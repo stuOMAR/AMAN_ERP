@@ -1951,6 +1951,29 @@ def create_purchase_return(
                 "qty": -abs(item.quantity), "uid": user_id
             })
 
+            # T3.9: reverse the original purchase's cost layer instead of
+            # creating a new (positive) layer. handle_return now reduces the
+            # remaining_quantity of the matching layer when we pass the
+            # original purchase invoice id; this keeps FIFO/LIFO valuation
+            # consistent across purchase returns.
+            if invoice.original_invoice_id:
+                from services.costing_service import CostingService
+                try:
+                    CostingService.handle_return(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=wh_id,
+                        quantity=abs(item.quantity),
+                        unit_cost=item.unit_price,
+                        source_document_type="purchase_return",
+                        source_document_id=new_invoice_id,
+                        costing_method=CostingService.get_active_policy(db) or "fifo",
+                        original_source_document_type="purchase_invoice",
+                        original_source_document_id=invoice.original_invoice_id,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+
         # 5. Update Supplier Balance (Logic: Return reduces balance)
         exchange_rate = _dec(invoice.exchange_rate or 1)
         if exchange_rate <= 0:

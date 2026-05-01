@@ -265,11 +265,11 @@ backend/scripts/seed_data.py:41
 backend/scripts/seed_data.py:46
 backend/scripts/seed_data.py:47
 backend/scripts/seed_data.py:48
-backend/services/costing_service.py:404
+backend/services/costing_service.py:576
 backend/services/costing_service.py:279
-backend/services/costing_service.py:350
-backend/services/costing_service.py:376
-backend/services/costing_service.py:438
+backend/services/costing_service.py:522
+backend/services/costing_service.py:548
+backend/services/costing_service.py:610
 backend/services/cpq_service.py:103
 backend/services/demand_forecast_service.py:180
 backend/services/industry_kpi_service.py:765

@@ -326,12 +326,184 @@ class CostingService:
         source_document_type: str,
         source_document_id: int,
         costing_method: str = "fifo",
-    ) -> int:
-        """Handle a return by creating a new cost layer at the original unit cost."""
-        return CostingService.create_cost_layer(
-            db, product_id, warehouse_id, quantity, unit_cost,
+        original_source_document_type: Optional[str] = None,
+        original_source_document_id: Optional[int] = None,
+    ) -> dict:
+        """Reverse a goods movement against the **original** cost layer(s).
+
+        Two scenarios:
+
+        - **Purchase return** (returning goods to a supplier): the original
+          purchase invoice produced one or more cost layers. We must reduce
+          the *remaining quantity* of those layers — not create a fresh layer
+          at an arbitrary cost — otherwise FIFO/LIFO valuation drifts and the
+          inventory ends up double-counted (once in the original layer, once
+          in a new bogus layer).
+
+        - **Sales return** (customer returning goods to us): the original
+          sale consumed cost layers. We bring back the consumed quantity by
+          reversing the matching ``cost_layer_consumptions`` entries
+          (newest-first, since the most recently consumed slice is the most
+          likely to be returned). If we cannot match exact consumptions we
+          fall back to creating a new layer at ``unit_cost``.
+
+        Pass ``original_source_document_type`` / ``original_source_document_id``
+        pointing at the *original* movement (e.g. the purchase invoice for a
+        purchase return, the sales invoice for a sales return). When omitted
+        the helper falls back to the legacy "create a new layer" behaviour
+        for backwards compatibility, but call sites should always supply the
+        original reference now.
+
+        Returns a dict describing what changed:
+            {"strategy": "reduce_layer"|"reverse_consumption"|"new_layer",
+             "affected_layer_ids": [...], "new_layer_id": <id or None>}
+        """
+        qty = _dec(quantity)
+        if qty <= 0:
+            return {"strategy": "noop", "affected_layer_ids": [], "new_layer_id": None}
+
+        # Strategy 1: purchase return — reduce remaining_quantity on layers
+        # produced by the original purchase document.
+        if (
+            original_source_document_type
+            and original_source_document_id
+            and original_source_document_type in ("purchase_invoice", "purchase", "purchase_order")
+        ):
+            layers = db.execute(text("""
+                SELECT id, remaining_quantity
+                FROM cost_layers
+                WHERE product_id = :pid
+                  AND warehouse_id = :wid
+                  AND source_document_type = :sdt
+                  AND source_document_id   = :sdi
+                ORDER BY purchase_date DESC, id DESC
+                FOR UPDATE
+            """), {
+                "pid": product_id, "wid": warehouse_id,
+                "sdt": original_source_document_type,
+                "sdi": original_source_document_id,
+            }).fetchall()
+
+            qty_left = qty
+            affected = []
+            for layer in layers:
+                if qty_left <= 0:
+                    break
+                lid = layer[0]
+                rem = _dec(layer[1])
+                take = min(qty_left, rem)
+                new_rem = rem - take
+                db.execute(text("""
+                    UPDATE cost_layers
+                       SET remaining_quantity = :rem,
+                           is_exhausted       = :exh,
+                           updated_at         = NOW()
+                     WHERE id = :id
+                """), {"rem": str(new_rem), "exh": new_rem <= 0, "id": lid})
+                affected.append(lid)
+                qty_left -= take
+
+            # If we fully reversed against the original layers, done.
+            if qty_left <= 0:
+                return {
+                    "strategy": "reduce_layer",
+                    "affected_layer_ids": affected,
+                    "new_layer_id": None,
+                }
+            # Otherwise the original layers were already consumed by sales.
+            # Fall through to consume FIFO/LIFO as a real outflow so the
+            # inventory valuation still drops by the returned qty.
+            try:
+                CostingService.consume_layers(
+                    db,
+                    product_id=product_id,
+                    warehouse_id=warehouse_id,
+                    quantity=qty_left,
+                    sale_document_type=source_document_type,
+                    sale_document_id=source_document_id,
+                    costing_method=costing_method,
+                )
+                return {
+                    "strategy": "reduce_layer+consume_overflow",
+                    "affected_layer_ids": affected,
+                    "new_layer_id": None,
+                }
+            except ValueError:
+                # Not enough stock at all — surface the error to the caller.
+                raise
+
+        # Strategy 2: sales return — reverse consumptions newest-first.
+        if (
+            original_source_document_type
+            and original_source_document_id
+            and original_source_document_type in ("sales_invoice", "invoice", "pos_sale")
+        ):
+            consumptions = db.execute(text("""
+                SELECT clc.id, clc.cost_layer_id, clc.quantity_consumed,
+                       cl.remaining_quantity, cl.original_quantity
+                FROM cost_layer_consumptions clc
+                JOIN cost_layers cl ON cl.id = clc.cost_layer_id
+                WHERE clc.sale_document_type = :sdt
+                  AND clc.sale_document_id   = :sdi
+                  AND cl.product_id   = :pid
+                  AND cl.warehouse_id = :wid
+                ORDER BY clc.consumed_at DESC, clc.id DESC
+                FOR UPDATE
+            """), {
+                "sdt": original_source_document_type,
+                "sdi": original_source_document_id,
+                "pid": product_id, "wid": warehouse_id,
+            }).fetchall()
+
+            qty_left = qty
+            affected = []
+            for c in consumptions:
+                if qty_left <= 0:
+                    break
+                cid, lid, consumed = c[0], c[1], _dec(c[2])
+                rem = _dec(c[3])
+                give_back = min(qty_left, consumed)
+                new_consumed = consumed - give_back
+                if new_consumed <= 0:
+                    db.execute(text("DELETE FROM cost_layer_consumptions WHERE id = :id"),
+                               {"id": cid})
+                else:
+                    db.execute(text("""
+                        UPDATE cost_layer_consumptions
+                           SET quantity_consumed = :q, updated_at = NOW()
+                         WHERE id = :id
+                    """), {"q": str(new_consumed), "id": cid})
+                # Restore the layer's remaining_quantity
+                db.execute(text("""
+                    UPDATE cost_layers
+                       SET remaining_quantity = remaining_quantity + :q,
+                           is_exhausted       = FALSE,
+                           updated_at         = NOW()
+                     WHERE id = :id
+                """), {"q": str(give_back), "id": lid})
+                affected.append(lid)
+                qty_left -= give_back
+
+            if qty_left <= 0:
+                return {
+                    "strategy": "reverse_consumption",
+                    "affected_layer_ids": affected,
+                    "new_layer_id": None,
+                }
+            # Could not reverse the full quantity from prior consumptions
+            # (the original sale may not have used the layer system, e.g.
+            # legacy data). Fall through to creating a fresh layer.
+
+        # Legacy fallback: create a new cost layer at the supplied unit_cost.
+        new_layer_id = CostingService.create_cost_layer(
+            db, product_id, warehouse_id, qty, unit_cost,
             source_document_type, source_document_id, costing_method,
         )
+        return {
+            "strategy": "new_layer",
+            "affected_layer_ids": [],
+            "new_layer_id": new_layer_id,
+        }
 
     @staticmethod
     def get_cost_layers(db, product_id=None, warehouse_id=None, include_exhausted=False):

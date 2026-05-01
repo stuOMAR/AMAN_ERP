@@ -366,11 +366,25 @@
   - اختبار جديد [tests/test_59_invoice_cancel_reversal.py](../../backend/tests/test_59_invoice_cancel_reversal.py) (3 حالات): pin على البحث بالمصدر، وجود فحص حركات المخزون مع الرسالة العربية، وتأمين الشرط المشروط على `product_lines` فقط.
 - **بوابات الجودة**: py_compile · sql lint نظيف · pytest 12/12 (T3.7+T3.8).
 
-### T3.9 — ربط FIFO/LIFO صحيح في مرتجعات الشراء + الشحنات `[M]`
+### T3.9 — ربط FIFO/LIFO صحيح في مرتجعات الشراء + الشحنات `[M]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #101، #245، 419aa.
 - **التغيير**: مرتجع الشراء يستدعي `CostingService.handle_return`. الشحنات تنشئ cost layers للوجهة. مراجعة `handle_return` لعكس الطبقة الأصلية بدل إنشاء طبقة جديدة.
 - **الملفات**: `backend/routers/purchases.py`، `backend/routers/shipments.py`، `backend/services/costing_service.py`.
 - **DoD**: اختبار FIFO سيناريو: شراء → بيع → مرتجع → التكلفة المتبقية تطابق المتوقع.
+- **التنفيذ**:
+  - [backend/services/costing_service.py](../../backend/services/costing_service.py): إعادة كتابة `handle_return` بثلاث استراتيجيات صريحة:
+    1. **مرتجع شراء** — يبحث عن طبقة(ات) التكلفة التي أنتجها أصل الشراء عبر `source_document_type='purchase_invoice' AND source_document_id=:original_id`، ويُنقص `remaining_quantity` بدلاً من إنشاء طبقة جديدة. إذا كانت الطبقة الأصلية مستهلكة بالكامل (تم بيعها قبل المرتجع) يستخدم `consume_layers` احتياطًا للحفاظ على صحة المخزون.
+    2. **مرتجع مبيعات** — يعكس صفوف `cost_layer_consumptions` الأحدث-أولاً ويُعيد `remaining_quantity` للطبقات الأصلية.
+    3. **fallback تقليدي** — إنشاء طبقة جديدة عند عدم تمرير `original_source_document_*` (للحفاظ على التوافق العكسي).
+    تُرجع الدالة الآن قاموسًا (`{"strategy": ..., "affected_layer_ids": [...], "new_layer_id": ...}`) ليتمكن المستدعي من اتخاذ قرارات لاحقة.
+  - [backend/routers/purchases.py](../../backend/routers/purchases.py) `create_purchase_return`: بعد سطر `INSERT INTO inventory_transactions`، يستدعي `CostingService.handle_return` لكل بند ممرراً `original_source_document_type="purchase_invoice"` وid فاتورة الشراء الأصلية، فيُنقص الطبقة الأصلية بدل تشويش طبقات FIFO/LIFO.
+  - [backend/routers/inventory/shipments.py](../../backend/routers/inventory/shipments.py) `confirm_shipment`: قبل `update_cost`، يستدعي `consume_layers` على المستودع المصدر و `create_cost_layer` على المستودع الوجهة بنفس `unit_cost`. لو لم تتوفر طبقات في المصدر (مخزون قديم) يتجاوز الخطوة بصمت ويعتمد على `update_cost` فقط.
+  - اختبار جديد [tests/test_60_fifo_returns_shipments.py](../../backend/tests/test_60_fifo_returns_shipments.py) (5 حالات):
+    - DoD السيناريو الكامل: شراء 10@100 + شراء 5@120 → بيع 8 → مرتجع 2 ⇒ التقييم المتبقي = 600 (5 وحدات × 120) و L1 ينخفض إلى 0 و is_exhausted=TRUE.
+    - استنزاف الطبقة الأصلية يتسبب في fallback إلى consume_layers ويُنقص L2 بدلاً من تجاهل المرتجع.
+    - مسار التوافق العكسي: استدعاء `handle_return` بدون `original_source_document_*` ⇒ ينشئ طبقة جديدة كما كان سابقاً.
+    - regressions على ملفات `purchases.py` و `inventory/shipments.py` للتأكد من بقاء الربط صحيحاً.
+- **بوابات الجودة**: py_compile · sql lint نظيف (305 + إزاحة الأسطر) · pytest 56/56 (T3.1–T3.9).
 
 ### T3.10 — POS: خصم قبل الضريبة + تطبيق الكوبونات backend `[M]`
 - **بنود**: #291، 419w.

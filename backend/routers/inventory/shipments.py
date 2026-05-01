@@ -344,6 +344,38 @@ def confirm_shipment(
             source_cost = CostingService.get_cogs_cost(db, item.product_id, shipment.source_warehouse_id)
             total_transit_value += (Decimal(str(item.quantity)) * Decimal(str(source_cost or 0)))
 
+            # T3.9: move FIFO/LIFO cost layers from source → destination so
+            # the destination warehouse keeps an auditable cost history per
+            # batch. Without this the cost basis at the destination collapses
+            # to a single WAC update and any subsequent FIFO/LIFO valuation
+            # at the destination is wrong.
+            try:
+                policy = CostingService.get_active_policy(db) or "fifo"
+                CostingService.consume_layers(
+                    db,
+                    product_id=item.product_id,
+                    warehouse_id=shipment.source_warehouse_id,
+                    quantity=item.quantity,
+                    sale_document_type="shipment_dispatch",
+                    sale_document_id=id,
+                    costing_method=policy,
+                )
+                CostingService.create_cost_layer(
+                    db,
+                    product_id=item.product_id,
+                    warehouse_id=shipment.destination_warehouse_id,
+                    quantity=item.quantity,
+                    unit_cost=float(source_cost or 0),
+                    source_document_type="shipment_receive",
+                    source_document_id=id,
+                    costing_method=policy,
+                )
+            except ValueError:
+                # Source warehouse has no cost layers (legacy stock created
+                # outside the layered system). Leave the WAC update below
+                # to keep the valuation reasonable; do NOT block the move.
+                pass
+
             # 3. Update Destination Cost (WAC Calculation)
             CostingService.update_cost(
                 db,
