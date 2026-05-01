@@ -278,11 +278,15 @@
   - `npx vitest run src/tests/auth.test.js` → 4/4.
   - `npm run build` → نجح.
 
-### T3.2 — إصلاح قيد المبيعات مع markup `[S]`
+### T3.2 — إصلاح قيد المبيعات مع markup `[S]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #15.
 - **التغيير**: إضافة سطر دائن لحساب markup-revenue (أو إضافة المبلغ على Revenue الموجود) ليتوازن القيد.
 - **الملف**: `backend/routers/invoices.py`.
 - **DoD**: `validate_je_lines` تمر؛ اختبار يفحص فاتورة بـ markup=10%.
+- **التنفيذ**:
+  - في [backend/routers/sales/invoices.py](../../backend/routers/sales/invoices.py) سطر الإيرادات أصبح `net_sales = subtotal - discount + markup_amt` (FC) و `net_sales_gl = gl_subtotal - gl_discount + to_base(markup_amt)` (BC) — لأن `compute_invoice_totals` يضيف `markup` إلى `grand_total` على جانب المدين فلزم تعويضه على جانب الدائن.
+  - اختبار جديد [backend/tests/test_53_sales_markup_je.py](../../backend/tests/test_53_sales_markup_je.py) يحاكي حساب القيد لأربع حالات (بدون markup، markup فقط، خصم سطر+markup، خصم رأسي) ويؤكد توازن المدين والدائن.
+- **بوابات الجودة**: py_compile · check_sql_parameterization (305) · pytest 16/16 (12 phase9 + 4 جديدة).
 
 ### T3.3 — توحيد آليتي القفل المالي `[M]`
 - **بنود**: #17.

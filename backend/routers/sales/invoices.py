@@ -551,9 +551,13 @@ def create_sales_invoice(
                  "amount_currency": remaining_balance, "currency": inv_currency
              })
 
-        # B. Revenue (Credit) - Net Amount
-        net_sales = subtotal - total_discount  # Foreign Currency
-        net_sales_gl = gl_subtotal - gl_discount  # Base Currency
+        # B. Revenue (Credit) - Net Amount + Markup
+        # T3.2 (#15): markup is added to grand_total on the debit side, so it
+        # must also be credited or the entry would be unbalanced. We post it
+        # as part of the sales-revenue line (a positive header markup is
+        # additional revenue, not a separate account in the current COA).
+        net_sales = subtotal - total_discount + markup_amt  # Foreign Currency
+        net_sales_gl = gl_subtotal - gl_discount + to_base(markup_amt)  # Base Currency
 
         if net_sales_gl > 0:
             je_lines.append({
