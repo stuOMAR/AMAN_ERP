@@ -137,6 +137,7 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
 
 @router.delete("/api-keys/{key_id}", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
 def revoke_api_key(key_id: int, current_user=Depends(get_current_user)):
+    """Revoke API Key."""
     with transactional(current_user.company_id) as db:
         db.execute(text("UPDATE api_keys SET is_active = FALSE WHERE id = :id"), {"id": key_id})
         log_activity(
@@ -157,6 +158,7 @@ def list_webhook_events(current_user=Depends(get_current_user)):
 
 @router.get("/webhooks", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
 def list_webhooks(current_user=Depends(get_current_user)):
+    """List Webhooks."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM webhooks ORDER BY created_at DESC")).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -164,6 +166,7 @@ def list_webhooks(current_user=Depends(get_current_user)):
 
 @router.post("/webhooks", status_code=201, dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
+    """Create Webhook."""
     # Validate events
     invalid = [e for e in data.events if e not in WEBHOOK_EVENTS]
     if invalid:
@@ -200,6 +203,7 @@ def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
 
 @router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(get_current_user)):
+    """Update Webhook."""
     if data.url is not None:
         try:
             validate_webhook_url(data.url)
@@ -231,6 +235,7 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
 
 @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
+    """Delete Webhook."""
     with transactional(current_user.company_id) as db:
         db.execute(text("DELETE FROM webhooks WHERE id = :id"), {"id": webhook_id})
         log_activity(
@@ -243,6 +248,7 @@ def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
 
 @router.get("/webhooks/{webhook_id}/logs", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
 def get_webhook_logs(webhook_id: int, limit: int = 50, current_user=Depends(get_current_user)):
+    """Get Webhook Logs."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(text("""
             SELECT id, event, response_status, success, attempt, error_message, created_at
@@ -381,6 +387,7 @@ def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
 
 @router.get("/wht/rates", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_wht_rates(current_user=Depends(get_current_user)):
+    """List WHT Rates."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM wht_rates WHERE is_active = TRUE ORDER BY category, name")).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -388,6 +395,7 @@ def list_wht_rates(current_user=Depends(get_current_user)):
 
 @router.post("/wht/rates", status_code=201, dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))], response_model=Dict[str, Any])
 def create_wht_rate(data: WHTRateCreate, current_user=Depends(get_current_user)):
+    """Create WHT Rate."""
     with transactional(current_user.company_id) as db:
         rid = db.execute(text("""
             INSERT INTO wht_rates (name, name_ar, rate, category, description)
@@ -483,6 +491,7 @@ def list_wht_transactions(
     to_date: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
+    """List WHT Transactions."""
     with transactional(current_user.company_id) as db:
         query = """
             SELECT wt.*, wr.name as rate_name, p.name as supplier_name

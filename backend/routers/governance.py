@@ -52,6 +52,7 @@ class OvertimeRate(BaseModel):
 
 @router.get("/overtime-rates", dependencies=[Depends(require_permission(["hr.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def list_overtime_rates(current_user=Depends(get_current_user)):
+    """List Overtime Rates."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(
             text("SELECT rate_key, description, multiplier, is_active FROM overtime_rates_config ORDER BY rate_key")
@@ -61,6 +62,7 @@ def list_overtime_rates(current_user=Depends(get_current_user)):
 
 @router.put("/overtime-rates", dependencies=[Depends(require_permission(["hr.manage", "settings.edit"]))], response_model=Dict[str, Any])
 def upsert_overtime_rate(body: OvertimeRate, current_user=Depends(get_current_user)):
+    """Upsert Overtime Rate."""
     with transactional(current_user.company_id) as db:
         db.execute(
             text(
@@ -97,6 +99,7 @@ def grant_document_permission(
     body: DocPermissionCreate,
     current_user=Depends(get_current_user),
 ):
+    """Grant Document Permission."""
     if body.department_id is None and body.role_id is None and body.user_id is None:
         raise HTTPException(status_code=400, detail="يجب تحديد قسم أو دور أو مستخدم")
     with transactional(current_user.company_id) as db:
@@ -122,6 +125,7 @@ def grant_document_permission(
 
 @router.get("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.view"))], response_model=List[Dict[str, Any]])
 def list_document_permissions(doc_id: int, current_user=Depends(get_current_user)):
+    """List Document Permissions."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(
             text(
@@ -166,6 +170,7 @@ def _haversine_m(lat1, lng1, lat2, lng2) -> float:
 
 @router.post("/geofences", dependencies=[Depends(require_permission(["hr.manage", "branches.manage"]))], response_model=Dict[str, Any])
 def create_geofence(body: GeofenceCreate, current_user=Depends(get_current_user)):
+    """Create Geofence."""
     with transactional(current_user.company_id) as db:
         row = db.execute(
             text(
@@ -298,6 +303,7 @@ class ZakatBaseItem(BaseModel):
 
 @router.get("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_zakat_base_items(current_user=Depends(get_current_user)):
+    """List Zakat Base Items."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(
             text(
@@ -314,6 +320,7 @@ def list_zakat_base_items(current_user=Depends(get_current_user)):
 
 @router.post("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))], response_model=Dict[str, Any])
 def upsert_zakat_base_item(body: ZakatBaseItem, current_user=Depends(get_current_user)):
+    """Upsert Zakat Base Item."""
     with transactional(current_user.company_id) as db:
         db.execute(
             text(
@@ -344,6 +351,7 @@ class BranchTaxSetting(BaseModel):
 
 @router.get("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def list_branch_tax_settings(current_user=Depends(get_current_user)):
+    """List Branch Tax Settings."""
     with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM branch_tax_settings")).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -351,6 +359,7 @@ def list_branch_tax_settings(current_user=Depends(get_current_user)):
 
 @router.put("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.manage", "settings.edit"]))], response_model=Dict[str, Any])
 def upsert_branch_tax_setting(body: BranchTaxSetting, current_user=Depends(get_current_user)):
+    """Upsert Branch Tax Setting."""
     with transactional(current_user.company_id) as db:
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS default_tax_rate DECIMAL(6,3) DEFAULT 15"))
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS tax_exempt BOOLEAN DEFAULT FALSE"))

@@ -32,6 +32,7 @@ def list_campaigns(
     branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
+    """List Campaigns."""
     # CRM-F1: enforce branch scope on list
     branch_id = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
@@ -72,6 +73,7 @@ def list_campaigns(
 
 @router.get("/campaigns/{campaign_id}", dependencies=[Depends(require_permission("crm.campaign_view"))], response_model=Dict[str, Any])
 def get_campaign(campaign_id: int, current_user=Depends(get_current_user)):
+    """Get Campaign."""
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(text("""
@@ -99,6 +101,7 @@ def get_campaign(campaign_id: int, current_user=Depends(get_current_user)):
 
 @router.post("/campaigns", status_code=201, dependencies=[Depends(require_permission("crm.campaign_manage"))], response_model=Dict[str, Any])
 def create_campaign(data: CampaignCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Campaign."""
     db = get_db_connection(current_user.company_id)
     try:
         cid = db.execute(text("""
@@ -135,6 +138,7 @@ def create_campaign(data: CampaignCreate, request: Request, current_user=Depends
 
 @router.put("/campaigns/{campaign_id}", dependencies=[Depends(require_permission("crm.campaign_manage"))], response_model=Dict[str, Any])
 def update_campaign(campaign_id: int, data: CampaignUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Campaign."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.dict(exclude_unset=True).items() if v is not None}
@@ -153,6 +157,7 @@ def update_campaign(campaign_id: int, data: CampaignUpdate, request: Request, cu
 
 @router.delete("/campaigns/{campaign_id}", dependencies=[Depends(require_permission("crm.campaign_manage"))], response_model=Dict[str, Any])
 def delete_campaign(campaign_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Campaign."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM marketing_campaigns WHERE id = :id"), {"id": campaign_id})

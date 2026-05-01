@@ -91,6 +91,7 @@ async def list_variants(
     offset: int = 0,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Variants."""
     db = get_db_connection(current_user.company_id)
     try:
         conditions = []
@@ -134,6 +135,7 @@ async def list_variants(
 
 @advanced_router.post("/variants", response_model=Dict[str, Any])
 async def create_variant(data: ProductVariantCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create Variant."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -169,6 +171,7 @@ async def create_variant(data: ProductVariantCreate, request: Request, current_u
 
 @advanced_router.put("/variants/{variant_id}", response_model=Dict[str, Any])
 async def update_variant(variant_id: int, data: ProductVariantUpdate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Update Variant."""
     db = get_db_connection(current_user.company_id)
     try:
         fields = []
@@ -205,6 +208,7 @@ async def list_bins(
     offset: int = 0,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Bins."""
     db = get_db_connection(current_user.company_id)
     try:
         conditions = []
@@ -238,6 +242,7 @@ async def list_bins(
 
 @advanced_router.post("/bins", response_model=Dict[str, Any])
 async def create_bin(data: BinLocationCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create Bin."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -262,6 +267,7 @@ async def create_bin(data: BinLocationCreate, request: Request, current_user: di
 
 @advanced_router.put("/bins/{bin_id}", response_model=Dict[str, Any])
 async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Update Bin."""
     db = get_db_connection(current_user.company_id)
     try:
         fields = []
@@ -297,6 +303,7 @@ async def list_kits(
     offset: int = 0,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Kits."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -319,6 +326,7 @@ async def list_kits(
 
 @advanced_router.get("/kits/{kit_id}", response_model=Dict[str, Any])
 async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Kit."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -353,6 +361,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
 
 @advanced_router.post("/kits", response_model=Dict[str, Any])
 async def create_kit(data: ProductKitCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create Kit."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -384,6 +393,7 @@ async def create_kit(data: ProductKitCreate, request: Request, current_user: dic
 
 @advanced_router.put("/kits/{kit_id}", response_model=Dict[str, Any])
 async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Update Kit."""
     db = get_db_connection(current_user.company_id)
     try:
         fields = []

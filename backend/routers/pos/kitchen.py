@@ -40,6 +40,7 @@ def kitchen_orders(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Kitchen Orders."""
     q = "SELECT * FROM pos_kitchen_orders WHERE 1=1"
     params = {}
     if station:
@@ -91,6 +92,7 @@ def send_to_kitchen(data: dict, request: Request, current_user: UserResponse = D
 
 @router.put("/kitchen/orders/{ko_id}/status", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def update_kitchen_status(ko_id: int, data: dict, request: Request, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Update Kitchen Status."""
     new_status = data.get("status")
     ts_field = {"accepted": "accepted_at", "ready": "ready_at", "served": "served_at"}.get(new_status)
     if ts_field:

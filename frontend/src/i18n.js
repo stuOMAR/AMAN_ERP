@@ -28,4 +28,12 @@ i18n
         returnEmptyString: false,
     });
 
+// T9.4: expose the i18n singleton on `window` so non-React modules
+// (e.g. `services/apiClient.js`) can read the active language without
+// importing react-i18next. The apiClient injects `Accept-Language`
+// on every request based on this value.
+if (typeof window !== 'undefined') {
+    window.i18next = i18n;
+}
+
 export default i18n;

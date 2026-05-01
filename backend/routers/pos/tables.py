@@ -40,6 +40,7 @@ def list_tables(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """List Tables."""
     q = "SELECT * FROM pos_tables WHERE is_active = true"
     params = {}
     if branch_id:
@@ -61,6 +62,7 @@ def list_tables(
 
 @router.post("/tables", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def create_table(data: dict, request: Request, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create Table."""
     branch_id = data.get("branch_id")
     if branch_id:
         validate_branch_access(current_user, branch_id)
@@ -95,6 +97,7 @@ def create_table(data: dict, request: Request, current_user: UserResponse = Depe
 
 @router.put("/tables/{table_id}", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def update_table(table_id: int, data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Update Table."""
     sets, params = [], {"id": table_id}
     for f in ["table_number", "table_name", "floor", "capacity", "shape", "pos_x", "pos_y", "status", "is_active"]:
         if f in data:
@@ -111,6 +114,7 @@ def update_table(table_id: int, data: dict, current_user: UserResponse = Depends
 
 @router.delete("/tables/{table_id}", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def delete_table(table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete Table."""
     db.execute(text("UPDATE pos_tables SET is_active = false WHERE id = :id"), {"id": table_id})
     db.commit()
     return {"message": "Table deactivated"}
@@ -118,6 +122,7 @@ def delete_table(table_id: int, current_user: UserResponse = Depends(get_current
 
 @router.post("/tables/{table_id}/seat", dependencies=[Depends(require_permission("pos.create"))], response_model=Dict[str, Any])
 def seat_table(table_id: int, data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Seat Table."""
     db.execute(text("UPDATE pos_tables SET status = 'occupied' WHERE id = :id"), {"id": table_id})
     result = db.execute(text("""
         INSERT INTO pos_table_orders (table_id, guests, waiter_id, status)
@@ -130,6 +135,7 @@ def seat_table(table_id: int, data: dict, current_user: UserResponse = Depends(g
 
 @router.post("/tables/{table_id}/clear", dependencies=[Depends(require_permission("pos.create"))], response_model=Dict[str, Any])
 def clear_table(table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Clear Table."""
     db.execute(text("UPDATE pos_tables SET status = 'available' WHERE id = :id"), {"id": table_id})
     db.execute(text("""
         UPDATE pos_table_orders SET status = 'cleared', cleared_at = NOW()

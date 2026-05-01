@@ -40,6 +40,7 @@ def list_equipment(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
 ):
+    """List Equipment."""
     conn = get_db_connection(current_user.company_id)
     try:
         equip = conn.execute(text("""
@@ -56,6 +57,7 @@ def list_equipment(
 
 @router.post("/equipment", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_equipment(equip: EquipmentCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Equipment."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -87,6 +89,7 @@ def create_equipment(equip: EquipmentCreate, request: Request, current_user: Use
 
 @router.put("/equipment/{equip_id}", response_model=EquipmentResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
 def update_equipment(equip_id: int, equip: EquipmentCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Update Equipment."""
     conn = get_db_connection(current_user.company_id)
     try:
         updated = conn.execute(text("""
@@ -121,6 +124,7 @@ def update_equipment(equip_id: int, equip: EquipmentCreate, request: Request, cu
 
 @router.delete("/equipment/{equip_id}", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.delete"]))], response_model=Dict[str, Any])
 def delete_equipment(equip_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Equipment."""
     conn = get_db_connection(current_user.company_id)
     try:
         # Check for maintenance logs
@@ -152,6 +156,7 @@ def list_maintenance_logs(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
 ):
+    """List Maintenance Logs."""
     conn = get_db_connection(current_user.company_id)
     try:
         query = """
@@ -177,6 +182,7 @@ def list_maintenance_logs(
 
 @router.post("/maintenance-logs", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_maintenance_log(log: MaintenanceLogCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Maintenance Log."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:

@@ -37,6 +37,7 @@ from .core import _D2, _D4
 
 @router.put("/maintenance/{maint_id}/complete", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def complete_maintenance(maint_id: int, data: MaintenanceComplete = MaintenanceComplete(), current_user: dict = Depends(get_current_user)):
+    """Complete Maintenance."""
     with transactional(current_user.company_id) as conn:
         conn.execute(text("""
             UPDATE asset_maintenance SET status = 'completed', completed_date = :d,
@@ -52,6 +53,7 @@ def complete_maintenance(maint_id: int, data: MaintenanceComplete = MaintenanceC
 
 @router.get("/{asset_id}/maintenance", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_asset_maintenance(asset_id: int, current_user: dict = Depends(get_current_user)):
+    """List Asset Maintenance."""
     with transactional(current_user.company_id) as conn:
         rows = conn.execute(text("SELECT * FROM asset_maintenance WHERE asset_id = :id ORDER BY scheduled_date DESC"),
                             {"id": asset_id}).fetchall()
@@ -60,6 +62,7 @@ def list_asset_maintenance(asset_id: int, current_user: dict = Depends(get_curre
 
 @router.post("/{asset_id}/maintenance", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def add_maintenance(asset_id: int, data: MaintenanceCreate, current_user: dict = Depends(get_current_user)):
+    """Add Maintenance."""
     with transactional(current_user.company_id) as conn:
         try:
             result = conn.execute(text("""

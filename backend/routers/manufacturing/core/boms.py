@@ -41,6 +41,7 @@ def list_boms(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
 ):
+    """List Boms."""
     conn = get_db_connection(current_user.company_id)
     try:
         from utils.permissions import validate_branch_access
@@ -96,6 +97,7 @@ def list_boms(
 
 @router.post("/boms", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_bom(bom: BOMCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create BOM."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -181,6 +183,7 @@ def create_bom(bom: BOMCreate, request: Request, current_user: UserResponse = De
 
 @router.get("/boms/{bom_id}", response_model=BOMResponse, dependencies=[Depends(require_permission("manufacturing.view"))])
 def get_bom(bom_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Get BOM."""
     conn = get_db_connection(current_user.company_id)
     try:
         b = conn.execute(text("""
@@ -212,6 +215,7 @@ def get_bom(bom_id: int, current_user: UserResponse = Depends(get_current_user))
 
 @router.put("/boms/{bom_id}", response_model=BOMResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
 def update_bom(bom_id: int, bom: BOMCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Update BOM."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -291,6 +295,7 @@ def update_bom(bom_id: int, bom: BOMCreate, request: Request, current_user: User
 # ---- Helper: Calculate Production Cost ----
 @router.delete("/boms/{bom_id}", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.delete"]))], response_model=Dict[str, Any])
 def delete_bom(bom_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete BOM."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:

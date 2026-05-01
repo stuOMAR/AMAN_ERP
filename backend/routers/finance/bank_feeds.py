@@ -44,6 +44,7 @@ async def import_statement(
     csv_config: Optional[str] = Form(None),  # JSON override for CSVStatementConfig
     current_user=Depends(get_current_user),
 ):
+    """Import Statement."""
     raw = await file.read()
     fmt = (source_format or "").lower().strip()
     db = get_db_connection(current_user.company_id)
@@ -181,6 +182,7 @@ def _insert_statement(db, *, bank_account_id, iban, statement_number, currency,
     dependencies=[Depends(require_permission("finance.reconciliation_view"))],
 )
 def list_statements(limit: int = 50, current_user=Depends(get_current_user)):
+    """List Statements."""
     limit = max(1, min(int(limit), 500))
     db = get_db_connection(current_user.company_id)
     try:
@@ -214,6 +216,7 @@ def list_statements(limit: int = 50, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.reconciliation_view"))],
 )
 def list_lines(statement_id: int, current_user=Depends(get_current_user)):
+    """List Lines."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(

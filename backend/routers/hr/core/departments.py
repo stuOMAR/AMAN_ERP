@@ -35,12 +35,14 @@ from .core import _D2
 
 @router.get("/departments", response_model=List[DepartmentResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_departments(company_id: str = Depends(get_current_user_company)):
+    """List Departments."""
     with transactional(company_id) as conn:
         rows = conn.execute(text("SELECT id, department_name FROM departments ORDER BY department_name")).fetchall()
         return [{"id": r.id, "department_name": r.department_name} for r in rows]
 
 @router.post("/departments", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_department(dept: DepartmentCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Department."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -60,6 +62,7 @@ def create_department(dept: DepartmentCreate, current_user: UserResponse = Depen
 
 @router.delete("/departments/{dept_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def delete_department(dept_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Delete Department."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -87,6 +90,7 @@ def delete_department(dept_id: int, current_user: UserResponse = Depends(get_cur
 # --- Positions ---
 @router.get("/positions", response_model=List[PositionResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_positions(company_id: str = Depends(get_current_user_company)):
+    """List Positions."""
     with transactional(company_id) as conn:
         query = """
             SELECT p.id, p.position_name, p.department_id, d.department_name
@@ -107,6 +111,7 @@ def list_positions(company_id: str = Depends(get_current_user_company)):
 
 @router.post("/positions", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_position(pos: PositionCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Position."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -127,6 +132,7 @@ def create_position(pos: PositionCreate, current_user: UserResponse = Depends(ge
 
 @router.delete("/positions/{pos_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def delete_position(pos_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Delete Position."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:

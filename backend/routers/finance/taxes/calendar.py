@@ -99,6 +99,7 @@ def get_tax_calendar_item(
     item_id: int,
     current_user=Depends(require_permission(["taxes.view"]))
 ):
+    """Get Tax Calendar Item."""
     with transactional(current_user.company_id) as db:
         try:
             row = db.execute(text("SELECT * FROM tax_calendar WHERE id = :id"), {"id": item_id}).fetchone()
@@ -119,6 +120,7 @@ def create_tax_calendar_item(
     data: TaxCalendarCreate,
     current_user=Depends(require_permission(["taxes.manage"]))
 ):
+    """Create Tax Calendar Item."""
     with transactional(current_user.company_id) as db:
         try:
             import json
@@ -155,6 +157,7 @@ def update_tax_calendar_item(
     data: TaxCalendarUpdate,
     current_user=Depends(require_permission(["taxes.manage"]))
 ):
+    """Update Tax Calendar Item."""
     with transactional(current_user.company_id) as db:
         try:
             import json
@@ -198,6 +201,7 @@ def delete_tax_calendar_item(
     request: Request,
     current_user=Depends(require_permission(["taxes.manage"]))
 ):
+    """Delete Tax Calendar Item."""
     with transactional(current_user.company_id) as db:
         try:
             result = db.execute(text("DELETE FROM tax_calendar WHERE id = :id"), {"id": item_id})

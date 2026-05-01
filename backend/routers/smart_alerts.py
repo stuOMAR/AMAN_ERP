@@ -30,6 +30,7 @@ router = APIRouter(prefix="/alerts", tags=["Smart Alerts"])
 
 @router.get("/rules", dependencies=[Depends(require_permission("settings.view"))], response_model=List[Dict[str, Any]])
 def list_alert_rules(current_user=Depends(get_current_user)):
+    """List Alert Rules."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text(
@@ -43,6 +44,7 @@ def list_alert_rules(current_user=Depends(get_current_user)):
 
 @router.post("/rules", status_code=201, dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 def create_alert_rule(data: dict, current_user=Depends(get_current_user)):
+    """Create Alert Rule."""
     _validate_rule(data)
     db = get_db_connection(current_user.company_id)
     try:
@@ -70,6 +72,7 @@ def create_alert_rule(data: dict, current_user=Depends(get_current_user)):
 
 @router.put("/rules/{rule_id}", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current_user)):
+    """Update Alert Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
@@ -108,6 +111,7 @@ def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current
 
 @router.delete("/rules/{rule_id}", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 def delete_alert_rule(rule_id: int, current_user=Depends(get_current_user)):
+    """Delete Alert Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
@@ -132,6 +136,7 @@ def list_alerts(
     status: str = None,
     current_user=Depends(get_current_user),
 ):
+    """List Alerts."""
     db = get_db_connection(current_user.company_id)
     try:
         q = """
@@ -153,6 +158,7 @@ def list_alerts(
 
 @router.post("/{alert_id}/resolve", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 def resolve_alert(alert_id: int, current_user=Depends(get_current_user)):
+    """Resolve Alert."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alerts WHERE id=:id"), {"id": alert_id}).fetchone()

@@ -21,6 +21,7 @@ logger = logging.getLogger(__name__)
 @router.post("/", response_model=BudgetResponse, dependencies=[Depends(require_permission("accounting.budgets.manage"))])
 @limiter.limit("100/minute")
 def create_budget(budget: BudgetCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Budget."""
     with transactional(current_user.company_id) as conn:
         try:
             # Check if name exists
@@ -66,6 +67,7 @@ def create_budget(budget: BudgetCreate, request: Request, current_user: UserResp
 @router.get("/", response_model=List[BudgetResponse], dependencies=[Depends(require_permission("accounting.budgets.view"))])
 @limiter.limit("200/minute")
 def list_budgets(request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """List Budgets."""
     with transactional(current_user.company_id) as conn:
         results = conn.execute(text("SELECT * FROM budgets ORDER BY created_at DESC")).fetchall()
         return [
@@ -84,6 +86,7 @@ def list_budgets(request: Request, current_user: UserResponse = Depends(get_curr
 @router.delete("/{budget_id}", dependencies=[Depends(require_permission("accounting.budgets.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def delete_budget(budget_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Budget."""
     with transactional(current_user.company_id) as conn:
         try:
             # Verify budget exists
@@ -114,6 +117,7 @@ def set_budget_items(
     request: Request,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Set Budget Items."""
     with transactional(current_user.company_id) as conn:
         try:
             # Verify budget exists
@@ -164,6 +168,7 @@ def get_budget_report(
     cost_center_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Get Budget Report."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -653,6 +658,7 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
 @router.get("/by-cost-center/{cc_id}", dependencies=[Depends(require_permission("accounting.budgets.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_budgets_by_cc(request: Request, cc_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """List Budgets By Cc."""
     with transactional(current_user.company_id) as conn:
         rows = conn.execute(text("""
             SELECT b.*, COALESCE(SUM(bi.planned_amount),0) as total_planned
@@ -674,6 +680,7 @@ def list_multi_year_budgets(
     budget_type: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Multi Year Budgets."""
     with transactional(current_user.company_id) as conn:
         q = "SELECT * FROM budgets WHERE budget_type IN ('multi_year','quarterly')"
         params = {}

@@ -40,6 +40,7 @@ def open_session(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Open Session."""
     user_id = current_user.id
     
     # Validate branch access
@@ -107,6 +108,7 @@ def close_session(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Close Session."""
     from utils.accounting import get_base_currency
     base_currency = get_base_currency(db)
     sess = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
@@ -222,6 +224,7 @@ def get_active_session(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Get Active Session."""
     query = text("""
         SELECT s.*, w.warehouse_name, u.full_name as cashier_name
         FROM pos_sessions s
@@ -242,6 +245,7 @@ def session_detailed_report(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Session Detailed Report."""
     session = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
     if not session:
         raise HTTPException(status_code=404, detail="Session not found")

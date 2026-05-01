@@ -19,6 +19,7 @@ logger = logging.getLogger(__name__)
 def list_configurable_products(
     current_user: dict = Depends(get_current_user),
 ):
+    """List Configurable Products."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("""
@@ -40,6 +41,7 @@ def get_configuration(
     config_id: int,
     current_user: dict = Depends(get_current_user),
 ):
+    """Get Configuration."""
     db = get_db_connection(current_user.company_id)
     try:
         # Config header
@@ -94,6 +96,7 @@ def validate_config(
     body: dict,
     current_user: dict = Depends(get_current_user),
 ):
+    """Validate Config."""
     db = get_db_connection(current_user.company_id)
     try:
         result = validate_configuration(
@@ -112,6 +115,7 @@ def calculate_price_endpoint(
     body: dict,
     current_user: dict = Depends(get_current_user),
 ):
+    """Calculate Price Endpoint."""
     db = get_db_connection(current_user.company_id)
     try:
         result = calculate_price(
@@ -139,6 +143,7 @@ def create_quote(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """Create Quote."""
     db = get_db_connection(current_user.company_id)
     try:
         lines_input = body.get("lines", [])
@@ -207,6 +212,7 @@ def get_quote(
     quote_id: int,
     current_user: dict = Depends(get_current_user),
 ):
+    """Get Quote."""
     db = get_db_connection(current_user.company_id)
     try:
         q = db.execute(text("""
@@ -239,6 +245,7 @@ def generate_pdf(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """Generate PDF."""
     import os
     db = get_db_connection(current_user.company_id)
     try:
@@ -277,6 +284,7 @@ def convert_to_quotation(
     request: Request,
     current_user: dict = Depends(get_current_user),
 ):
+    """Convert To Quotation."""
     db = get_db_connection(current_user.company_id)
     try:
         q = db.execute(text(

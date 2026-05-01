@@ -76,6 +76,7 @@ def list_production_orders(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Production Orders."""
     from utils.permissions import validate_branch_access
     validated_branch = validate_branch_access(current_user, branch_id)
     conn = get_db_connection(current_user.company_id)
@@ -114,6 +115,7 @@ def list_production_orders(
  
 @router.get("/orders/{order_id}", response_model=ProductionOrderResponse, dependencies=[Depends(require_permission("manufacturing.view"))])
 def get_production_order(order_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Get Production Order."""
     conn = get_db_connection(current_user.company_id)
     try:
         o = conn.execute(text("""
@@ -187,6 +189,7 @@ def list_all_operations(
     branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List All Operations."""
     conn = get_db_connection(current_user.company_id)
     try:
         from utils.permissions import validate_branch_access
@@ -235,6 +238,7 @@ def list_all_operations(
 
 @router.post("/orders", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_production_order(order: ProductionOrderCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Production Order."""
     from utils.permissions import validate_branch_access
     if order.warehouse_id:
         conn_pre = get_db_connection(current_user.company_id)
@@ -352,6 +356,7 @@ def create_production_order(order: ProductionOrderCreate, request: Request, curr
 
 @router.post("/orders/{order_id}/start", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def start_production_order(order_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Start Production Order."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -506,6 +511,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
 
 @router.post("/orders/{order_id}/complete", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def complete_production_order(order_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Complete Production Order."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -910,6 +916,7 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
 
 @router.post("/operations/{op_id}/start", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def start_operation(op_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Start Operation."""
     conn = get_db_connection(current_user.company_id)
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
@@ -948,6 +955,7 @@ def start_operation(op_id: int, request: Request, current_user: UserResponse = D
 
 @router.post("/operations/{op_id}/pause", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def pause_operation(op_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Pause Operation."""
     conn = get_db_connection(current_user.company_id)
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
@@ -976,6 +984,7 @@ def pause_operation(op_id: int, request: Request, current_user: UserResponse = D
 
 @router.post("/operations/{op_id}/complete", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def complete_operation(op_id: int, completed_qty: float, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Complete Operation."""
     conn = get_db_connection(current_user.company_id)
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
@@ -1016,6 +1025,7 @@ def complete_operation(op_id: int, completed_qty: float, request: Request, curre
 
 @router.get("/orders/operations/active", response_model=List[ProductionOrderOperationResponse], dependencies=[Depends(require_permission("manufacturing.view"))])
 def get_active_operations(current_user: UserResponse = Depends(get_current_user)):
+    """Get Active Operations."""
     conn = get_db_connection(current_user.company_id)
     try:
         # Fetch active or pending operations with order details

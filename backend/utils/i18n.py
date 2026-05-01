@@ -107,9 +107,17 @@ def http_error(status_code: int, error_key: str, lang: str | None = None, **fmt:
     Args:
         status_code: HTTP status code.
         error_key: Translation/message key used in routers.
-        lang: Optional language (e.g., en, ar, ar-SA).
+        lang: Optional language (e.g., en, ar, ar-SA). Routers may also pass
+            a Starlette/FastAPI ``Request`` object as ``lang`` and we will
+            extract ``request.state.lang`` (set by ``AcceptLanguageMiddleware``).
         **fmt: Optional formatting fields for message templates.
     """
+    # T9.4: allow callers to pass a Request directly for ergonomic use.
+    if lang is not None and not isinstance(lang, str):
+        try:
+            lang = getattr(getattr(lang, "state", None), "lang", None)
+        except Exception:
+            lang = None
     detail = i18n_message(error_key, lang=lang, **fmt)
 
     return {

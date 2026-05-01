@@ -36,6 +36,7 @@ router = APIRouter()
 
 @router.get("/mrp/calculate/{order_id}", response_model=MRPPlanResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
 def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Calculate MRP For Order."""
     conn = get_db_connection(current_user.company_id)
     try:
         order = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
@@ -148,6 +149,7 @@ def list_mrp_plans(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
 ):
+    """List MRP Plans."""
     conn = get_db_connection(current_user.company_id)
     try:
         from utils.permissions import validate_branch_access

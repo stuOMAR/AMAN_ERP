@@ -715,6 +715,7 @@ def get_purchases_summary(
 
 @router.get("/rfq", dependencies=[Depends(require_permission("buying.view"))], response_model=List[Dict[str, Any]])
 def list_rfqs(status: Optional[str] = None, current_user=Depends(get_current_user)):
+    """List Rfqs."""
     with transactional(current_user.company_id) as db:
         q = "SELECT * FROM request_for_quotations WHERE 1=1"
         params = {}
@@ -726,6 +727,7 @@ def list_rfqs(status: Optional[str] = None, current_user=Depends(get_current_use
         return [dict(r._mapping) for r in rows]
 @router.get("/rfq/{rfq_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
 def get_rfq(rfq_id: int, current_user=Depends(get_current_user)):
+    """Get RFQ."""
     with transactional(current_user.company_id) as db:
         rfq = db.execute(text("SELECT * FROM request_for_quotations WHERE id = :id"), {"id": rfq_id}).fetchone()
         if not rfq:
@@ -739,6 +741,7 @@ def get_rfq(rfq_id: int, current_user=Depends(get_current_user)):
         }
 @router.post("/rfq", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def create_rfq(data: dict, request: Request, current_user=Depends(get_current_user)):
+    """Create RFQ."""
     with transactional(current_user.company_id) as db:
         try:
             import uuid
@@ -772,6 +775,7 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
             raise HTTPException(**http_error(500, "internal_error"))
 @router.put("/rfq/{rfq_id}/send", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def send_rfq(rfq_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Send RFQ."""
     with transactional(current_user.company_id) as db:
         db.execute(text("UPDATE request_for_quotations SET status = 'sent', updated_at = NOW() WHERE id = :id"), {"id": rfq_id})
         log_activity(
@@ -783,6 +787,7 @@ def send_rfq(rfq_id: int, request: Request, current_user=Depends(get_current_use
         return {"message": "RFQ sent to suppliers"}
 @router.post("/rfq/{rfq_id}/responses", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
+    """Add RFQ Response."""
     with transactional(current_user.company_id) as db:
         try:
             result = db.execute(text("""
@@ -807,6 +812,7 @@ def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Dep
             raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/rfq/{rfq_id}/compare", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
 def compare_rfq_responses(rfq_id: int, current_user=Depends(get_current_user)):
+    """Compare RFQ Responses."""
     with transactional(current_user.company_id) as db:
         responses = db.execute(text("""
             SELECT * FROM rfq_responses WHERE rfq_id = :rid ORDER BY total_price ASC
@@ -843,6 +849,7 @@ def convert_rfq_to_po(rfq_id: int, data: dict, request: Request, current_user=De
 
 @router.get("/agreements", dependencies=[Depends(require_permission("buying.view"))], response_model=List[Dict[str, Any]])
 def list_agreements(status: Optional[str] = None, current_user=Depends(get_current_user)):
+    """List Agreements."""
     with transactional(current_user.company_id) as db:
         q = "SELECT * FROM purchase_agreements WHERE 1=1"
         params = {}
@@ -854,6 +861,7 @@ def list_agreements(status: Optional[str] = None, current_user=Depends(get_curre
         return [dict(r._mapping) for r in rows]
 @router.get("/agreements/{agr_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
 def get_agreement(agr_id: int, current_user=Depends(get_current_user)):
+    """Get Agreement."""
     with transactional(current_user.company_id) as db:
         agr = db.execute(text("SELECT * FROM purchase_agreements WHERE id = :id"), {"id": agr_id}).fetchone()
         if not agr:
@@ -862,6 +870,7 @@ def get_agreement(agr_id: int, current_user=Depends(get_current_user)):
         return {"agreement": dict(agr._mapping), "lines": [dict(r._mapping) for r in lines]}
 @router.post("/agreements", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def create_agreement(data: dict, request: Request, current_user=Depends(get_current_user)):
+    """Create Agreement."""
     with transactional(current_user.company_id) as db:
         try:
             import uuid
@@ -898,6 +907,7 @@ def create_agreement(data: dict, request: Request, current_user=Depends(get_curr
             raise HTTPException(**http_error(500, "internal_error"))
 @router.put("/agreements/{agr_id}/activate", dependencies=[Depends(require_permission("buying.approve"))], response_model=Dict[str, Any])
 def activate_agreement(agr_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Activate Agreement."""
     with transactional(current_user.company_id) as db:
         db.execute(text("UPDATE purchase_agreements SET status = 'active' WHERE id = :id"), {"id": agr_id})
         log_activity(

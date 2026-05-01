@@ -41,6 +41,7 @@ def list_routes(
     limit: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user),
 ):
+    """List Routes."""
     conn = get_db_connection(current_user.company_id)
     try:
         from utils.permissions import validate_branch_access
@@ -85,6 +86,7 @@ def list_routes(
 
 @router.post("/routes", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_route(route: RouteCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Route."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -144,6 +146,7 @@ def create_route(route: RouteCreate, request: Request, current_user: UserRespons
 
 @router.put("/routes/{route_id}", response_model=RouteResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
 def update_route(route_id: int, route: RouteCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Update Route."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -195,6 +198,7 @@ def update_route(route_id: int, route: RouteCreate, request: Request, current_us
 
 @router.delete("/routes/{route_id}", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.delete"]))], response_model=Dict[str, Any])
 def delete_route(route_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Route."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:

@@ -81,6 +81,7 @@ class CreateShipmentRequest(BaseModel):
 @router.post("/shipments",
              dependencies=[Depends(require_permission("inventory.shipments_create"))], response_model=Dict[str, Any])
 def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_current_user)):
+    """Create Shipment."""
     db = get_db_connection(current_user.company_id)
     try:
         cfg = _load_cfg(db, body.carrier)
@@ -145,6 +146,7 @@ def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_curren
 @router.post("/shipments/{shipment_id}/track",
              dependencies=[Depends(require_permission("inventory.shipments_view"))], response_model=Dict[str, Any])
 def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
+    """Track Shipment."""
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(
@@ -177,6 +179,7 @@ def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
 @router.get("/shipments",
             dependencies=[Depends(require_permission("inventory.shipments_view"))], response_model=List[Dict[str, Any]])
 def list_shipments(limit: int = 50, current_user=Depends(get_current_user)):
+    """List Shipments."""
     limit = max(1, min(int(limit), 500))
     db = get_db_connection(current_user.company_id)
     try:
@@ -202,4 +205,5 @@ def list_shipments(limit: int = 50, current_user=Depends(get_current_user)):
 
 @router.get("/carriers", response_model=Dict[str, Any])
 def list_carriers() -> List[str]:
+    """List Carriers."""
     return sorted(_SHIP_REGISTRY.keys())

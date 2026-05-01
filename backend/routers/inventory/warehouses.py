@@ -20,6 +20,7 @@ logger = logging.getLogger(__name__)
 
 @warehouses_router.get("/warehouses", response_model=List[WarehouseResponse], dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
 def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    """List Warehouses."""
     if not current_user.company_id:
         raise HTTPException(status_code=400, detail="Company ID missing")
 
@@ -64,6 +65,7 @@ def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depend
 
 @warehouses_router.post("/warehouses", response_model=WarehouseResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
 def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create Warehouse."""
     db = get_db_connection(current_user.company_id)
     try:
         # Check duplicate code
@@ -103,6 +105,7 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
 
 @warehouses_router.put("/warehouses/{id}", response_model=WarehouseResponse, dependencies=[Depends(require_permission("stock.manage"))])
 def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Update Warehouse."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id, branch_id FROM warehouses WHERE id = :id"), {"id": id}).fetchone()
@@ -147,6 +150,7 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
 
 @warehouses_router.delete("/warehouses/{id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    """Delete Warehouse."""
     db = get_db_connection(current_user.company_id)
     try:
         # INV-001: Check existence

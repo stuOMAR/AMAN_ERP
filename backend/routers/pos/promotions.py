@@ -39,6 +39,7 @@ def list_promotions(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """List Promotions."""
     q = "SELECT * FROM pos_promotions WHERE 1=1"
     params = {}
     if active_only:
@@ -55,6 +56,7 @@ def create_promotion(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Create Promotion."""
     branch_id = data.get("branch_id")
     if branch_id:
         validate_branch_access(current_user, branch_id)
@@ -105,6 +107,7 @@ def update_promotion(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Update Promotion."""
     sets = []
     params = {"id": promo_id}
     for field in ["name", "promotion_type", "value", "buy_qty", "get_qty", "coupon_code",
@@ -135,6 +138,7 @@ def update_promotion(
 
 @router.delete("/promotions/{promo_id}", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def delete_promotion(promo_id: int, request: Request, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Delete Promotion."""
     db.execute(text("DELETE FROM pos_promotions WHERE id = :id"), {"id": promo_id})
     db.commit()
 

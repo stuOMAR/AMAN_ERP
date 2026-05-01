@@ -449,6 +449,29 @@ app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 # OPS-001: Request-ID middleware — adds X-Request-ID to every request/response
 app.add_middleware(RequestIDMiddleware)
 
+# T9.4: Accept-Language middleware — stash the negotiated UI language onto
+# `request.state.lang` so backend `utils/i18n.http_error()` can return the
+# correct locale without every router parsing the header. Frontend's
+# `services/apiClient.js` injects this header automatically.
+from starlette.middleware.base import BaseHTTPMiddleware
+
+
+class AcceptLanguageMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        raw = request.headers.get("Accept-Language", "")
+        # Take the first language tag, drop quality parameters, normalize ar-SA → ar.
+        primary = (raw.split(",")[0].split(";")[0].strip() or "en").split("-")[0].lower()
+        if primary not in {"ar", "en"}:
+            primary = "en"
+        try:
+            request.state.lang = primary
+        except Exception:
+            pass
+        return await call_next(request)
+
+
+app.add_middleware(AcceptLanguageMiddleware)
+
 # SEC-203: HTTPS Enforcement + Security Headers
 # SEC-204: Input Sanitization (XSS/SQLi detection)
 from utils.security_middleware import HTTPSRedirectMiddleware, InputSanitizationMiddleware

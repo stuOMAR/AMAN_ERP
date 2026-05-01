@@ -752,3 +752,89 @@ counts of the top 10 tables before/after restore (sanity check).
 * Nightly checksum (sha256) is appended to `/var/backups/aman/CHECKSUMS`.
 * Prometheus alert `BackupOlderThan26h` fires when the newest daily file is
   more than 26 hours old.
+
+---
+
+## Encryption Key Rotation (T9.5)
+
+`FIELD_ENCRYPTION_KEY` is used by `backend/utils/encryption.py` to encrypt
+sensitive fields at rest (CSID secrets, payment tokens, PII columns flagged
+in `models/`). Rotation procedure:
+
+1. Generate a new key:
+   ```bash
+   python -c "from cryptography.fernet import Fernet; print(Fernet.generate_key().decode())"
+   ```
+2. Append the new key to `FIELD_ENCRYPTION_KEYS` (comma-separated list — old
+   keys remain for decryption only). Set `FIELD_ENCRYPTION_KEY` (singular) to
+   the new value so all NEW writes use it.
+3. Restart backend + worker (`./safe-stop.sh && ./safe-start.sh`).
+4. Run the re-encryption job (off-hours):
+   ```bash
+   docker exec aman_backend python -m scripts.rotate_field_encryption \
+       --batch-size 500
+   ```
+5. Once all rows are re-encrypted, drop the old key from `FIELD_ENCRYPTION_KEYS`
+   on the next deploy.
+
+Rotation cadence: yearly OR immediately after a suspected key compromise.
+
+## ZATCA Phase 2 / CSID Setup (T9.5)
+
+CSIDs (Cryptographic Stamp Identifiers) are stored encrypted in
+`zatca_csids` (per branch). To onboard a new branch:
+
+1. Submit CSR via `POST /api/zatca/csids/request` (returns sandbox CSID).
+2. Validate against ZATCA sandbox: `POST /api/zatca/invoices/validate`.
+3. Promote to production: `POST /api/zatca/csids/{id}/promote-prod`.
+4. Verify reporting works: tail `worker` logs for `zatca_report` job.
+
+See `backend/integrations/einvoicing/` for the underlying client.
+
+## Scheduler / Worker Process (T9.5)
+
+The system runs a single dedicated APScheduler process to avoid duplicate
+job execution across uvicorn workers. Configure via:
+
+```bash
+# In .env / docker-compose.prod.yml — exactly ONE process per cluster
+SCHEDULER_MODE=dedicated
+```
+
+Start the worker:
+
+```bash
+python -m worker        # or: docker compose up worker
+```
+
+Key recurring jobs (see `backend/services/scheduler.py`):
+
+| Job ID                  | Schedule                | Purpose |
+|-------------------------|-------------------------|---------|
+| `audit_archival`        | every 24h               | Soft-archive >1y, MOVE >7y to `audit_logs_archive` (T9.3) |
+| `inventory_archival`    | monthly, 1st @ 03:00    | MOVE inventory_transactions >7y to archive table (T9.3) |
+| `gl_close_period`       | monthly                 | Auto-close prior period if reconciled |
+| `recurring_invoices`    | hourly                  | Generate scheduled invoices |
+| `zatca_report`          | every 5 min             | Report queued invoices to ZATCA |
+| `bank_feed_sync`        | every 30 min            | Pull bank statements via integrations |
+
+If you need to disable scheduling temporarily, set `SCHEDULER_ENABLED=false`
+on the worker process.
+
+## Recently Added Endpoints (Phase 8 / 9)
+
+* `GET /api/search` — unified full-text search across products / customers / suppliers / invoices.
+* `GET /api/currencies/current` — convenience endpoint exposing today's exchange rate.
+* `POST /api/hr/overtime-rates-config` — admin-only configuration of overtime multipliers.
+* `GET /api/parties/duplicates-by-phone` — duplicate-detection helper.
+* Archive tables: `audit_logs_archive`, `inventory_transactions_archive` (T9.3).
+
+## Bilingual Error Responses (T9.4)
+
+The frontend `apiClient.js` injects `Accept-Language: <lang>` on every
+request. Backend `AcceptLanguageMiddleware` stores the value on
+`request.state.lang`, and `utils/i18n.http_error()` resolves messages from
+`backend/locales/errors.{ar,en}.json`. To add a new key:
+
+1. Add to BOTH `errors.en.json` and `errors.ar.json`.
+2. Use `raise HTTPException(**http_error(404, "my_key", lang=request.state.lang))`.

@@ -55,6 +55,7 @@ def list_plans(
     is_active: Optional[bool] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    """List Plans."""
     with transactional(current_user.company_id) as db:
         where = "is_deleted = false"
         params: dict = {"lim": limit, "off": skip}
@@ -84,6 +85,7 @@ def list_plans(
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def create_plan(body: PlanCreate, current_user=Depends(get_current_user)):
+    """Create Plan."""
     with transactional(current_user.company_id) as db:
         try:
             row = db.execute(
@@ -119,6 +121,7 @@ def create_plan(body: PlanCreate, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def update_plan(plan_id: int, body: PlanUpdate, current_user=Depends(get_current_user)):
+    """Update Plan."""
     with transactional(current_user.company_id) as db:
         try:
             # Build dynamic SET clause from provided fields
@@ -163,6 +166,7 @@ def update_plan(plan_id: int, body: PlanUpdate, current_user=Depends(get_current
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def enroll(body: EnrollmentCreate, current_user=Depends(get_current_user)):
+    """Enroll."""
     with transactional(current_user.company_id) as db:
         try:
             # Check fiscal period is open for the enrollment start date
@@ -227,6 +231,7 @@ def list_enrollments(
     customer_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    """List Enrollments."""
     with transactional(current_user.company_id) as db:
         where = "e.is_deleted = false"
         params: dict = {"lim": limit, "off": skip}
@@ -259,6 +264,7 @@ def list_enrollments(
     dependencies=[Depends(require_permission("finance.subscription_view"))],
 )
 def get_enrollment(enrollment_id: int, current_user=Depends(get_current_user)):
+    """Get Enrollment."""
     with transactional(current_user.company_id) as db:
         row = db.execute(
             text(
@@ -293,6 +299,7 @@ def get_enrollment(enrollment_id: int, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def pause(enrollment_id: int, current_user=Depends(get_current_user)):
+    """Pause."""
     with transactional(current_user.company_id) as db:
         try:
             pause_enrollment(db, enrollment_id=enrollment_id, user=str(current_user.id))
@@ -312,6 +319,7 @@ def pause(enrollment_id: int, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def resume(enrollment_id: int, current_user=Depends(get_current_user)):
+    """Resume."""
     with transactional(current_user.company_id) as db:
         try:
             resume_enrollment(db, enrollment_id=enrollment_id, user=str(current_user.id))
@@ -331,6 +339,7 @@ def resume(enrollment_id: int, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def cancel(enrollment_id: int, body: CancelRequest, current_user=Depends(get_current_user)):
+    """Cancel."""
     with transactional(current_user.company_id) as db:
         try:
             cancel_enrollment(
@@ -359,6 +368,7 @@ def cancel(enrollment_id: int, body: CancelRequest, current_user=Depends(get_cur
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
 def change_plan(enrollment_id: int, body: PlanChangeRequest, current_user=Depends(get_current_user)):
+    """Change Plan."""
     with transactional(current_user.company_id) as db:
         try:
             # Check fiscal period is open for today (plan change date)

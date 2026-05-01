@@ -5350,6 +5350,48 @@ def get_performance_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_logs(resource_type, resource_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_live ON audit_logs(created_at DESC) WHERE NOT is_archived;
     CREATE INDEX IF NOT EXISTS idx_audit_logs_archival ON audit_logs(created_at) WHERE is_archived = TRUE;
+    -- T9.3: cold-storage archive tables for >7 year retention. Live tables
+    -- stay slim; long-term forensic data still queryable from archive.
+    CREATE TABLE IF NOT EXISTS audit_logs_archive (
+        id              INTEGER       PRIMARY KEY,
+        user_id         INTEGER,
+        username        VARCHAR(100),
+        action          VARCHAR(100),
+        resource_type   VARCHAR(50),
+        resource_id     VARCHAR(50),
+        details         JSONB,
+        ip_address      VARCHAR(50),
+        branch_id       INTEGER,
+        prev_hash       VARCHAR(64),
+        hash            VARCHAR(64),
+        chain_seq       BIGINT,
+        created_at      TIMESTAMPTZ   NOT NULL,
+        archived_at     TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_arch_created ON audit_logs_archive (created_at);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_arch_user ON audit_logs_archive (user_id);
+    CREATE INDEX IF NOT EXISTS idx_audit_logs_arch_chain ON audit_logs_archive (chain_seq);
+
+    CREATE TABLE IF NOT EXISTS inventory_transactions_archive (
+        id                  INTEGER       PRIMARY KEY,
+        product_id          INTEGER,
+        warehouse_id        INTEGER,
+        transaction_type    VARCHAR(50)   NOT NULL,
+        reference_type      VARCHAR(50),
+        reference_id        INTEGER,
+        reference_document  VARCHAR(100),
+        quantity            DECIMAL(18, 4) NOT NULL,
+        balance_before      DECIMAL(18, 4),
+        balance_after       DECIMAL(18, 4),
+        unit_cost           DECIMAL(18, 4),
+        total_cost          DECIMAL(18, 4),
+        notes               TEXT,
+        created_by          INTEGER,
+        created_at          TIMESTAMPTZ   NOT NULL,
+        archived_at         TIMESTAMPTZ   NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_inv_tx_arch_created ON inventory_transactions_archive (created_at);
+    CREATE INDEX IF NOT EXISTS idx_inv_tx_arch_product ON inventory_transactions_archive (product_id);
     -- T3.7 (audit #21,#22): hash-chain unique index + immutability trigger.
     CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_logs_chain_seq ON audit_logs(chain_seq);
     CREATE EXTENSION IF NOT EXISTS pgcrypto;

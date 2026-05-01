@@ -39,6 +39,7 @@ def generate_forecast(
     body: ForecastGenerateRequest,
     current_user=Depends(get_current_user),
 ):
+    """Generate Forecast."""
     db = get_db_connection(current_user.company_id)
     try:
         result = generate_cashflow_forecast(
@@ -76,6 +77,7 @@ def list_forecasts(
     branch_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    """List Forecasts."""
     resolved_branch = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
@@ -110,6 +112,7 @@ def list_forecasts(
     dependencies=[Depends(require_permission("finance.cashflow_view"))],
 )
 def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
+    """Get Forecast."""
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(
@@ -142,6 +145,7 @@ def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.cashflow_manage"))],
 )
 def delete_forecast(forecast_id: int, current_user=Depends(get_current_user)):
+    """Delete Forecast."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(

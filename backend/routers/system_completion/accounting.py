@@ -561,6 +561,7 @@ def post_zakat_entry(fiscal_year: int, current_user: dict = Depends(get_current_
 @router.get("/accounting/fiscal-periods", dependencies=[Depends(require_permission("accounting.view"))],
             tags=["Fiscal Periods"], response_model=List[Dict[str, Any]])
 def list_fiscal_periods(current_user: dict = Depends(get_current_user)):
+    """List Fiscal Periods."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         create_fiscal_lock_table(db)
@@ -576,6 +577,7 @@ def list_fiscal_periods(current_user: dict = Depends(get_current_user)):
 @router.post("/accounting/fiscal-periods", dependencies=[Depends(require_permission("accounting.manage"))],
              tags=["Fiscal Periods"], response_model=Dict[str, Any])
 def create_fiscal_period(body: FiscalPeriodLockRequest, current_user: dict = Depends(get_current_user)):
+    """Create Fiscal Period."""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
     with transactional(company_id) as db:

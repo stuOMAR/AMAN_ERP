@@ -113,3 +113,50 @@ bash stop.sh
 - **Swagger UI:** http://localhost:8000/api/docs
 - **ReDoc:** http://localhost:8000/api/redoc
 - **OpenAPI JSON:** http://localhost:8000/openapi.json
+
+## Worker / Scheduler (T9.5)
+
+A dedicated worker process runs APScheduler jobs (audit/inventory archival,
+ZATCA reporting, recurring invoices, bank feed sync). It must NOT run inside
+uvicorn workers (would cause duplicate job execution).
+
+```bash
+# In production (docker compose)
+docker compose -f docker-compose.prod.yml up -d worker
+
+# Locally
+SCHEDULER_MODE=dedicated python -m worker
+```
+
+Job registry: `backend/services/scheduler.py::start_scheduler`. See
+`docs/RUNBOOK.md` → "Scheduler / Worker Process" for the full job schedule.
+
+## Internationalization (T9.4)
+
+Backend errors are bilingual (Arabic / English) via
+`backend/locales/errors.{ar,en}.json`. Routers use:
+
+```python
+from utils.i18n import http_error
+raise HTTPException(**http_error(404, "record_not_found", lang=request.state.lang))
+```
+
+`AcceptLanguageMiddleware` (in `main.py`) reads the `Accept-Language` header
+that the frontend's `apiClient.js` sets automatically.
+
+## Recently Added Endpoints
+
+| Endpoint | Purpose |
+|----------|---------|
+| `GET /api/search` | Unified search (products/customers/suppliers/invoices) |
+| `GET /api/currencies/current` | Today's FX rate |
+| `POST /api/hr/overtime-rates-config` | Configure overtime multipliers |
+| `GET /api/parties/duplicates-by-phone` | Duplicate detection |
+
+## Archive Tables (T9.3)
+
+* `audit_logs_archive` — entries older than 7 years moved here monthly.
+* `inventory_transactions_archive` — same retention policy.
+
+Both preserve original IDs and (for audit) the hash-chain columns so
+forensic verification can still walk the chain.

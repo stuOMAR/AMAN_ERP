@@ -35,6 +35,7 @@ from .core import ApplicationCreate, ApplicationStageUpdate, JobOpeningCreate, J
 
 @router.get("/recruitment/openings", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def list_job_openings(status: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Job Openings."""
     with transactional(company_id) as conn:
         q = """SELECT jo.*,
                    (SELECT COUNT(*) FROM job_applications ja WHERE ja.opening_id = jo.id) as applications_count
@@ -65,6 +66,7 @@ def list_job_openings(status: Optional[str] = None, branch_id: Optional[int] = N
 
 @router.post("/recruitment/openings", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_job_opening(data: JobOpeningCreate, company_id: str = Depends(get_current_user_company), current_user: UserResponse = Depends(get_current_user)):
+    """Create Job Opening."""
     with transactional(company_id) as conn:
         res = conn.execute(text("""
             INSERT INTO job_openings (title,description,requirements,employment_type,vacancies,status,closing_date,created_by)
@@ -78,6 +80,7 @@ def create_job_opening(data: JobOpeningCreate, company_id: str = Depends(get_cur
 
 @router.put("/recruitment/openings/{opening_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_job_opening(opening_id: int, data: JobOpeningUpdate, company_id: str = Depends(get_current_user_company)):
+    """Update Job Opening."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": opening_id}
         for f, col in [("title","title"),("status","status"),("positions","vacancies"),("requirements","requirements"),("deadline","closing_date")]:
@@ -91,6 +94,7 @@ def update_job_opening(opening_id: int, data: JobOpeningUpdate, company_id: str 
 
 @router.get("/recruitment/openings/{opening_id}/applications", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def list_opening_applications(opening_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Opening Applications."""
     with transactional(company_id) as conn:
         # Check branch access for this opening
         if current_user.role not in ['admin', 'system_admin', 'manager', 'gm']:
@@ -110,6 +114,7 @@ def list_opening_applications(opening_id: int, current_user: UserResponse = Depe
 
 @router.get("/recruitment/applications", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def list_all_applications(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List All Applications."""
     with transactional(company_id) as conn:
         q = """SELECT ja.*, jo.title as opening_title
             FROM job_applications ja
@@ -126,6 +131,7 @@ def list_all_applications(branch_id: Optional[int] = None, current_user: UserRes
 
 @router.post("/recruitment/applications", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_application(data: ApplicationCreate, company_id: str = Depends(get_current_user_company)):
+    """Create Application."""
     with transactional(company_id) as conn:
         res = conn.execute(text("""
             INSERT INTO job_applications (opening_id,applicant_name,email,phone,resume_url,cover_letter,stage,status)
@@ -138,6 +144,7 @@ def create_application(data: ApplicationCreate, company_id: str = Depends(get_cu
 
 @router.put("/recruitment/applications/{app_id}/stage", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_application_stage(app_id: int, data: ApplicationStageUpdate, company_id: str = Depends(get_current_user_company)):
+    """Update Application Stage."""
     with transactional(company_id) as conn:
         conn.execute(text("UPDATE job_applications SET stage=:stage, updated_at=NOW() WHERE id=:id"),
                      {"stage": data.stage, "id": app_id})

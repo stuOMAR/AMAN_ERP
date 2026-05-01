@@ -331,6 +331,7 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
 
 @router.get("/supplier-ratings", dependencies=[Depends(require_permission("buying.view"))], response_model=List[Dict[str, Any]])
 def list_supplier_ratings(supplier_id: Optional[int] = None, current_user=Depends(get_current_user)):
+    """List Supplier Ratings."""
     with transactional(current_user.company_id) as db:
         q = "SELECT * FROM supplier_ratings WHERE 1=1"
         params = {}
@@ -342,6 +343,7 @@ def list_supplier_ratings(supplier_id: Optional[int] = None, current_user=Depend
         return [dict(r._mapping) for r in rows]
 @router.get("/supplier-ratings/summary/{supplier_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
 def supplier_rating_summary(supplier_id: int, current_user=Depends(get_current_user)):
+    """Supplier Rating Summary."""
     with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             SELECT supplier_id,
@@ -359,6 +361,7 @@ def supplier_rating_summary(supplier_id: int, current_user=Depends(get_current_u
         return dict(row._mapping)
 @router.post("/supplier-ratings", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def rate_supplier(data: dict, request: Request, current_user=Depends(get_current_user)):
+    """Rate Supplier."""
     with transactional(current_user.company_id) as db:
         try:
             q = _dec(data.get("quality_score", 0)).quantize(Decimal('0.1'), ROUND_HALF_UP)

@@ -64,6 +64,7 @@ def create_scoring_rule(data: LeadScoringRuleCreate, request: Request, current_u
 
 @router.put("/lead-scoring/rules/{rule_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_scoring_rule(rule_id: int, data: LeadScoringRuleUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Scoring Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
@@ -82,6 +83,7 @@ def update_scoring_rule(rule_id: int, data: LeadScoringRuleUpdate, request: Requ
 
 @router.delete("/lead-scoring/rules/{rule_id}", dependencies=[Depends(require_permission("sales.delete"))], response_model=Dict[str, Any])
 def delete_scoring_rule(rule_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Scoring Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM crm_lead_scoring_rules WHERE id = :id"), {"id": rule_id})
@@ -208,6 +210,7 @@ def list_segments(current_user=Depends(get_current_user)):
 
 @router.post("/segments", status_code=201, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_segment(data: SegmentCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Segment."""
     db = get_db_connection(current_user.company_id)
     try:
         import json
@@ -232,6 +235,7 @@ def create_segment(data: SegmentCreate, request: Request, current_user=Depends(g
 
 @router.put("/segments/{seg_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_segment(seg_id: int, data: SegmentUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Segment."""
     db = get_db_connection(current_user.company_id)
     try:
         import json
@@ -253,6 +257,7 @@ def update_segment(seg_id: int, data: SegmentUpdate, request: Request, current_u
 
 @router.delete("/segments/{seg_id}", dependencies=[Depends(require_permission("sales.delete"))], response_model=Dict[str, Any])
 def delete_segment(seg_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Segment."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM crm_customer_segment_members WHERE segment_id = :id"), {"id": seg_id})
@@ -267,6 +272,7 @@ def delete_segment(seg_id: int, request: Request, current_user=Depends(get_curre
 @router.post("/segments/{seg_id}/customers/{customer_id}",
              status_code=201, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def add_customer_to_segment(seg_id: int, customer_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Add Customer To Segment."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("""
@@ -287,6 +293,7 @@ def add_customer_to_segment(seg_id: int, customer_id: int, request: Request, cur
 @router.delete("/segments/{seg_id}/customers/{customer_id}",
                dependencies=[Depends(require_permission("sales.delete"))], response_model=Dict[str, Any])
 def remove_customer_from_segment(seg_id: int, customer_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Remove Customer From Segment."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("""
@@ -301,6 +308,7 @@ def remove_customer_from_segment(seg_id: int, customer_id: int, request: Request
 
 @router.get("/segments/{seg_id}/customers", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def get_segment_customers(seg_id: int, current_user=Depends(get_current_user)):
+    """Get Segment Customers."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("""

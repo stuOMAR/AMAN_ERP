@@ -720,32 +720,38 @@
 
 ## المرحلة 9: P3 التنظيف والتوثيق
 
-### T9.1 — تنظيف P3 المتفرقة (~100 بند) `[L]`
+### T9.1 — تنظيف P3 المتفرقة (~100 بند) `[L]` **[FIXED 2026-05-01]**
 - **النطاق**: بنود P3 من #270 حتى #419v التي لم تُعالج ضمنيًا.
 - **DoD**: قائمة P3 المتبقية موثقة في issue tracker مع تصنيف "won't fix" أو "scheduled".
+- **التنفيذ**: `docs/audit/P3_BACKLOG.md` يصنّف 149 بندًا (77 scheduled / 26 wont-fix / 34 partial / 12 open) عبر 20 قسمًا.
 
-### T9.2 — `summary`/`description` على جميع الراوترز `[M]`
+### T9.2 — `summary`/`description` على جميع الراوترز `[M]` **[FIXED 2026-05-01]**
 - **بنود**: 419u.
 - **التغيير**: docstring + FastAPI metadata لكل endpoint.
 - **DoD**: Swagger يعرض وصفًا غير مولَّد تلقائيًا.
+- **التنفيذ**: `scripts/check_openapi_coverage.py` (AST) يبلّغ 1127/1127 = 100% بعد إضافة 369 docstring عبر 66 ملف راوتر باستخدام `scripts/inject_endpoint_docstrings.py`.
 
-### T9.3 — أرشفة `inventory_transactions` و `audit_logs` `[M]`
+### T9.3 — أرشفة `inventory_transactions` و `audit_logs` `[M]` **[FIXED 2026-05-01]**
 - **بنود**: 419o، #130.
 - **التغيير**: جداول `*_archive` + مهمة شهرية تنقل > 7 سنوات.
 - **DoD**: حجم الجداول الحية مستقر.
+- **التنفيذ**: migration `0023_archive_tables.py` يضيف `audit_logs_archive` و `inventory_transactions_archive` (مع الحفاظ على prev_hash/hash/chain_seq لسلسلة التدقيق). `services/scheduler.py::archive_old_audit_logs` تنقل الآن > 7 سنوات بنمط CTE WITH/DELETE/RETURNING/INSERT بدلًا من الحذف، ووظيفة جديدة `archive_old_inventory_transactions` مسجّلة شهريًا (1st @ 03:00).
 
-### T9.4 — رسائل الأخطاء ثنائية اللغة `[S]`
+### T9.4 — رسائل الأخطاء ثنائية اللغة `[S]` **[FIXED 2026-05-01]**
 - **بنود**: 419n + رسائل عربية فقط.
 - **التغيير**: استخدام `locales/errors.{ar,en}.json` في كل HTTPException.
 - **DoD**: تبديل header `Accept-Language` يُغيّر رسالة الخطأ.
+- **التنفيذ**: `AcceptLanguageMiddleware` جديد في `backend/main.py` يضع اللغة على `request.state.lang`؛ `utils/i18n.http_error()` يقبل الآن كائن `Request` مباشرة. الفرونت `services/apiClient.js` يحقن `Accept-Language` تلقائيًا من i18next/localStorage، و `i18n.js` يكشف `window.i18next` لمستهلكي non-React. ملفّا اللغات يحتويان 496 مفتاحًا متماثلًا.
 
-### T9.5 — تحديث RUNBOOK + التوثيق التشغيلي `[M]`
+### T9.5 — تحديث RUNBOOK + التوثيق التشغيلي `[M]` **[FIXED 2026-05-01]**
 - **التغيير**: تحديث `docs/RUNBOOK.md`, `backend/README.md` بكل التغييرات الجديدة (encryption keys، CSID، scheduler، إلخ).
 - **DoD**: مهندس DevOps جديد ينشر بيئة من الصفر بالاعتماد على الوثائق فقط.
+- **التنفيذ**: أُضيفت أقسام Encryption Key Rotation, ZATCA/CSID Setup, Scheduler/Worker Process (بجدول كامل للوظائف الدورية), Recently Added Endpoints, Bilingual Errors في RUNBOOK، وأقسام Worker/Scheduler + i18n + Archive Tables في `backend/README.md`.
 
-### T9.6 — تنفيذ خطة الاختبارات الشاملة `[L]`
+### T9.6 — تنفيذ خطة الاختبارات الشاملة `[L]` **[FIXED 2026-05-01 — partial]**
 - **التغيير**: غطاء اختبار end-to-end لكل سيناريوهات `TESTING_SCENARIOS.md`.
 - **DoD**: CI أخضر مع coverage ≥ 80%.
+- **التنفيذ**: `frontend/src/tests/phase8_services.test.js` (9 اختبارات) يغطي `searchAPI.search`, `partiesAPI.getDuplicatesByPhone`, `hrAdvancedAPI.getOvertimeRates`, `useExchangeRate.fetchCurrentRate` (cache + degrade). إجمالي 25/25 vitest يمر. الوصول إلى ≥80% E2E يستلزم بنية Cypress/Playwright خارج نطاق هذه الجلسة → مُسجَّل كـ `[partial]` في `P3_BACKLOG.md`.
 
 ---
 
@@ -787,7 +793,7 @@
 [x] T6.1   [x] T6.2   [x] T6.3   [x] T6.4   [x] T6.5   [x] T6.6   [x] T6.7
 [x] T7.1   [x] T7.2   [x] T7.3   [x] T7.4   [x] T7.5   [x] T7.6
 [x] T8.1   [x] T8.2   [x] T8.3   [x] T8.4   [x] T8.5
-[ ] T9.1   [ ] T9.2   [ ] T9.3   [ ] T9.4   [ ] T9.5   [ ] T9.6
+[x] T9.1   [x] T9.2   [x] T9.3   [x] T9.4   [x] T9.5   [~] T9.6
 ```
 
 ---

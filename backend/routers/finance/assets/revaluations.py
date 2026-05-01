@@ -37,6 +37,7 @@ from .core import AssetRevaluation, _D2, _D4, _dec
 
 @router.get("/revaluations", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_revaluations(asset_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    """List Revaluations."""
     with transactional(current_user.company_id) as conn:
         q = "SELECT * FROM asset_revaluations WHERE 1=1"
         params = {}
@@ -50,6 +51,7 @@ def list_revaluations(asset_id: Optional[int] = None, current_user: dict = Depen
 
 @router.post("/revaluations", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_revaluation(data: AssetRevaluationCreate, current_user: dict = Depends(get_current_user)):
+    """Create Revaluation."""
     with transactional(current_user.company_id) as conn:
         try:
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()

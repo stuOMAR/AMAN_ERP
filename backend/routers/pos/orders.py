@@ -40,6 +40,7 @@ def create_order(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Create Order."""
     # Get base currency
     from utils.accounting import get_base_currency
     base_currency = get_base_currency(db)

@@ -65,6 +65,7 @@ class SendSMSRequest(BaseModel):
     dependencies=[Depends(require_permission("notifications.send"))],
 )
 def send_sms(body: SendSMSRequest, current_user=Depends(get_current_user)):
+    """Send SMS."""
     db = get_db_connection(current_user.company_id)
     try:
         cfg = _load_cfg(db, body.provider)
@@ -111,6 +112,7 @@ def send_sms(body: SendSMSRequest, current_user=Depends(get_current_user)):
 
 @router.get("/logs", dependencies=[Depends(require_permission("notifications.view"))])
 def list_sms(limit: int = 50, current_user=Depends(get_current_user)) -> List[Dict[str, Any]]:
+    """List SMS."""
     limit = max(1, min(int(limit), 500))
     db = get_db_connection(current_user.company_id)
     try:
@@ -135,12 +137,14 @@ def list_sms(limit: int = 50, current_user=Depends(get_current_user)) -> List[Di
 
 @router.get("/providers")
 def list_providers() -> List[str]:
+    """List Providers."""
     return sorted(_SMS_REGISTRY.keys())
 
 
 @router.get("/{provider}/balance",
             dependencies=[Depends(require_permission("notifications.view"))])
 def gateway_balance(provider: str, current_user=Depends(get_current_user)):
+    """Gateway Balance."""
     db = get_db_connection(current_user.company_id)
     try:
         cfg = _load_cfg(db, provider)

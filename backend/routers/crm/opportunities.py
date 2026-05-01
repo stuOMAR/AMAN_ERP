@@ -32,6 +32,7 @@ def list_opportunities(
     branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
+    """List Opportunities."""
     # CRM-F1: enforce branch scope on list
     branch_id = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
@@ -114,6 +115,7 @@ def get_pipeline_summary(current_user=Depends(get_current_user)):
 
 @router.get("/opportunities/{opp_id}", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=Dict[str, Any])
 def get_opportunity(opp_id: int, current_user=Depends(get_current_user)):
+    """Get Opportunity."""
     db = get_db_connection(current_user.company_id)
     try:
         opp = db.execute(text("""
@@ -139,6 +141,7 @@ def get_opportunity(opp_id: int, current_user=Depends(get_current_user)):
 
 @router.post("/opportunities", status_code=201, dependencies=[Depends(require_permission(["sales.create", "projects.create"]))], response_model=Dict[str, Any])
 def create_opportunity(data: OpportunityCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Opportunity."""
     db = get_db_connection(current_user.company_id)
     try:
         opp_id = db.execute(text("""
@@ -170,6 +173,7 @@ def create_opportunity(data: OpportunityCreate, request: Request, current_user=D
 
 @router.put("/opportunities/{opp_id}", dependencies=[Depends(require_permission(["sales.create", "projects.edit"]))], response_model=Dict[str, Any])
 async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Opportunity."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.model_dump().items()
@@ -220,6 +224,7 @@ async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Requ
 
 @router.delete("/opportunities/{opp_id}", dependencies=[Depends(require_permission(["sales.delete", "projects.delete"]))], response_model=Dict[str, Any])
 def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Opportunity."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM sales_opportunities WHERE id = :id"), {"id": opp_id})
@@ -233,6 +238,7 @@ def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_c
 @router.post("/opportunities/{opp_id}/activities", status_code=201,
              dependencies=[Depends(require_permission(["sales.create", "projects.edit"]))], response_model=Dict[str, Any])
 def add_activity(opp_id: int, data: ActivityCreate, request: Request, current_user=Depends(get_current_user)):
+    """Add Activity."""
     db = get_db_connection(current_user.company_id)
     try:
         aid = db.execute(text("""

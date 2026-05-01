@@ -37,6 +37,7 @@ from .core import _D2, _D4
 
 @router.get("/{asset_id}/insurance", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_asset_insurance(asset_id: int, current_user: dict = Depends(get_current_user)):
+    """List Asset Insurance."""
     with transactional(current_user.company_id) as conn:
         rows = conn.execute(text("SELECT * FROM asset_insurance WHERE asset_id = :id ORDER BY end_date DESC"),
                             {"id": asset_id}).fetchall()
@@ -45,6 +46,7 @@ def list_asset_insurance(asset_id: int, current_user: dict = Depends(get_current
 
 @router.post("/{asset_id}/insurance", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def add_insurance(asset_id: int, data: InsuranceCreate, current_user: dict = Depends(get_current_user)):
+    """Add Insurance."""
     with transactional(current_user.company_id) as conn:
         try:
             result = conn.execute(text("""

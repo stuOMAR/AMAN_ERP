@@ -39,6 +39,7 @@ def list_work_centers(
     branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Work Centers."""
     from utils.permissions import validate_branch_access
     validated_branch = validate_branch_access(current_user, branch_id)
     conn = get_db_connection(current_user.company_id)
@@ -56,6 +57,7 @@ def list_work_centers(
 
 @router.post("/work-centers", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_work_center(wc: WorkCenterCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Work Center."""
     conn = get_db_connection(current_user.company_id)
     try:
         new_wc = conn.execute(text("""
@@ -84,6 +86,7 @@ def create_work_center(wc: WorkCenterCreate, request: Request, current_user: Use
 
 @router.put("/work-centers/{wc_id}", response_model=WorkCenterResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
 def update_work_center(wc_id: int, wc: WorkCenterCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Update Work Center."""
     conn = get_db_connection(current_user.company_id)
     try:
         updated = conn.execute(text("""
@@ -120,6 +123,7 @@ def update_work_center(wc_id: int, wc: WorkCenterCreate, request: Request, curre
 
 @router.delete("/work-centers/{wc_id}", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.delete"]))], response_model=Dict[str, Any])
 def delete_work_center(wc_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Work Center."""
     conn = get_db_connection(current_user.company_id)
     try:
         # Check if in use by any operations

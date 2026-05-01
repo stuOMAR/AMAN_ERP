@@ -126,6 +126,29 @@ api.interceptors.request.use(async (config) => {
         }
     }
 
+    // T9.4: forward the user's UI language to the backend so that
+    // `utils/i18n.http_error()` / `i18n_message()` resolve error messages
+    // in the correct locale (uses `backend/locales/errors.{ar,en}.json`).
+    // We read i18next first (authoritative) and fall back to localStorage
+    // and finally to the <html lang> attribute. The backend normalizes
+    // 'ar-SA' / 'en-US' to 'ar' / 'en' automatically.
+    if (!config.headers['Accept-Language']) {
+        let lang = null;
+        try {
+            // Lazy access — i18next attaches itself globally once initialized.
+            lang = (typeof window !== 'undefined' && window.i18next?.language) || null;
+        } catch { /* ignore */ }
+        if (!lang) {
+            try { lang = localStorage.getItem('i18nextLng'); } catch { /* ignore */ }
+        }
+        if (!lang && typeof document !== 'undefined') {
+            lang = document.documentElement?.lang || null;
+        }
+        if (lang) {
+            config.headers['Accept-Language'] = lang;
+        }
+    }
+
     // Auto-attach AbortController unless request already has a signal or opts out
     if (!config.signal && !config.skipAbort) {
         const controller = requestManager.createController()

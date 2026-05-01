@@ -35,6 +35,7 @@ from .core import PayslipGenerateRequest, _D2, _dec
 
 @router.get("/payroll-periods", response_model=List[PayrollPeriodResponse], dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
 def list_payroll_periods(company_id: str = Depends(get_current_user_company)):
+    """List Payroll Periods."""
     with transactional(company_id) as conn:
         query = """
             SELECT p.id, p.name, p.start_date, p.end_date, p.status, p.created_at,
@@ -61,6 +62,7 @@ def list_payroll_periods(company_id: str = Depends(get_current_user_company)):
 
 @router.get("/payroll-periods/{period_id}", response_model=PayrollPeriodResponse, dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
 def get_payroll_period(period_id: int, company_id: str = Depends(get_current_user_company)):
+    """Get Payroll Period."""
     with transactional(company_id) as conn:
         query = """
             SELECT p.id, p.name, p.start_date, p.end_date, p.status, p.created_at,
@@ -87,6 +89,7 @@ def get_payroll_period(period_id: int, company_id: str = Depends(get_current_use
 
 @router.post("/payroll-periods", dependencies=[Depends(require_permission(["hr.manage", "hr.payroll.manage"]))], response_model=Dict[str, Any])
 def create_payroll_period(period: PayrollPeriodCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Payroll Period."""
     with transactional(company_id) as conn:
         # Check overlap? For now skip complex validation
         
@@ -107,6 +110,7 @@ def create_payroll_period(period: PayrollPeriodCreate, current_user: UserRespons
 
 @router.get("/payroll-periods/{period_id}/entries", response_model=List[PayrollEntryResponse], dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
 def get_payroll_entries(period_id: int, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Get Payroll Entries."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -164,6 +168,7 @@ def get_payroll_entries(period_id: int, branch_id: Optional[int] = None, current
 
 @router.post("/loans", response_model=LoanResponse, dependencies=[Depends(require_permission("hr.loans.manage"))])
 def create_loan_request(loan: LoanCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Loan Request."""
     with transactional(company_id) as conn:
         try:
             monthly_installment = str((_dec(loan.amount) / Decimal(str(loan.total_installments))).quantize(_D2, ROUND_HALF_UP))
@@ -197,6 +202,7 @@ def create_loan_request(loan: LoanCreate, current_user: UserResponse = Depends(g
 
 @router.get("/loans", dependencies=[Depends(require_permission("hr.loans.view"))], response_model=List[Dict[str, Any]])
 def list_loans(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Loans."""
     with transactional(company_id) as conn:
         try:
             if branch_id:
@@ -223,6 +229,7 @@ def list_loans(branch_id: Optional[int] = None, current_user: UserResponse = Dep
 
 @router.put("/loans/{loan_id}/approve", dependencies=[Depends(require_permission("hr.loans.manage"))], response_model=Dict[str, Any])
 def approve_loan(loan_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Approve Loan."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -285,6 +292,7 @@ def approve_loan(loan_id: int, current_user: UserResponse = Depends(get_current_
 
 @router.post("/payroll-periods/{period_id}/generate", dependencies=[Depends(require_permission(["hr.manage", "hr.payroll.manage"]))], response_model=Dict[str, Any])
 def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Generate Payroll."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -490,6 +498,7 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
 
 @router.post("/payroll-periods/{period_id}/post", dependencies=[Depends(require_permission(["hr.manage", "hr.payroll.manage"]))], response_model=Dict[str, Any])
 def post_payroll(period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Post Payroll."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -770,6 +779,7 @@ def post_payroll(period_id: int, current_user: UserResponse = Depends(get_curren
 # --- Departments ---
 @router.get("/payslips", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def list_all_payslips(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List All Payslips."""
     with transactional(company_id) as conn:
         q = """
             SELECT pe.id, pe.employee_id, pe.period_id,
@@ -814,6 +824,7 @@ def get_payslip_detail(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Payslip Detail."""
     with transactional(company_id) as conn:
         row = conn.execute(text("""
             SELECT pe.*, e.first_name || ' ' || e.last_name as employee_name,
@@ -840,6 +851,7 @@ def get_payslip_detail(
 
 @router.post("/payslips/generate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def generate_single_payslip(data: PayslipGenerateRequest, company_id: str = Depends(get_current_user_company)):
+    """Generate Single Payslip."""
     with transactional(company_id) as conn:
         last_day = cal_module.monthrange(data.year, data.month)[1]
         start_date = f"{data.year}-{data.month:02d}-01"

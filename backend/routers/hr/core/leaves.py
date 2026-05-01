@@ -35,6 +35,7 @@ from .core import LeaveCarryoverRequest, _D2, _dec, has_permission
 
 @router.post("/leaves", response_model=LeaveRequestResponse, dependencies=[Depends(require_permission("hr.leaves.manage"))])
 def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Leave Request."""
     with transactional(company_id) as conn:
         try:
             # Determine employee ID
@@ -173,6 +174,7 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
 
 @router.get("/leaves", response_model=List[LeaveRequestResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_leave_requests(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Leave Requests."""
     # Basic view permission required
     if not has_permission(current_user, "hr.leaves.view"):
         pass 
@@ -216,6 +218,7 @@ def list_leave_requests(branch_id: Optional[int] = None, current_user: UserRespo
 
 @router.put("/leaves/{leave_id}/status", dependencies=[Depends(require_permission("hr.leaves.manage"))], response_model=Dict[str, Any])
 def update_leave_status(leave_id: int, status_in: str, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Leave Status."""
     with transactional(company_id) as conn:
         conn.execute(text("""
             UPDATE leave_requests 
@@ -260,6 +263,7 @@ def update_leave_status(leave_id: int, status_in: str, current_user: UserRespons
 
 @router.get("/leave-balance/{emp_id}", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
 def get_leave_balance(emp_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Get Leave Balance."""
     with transactional(company_id) as conn:
         from datetime import datetime as dt
         emp = conn.execute(text("""
@@ -295,6 +299,7 @@ def get_leave_balance(emp_id: int, current_user: UserResponse = Depends(get_curr
 
 @router.post("/leave-carryover/calculate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def calculate_leave_carryover(data: LeaveCarryoverRequest, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Calculate Leave Carryover."""
     with transactional(company_id) as conn:
         from datetime import datetime as dt
         year = data.year or (dt.now().year - 1)

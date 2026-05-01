@@ -78,6 +78,7 @@ def list_matches(
     branch_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
+    """List Matches."""
     company_id = _get_company_id(current_user)
     resolved_branch = validate_branch_access(current_user, branch_id)
     with transactional(company_id) as db:
@@ -120,6 +121,7 @@ def list_matches(
 
 @router.get("/matches/{match_id}", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))], response_model=Dict[str, Any])
 def get_match(match_id: int, current_user=Depends(get_current_user)):
+    """Get Match."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as db:
         row = db.execute(text("""
@@ -192,6 +194,7 @@ def approve_match(
     body: MatchActionRequest,
     current_user=Depends(get_current_user),
 ):
+    """Approve Match."""
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
     with transactional(company_id) as db:
@@ -219,6 +222,7 @@ def reject_match(
     body: MatchActionRequest,
     current_user=Depends(get_current_user),
 ):
+    """Reject Match."""
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
     with transactional(company_id) as db:
@@ -246,6 +250,7 @@ def reject_match(
 
 @router.get("/tolerances", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))], response_model=List[Dict[str, Any]])
 def list_tolerances(current_user=Depends(get_current_user)):
+    """List Tolerances."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as db:
         rows = db.execute(text(
@@ -268,6 +273,7 @@ def list_tolerances(current_user=Depends(get_current_user)):
 
 @router.post("/tolerances", dependencies=[Depends(require_permission(["matching.manage", "buying.edit"]))], response_model=Dict[str, Any])
 def save_tolerance(body: ToleranceSave, current_user=Depends(get_current_user)):
+    """Save Tolerance."""
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
     with transactional(company_id) as db:

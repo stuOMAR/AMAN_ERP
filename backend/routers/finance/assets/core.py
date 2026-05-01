@@ -55,6 +55,7 @@ def list_assets(
     status: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Assets."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -76,6 +77,7 @@ def list_assets(
 
 @router.post("/", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_asset(asset: AssetCreate, current_user: dict = Depends(get_current_user)):
+    """Create Asset."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -243,6 +245,7 @@ def create_asset(asset: AssetCreate, current_user: dict = Depends(get_current_us
 
 @router.get("/{asset_id}", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
 def get_asset(asset_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Asset."""
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:

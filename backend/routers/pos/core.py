@@ -152,6 +152,7 @@ def get_pos_products(
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
+    """Get POS Products."""
     # 1. Validate warehouse if provided
     if warehouse_id:
         wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()

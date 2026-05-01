@@ -50,6 +50,7 @@ def list_contacts(customer_id: Optional[int] = None, current_user=Depends(get_cu
 
 @router.post("/contacts", status_code=201, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_contact(data: ContactCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Contact."""
     db = get_db_connection(current_user.company_id)
     try:
         # If setting as primary, unset others
@@ -88,6 +89,7 @@ def create_contact(data: ContactCreate, request: Request, current_user=Depends(g
 
 @router.put("/contacts/{contact_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_contact(contact_id: int, data: ContactUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Contact."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.model_dump(exclude_unset=True).items() if v is not None}
@@ -115,6 +117,7 @@ def update_contact(contact_id: int, data: ContactUpdate, request: Request, curre
 
 @router.delete("/contacts/{contact_id}", dependencies=[Depends(require_permission("sales.delete"))], response_model=Dict[str, Any])
 def delete_contact(contact_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Contact."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM crm_contacts WHERE id = :id"), {"id": contact_id})

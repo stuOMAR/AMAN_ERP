@@ -37,6 +37,7 @@ from .core import AssetTransfer, _D2, _D4, _dec
 
 @router.get("/transfers", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_asset_transfers(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+    """List Asset Transfers."""
     with transactional(current_user.company_id) as conn:
         q = "SELECT * FROM asset_transfers WHERE 1=1"
         params = {}
@@ -50,6 +51,7 @@ def list_asset_transfers(status: Optional[str] = None, current_user: dict = Depe
 
 @router.post("/transfers", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_asset_transfer(data: AssetTransferCreate, current_user: dict = Depends(get_current_user)):
+    """Create Asset Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
@@ -81,6 +83,7 @@ def create_asset_transfer(data: AssetTransferCreate, current_user: dict = Depend
 
 @router.put("/transfers/{transfer_id}/approve", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def approve_transfer(transfer_id: int, current_user: dict = Depends(get_current_user)):
+    """Approve Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
             t = conn.execute(text("SELECT * FROM asset_transfers WHERE id = :id"), {"id": transfer_id}).fetchone()

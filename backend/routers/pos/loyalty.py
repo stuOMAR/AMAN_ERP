@@ -35,12 +35,14 @@ from .core import _D2, _D4, _dec, get_db
 
 @router.get("/loyalty/programs", dependencies=[Depends(require_permission("pos.view"))], response_model=List[Dict[str, Any]])
 def list_loyalty_programs(current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """List Loyalty Programs."""
     rows = db.execute(text("SELECT * FROM pos_loyalty_programs WHERE is_active = true ORDER BY id")).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
 @router.post("/loyalty/programs", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def create_loyalty_program(data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Create Loyalty Program."""
     import json
     result = db.execute(text("""
         INSERT INTO pos_loyalty_programs (name, points_per_unit, currency_per_point, min_points_redeem, tier_rules, is_active, branch_id)
@@ -61,6 +63,7 @@ def create_loyalty_program(data: dict, current_user: UserResponse = Depends(get_
 
 @router.get("/loyalty/customer/{party_id}", dependencies=[Depends(require_permission("pos.view"))], response_model=Dict[str, Any])
 def get_customer_loyalty(party_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Get Customer Loyalty."""
     row = db.execute(text("""
         SELECT lp.*, prg.name as program_name, prg.currency_per_point
         FROM pos_loyalty_points lp
@@ -74,6 +77,7 @@ def get_customer_loyalty(party_id: int, current_user: UserResponse = Depends(get
 
 @router.post("/loyalty/enroll", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
 def enroll_customer(data: dict, request: Request, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+    """Enroll Customer."""
     existing = db.execute(text(
         "SELECT id FROM pos_loyalty_points WHERE party_id = :pid AND program_id = :prog"
     ), {"pid": data["party_id"], "prog": data["program_id"]}).fetchone()

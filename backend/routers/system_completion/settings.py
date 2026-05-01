@@ -40,6 +40,7 @@ from .core import PrintTemplateCreate
             tags=["Print Templates"], response_model=List[Dict[str, Any]])
 def list_print_templates(template_type: Optional[str] = None,
                          current_user: dict = Depends(get_current_user)):
+    """List Print Templates."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         try:
@@ -59,6 +60,7 @@ def list_print_templates(template_type: Optional[str] = None,
 @router.post("/settings/print-templates", dependencies=[Depends(require_permission("settings.manage"))],
              tags=["Print Templates"], response_model=Dict[str, Any])
 def create_print_template(body: PrintTemplateCreate, current_user: dict = Depends(get_current_user)):
+    """Create Print Template."""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
     with transactional(company_id) as db:
@@ -97,6 +99,7 @@ def create_print_template(body: PrintTemplateCreate, current_user: dict = Depend
 @router.get("/settings/print-templates/{template_id}",
             dependencies=[Depends(require_permission("settings.view"))], tags=["Print Templates"], response_model=Dict[str, Any])
 def get_print_template(template_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Print Template."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         row = db.execute(text("SELECT * FROM print_templates WHERE id = :id"), {"id": template_id}).fetchone()
@@ -109,6 +112,7 @@ def get_print_template(template_id: int, current_user: dict = Depends(get_curren
             dependencies=[Depends(require_permission("settings.manage"))], tags=["Print Templates"], response_model=Dict[str, Any])
 def update_print_template(template_id: int, body: PrintTemplateCreate,
                           current_user: dict = Depends(get_current_user)):
+    """Update Print Template."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         if body.is_default:

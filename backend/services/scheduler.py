@@ -294,7 +294,11 @@ def check_subscription_billing():
 
 
 def archive_old_audit_logs():
-    """T018: Archive audit log entries older than 1 year, delete entries older than 7 years."""
+    """T018 + T9.3: Soft-archive audit logs > 1 year (mark is_archived=TRUE),
+    and **move** entries older than 7 years into ``audit_logs_archive``
+    instead of hard-deleting them. The archive preserves the hash-chain
+    columns so forensic verification can still walk the chain.
+    """
     logger.info("⏰ Running audit log archival job...")
 
     databases = []
@@ -329,17 +333,110 @@ def archive_old_audit_logs():
                 ))
                 conn.commit()
 
-                # Delete entries older than 7 years
+                # T9.3: move entries older than 7 years into the archive table
+                # instead of deleting them outright. CTE pattern guarantees the
+                # INSERT and DELETE see the same row set atomically.
+                has_archive_table = conn.execute(text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = 'audit_logs_archive')"
+                )).scalar()
                 conn.execute(text("SET LOCAL audit_logs.allow_admin_op = 'retention'"))
-                deleted = conn.execute(text(
-                    "DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '7 years'"
-                ))
+                if has_archive_table:
+                    moved_result = conn.execute(text(
+                        """
+                        WITH old_rows AS (
+                            DELETE FROM audit_logs
+                            WHERE created_at < NOW() - INTERVAL '7 years'
+                            RETURNING id, user_id, username, action, resource_type, resource_id,
+                                      details, ip_address, branch_id, prev_hash, hash, chain_seq, created_at
+                        )
+                        INSERT INTO audit_logs_archive
+                            (id, user_id, username, action, resource_type, resource_id,
+                             details, ip_address, branch_id, prev_hash, hash, chain_seq, created_at)
+                        SELECT id, user_id, username, action, resource_type, resource_id,
+                               details, ip_address, branch_id, prev_hash, hash, chain_seq, created_at
+                        FROM old_rows
+                        ON CONFLICT (id) DO NOTHING
+                        RETURNING id
+                        """
+                    ))
+                    moved = len(moved_result.fetchall() if moved_result.returns_rows else [])
+                else:
+                    # Fallback (older tenants without the archive table yet):
+                    # keep the legacy hard-delete behaviour to bound table size.
+                    moved_obj = conn.execute(text(
+                        "DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '7 years'"
+                    ))
+                    moved = moved_obj.rowcount or 0
                 conn.commit()
 
-                if archived.rowcount > 0 or deleted.rowcount > 0:
-                    logger.info(f"Audit archival in {db_name}: archived={archived.rowcount}, deleted={deleted.rowcount}")
+                if archived.rowcount > 0 or moved > 0:
+                    logger.info(
+                        f"Audit archival in {db_name}: archived={archived.rowcount}, moved_to_archive={moved}"
+                    )
         except Exception as e:
             logger.error(f"Error archiving audit logs in {db_name}: {e}")
+
+
+def archive_old_inventory_transactions():
+    """T9.3: Move ``inventory_transactions`` rows older than 7 years into
+    ``inventory_transactions_archive``. Keeps the live table — and by
+    extension every JOIN against it — performant.
+
+    Runs monthly (cron: 1st of each month at 03:00). Safe on tenants that
+    don't have the archive table yet (it just no-ops).
+    """
+    logger.info("⏰ Running inventory_transactions archival job...")
+
+    databases = []
+    try:
+        with system_engine.connect() as conn:
+            result = conn.execute(text("SELECT datname FROM pg_database WHERE datname LIKE 'aman_%'"))
+            databases = [row[0] for row in result.fetchall()]
+    except Exception as e:
+        logger.error(f"Failed to list DBs for inventory archival: {e}")
+        return
+
+    for db_name in databases:
+        try:
+            company_engine = _get_company_engine_for_db(db_name)
+            with company_engine.connect() as conn:
+                has_archive_table = conn.execute(text(
+                    "SELECT EXISTS (SELECT 1 FROM information_schema.tables "
+                    "WHERE table_name = 'inventory_transactions_archive')"
+                )).scalar()
+                if not has_archive_table:
+                    continue
+                moved_result = conn.execute(text(
+                    """
+                    WITH old_rows AS (
+                        DELETE FROM inventory_transactions
+                        WHERE created_at < NOW() - INTERVAL '7 years'
+                        RETURNING id, product_id, warehouse_id, transaction_type,
+                                  reference_type, reference_id, reference_document,
+                                  quantity, balance_before, balance_after,
+                                  unit_cost, total_cost, notes, created_by, created_at
+                    )
+                    INSERT INTO inventory_transactions_archive
+                        (id, product_id, warehouse_id, transaction_type,
+                         reference_type, reference_id, reference_document,
+                         quantity, balance_before, balance_after,
+                         unit_cost, total_cost, notes, created_by, created_at)
+                    SELECT id, product_id, warehouse_id, transaction_type,
+                           reference_type, reference_id, reference_document,
+                           quantity, balance_before, balance_after,
+                           unit_cost, total_cost, notes, created_by, created_at
+                    FROM old_rows
+                    ON CONFLICT (id) DO NOTHING
+                    RETURNING id
+                    """
+                ))
+                moved = len(moved_result.fetchall() if moved_result.returns_rows else [])
+                conn.commit()
+                if moved > 0:
+                    logger.info(f"inventory_transactions archival in {db_name}: moved={moved}")
+        except Exception as e:
+            logger.error(f"Error archiving inventory_transactions in {db_name}: {e}")
 
 
 def retry_failed_notifications():
@@ -1154,6 +1251,8 @@ def start_scheduler():
     _add(check_subscription_billing,          'interval', 'subscription_billing',   hours=24)
     _add(refresh_analytics_materialized_views,'interval', 'analytics_mv_refresh',   minutes=15)
     _add(archive_old_audit_logs,              'interval', 'audit_archival',          hours=24)
+    # T9.3 — monthly archival of inventory_transactions older than 7 years.
+    _add(archive_old_inventory_transactions,  'cron',     'inventory_archival',       day=1, hour=3)
     _add(retry_failed_notifications,          'interval', 'notification_retry',      minutes=1)
     _add(auto_fx_revaluation,                 'cron',     'fx_monthly_reval',        day=1, hour=2)
     _add(check_zatca_csid_expiry,             'interval', 'zatca_csid_expiry',       hours=12)

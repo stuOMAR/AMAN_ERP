@@ -24,6 +24,7 @@ def list_categories(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Categories."""
     db = get_db_connection(current_user.company_id)
     try:
         query = "SELECT id, category_name as name, category_code as code, branch_id FROM product_categories WHERE 1=1"
@@ -47,6 +48,7 @@ def list_categories(
 
 @categories_router.get("/categories/next-code", dependencies=[Depends(require_permission("products.create"))], response_model=Dict[str, Any])
 def get_next_category_code(current_user: dict = Depends(get_current_user)):
+    """Get Next Category Code."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("SELECT category_code FROM product_categories WHERE category_code LIKE 'CAT%' ORDER BY category_code DESC LIMIT 1")).scalar()
@@ -71,6 +73,7 @@ def create_category(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
+    """Create Category."""
     db = get_db_connection(current_user.company_id)
     try:
         # Check duplicate code
@@ -117,6 +120,7 @@ def update_category(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
+    """Update Category."""
     db = get_db_connection(current_user.company_id)
     try:
         exists = db.execute(text("SELECT id FROM product_categories WHERE id = :id"), {"id": id}).scalar()
@@ -157,6 +161,7 @@ def delete_category(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
+    """Delete Category."""
     db = get_db_connection(current_user.company_id)
     try:
         # INV-008: Check existence

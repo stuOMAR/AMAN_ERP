@@ -216,6 +216,7 @@ async def sync_status(
     device_id: str,
     current_user=Depends(get_current_user),
 ):
+    """Sync Status."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as conn:
         row = conn.execute(text("""
@@ -246,6 +247,7 @@ async def resolve_conflict(
     request: Request,
     current_user=Depends(get_current_user),
 ):
+    """Resolve Conflict."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as conn:
         with conn.begin():
@@ -304,6 +306,7 @@ async def resolve_conflict(
 @router.get("/dashboard", response_model=DashboardResponse,
             dependencies=[Depends(require_permission("mobile.dashboard"))])
 async def mobile_dashboard(current_user=Depends(get_current_user)):
+    """Mobile Dashboard."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as conn:
         # Company currency settings
@@ -453,6 +456,7 @@ async def register_device(
     body: DeviceRegisterRequest,
     current_user=Depends(get_current_user),
 ):
+    """Register Device."""
     company_id = _get_company_id(current_user)
     with transactional(company_id) as conn:
         with conn.begin():

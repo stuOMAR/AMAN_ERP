@@ -51,6 +51,7 @@ def list_integration_keys(
     include_revoked: bool = False,
     current_user=Depends(get_current_user),
 ):
+    """List Integration Keys."""
     company_id = current_user.company_id
     with transactional(company_id) as db:
         return ks.list_keys(
@@ -69,6 +70,7 @@ def create_or_rotate_key(
     body: IntegrationKeyCreate,
     current_user=Depends(get_current_user),
 ):
+    """Create Or Rotate Key."""
     company_id = current_user.company_id
     try:
         with transactional(company_id) as db:
@@ -97,6 +99,7 @@ def create_or_rotate_key(
     dependencies=[Depends(require_permission("admin"))],
 )
 def revoke_integration_key(key_id: int, current_user=Depends(get_current_user)):
+    """Revoke Integration Key."""
     company_id = current_user.company_id
     try:
         with transactional(company_id) as db:
@@ -229,6 +232,7 @@ def list_sms_retry_queue(
     limit: int = 100,
     current_user=Depends(get_current_user),
 ):
+    """List SMS Retry Queue."""
     company_id = current_user.company_id
     limit = min(max(int(limit or 100), 1), 500)
     with transactional(company_id) as db:

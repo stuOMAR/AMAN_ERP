@@ -57,6 +57,7 @@ class ECLComputeRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def ecl_compute(body: ECLComputeRequest, current_user=Depends(get_current_user)):
+    """Ecl Compute."""
     db = get_db_connection(current_user.company_id)
     try:
         return ecl_service.compute_ecl_provision(
@@ -88,6 +89,7 @@ def ecl_compute(body: ECLComputeRequest, current_user=Depends(get_current_user))
     dependencies=[Depends(require_permission("finance.accounting_view"))],
 )
 def ecl_list(current_user=Depends(get_current_user), limit: int = 50):
+    """Ecl List."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("""
@@ -117,6 +119,7 @@ class NRVRunRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def nrv_run(body: NRVRunRequest, current_user=Depends(get_current_user)):
+    """Nrv Run."""
     db = get_db_connection(current_user.company_id)
     try:
         return nrv_service.run_nrv_test(
@@ -146,6 +149,7 @@ def nrv_run(body: NRVRunRequest, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.accounting_view"))],
 )
 def nrv_list(current_user=Depends(get_current_user), limit: int = 100):
+    """Nrv List."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("""
@@ -185,6 +189,7 @@ class ImpairmentTestRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def cgu_create(body: CGUCreateRequest, current_user=Depends(get_current_user)):
+    """Cgu Create."""
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(text("""
@@ -204,6 +209,7 @@ def cgu_create(body: CGUCreateRequest, current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.accounting_view"))],
 )
 def cgu_list(current_user=Depends(get_current_user)):
+    """Cgu List."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text(
@@ -220,6 +226,7 @@ def cgu_list(current_user=Depends(get_current_user)):
 )
 def impairment_test(body: ImpairmentTestRequest,
                     current_user=Depends(get_current_user)):
+    """Impairment Test."""
     db = get_db_connection(current_user.company_id)
     try:
         return impairment_service.record_impairment_test(
@@ -284,6 +291,7 @@ class RevenueRecogniseRequest(BaseModel):
 )
 def ifrs15_create_contract(body: ContractCreateRequest,
                            current_user=Depends(get_current_user)):
+    """Ifrs15 Create Contract."""
     db = get_db_connection(current_user.company_id)
     try:
         contract_id = ifrs15_revenue_service.create_contract(
@@ -313,6 +321,7 @@ def ifrs15_create_contract(body: ContractCreateRequest,
     dependencies=[Depends(require_permission("finance.accounting_view"))],
 )
 def ifrs15_get_contract(contract_id: int, current_user=Depends(get_current_user)):
+    """Ifrs15 Get Contract."""
     db = get_db_connection(current_user.company_id)
     try:
         c = db.execute(text(
@@ -337,6 +346,7 @@ def ifrs15_get_contract(contract_id: int, current_user=Depends(get_current_user)
 )
 def ifrs15_recognise(body: RevenueRecogniseRequest,
                      current_user=Depends(get_current_user)):
+    """Ifrs15 Recognise."""
     db = get_db_connection(current_user.company_id)
     try:
         return ifrs15_revenue_service.recognise_revenue(
@@ -379,6 +389,7 @@ class EInvoiceSubmitRequest(BaseModel):
 )
 def einvoice_submit(body: EInvoiceSubmitRequest,
                     current_user=Depends(get_current_user)):
+    """Einvoice Submit."""
     try:
         adapter = get_adapter(body.jurisdiction)
     except ValueError as e:
@@ -454,6 +465,7 @@ def einvoice_submit(body: EInvoiceSubmitRequest,
 )
 def einvoice_list(current_user=Depends(get_current_user), limit: int = 50,
                   jurisdiction: Optional[str] = None):
+    """Einvoice List."""
     db = get_db_connection(current_user.company_id)
     try:
         if jurisdiction:
@@ -481,6 +493,7 @@ def einvoice_list(current_user=Depends(get_current_user), limit: int = 50,
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def einvoice_refresh(submission_id: int, current_user=Depends(get_current_user)):
+    """Einvoice Refresh."""
     db = get_db_connection(current_user.company_id)
     try:
         sub = db.execute(text("""

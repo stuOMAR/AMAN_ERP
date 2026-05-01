@@ -61,6 +61,7 @@ def list_service_requests(
     per_page: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Service Requests."""
     with transactional(current_user.company_id) as db:
         base_where = " WHERE sr.is_deleted = false"
         params = {}
@@ -109,6 +110,7 @@ def list_service_requests(
 
 @router.get("/requests/stats", dependencies=[Depends(require_permission("services.view"))], response_model=Dict[str, Any])
 def get_service_stats(current_user: UserResponse = Depends(get_current_user)):
+    """Get Service Stats."""
     with transactional(current_user.company_id) as db:
         stats = db.execute(text("""
             SELECT
@@ -130,6 +132,7 @@ def get_service_stats(current_user: UserResponse = Depends(get_current_user)):
 
 @router.get("/requests/{request_id}", dependencies=[Depends(require_permission("services.view"))], response_model=Dict[str, Any])
 def get_service_request(request_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Get Service Request."""
     with transactional(current_user.company_id) as db:
         req = db.execute(text("""
             SELECT sr.*,
@@ -155,6 +158,7 @@ def get_service_request(request_id: int, current_user: UserResponse = Depends(ge
 
 @router.post("/requests", dependencies=[Depends(require_permission("services.create"))], response_model=Dict[str, Any])
 def create_service_request(data: ServiceRequestCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Create Service Request."""
     with transactional(current_user.company_id) as db:
         try:
             if data.branch_id:
@@ -213,6 +217,7 @@ def create_service_request(data: ServiceRequestCreate, request: Request, current
 
 @router.put("/requests/{request_id}", dependencies=[Depends(require_permission("services.edit"))], response_model=Dict[str, Any])
 def update_service_request(request_id: int, data: ServiceRequestUpdate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Update Service Request."""
     with transactional(current_user.company_id) as db:
         try:
             existing = db.execute(text("SELECT id, status, branch_id FROM service_requests WHERE id = :id AND is_deleted = false"), {"id": request_id}).fetchone()
@@ -273,6 +278,7 @@ def update_service_request(request_id: int, data: ServiceRequestUpdate, request:
 
 @router.delete("/requests/{request_id}", dependencies=[Depends(require_permission("services.delete"))], response_model=Dict[str, Any])
 def delete_service_request(request_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Service Request."""
     with transactional(current_user.company_id) as db:
         try:
             existing = db.execute(text("SELECT id, branch_id FROM service_requests WHERE id = :id AND is_deleted = false"), {"id": request_id}).fetchone()
@@ -386,6 +392,7 @@ def add_service_cost(request_id: int, data: ServiceCostCreate, request: Request,
 
 @router.delete("/requests/{request_id}/costs/{cost_id}", dependencies=[Depends(require_permission("services.edit"))], response_model=Dict[str, Any])
 def delete_service_cost(request_id: int, cost_id: int, request: Request, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Service Cost."""
     with transactional(current_user.company_id) as db:
         try:
             db.execute(text(
@@ -424,6 +431,7 @@ def list_documents(
     per_page: int = Query(25, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Documents."""
     with transactional(current_user.company_id) as db:
         base_where = " WHERE d.is_deleted = false"
         params = {}
@@ -472,6 +480,7 @@ def list_documents(
 
 @router.get("/documents/{doc_id}", dependencies=[Depends(require_permission("services.view"))], response_model=Dict[str, Any])
 def get_document(doc_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Get Document."""
     with transactional(current_user.company_id) as db:
         doc = db.execute(text("""
             SELECT d.id, d.title, d.description, d.category, d.file_name,
@@ -511,6 +520,7 @@ async def upload_document(
     related_id: int = Form(0),
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Upload Document."""
     with transactional(current_user.company_id) as db:
         try:
             # SEC-FIX-016/017: Validate file size and type
@@ -695,6 +705,7 @@ def download_document(doc_id: int, current_user: UserResponse = Depends(get_curr
 
 @router.delete("/documents/{doc_id}", dependencies=[Depends(require_permission("services.delete"))], response_model=Dict[str, Any])
 def delete_document(doc_id: int, current_user: UserResponse = Depends(get_current_user)):
+    """Delete Document."""
     with transactional(current_user.company_id) as db:
         try:
             doc = db.execute(text("SELECT id, file_path FROM documents WHERE id = :id AND is_deleted = false"), {"id": doc_id}).fetchone()

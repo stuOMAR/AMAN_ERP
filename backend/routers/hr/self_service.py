@@ -76,6 +76,7 @@ def get_own_profile(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Own Profile."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user, raise_on_missing=False)
@@ -107,6 +108,7 @@ def update_own_profile(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Update Own Profile."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user)
@@ -163,6 +165,7 @@ def list_own_payslips(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """List Own Payslips."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user, raise_on_missing=False)
@@ -202,6 +205,7 @@ def get_payslip_detail(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Payslip Detail."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user)
@@ -242,6 +246,7 @@ def get_leave_balance(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Leave Balance."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user, raise_on_missing=False)
@@ -299,6 +304,7 @@ def submit_leave_request(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Submit Leave Request."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user)
@@ -430,6 +436,7 @@ def list_own_leave_requests(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """List Own Leave Requests."""
     conn = get_db_connection(company_id)
     try:
         emp = _resolve_employee(conn, current_user, raise_on_missing=False)
@@ -499,6 +506,7 @@ def approve_leave_request(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Approve Leave Request."""
     conn = get_db_connection(company_id)
     try:
         manager = _resolve_employee(conn, current_user)
@@ -571,6 +579,7 @@ def reject_leave_request(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Reject Leave Request."""
     conn = get_db_connection(company_id)
     try:
         manager = _resolve_employee(conn, current_user)

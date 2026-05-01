@@ -148,6 +148,7 @@ def run_depreciation(
 
 @router.post("/{asset_id}/depreciate/{schedule_id}", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depends(get_current_user)):
+    """Post Depreciation."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:

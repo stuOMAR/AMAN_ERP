@@ -69,6 +69,7 @@ def list_landed_costs(
     status_filter: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Landed Costs."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         # Branch access enforcement
@@ -99,6 +100,7 @@ def list_landed_costs(
 
 @router.get("/{lc_id}", dependencies=[Depends(require_permission("purchases.view"))], response_model=Dict[str, Any])
 def get_landed_cost(lc_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Landed Cost."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         lc = db.execute(text("""
@@ -138,6 +140,7 @@ def get_landed_cost(lc_id: int, current_user: dict = Depends(get_current_user)):
 
 @router.post("", status_code=201, dependencies=[Depends(require_permission("purchases.create"))], response_model=Dict[str, Any])
 def create_landed_cost(body: LandedCostCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Create Landed Cost."""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
     with transactional(company_id) as db:

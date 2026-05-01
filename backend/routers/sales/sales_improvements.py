@@ -104,6 +104,7 @@ def convert_quotation_to_order(sq_id: int, current_user=Depends(get_current_user
 
 @sales_improvements_router.get("/commissions/rules", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def list_commission_rules(current_user=Depends(get_current_user)):
+    """List Commission Rules."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("SELECT * FROM commission_rules WHERE is_active = true ORDER BY id")).fetchall()
@@ -114,6 +115,7 @@ def list_commission_rules(current_user=Depends(get_current_user)):
 
 @sales_improvements_router.post("/commissions/rules", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_commission_rule(data: dict, current_user=Depends(get_current_user)):
+    """Create Commission Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
@@ -146,6 +148,7 @@ def list_commissions(
     to_date: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
+    """List Commissions."""
     db = get_db_connection(current_user.company_id)
     try:
         q = "SELECT * FROM sales_commissions WHERE 1=1"
@@ -279,6 +282,7 @@ def calculate_commission(data: dict, current_user=Depends(get_current_user)):
 
 @sales_improvements_router.get("/commissions/summary", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def commission_summary(current_user=Depends(get_current_user)):
+    """Commission Summary."""
     db = get_db_connection(current_user.company_id)
     try:
         rows = db.execute(text("""
@@ -467,6 +471,7 @@ def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_c
 
 @sales_improvements_router.get("/customers/{party_id}/credit-status", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
+    """Get Credit Status."""
     db = get_db_connection(current_user.company_id)
     try:
         party = db.execute(text("SELECT id, name, credit_limit, credit_used FROM parties WHERE id = :id"),
@@ -489,6 +494,7 @@ def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
 
 @sales_improvements_router.put("/customers/{party_id}/credit-limit", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_credit_limit(party_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
+    """Update Credit Limit."""
     db = get_db_connection(current_user.company_id)
     try:
         old_limit = db.execute(text("SELECT credit_limit FROM parties WHERE id = :id"), {"id": party_id}).scalar()

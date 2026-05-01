@@ -31,6 +31,7 @@ def list_articles(
     search: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
+    """List Articles."""
     db = get_db_connection(current_user.company_id)
     try:
         conditions = ["1=1"]
@@ -56,6 +57,7 @@ def list_articles(
 
 @router.get("/knowledge-base/{article_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_article(article_id: int, current_user=Depends(get_current_user)):
+    """Get Article."""
     db = get_db_connection(current_user.company_id)
     try:
         # increment view count
@@ -75,6 +77,7 @@ def get_article(article_id: int, current_user=Depends(get_current_user)):
 
 @router.post("/knowledge-base", status_code=201, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_article(data: ArticleCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Article."""
     db = get_db_connection(current_user.company_id)
     try:
         aid = db.execute(text("""
@@ -97,6 +100,7 @@ def create_article(data: ArticleCreate, request: Request, current_user=Depends(g
 
 @router.put("/knowledge-base/{article_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_article(article_id: int, data: ArticleUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Article."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.dict(exclude_unset=True).items() if v is not None}
@@ -115,6 +119,7 @@ def update_article(article_id: int, data: ArticleUpdate, request: Request, curre
 
 @router.delete("/knowledge-base/{article_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def delete_article(article_id: int, request: Request, current_user=Depends(get_current_user)):
+    """Delete Article."""
     db = get_db_connection(current_user.company_id)
     try:
         db.execute(text("DELETE FROM crm_knowledge_base WHERE id = :id"), {"id": article_id})

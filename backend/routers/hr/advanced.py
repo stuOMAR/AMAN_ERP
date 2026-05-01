@@ -45,6 +45,7 @@ router = APIRouter(prefix="/hr-advanced", tags=["HR Advanced - الموارد ا
 
 @router.get("/salary-structures", response_model=List[SalaryStructureResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_salary_structures(company_id: str = Depends(get_current_user_company)):
+    """List Salary Structures."""
     with transactional(company_id) as conn:
         rows = conn.execute(text("SELECT * FROM salary_structures ORDER BY created_at DESC")).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -52,6 +53,7 @@ def list_salary_structures(company_id: str = Depends(get_current_user_company)):
 
 @router.post("/salary-structures", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_salary_structure(data: SalaryStructureCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Salary Structure."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             INSERT INTO salary_structures (name, name_en, description, base_type)
@@ -68,6 +70,7 @@ def create_salary_structure(data: SalaryStructureCreate, request: Request, curre
 
 @router.put("/salary-structures/{structure_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_salary_structure(structure_id: int, data: SalaryStructureUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Salary Structure."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": structure_id}
         for field in ["name", "name_en", "description", "base_type", "is_active"]:
@@ -89,6 +92,7 @@ def update_salary_structure(structure_id: int, data: SalaryStructureUpdate, requ
 
 @router.delete("/salary-structures/{structure_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def delete_salary_structure(structure_id: int, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Delete Salary Structure."""
     with transactional(company_id) as conn:
         conn.execute(text("DELETE FROM salary_structures WHERE id = :id"), {"id": structure_id})
         log_activity(
@@ -105,6 +109,7 @@ def delete_salary_structure(structure_id: int, request: Request, current_user: U
 
 @router.get("/salary-components", response_model=List[SalaryComponentResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_salary_components(structure_id: Optional[int] = None, company_id: str = Depends(get_current_user_company)):
+    """List Salary Components."""
     with transactional(company_id) as conn:
         query = "SELECT * FROM salary_components WHERE 1=1"
         params = {}
@@ -118,6 +123,7 @@ def list_salary_components(structure_id: Optional[int] = None, company_id: str =
 
 @router.post("/salary-components", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_salary_component(data: SalaryComponentCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Salary Component."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             INSERT INTO salary_components (name, name_en, component_type, calculation_type, percentage_of, percentage_value, formula, is_taxable, is_gosi_applicable, sort_order, structure_id)
@@ -140,6 +146,7 @@ def create_salary_component(data: SalaryComponentCreate, request: Request, curre
 
 @router.put("/salary-components/{component_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_salary_component(component_id: int, data: SalaryComponentUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Salary Component."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": component_id}
         for field in ["name", "name_en", "component_type", "calculation_type", "percentage_of", "percentage_value", "formula", "is_taxable", "is_gosi_applicable", "is_active", "sort_order", "structure_id"]:
@@ -164,6 +171,7 @@ def update_salary_component(component_id: int, data: SalaryComponentUpdate, requ
 
 @router.get("/employee-salary-components/{employee_id}", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def get_employee_salary_components(employee_id: int, company_id: str = Depends(get_current_user_company)):
+    """Get Employee Salary Components."""
     with transactional(company_id) as conn:
         rows = conn.execute(text("""
             SELECT esc.*, sc.name as component_name, sc.component_type
@@ -177,6 +185,7 @@ def get_employee_salary_components(employee_id: int, company_id: str = Depends(g
 
 @router.post("/employee-salary-components", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def assign_salary_component(data: EmployeeSalaryComponentCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Assign Salary Component."""
     with transactional(company_id) as conn:
         conn.execute(text("""
             INSERT INTO employee_salary_components (employee_id, component_id, amount, is_active, effective_date)
@@ -236,6 +245,7 @@ def get_overtime_rates(
 
 @router.get("/overtime", response_model=List[OvertimeRequestResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_overtime_requests(employee_id: Optional[int] = None, status: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Overtime Requests."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -262,6 +272,7 @@ def list_overtime_requests(employee_id: Optional[int] = None, status: Optional[s
 
 @router.post("/overtime", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_overtime_request(data: OvertimeRequestCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Overtime Request."""
     with transactional(company_id) as conn:
         # Calculate amount: (salary / 30 / 8) * hours * multiplier
         emp = conn.execute(text("SELECT salary FROM employees WHERE id = :eid"), {"eid": data.employee_id}).fetchone()
@@ -292,6 +303,7 @@ def create_overtime_request(data: OvertimeRequestCreate, request: Request, curre
 
 @router.put("/overtime/{overtime_id}/approve", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def approve_overtime(overtime_id: int, data: OvertimeRequestUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Approve Overtime."""
     with transactional(company_id) as conn:
         user_id = current_user.id if hasattr(current_user, 'id') else current_user.get("id")
         conn.execute(text("""
@@ -312,6 +324,7 @@ def approve_overtime(overtime_id: int, data: OvertimeRequestUpdate, request: Req
 
 @router.get("/gosi-settings", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
 def get_gosi_settings(company_id: str = Depends(get_current_user_company)):
+    """Get GOSI Settings."""
     with transactional(company_id) as conn:
         row = conn.execute(text("SELECT * FROM gosi_settings WHERE is_active = TRUE ORDER BY id DESC LIMIT 1")).fetchone()
         if not row:
@@ -321,6 +334,7 @@ def get_gosi_settings(company_id: str = Depends(get_current_user_company)):
 
 @router.post("/gosi-settings", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def save_gosi_settings(data: GOSISettingsCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Save GOSI Settings."""
     with transactional(company_id) as conn:
         # Deactivate old
         conn.execute(text("UPDATE gosi_settings SET is_active = FALSE"))
@@ -343,6 +357,7 @@ def save_gosi_settings(data: GOSISettingsCreate, request: Request, current_user:
 
 @router.get("/gosi-calculation", response_model=List[GOSICalculationResponse], dependencies=[Depends(require_permission("hr.view"))])
 def calculate_gosi(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Calculate GOSI."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -523,6 +538,7 @@ def export_gosi(
 
 @router.get("/documents", response_model=List[EmployeeDocumentResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_documents(employee_id: Optional[int] = None, expiring_soon: Optional[bool] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Documents."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -548,6 +564,7 @@ def list_documents(employee_id: Optional[int] = None, expiring_soon: Optional[bo
 
 @router.post("/documents", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_document(data: EmployeeDocumentCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Document."""
     with transactional(company_id) as conn:
         # Determine status based on expiry
         doc_status = "valid"
@@ -576,6 +593,7 @@ def create_document(data: EmployeeDocumentCreate, request: Request, current_user
 
 @router.put("/documents/{doc_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_document(doc_id: int, data: EmployeeDocumentUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Document."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": doc_id}
         for field in ["document_number", "issue_date", "expiry_date", "issuing_authority", "file_url", "notes", "alert_days"]:
@@ -597,6 +615,7 @@ def update_document(doc_id: int, data: EmployeeDocumentUpdate, request: Request,
 
 @router.delete("/documents/{doc_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def delete_document(doc_id: int, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Delete Document."""
     with transactional(company_id) as conn:
         conn.execute(text("DELETE FROM employee_documents WHERE id = :id"), {"id": doc_id})
         log_activity(
@@ -613,6 +632,7 @@ def delete_document(doc_id: int, request: Request, current_user: UserResponse = 
 
 @router.get("/performance-reviews", response_model=List[PerformanceReviewResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_performance_reviews(employee_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Performance Reviews."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -639,6 +659,7 @@ def list_performance_reviews(employee_id: Optional[int] = None, branch_id: Optio
 
 @router.post("/performance-reviews", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_performance_review(data: PerformanceReviewCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Performance Review."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             INSERT INTO performance_reviews (employee_id, reviewer_id, review_period, review_date, review_type, overall_rating, strengths, weaknesses, goals)
@@ -659,6 +680,7 @@ def create_performance_review(data: PerformanceReviewCreate, request: Request, c
 
 @router.put("/performance-reviews/{review_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_performance_review(review_id: int, data: PerformanceReviewUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Performance Review."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": review_id}
         for field in ["overall_rating", "strengths", "weaknesses", "goals", "self_rating", "self_comments", "manager_comments", "status"]:
@@ -684,6 +706,7 @@ def update_performance_review(review_id: int, data: PerformanceReviewUpdate, req
 
 @router.get("/training", response_model=List[TrainingProgramResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_training_programs(company_id: str = Depends(get_current_user_company)):
+    """List Training Programs."""
     with transactional(company_id) as conn:
         rows = conn.execute(text("""
             SELECT t.*, COUNT(tp.id) as participant_count
@@ -697,6 +720,7 @@ def list_training_programs(company_id: str = Depends(get_current_user_company)):
 
 @router.post("/training", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_training_program(data: TrainingProgramCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Training Program."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             INSERT INTO training_programs (name, name_en, description, trainer, location, start_date, end_date, max_participants, cost)
@@ -717,6 +741,7 @@ def create_training_program(data: TrainingProgramCreate, request: Request, curre
 
 @router.put("/training/{training_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_training_program(training_id: int, data: TrainingProgramUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Training Program."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": training_id}
         for field in ["name", "name_en", "description", "trainer", "location", "start_date", "end_date", "max_participants", "cost", "status"]:
@@ -737,6 +762,7 @@ def update_training_program(training_id: int, data: TrainingProgramUpdate, reque
 
 @router.post("/training/{training_id}/participants", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def add_training_participant(training_id: int, data: TrainingParticipantCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Add Training Participant."""
     conn = get_db_connection(company_id)
     try:
         conn.execute(text("""
@@ -761,6 +787,7 @@ def add_training_participant(training_id: int, data: TrainingParticipantCreate, 
 
 @router.get("/training/{training_id}/participants", response_model=List[TrainingParticipantResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_training_participants(training_id: int, company_id: str = Depends(get_current_user_company)):
+    """List Training Participants."""
     with transactional(company_id) as conn:
         rows = conn.execute(text("""
             SELECT tp.*, e.first_name || ' ' || e.last_name as employee_name
@@ -774,6 +801,7 @@ def list_training_participants(training_id: int, company_id: str = Depends(get_c
 
 @router.put("/training/participants/{participant_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_training_participant(participant_id: int, data: TrainingParticipantUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Training Participant."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": participant_id}
         for field in ["attendance_status", "certificate_issued", "score", "feedback"]:
@@ -798,6 +826,7 @@ def update_training_participant(participant_id: int, data: TrainingParticipantUp
 
 @router.get("/violations", response_model=List[ViolationResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_violations(employee_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Violations."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -821,6 +850,7 @@ def list_violations(employee_id: Optional[int] = None, branch_id: Optional[int] 
 
 @router.post("/violations", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_violation(data: ViolationCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Violation."""
     with transactional(company_id) as conn:
         user_id = current_user.id if hasattr(current_user, 'id') else current_user.get("id")
         result = conn.execute(text("""
@@ -843,6 +873,7 @@ def create_violation(data: ViolationCreate, request: Request, current_user: User
 
 @router.put("/violations/{violation_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_violation(violation_id: int, data: ViolationUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Violation."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": violation_id}
         for field in ["action_taken", "penalty_amount", "deduct_from_salary", "status"]:
@@ -868,6 +899,7 @@ def update_violation(violation_id: int, data: ViolationUpdate, request: Request,
 
 @router.get("/custody", response_model=List[CustodyResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_custody(employee_id: Optional[int] = None, status_filter: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """List Custody."""
     with transactional(company_id) as conn:
         if branch_id:
             branch_id = validate_branch_access(current_user, branch_id)
@@ -894,6 +926,7 @@ def list_custody(employee_id: Optional[int] = None, status_filter: Optional[str]
 
 @router.post("/custody", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_custody(data: CustodyCreate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Custody."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             INSERT INTO employee_custody (employee_id, item_name, item_type, serial_number, assigned_date, condition_on_assign, value, notes)
@@ -914,6 +947,7 @@ def create_custody(data: CustodyCreate, request: Request, current_user: UserResp
 
 @router.put("/custody/{custody_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def update_custody(custody_id: int, data: CustodyUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Update Custody."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": custody_id}
         for field in ["return_date", "condition_on_return", "status", "notes"]:
@@ -935,6 +969,7 @@ def update_custody(custody_id: int, data: CustodyUpdate, request: Request, curre
 
 @router.put("/custody/{custody_id}/return", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def return_custody(custody_id: int, data: CustodyUpdate, request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Return Custody."""
     with transactional(company_id) as conn:
         conn.execute(text("""
             UPDATE employee_custody SET status = 'returned', return_date = CURRENT_DATE, 

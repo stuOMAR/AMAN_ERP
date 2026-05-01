@@ -38,6 +38,7 @@ def create_cycle(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Create Cycle."""
     conn = get_db_connection(company_id)
     try:
         if data.period_end <= data.period_start:
@@ -77,6 +78,7 @@ def list_cycles(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """List Cycles."""
     conn = get_db_connection(company_id)
     try:
         if branch_id:
@@ -280,6 +282,7 @@ def submit_self_assessment(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Submit Self Assessment."""
     conn = get_db_connection(company_id)
     try:
         # Verify ownership
@@ -406,6 +409,7 @@ def submit_manager_assessment(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Submit Manager Assessment."""
     conn = get_db_connection(company_id)
     try:
         review = conn.execute(text("""
@@ -561,6 +565,7 @@ def add_goal(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Add Goal."""
     conn = get_db_connection(company_id)
     try:
         # Verify review exists
@@ -601,6 +606,7 @@ def list_goals(
     review_id: int,
     company_id: str = Depends(get_current_user_company),
 ):
+    """List Goals."""
     conn = get_db_connection(company_id)
     try:
         rows = conn.execute(text(
@@ -618,6 +624,7 @@ def delete_goal(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Delete Goal."""
     conn = get_db_connection(company_id)
     try:
         result = conn.execute(text(
@@ -651,6 +658,7 @@ def get_review_detail(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Review Detail."""
     conn = get_db_connection(company_id)
     try:
         row = conn.execute(text("""

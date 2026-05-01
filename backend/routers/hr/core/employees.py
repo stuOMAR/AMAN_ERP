@@ -39,6 +39,7 @@ def get_employees(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
+    """Get Employees."""
     with transactional(company_id) as conn:
         query = """
             SELECT 
@@ -136,6 +137,7 @@ def get_employees(
 
 @router.post("/employees", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def create_employee(request: Request, employee: EmployeeCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Create Employee."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -364,6 +366,7 @@ def update_employee(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
+    """Update Employee."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -606,6 +609,7 @@ def get_employee_payslips_route(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
+    """Get Employee Payslips Route."""
     with transactional(company_id) as conn:
         result = conn.execute(text("""
             SELECT pe.id, pe.employee_id,

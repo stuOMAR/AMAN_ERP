@@ -112,6 +112,7 @@ class ChargeRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
+    """Create Charge."""
     db = get_db_connection(current_user.company_id)
     try:
         # idempotency — if we've already charged this key, return the prior row.
@@ -300,6 +301,7 @@ async def webhook(provider: str, company_id: str, request: Request):
 @router.get("/{provider}/{charge_id}",
             dependencies=[Depends(require_permission("finance.accounting_read"))])
 def fetch_charge(provider: str, charge_id: str, current_user=Depends(get_current_user)):
+    """Fetch Charge."""
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(
@@ -332,6 +334,7 @@ class RefundRequest(BaseModel):
              dependencies=[Depends(require_permission("finance.accounting_post"))])
 def refund_charge(provider: str, charge_id: str, body: RefundRequest,
                   current_user=Depends(get_current_user)):
+    """Refund Charge."""
     db = get_db_connection(current_user.company_id)
     try:
         cfg = _load_gateway_config(db, provider)

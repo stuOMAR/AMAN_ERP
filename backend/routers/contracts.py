@@ -29,6 +29,7 @@ def create_contract(
     request: Request,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Create Contract."""
     with transactional(current_user.company_id) as db:
         try:
             # Validate dates
@@ -145,6 +146,7 @@ def list_contracts(
     branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """List Contracts."""
     from utils.permissions import validate_branch_access
     validated_branch = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
@@ -271,6 +273,7 @@ def get_contract(
     contract_id: int, 
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Get Contract."""
     with transactional(current_user.company_id) as db:
         contract = db.execute(
             text("""
@@ -303,6 +306,7 @@ def update_contract(
     request: Request,
     current_user: UserResponse = Depends(get_current_user)
 ):
+    """Update Contract."""
     db = get_db_connection(current_user.company_id)
     trans = db.begin()
     try:

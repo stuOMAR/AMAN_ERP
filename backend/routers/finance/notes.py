@@ -96,6 +96,7 @@ def list_notes_receivable(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Notes Receivable."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -121,6 +122,7 @@ def list_notes_receivable(
 
 @router.get("/receivable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def receivable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    """Receivable Stats."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -147,6 +149,7 @@ def receivable_stats(branch_id: Optional[int] = None, current_user: dict = Depen
 
 @router.get("/receivable/{note_id}", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_note_receivable(note_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Note Receivable."""
     with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             SELECT n.*, p.name as party_name, t.name as treasury_name
@@ -399,6 +402,7 @@ def list_notes_payable(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
+    """List Notes Payable."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -424,6 +428,7 @@ def list_notes_payable(
 
 @router.get("/payable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def payable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    """Payable Stats."""
     # Validate branch access
     branch_id = validate_branch_access(current_user, branch_id)
     
@@ -450,6 +455,7 @@ def payable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(
 
 @router.get("/payable/{note_id}", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_note_payable(note_id: int, current_user: dict = Depends(get_current_user)):
+    """Get Note Payable."""
     with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             SELECT n.*, p.name as party_name, t.name as treasury_name

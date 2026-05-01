@@ -274,6 +274,7 @@ def create_product(
 
 @products_router.get("/products/{id}", response_model=ProductResponse, dependencies=[Depends(require_permission("products.view"))])
 def get_product(id: int, current_user: dict = Depends(get_current_user)):
+    """Get Product."""
     db = get_db_connection(current_user.company_id)
     try:
         product = db.execute(text("""
@@ -312,6 +313,7 @@ def get_product(id: int, current_user: dict = Depends(get_current_user)):
 
 @products_router.put("/products/{id}", response_model=ProductResponse, dependencies=[Depends(require_permission("products.edit"))])
 def update_product(id: int, product: ProductCreate, request: Request, current_user: dict = Depends(get_current_user)):
+    """Update Product."""
     db = get_db_connection(current_user.company_id)
     try:
         # Check existence

@@ -193,6 +193,7 @@ async def import_bank_statement(
 @router.get("/treasury/bank-import/batches", dependencies=[Depends(require_permission("accounting.view"))],
             tags=["Treasury"], response_model=List[Dict[str, Any]])
 def list_bank_import_batches(current_user: dict = Depends(get_current_user)):
+    """List Bank Import Batches."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         rows = db.execute(text("""
@@ -208,6 +209,7 @@ def list_bank_import_batches(current_user: dict = Depends(get_current_user)):
             dependencies=[Depends(require_permission("accounting.view"))], tags=["Treasury"], response_model=List[Dict[str, Any]])
 def get_bank_import_lines(batch_id: int, status_filter: Optional[str] = None,
                           current_user: dict = Depends(get_current_user)):
+    """Get Bank Import Lines."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
         query = "SELECT * FROM bank_import_lines WHERE batch_id = :bid"

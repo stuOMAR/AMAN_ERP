@@ -33,6 +33,7 @@ def list_tickets(
     branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
+    """List Tickets."""
     # CRM-F1: enforce branch scope on list
     branch_id = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
@@ -77,6 +78,7 @@ def list_tickets(
 
 @router.get("/tickets/stats", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=Dict[str, Any])
 def get_ticket_stats(current_user=Depends(get_current_user)):
+    """Get Ticket Stats."""
     db = get_db_connection(current_user.company_id)
     try:
         stats = db.execute(text("""
@@ -98,6 +100,7 @@ def get_ticket_stats(current_user=Depends(get_current_user)):
 
 @router.get("/tickets/{ticket_id}", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=Dict[str, Any])
 def get_ticket(ticket_id: int, current_user=Depends(get_current_user)):
+    """Get Ticket."""
     db = get_db_connection(current_user.company_id)
     try:
         ticket = db.execute(text("""
@@ -140,6 +143,7 @@ def get_ticket(ticket_id: int, current_user=Depends(get_current_user)):
 @router.post("/tickets", status_code=201,
              dependencies=[Depends(require_permission(["sales.create", "projects.create"]))], response_model=Dict[str, Any])
 def create_ticket(data: TicketCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create Ticket."""
     db = get_db_connection(current_user.company_id)
     try:
         ticket_num = generate_sequential_number(db, f"TKT-{datetime.now().year}", "support_tickets", "ticket_number")
@@ -176,6 +180,7 @@ def create_ticket(data: TicketCreate, request: Request, current_user=Depends(get
 
 @router.put("/tickets/{ticket_id}", dependencies=[Depends(require_permission(["sales.create", "projects.edit"]))], response_model=Dict[str, Any])
 async def update_ticket(ticket_id: int, data: TicketUpdate, request: Request, current_user=Depends(get_current_user)):
+    """Update Ticket."""
     db = get_db_connection(current_user.company_id)
     try:
         updates = {k: v for k, v in data.model_dump().items() if v is not None}
@@ -222,6 +227,7 @@ async def update_ticket(ticket_id: int, data: TicketUpdate, request: Request, cu
 @router.post("/tickets/{ticket_id}/comments", status_code=201,
              dependencies=[Depends(require_permission(["sales.create", "projects.edit"]))], response_model=Dict[str, Any])
 def add_comment(ticket_id: int, data: CommentCreate, request: Request, current_user=Depends(get_current_user)):
+    """Add Comment."""
     db = get_db_connection(current_user.company_id)
     try:
         cid = db.execute(text("""

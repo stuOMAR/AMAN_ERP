@@ -35,6 +35,7 @@ from .core import _D2
 
 @router.post("/attendance/check-in", response_model=AttendanceResponse, dependencies=[Depends(require_permission(["hr.attendance.view", "hr.attendance.manage"]))])
 def check_in(current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+    """Check In."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -104,6 +105,7 @@ def check_out(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
+    """Check Out."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
@@ -165,6 +167,7 @@ def get_attendance_status(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
+    """Get Attendance Status."""
     with transactional(company_id) as conn:
         emp_res = conn.execute(
             text("SELECT id FROM employees WHERE user_id = :uid"), 
@@ -213,6 +216,7 @@ def get_attendance_history(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
+    """Get Attendance History."""
     with transactional(company_id) as conn:
         emp_res = conn.execute(
             text("SELECT id FROM employees WHERE user_id = :uid"), 
