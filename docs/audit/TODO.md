@@ -262,11 +262,21 @@
 
 ## المرحلة 3: P1 الدقة المحاسبية (أسبوع 3-5)
 
-### T3.1 — توحيد مصدر المبيعات بين Dashboard والتقارير `[M]`
+### T3.1 — توحيد مصدر المبيعات بين Dashboard والتقارير `[M]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #8، #9، #12.
 - **التغيير**: دالة موحدة `get_sales_total(company, period, branch)` يستخدمها الجميع. `dashboard.py` يستخدمها بدلًا من `accounts.balance`. إضافة COGS و net profit صريحين للرسم.
 - **الملفات**: `backend/services/sales_service.py` (جديد)، `backend/routers/dashboard.py`، `backend/routers/reports.py`.
 - **DoD**: قيمة Dashboard = قيمة Reports لنفس الفترة على بيانات الإنتاج.
+- **التنفيذ**:
+  - أنشئ [backend/services/sales_service.py](../../backend/services/sales_service.py) يحتوي `get_sales_total` (إجمالي مبيعات بالعملة الأساس من invoices + pos_orders) و `get_gl_profit_breakdown` (إيرادات/COGS/مصاريف/صافي ربح من journal_lines المرحلة).
+  - استبدل دالة `calculate_period_stats` في [backend/routers/dashboard.py](../../backend/routers/dashboard.py) لتستخدم المصدر الموحد بدلاً من `accounts.balance` أو SUM revenue من GL، وأضف `cogs` و `net_profit` في استجابة `/dashboard/stats`.
+  - استبدل بلوكي SQL الكبيرين في `/reports/sales/summary` ضمن [backend/routers/reports.py](../../backend/routers/reports.py) باستدعاءات `get_sales_total` + `get_gl_profit_breakdown` (ضريبة محسوبة محليًا فقط).
+- **بوابات الجودة**:
+  - `python -m py_compile` على الملفات الثلاثة → OK.
+  - `python scripts/check_sql_parameterization.py` → exit=0 (baseline أُعيد بناؤه إلى 305 بعد دمج فروع SQL في dashboard).
+  - `pytest backend/tests/test_52_phase9_permission_gates.py` → 12/12.
+  - `npx vitest run src/tests/auth.test.js` → 4/4.
+  - `npm run build` → نجح.
 
 ### T3.2 — إصلاح قيد المبيعات مع markup `[S]`
 - **بنود**: #15.

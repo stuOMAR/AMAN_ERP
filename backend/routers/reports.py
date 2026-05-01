@@ -14,6 +14,7 @@ logger = logging.getLogger(__name__)
 from routers.auth import get_current_user
 from utils.permissions import require_permission, validate_branch_access
 from utils.cache import cached
+from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 router = APIRouter(prefix="/reports", tags=["Reports"])
 
@@ -103,46 +104,48 @@ def get_sales_summary(
             start_date = date.today() - timedelta(days=30)
         if not end_date:
             end_date = date.today()
-            
+
+        # T3.1: unified gross sales source (matches Dashboard)
+        sales = get_sales_total(
+            db,
+            start_date=start_date,
+            end_date=end_date,
+            branch_id=branch_id,
+        )
+
+        # Approximate tax extracted from gross totals (assumes embedded tax
+        # at the line-level rate; falls back to 15 % when no lines exist).
         params = {"start": start_date, "end": end_date}
-        
         branch_filter = "AND branch_id = :branch_id" if branch_id else ""
         if branch_id:
             params["branch_id"] = branch_id
 
-        # 1. Total Sales & Count (Combined Invoices + POS)
-        summary = db.execute(text(f"""
+        tax_row = db.execute(text(f"""
             WITH all_sales AS (
-                SELECT 
-                    total, 
-                    COALESCE(exchange_rate, 1.0) as exchange_rate, 
-                    paid_amount, 
-                    invoice_date as sale_date, 
+                SELECT
+                    total,
+                    COALESCE(exchange_rate, 1.0) as exchange_rate,
+                    invoice_date as sale_date,
                     branch_id,
                     id,
                     'invoice' as source
-                FROM invoices 
-                WHERE invoice_type = 'sales' 
+                FROM invoices
+                WHERE invoice_type = 'sales'
                 AND status NOT IN ('cancelled', 'draft')
-                
+
                 UNION ALL
-                
-                SELECT 
-                    total_amount as total, 
-                    1.0 as exchange_rate, 
-                    paid_amount, 
-                    CAST(order_date AS DATE) as sale_date, 
+
+                SELECT
+                    total_amount as total,
+                    1.0 as exchange_rate,
+                    CAST(order_date AS DATE) as sale_date,
                     branch_id,
                     id,
                     'pos' as source
                 FROM pos_orders
                 WHERE status IN ('paid', 'completed')
             )
-            SELECT 
-                COUNT(*) as count,
-                COALESCE(SUM(total * exchange_rate), 0) as total_sales,
-                COALESCE(SUM(paid_amount * exchange_rate), 0) as total_paid,
-                COALESCE(SUM(GREATEST(total - paid_amount, 0) * exchange_rate), 0) as total_due,
+            SELECT
                 COALESCE(SUM((total * COALESCE(exchange_rate, 1.0) * (
                     CASE WHEN source = 'invoice' THEN
                         COALESCE((SELECT AVG(tax_rate) FROM invoice_lines WHERE invoice_id = all_sales.id), 0)
@@ -154,49 +157,33 @@ def get_sales_summary(
                     ELSE
                         COALESCE((SELECT AVG(tax_rate) FROM pos_order_lines WHERE order_id = all_sales.id), 15)
                     END)) ), 0) as total_tax
-            FROM all_sales 
+            FROM all_sales
             WHERE sale_date BETWEEN :start AND :end
-            {branch_filter.replace('branch_id', 'branch_id')}
+            {branch_filter}
         """), params).fetchone()
-        
-        # 2. Profit from GL (journal entries) - consistent with dashboard
-        profit_params = {"start": start_date, "end": end_date}
-        profit_branch_filter = ""
-        if branch_id:
-            profit_branch_filter = "AND je.branch_id = :profit_branch"
-            profit_params["profit_branch"] = branch_id
 
-        profit_query = db.execute(text(f"""
-            SELECT 
-                COALESCE(SUM(CASE WHEN a.account_type = 'revenue' 
-                    THEN jl.credit - jl.debit ELSE 0 END), 0) as total_revenue,
-                COALESCE(SUM(CASE WHEN a.account_code LIKE 'CGS%' 
-                    THEN jl.debit - jl.credit ELSE 0 END), 0) as total_cogs,
-                COALESCE(SUM(CASE WHEN a.account_type = 'expense' AND a.account_code NOT LIKE 'CGS%' 
-                    THEN jl.debit - jl.credit ELSE 0 END), 0) as total_opex
-            FROM journal_lines jl
-            JOIN journal_entries je ON je.id = jl.journal_entry_id
-            JOIN accounts a ON a.id = jl.account_id
-            WHERE je.entry_date BETWEEN :start AND :end
-            AND je.status = 'posted'
-            {profit_branch_filter}
-        """), profit_params).fetchone()
+        # T3.1: shared GL profit breakdown
+        gl = get_gl_profit_breakdown(
+            db,
+            start_date=start_date,
+            end_date=end_date,
+            branch_id=branch_id,
+        )
+        revenue = gl["net_revenue"]
+        cogs = gl["cogs"]
+        operating_expenses = gl["operating_expenses"]
+        gross_profit = gl["gross_profit"]
+        net_profit = gl["net_profit"]
 
-        revenue = Decimal(str(profit_query.total_revenue or 0))
-        cogs = Decimal(str(profit_query.total_cogs or 0))
-        operating_expenses = Decimal(str(profit_query.total_opex or 0))
-        gross_profit = revenue - cogs
-        net_profit = gross_profit - operating_expenses
-        
         return {
             "period": {"start": start_date, "end": end_date},
             "stats": {
-                "invoice_count": summary.count,
-                "total_sales": Decimal(str(summary.total_sales or 0)),
-                "total_paid": Decimal(str(summary.total_paid or 0)),
-                "total_due": Decimal(str(summary.total_due or 0)),
+                "invoice_count": sales["invoice_count"],
+                "total_sales": sales["total_sales"],
+                "total_paid": sales["total_paid"],
+                "total_due": sales["total_due"],
                 "net_revenue": revenue,
-                "total_tax": Decimal(str(summary.total_tax or 0)),
+                "total_tax": Decimal(str(tax_row.total_tax or 0)),
                 "total_cogs": cogs,
                 "gross_profit": gross_profit,
                 "operating_expenses": operating_expenses,

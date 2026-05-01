@@ -10,6 +10,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission, validate_branch_access
 from utils.cache import cached
+from services.sales_service import get_sales_total, get_gl_profit_breakdown
 import time
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
@@ -57,14 +58,33 @@ def get_dashboard_stats(
             params_cash["branch_id"] = branch_id
 
         def calculate_period_stats(start_dt, end_dt=None):
-            """Calculate stats from GL account balances for consistency with Accounting page."""
-            # For GL-based reporting, we use cumulative account balances
-            # Period filtering would require summing journal_lines within the period
-            # For simplicity, this returns current balances (month-to-date can be added later)
-            
+            """Calculate sales/profit/cash for the period.
+
+            Sales come from the unified `get_sales_total` source (invoices +
+            POS, base currency, gross including tax) so Dashboard matches
+            the Reports page. COGS, opex and net profit come from posted
+            GL entries via `get_gl_profit_breakdown`.
+            """
+            # Unified gross sales (T3.1)
+            sales_data = get_sales_total(
+                db, start_date=start_dt, end_date=end_dt, branch_id=branch_id
+            )
+            total_sales = float(sales_data["total_sales"])
+
+            # GL-based profit breakdown
+            gl = get_gl_profit_breakdown(
+                db, start_date=start_dt, end_date=end_dt, branch_id=branch_id
+            )
+            total_expenses = float(gl["operating_expenses"])
+            cogs = float(gl["cogs"])
+            net_profit = float(gl["net_profit"])
+
+            # Cash balance: branch- and period-aware via journal lines, or
+            # cumulative via accounts.balance for the company-wide all-time
+            # view (kept fast for the dashboard summary card).
             branch_filter_je = ""
             date_filter_je = ""
-            params_gl = {}
+            params_gl: dict = {}
             if branch_id:
                 branch_filter_je = "AND je.branch_id = :branch_id"
                 params_gl["branch_id"] = branch_id
@@ -74,35 +94,17 @@ def get_dashboard_stats(
             if end_dt:
                 date_filter_je += " AND je.entry_date <= :end_dt"
                 params_gl["end_dt"] = end_dt
-            
-            if branch_id or start_dt or end_dt:
-                # Branch/period-specific: sum journal lines
-                total_income = db.execute(text(f"""
-                    SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
-                    FROM journal_lines jl
-                    JOIN journal_entries je ON jl.journal_entry_id = je.id
-                    JOIN accounts a ON jl.account_id = a.id
-                    WHERE a.account_type = 'revenue' {branch_filter_je} {date_filter_je}
-                """), params_gl).scalar() or 0
-                
-                total_expenses = db.execute(text(f"""
-                    SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
-                    FROM journal_lines jl
-                    JOIN journal_entries je ON jl.journal_entry_id = je.id
-                    JOIN accounts a ON jl.account_id = a.id
-                    WHERE a.account_type = 'expense' {branch_filter_je} {date_filter_je}
-                """), params_gl).scalar() or 0
-                
-                # Cash balance for branch
-                treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
-                legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
-                all_cash_ids = list(set(treasury_ids + legacy_ids))
-                
-                cash_balance = 0
-                if all_cash_ids:
-                    # SEC-003: Use parameterized IN clause
-                    id_params = {f"cid_{i}": cid for i, cid in enumerate(all_cash_ids)}
-                    id_placeholders = ", ".join(f":cid_{i}" for i in range(len(all_cash_ids)))
+
+            treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
+            legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
+            all_cash_ids = list(set(treasury_ids + legacy_ids))
+
+            cash_balance = 0
+            if all_cash_ids:
+                # SEC-003: parameterized IN clause
+                id_params = {f"cid_{i}": cid for i, cid in enumerate(all_cash_ids)}
+                id_placeholders = ", ".join(f":cid_{i}" for i in range(len(all_cash_ids)))
+                if branch_id or start_dt or end_dt:
                     cash_balance = db.execute(text(f"""
                         SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
                         FROM journal_lines jl
@@ -111,55 +113,18 @@ def get_dashboard_stats(
                         WHERE a.id IN ({id_placeholders})
                         {branch_filter_je} {date_filter_je}
                     """), {**params_gl, **id_params}).scalar() or 0
-            else:
-                # Company-wide: if date filters exist, sum journal lines instead of using cumulative balances
-                if start_dt or end_dt:
-                    total_income = db.execute(text(f"""
-                        SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
-                        FROM journal_lines jl
-                        JOIN journal_entries je ON jl.journal_entry_id = je.id
-                        JOIN accounts a ON jl.account_id = a.id
-                        WHERE a.account_type = 'revenue' {date_filter_je}
-                    """), params_gl).scalar() or 0
-                    
-                    total_expenses = db.execute(text(f"""
-                        SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
-                        FROM journal_lines jl
-                        JOIN journal_entries je ON jl.journal_entry_id = je.id
-                        JOIN accounts a ON jl.account_id = a.id
-                        WHERE a.account_type = 'expense' {date_filter_je}
-                    """), params_gl).scalar() or 0
                 else:
-                    # No date filter: use account balances directly (fastest)
-                    # balance is stored as DR-CR, so revenue (credit-normal) is negative → negate it
-                    total_income = -(db.execute(text("""
-                        SELECT COALESCE(SUM(balance), 0) FROM accounts WHERE account_type = 'revenue'
-                    """)).scalar() or 0)
-                    
-                    total_expenses = db.execute(text("""
-                        SELECT COALESCE(SUM(balance), 0) FROM accounts WHERE account_type = 'expense'
-                    """)).scalar() or 0
-                
-                # Cash balance
-                treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
-                legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
-                all_cash_ids = list(set(treasury_ids + legacy_ids))
-                
-                cash_balance = 0
-                if all_cash_ids:
-                    # SEC-003: Use parameterized IN clause
-                    id_params = {f"cid_{i}": cid for i, cid in enumerate(all_cash_ids)}
-                    id_placeholders = ", ".join(f":cid_{i}" for i in range(len(all_cash_ids)))
                     cash_balance = db.execute(text(f"""
-                        SELECT COALESCE(SUM(balance), 0) FROM accounts 
+                        SELECT COALESCE(SUM(balance), 0) FROM accounts
                         WHERE id IN ({id_placeholders})
                     """), id_params).scalar() or 0
-            
+
             return {
-                "sales": float(total_income),
-                "expenses": float(total_expenses),
-                "profit": float(total_income - total_expenses),
-                "cash": float(cash_balance)
+                "sales": total_sales,
+                "cogs": cogs,
+                "expenses": total_expenses,
+                "profit": net_profit,
+                "cash": float(cash_balance),
             }
 
         # Calculate cumulative stats (matching accounting summary - all-time balances)
@@ -222,7 +187,9 @@ def get_dashboard_stats(
             "sales_change": calc_change(current["sales"], previous["sales"]),
             "expenses": cumulative["expenses"],
             "expenses_change": calc_change(current["expenses"], previous["expenses"]),
+            "cogs": cumulative.get("cogs", 0),
             "profit": cumulative["profit"],
+            "net_profit": cumulative["profit"],
             "profit_change": calc_change(current["profit"], previous["profit"]),
             "cash": cumulative["cash"],
             "cash_change": calc_change(current["cash"], previous["cash"]),
