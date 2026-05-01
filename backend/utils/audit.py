@@ -2,10 +2,97 @@ from datetime import datetime, timezone
 from sqlalchemy import text
 from fastapi import Request, HTTPException
 from database import engine
+import hashlib
 import json
 import logging
 
 logger = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# T3.7 (audit #21, #22): tamper-evident hash chain over audit_logs.
+# ---------------------------------------------------------------------------
+
+def _canonical_payload(
+    *,
+    prev_hash: str,
+    chain_seq: int,
+    user_id,
+    username,
+    action,
+    resource_type,
+    resource_id,
+    details_json: str,
+    ip_address,
+    branch_id,
+    created_at_iso: str,
+) -> str:
+    """Build the pipe-joined canonical string hashed for one audit row.
+
+    Field order matches the SQL backfill in migration 0017 so the Python
+    chain and the in-DB backfill produce identical hashes for the same
+    inputs (the CLI verifier in scripts/verify_audit_chain.py relies on
+    that equivalence).
+    """
+    parts = [
+        prev_hash or "",
+        str(chain_seq),
+        "" if user_id is None else str(user_id),
+        username or "",
+        action or "",
+        resource_type or "",
+        resource_id or "",
+        details_json or "{}",
+        ip_address or "",
+        "" if branch_id is None else str(branch_id),
+        created_at_iso or "",
+    ]
+    return "|".join(parts)
+
+
+def compute_audit_hash(
+    *,
+    prev_hash: str,
+    chain_seq: int,
+    user_id,
+    username,
+    action,
+    resource_type,
+    resource_id,
+    details_json: str,
+    ip_address,
+    branch_id,
+    created_at_iso: str,
+) -> str:
+    payload = _canonical_payload(
+        prev_hash=prev_hash,
+        chain_seq=chain_seq,
+        user_id=user_id,
+        username=username,
+        action=action,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        details_json=details_json,
+        ip_address=ip_address,
+        branch_id=branch_id,
+        created_at_iso=created_at_iso,
+    )
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def make_change_details(old: dict | None, new: dict | None, **extra) -> dict:
+    """T3.7 (audit #25): canonical {"old": ..., "new": ...} envelope.
+
+    All audit details for record mutations should adopt this shape so the
+    audit viewer can render diffs uniformly. Pass extra context as kwargs
+    (e.g. ``reason='...'``, ``request_id=...``) — they are merged at the
+    top level alongside ``old`` and ``new``.
+    """
+    payload: dict = {"old": old or {}, "new": new or {}}
+    if extra:
+        payload.update(extra)
+    return payload
+
 
 def log_activity(
     db_conn,
@@ -53,29 +140,66 @@ def log_activity(
                 logger.warning(f"Could not determine branch for audit log: {e}")
 
         # Ensure details is JSON serializable
-        details_json = json.dumps(details, default=str) if details else '{}'
+        details_json = json.dumps(details, default=str, sort_keys=True) if details else '{}'
+
+        # T3.7: serialize on a per-table advisory lock so concurrent
+        # writers see a consistent (chain_seq, prev_hash) tail.
+        db_conn.execute(
+            text("SELECT pg_advisory_xact_lock(hashtextextended('audit_logs_chain', 0))")
+        )
+        tail = db_conn.execute(
+            text("SELECT chain_seq, hash FROM audit_logs ORDER BY chain_seq DESC NULLS LAST LIMIT 1")
+        ).fetchone()
+        prev_seq = (tail.chain_seq if tail and tail.chain_seq is not None else 0) or 0
+        prev_hash = (tail.hash if tail and tail.hash else "") or ""
+        new_seq = int(prev_seq) + 1
+
+        now = datetime.now(timezone.utc)
+        # ISO with microseconds, matching to_char in the SQL backfill.
+        created_at_iso = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond:06d}Z"
+
+        new_hash = compute_audit_hash(
+            prev_hash=prev_hash,
+            chain_seq=new_seq,
+            user_id=user_id,
+            username=username,
+            action=action,
+            resource_type=resource_type,
+            resource_id=str(resource_id) if resource_id is not None else None,
+            details_json=details_json,
+            ip_address=ip_address,
+            branch_id=branch_id,
+            created_at_iso=created_at_iso,
+        )
 
         db_conn.execute(
             text("""
-                INSERT INTO audit_logs 
-                (user_id, username, action, resource_type, resource_id, details, ip_address, branch_id, created_at)
-                VALUES 
-                (:uid, :uname, :act, :res_type, :res_id, :det, :ip, :bid, :now)
+                INSERT INTO audit_logs
+                (user_id, username, action, resource_type, resource_id, details,
+                 ip_address, branch_id, created_at,
+                 prev_hash, hash, chain_seq)
+                VALUES
+                (:uid, :uname, :act, :res_type, :res_id, :det,
+                 :ip, :bid, :now,
+                 :prev, :h, :seq)
             """),
             {
                 "uid": user_id,
                 "uname": username,
                 "act": action,
                 "res_type": resource_type,
-                "res_id": str(resource_id) if resource_id else None,
+                "res_id": str(resource_id) if resource_id is not None else None,
                 "det": details_json,
                 "ip": ip_address,
                 "bid": branch_id,
-                "now": datetime.now(timezone.utc)
+                "now": now,
+                "prev": prev_hash or None,
+                "h": new_hash,
+                "seq": new_seq,
             }
         )
         db_conn.commit()
-        logger.info(f"📝 AUDIT: {username} -> {action} ({resource_id})")
+        logger.info(f"📝 AUDIT[{new_seq}]: {username} -> {action} ({resource_id})")
 
     except Exception as e:
         # ACC-F6: never swallow silently — emit full stack for observability

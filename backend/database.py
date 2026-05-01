@@ -1461,6 +1461,10 @@ def get_organization_tables_sql() -> str:
         branch_id INTEGER REFERENCES branches(id),
         is_archived BOOLEAN DEFAULT FALSE,
         archived_at TIMESTAMPTZ,
+        -- T3.7 (audit #21,#22): tamper-evident chain.
+        prev_hash VARCHAR(64),
+        hash      VARCHAR(64),
+        chain_seq BIGINT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
         
@@ -6515,6 +6519,50 @@ def get_performance_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_audit_resource ON audit_logs(resource_type, resource_id);
     CREATE INDEX IF NOT EXISTS idx_audit_logs_live ON audit_logs(created_at DESC) WHERE NOT is_archived;
     CREATE INDEX IF NOT EXISTS idx_audit_logs_archival ON audit_logs(created_at) WHERE is_archived = TRUE;
+    -- T3.7 (audit #21,#22): hash-chain unique index + immutability trigger.
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_logs_chain_seq ON audit_logs(chain_seq);
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    CREATE OR REPLACE FUNCTION audit_logs_immutable_fn()
+    RETURNS trigger AS $audit_immut$
+    DECLARE
+        allowed TEXT;
+    BEGIN
+        BEGIN
+            allowed := current_setting('audit_logs.allow_admin_op', true);
+        EXCEPTION WHEN OTHERS THEN
+            allowed := NULL;
+        END;
+        IF allowed IS NULL OR allowed = '' THEN
+            RAISE EXCEPTION
+                'audit_logs is append-only (T3.7 audit #21) — set audit_logs.allow_admin_op for retention jobs';
+        END IF;
+        IF TG_OP = 'UPDATE' THEN
+            IF OLD.id          IS DISTINCT FROM NEW.id          OR
+               OLD.user_id     IS DISTINCT FROM NEW.user_id     OR
+               OLD.username    IS DISTINCT FROM NEW.username    OR
+               OLD.action      IS DISTINCT FROM NEW.action      OR
+               OLD.resource_type IS DISTINCT FROM NEW.resource_type OR
+               OLD.resource_id IS DISTINCT FROM NEW.resource_id OR
+               OLD.details     IS DISTINCT FROM NEW.details     OR
+               OLD.ip_address  IS DISTINCT FROM NEW.ip_address  OR
+               OLD.branch_id   IS DISTINCT FROM NEW.branch_id   OR
+               OLD.created_at  IS DISTINCT FROM NEW.created_at  OR
+               OLD.prev_hash   IS DISTINCT FROM NEW.prev_hash   OR
+               OLD.hash        IS DISTINCT FROM NEW.hash        OR
+               OLD.chain_seq   IS DISTINCT FROM NEW.chain_seq THEN
+                RAISE EXCEPTION
+                    'audit_logs UPDATE limited to is_archived/archived_at';
+            END IF;
+        END IF;
+        RETURN COALESCE(NEW, OLD);
+    END;
+    $audit_immut$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS audit_logs_no_update ON audit_logs;
+    DROP TRIGGER IF EXISTS audit_logs_no_delete ON audit_logs;
+    CREATE TRIGGER audit_logs_no_update BEFORE UPDATE ON audit_logs
+        FOR EACH ROW EXECUTE FUNCTION audit_logs_immutable_fn();
+    CREATE TRIGGER audit_logs_no_delete BEFORE DELETE ON audit_logs
+        FOR EACH ROW EXECUTE FUNCTION audit_logs_immutable_fn();
 
     -- Parties - name search
     CREATE INDEX IF NOT EXISTS idx_parties_name ON parties(name);

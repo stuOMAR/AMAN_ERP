@@ -1,14 +1,14 @@
 # Auto-regenerated baseline (T2.2 - Phase 2 P1 security; refreshed by T3.1).
 # Each line is a pre-existing dynamic SQL site already vetted.
 # CI guard: scripts/check_sql_parameterization.py
-backend/database.py:3707
+backend/database.py:3711
 backend/database.py:175
 backend/database.py:176
 backend/database.py:177
 backend/database.py:178
-backend/database.py:3910
-backend/database.py:3762
-backend/database.py:3786
+backend/database.py:3914
+backend/database.py:3766
+backend/database.py:3790
 backend/routers/approvals.py:67
 backend/routers/approvals.py:351
 backend/routers/approvals.py:407

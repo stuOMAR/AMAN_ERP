@@ -335,7 +335,7 @@
   - اختبار جديد [test_57_tax_settlement_returns.py](../../backend/tests/test_57_tax_settlement_returns.py) (3 حالات): مرتجع مبيعات يخصم من المخرجات، مرتجع مشتريات يخصم من المدخلات، مرتجعات > مبيعات ⇒ refundable بدون قيد.
 - **بوابات الجودة**: py_compile · sql lint (305) · pytest 3/3.
 
-### T3.7 — مصدر سجل التدقيق + Hash Chain + DB triggers `[L]`
+### T3.7 — مصدر سجل التدقيق + Hash Chain + DB triggers `[L]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #21، #22، #23، #25، #26، #137.
 - **التغيير**:
   - عمود `prev_hash`, `hash`, `chain_seq` في `audit_logs`.
@@ -344,6 +344,15 @@
   - نمط `{"old": {...}, "new": {...}}` موحد.
   - فشل التدقيق `critical=True` يُلغي العملية الأصلية للسجلات الحساسة.
 - **DoD**: محاولة `UPDATE audit_logs` ترفض على مستوى DB؛ سلسلة الهاش قابلة للتحقق عبر CLI script.
+- **التنفيذ**:
+  - ترحيل [alembic 0017_audit_logs_hash_chain_immutability.py](../../backend/alembic/versions/0017_audit_logs_hash_chain_immutability.py): أضاف الأعمدة الثلاثة + UNIQUE INDEX على `chain_seq`، يحسب الـ backfill في PG SQL هاشاً متسلسلاً (SHA-256) عبر كل صف موجود بترتيب الـ id، ثم ينشئ `audit_logs_immutable_fn` و triggers `BEFORE UPDATE/DELETE` على `audit_logs`. للسماح بأعمال الأرشفة، الـ trigger يكتفي بالسماح إذا كان `audit_logs.allow_admin_op` مضبوطًا في الجلسة، ولا يسمح إلا بتعديل `is_archived/archived_at`.
+  - [backend/database.py](../../backend/database.py): الـ DDL الكنسي لإنشاء tenant جديد يضم الأعمدة + الـ trigger مباشرة (idempotent).
+  - [backend/utils/audit.py](../../backend/utils/audit.py): دالة `log_activity` تأخذ pg_advisory_xact_lock، تقرأ آخر `(chain_seq, hash)`، تحسب الهاش الجديد عبر `compute_audit_hash` (canonical pipe-joined payload مطابق لـ SQL backfill)، ثم تُدخل الصف. أُضيف `make_change_details(old, new, **extra)` لتوحيد شكل تفاصيل التغييرات (#25).
+  - [backend/utils/permissions.py](../../backend/utils/permissions.py): `_log_permission_denied` و `log_permission_change` لم يعدا يُدخلان مباشرة في `audit_logs`؛ يستدعيان `log_activity` (#137). اختبار regression يفحص الملف للتأكد من خلوّه من `INSERT INTO audit_logs`.
+  - [backend/services/scheduler.py](../../backend/services/scheduler.py): مهمة الأرشفة تضبط `SET LOCAL audit_logs.allow_admin_op = 'retention'` قبل UPDATE/DELETE، فلا يُكسر الـ trigger.
+  - أداة CLI [scripts/verify_audit_chain.py](../../scripts/verify_audit_chain.py) تتصل بأي قاعدة tenant وتعيد حساب السلسلة وتُبلغ عن أول صف به اختلاف. اختُبرت على `aman_d24b1b1c` ⇒ `OK 905 rows`.
+  - اختبار جديد [tests/test_58_audit_chain_immutability.py](../../backend/tests/test_58_audit_chain_immutability.py) (9 حالات): ثبات الهاش على البيانات الثابتة، تغيير أي حقل يغيّر الهاش، envelope `{old, new}`، `log_activity` يبني السلسلة، `UPDATE/DELETE` ترفض، علامة الأرشفة لا تسمح بتعديل حقول السلسلة، regression لمنع عودة الـ INSERT المباشر في `permissions.py`.
+- **بوابات الجودة**: py_compile · sql lint (305) · pytest 48/48 · CLI verify على 905 صف = OK.
 
 ### T3.8 — عكس مخزون/قيد عند إلغاء الفاتورة بدقة `[S]`
 - **بنود**: #294 (P2 لكن منطقي مع المرحلة)، 1.3.2/1.3.3 من Sales/POS.

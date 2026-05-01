@@ -275,6 +275,9 @@ def archive_old_audit_logs():
                     continue
 
                 # Archive entries older than 1 year
+                # T3.7 (audit #21): the immutability trigger blocks UPDATE/
+                # DELETE on audit_logs unless this session-local flag is set.
+                conn.execute(text("SET LOCAL audit_logs.allow_admin_op = 'retention'"))
                 archived = conn.execute(text(
                     "UPDATE audit_logs SET is_archived = TRUE, archived_at = NOW() "
                     "WHERE created_at < NOW() - INTERVAL '1 year' AND (is_archived IS NULL OR is_archived = FALSE)"
@@ -282,6 +285,7 @@ def archive_old_audit_logs():
                 conn.commit()
 
                 # Delete entries older than 7 years
+                conn.execute(text("SET LOCAL audit_logs.allow_admin_op = 'retention'"))
                 deleted = conn.execute(text(
                     "DELETE FROM audit_logs WHERE created_at < NOW() - INTERVAL '7 years'"
                 ))

@@ -612,19 +612,21 @@ def _log_permission_denied(current_user, permission):
             return
 
         from database import get_db_connection
-        from sqlalchemy import text
+        from utils.audit import log_activity
         db = get_db_connection(company_id)
         try:
-            db.execute(text("""
-                INSERT INTO audit_logs (user_id, username, action, resource_type, details, created_at)
-                VALUES (:uid, :uname, 'permission_denied', 'security',
-                        :details, CURRENT_TIMESTAMP)
-            """), {
-                "uid": user_id,
-                "uname": username,
-                "details": json.dumps({"denied_permission": str(permission)})
-            })
-            db.commit()
+            # T3.7 (audit #137): route through unified log_activity so the
+            # permission-denied event participates in the hash chain rather
+            # than bypassing it via a direct INSERT.
+            log_activity(
+                db,
+                user_id=user_id,
+                username=username,
+                action="permission_denied",
+                resource_type="security",
+                resource_id=None,
+                details={"denied_permission": str(permission)},
+            )
         except Exception:
             try:
                 db.rollback()
@@ -639,20 +641,20 @@ def _log_permission_denied(current_user, permission):
 def log_permission_change(company_conn, admin_user_id: int, admin_username: str,
                           target_user_id: int, change_type: str, details: dict):
     """
-    PERM-004: Log permission changes (role changes, warehouse assignments, etc.)
+    PERM-004 / T3.7 (audit #137): Log permission changes via the unified
+    log_activity helper so the entry is hash-chained.
     """
     try:
-        from sqlalchemy import text
-        company_conn.execute(text("""
-            INSERT INTO audit_logs (user_id, username, action, resource_type, resource_id, details, created_at)
-            VALUES (:uid, :uname, :action, 'permissions', :target, :details, CURRENT_TIMESTAMP)
-        """), {
-            "uid": admin_user_id,
-            "uname": admin_username,
-            "action": change_type,
-            "target": str(target_user_id),
-            "details": json.dumps(details)
-        })
+        from utils.audit import log_activity
+        log_activity(
+            company_conn,
+            user_id=admin_user_id,
+            username=admin_username,
+            action=change_type,
+            resource_type="permissions",
+            resource_id=str(target_user_id),
+            details=details,
+        )
     except Exception as e:
         logger.warning(f"Failed to log permission change: {e}")
 
