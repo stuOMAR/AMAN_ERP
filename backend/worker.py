@@ -22,6 +22,7 @@ In docker-compose:
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import sys
 import time
@@ -31,6 +32,23 @@ logging.basicConfig(
     format="%(asctime)s [worker] %(levelname)s %(name)s: %(message)s",
 )
 logger = logging.getLogger("aman.worker")
+
+# T4.1 — Sentry init in worker process
+_SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
+if _SENTRY_DSN:
+    try:
+        import sentry_sdk
+        from sentry_sdk.integrations.sqlalchemy import SqlalchemyIntegration
+        sentry_sdk.init(
+            dsn=_SENTRY_DSN,
+            integrations=[SqlalchemyIntegration()],
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "0.05")),
+            environment=os.environ.get("APP_ENV", "production"),
+            release="aman-erp@2.0.0",
+        )
+        logger.info("✅ Sentry initialized in scheduler worker")
+    except ImportError:
+        logger.warning("sentry-sdk not installed — Sentry disabled")
 
 
 def main() -> int:

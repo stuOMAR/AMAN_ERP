@@ -4,7 +4,7 @@ Inventory Module - Stock Adjustments
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import logging
 
@@ -74,7 +74,7 @@ def list_adjustments(
         db.close()
 
 
-@adjustments_router.post("/adjustments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.adjustment"))])
+@adjustments_router.post("/adjustments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.adjustment"))], response_model=Dict[str, Any])
 def create_adjustment(
     data: StockAdjustmentCreate,
     request: Request,

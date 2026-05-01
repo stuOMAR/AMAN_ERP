@@ -9,12 +9,13 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
+from typing import Any, Dict, List
 
 notifications_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@notifications_router.get("/notifications", dependencies=[Depends(require_permission("notifications.view"))])
+@notifications_router.get("/notifications", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
 def get_notifications(
     current_user: dict = Depends(get_current_user)
 ):
@@ -50,7 +51,7 @@ def get_notifications(
         db.close()
 
 
-@notifications_router.get("/notifications/unread-count", dependencies=[Depends(require_permission("notifications.view"))])
+@notifications_router.get("/notifications/unread-count", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
 def get_unread_count(
     current_user: dict = Depends(get_current_user)
 ):
@@ -74,7 +75,7 @@ def get_unread_count(
         db.close()
 
 
-@notifications_router.post("/notifications/{id}/read", dependencies=[Depends(require_permission("notifications.view"))])
+@notifications_router.post("/notifications/{id}/read", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
 def mark_notification_read(
     id: int,
     current_user: dict = Depends(get_current_user)
@@ -94,7 +95,7 @@ def mark_notification_read(
         db.close()
 
 
-@notifications_router.post("/notifications/read-all", dependencies=[Depends(require_permission("notifications.view"))])
+@notifications_router.post("/notifications/read-all", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
 def mark_all_notifications_read(
     current_user: dict = Depends(get_current_user)
 ):

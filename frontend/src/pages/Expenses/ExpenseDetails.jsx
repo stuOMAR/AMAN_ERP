@@ -4,7 +4,7 @@ import { expensesAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
 import { 
   Edit, Trash2, CheckCircle, XCircle, FileText, 
-  DollarSign, User 
+  DollarSign, User, RotateCcw
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { formatNumber } from '../../utils/format';
@@ -28,6 +28,9 @@ export default function ExpenseDetails() {
   const [approvalAction, setApprovalAction] = useState('');
   const [approvalNotes, setApprovalNotes] = useState('');
   const [processing, setProcessing] = useState(false);
+  const [showReverseModal, setShowReverseModal] = useState(false);
+  const [reverseReason, setReverseReason] = useState('');
+  const [reverseDate, setReverseDate] = useState(new Date().toISOString().slice(0, 10));
 
   useEffect(() => {
     loadExpense();
@@ -74,6 +77,29 @@ export default function ExpenseDetails() {
     }
   };
 
+  const submitReverse = async () => {
+    if (!reverseReason || reverseReason.trim().length < 3) {
+      showToast(t('expenses.errors.reverseReasonRequired', 'سبب العكس مطلوب'), 'error');
+      return;
+    }
+    try {
+      setProcessing(true);
+      await expensesAPI.reverse(id, {
+        reversal_date: reverseDate,
+        reason: reverseReason.trim(),
+      });
+      showToast(t('expenses.messages.reversed', 'تم عكس المصروف بنجاح'), 'success');
+      setShowReverseModal(false);
+      setReverseReason('');
+      loadExpense();
+    } catch (error) {
+      const msg = error?.response?.data?.detail || t('expenses.errors.reverseFailed', 'فشل عكس المصروف');
+      showToast(typeof msg === 'string' ? msg : t('expenses.errors.reverseFailed', 'فشل عكس المصروف'), 'error');
+    } finally {
+      setProcessing(false);
+    }
+  };
+
   const handleDelete = async () => {
     if (!confirm(t('expenses.confirmDelete'))) return;
 
@@ -90,12 +116,13 @@ export default function ExpenseDetails() {
     const styles = {
       pending: { bg: '#fef3c7', color: '#d97706', icon: '⏳' },
       approved: { bg: '#dcfce7', color: '#16a34a', icon: '✅' },
-      rejected: { bg: '#fee2e2', color: '#dc2626', icon: '❌' }
+      rejected: { bg: '#fee2e2', color: '#dc2626', icon: '❌' },
+      reversed: { bg: '#e0e7ff', color: '#4338ca', icon: '↩️' }
     };
     const s = styles[status] || styles.pending;
     return (
       <span style={{ background: s.bg, color: s.color, padding: '6px 16px', borderRadius: '20px', fontSize: '14px', fontWeight: '600' }}>
-        {s.icon} {t(`expenses.status.${status}`)}
+        {s.icon} {t(`expenses.status.${status}`, status)}
       </span>
     );
   };
@@ -156,6 +183,16 @@ export default function ExpenseDetails() {
                 {t('common.delete')}
               </button>
             </>
+          )}
+          {expense.approval_status === 'approved' && (
+            <button
+              className="btn btn-warning d-flex align-items-center gap-2"
+              onClick={() => setShowReverseModal(true)}
+              title={t('expenses.actions.reverseTooltip', 'إنشاء قيد عكسي وإلغاء تأثير المصروف')}
+            >
+              <RotateCcw size={20} />
+              {t('expenses.actions.reverse', 'عكس المصروف')}
+            </button>
           )}
         </div>
         </div>
@@ -405,6 +442,66 @@ export default function ExpenseDetails() {
               value={approvalNotes}
               onChange={(e) => setApprovalNotes(e.target.value)}
               placeholder={t('expenses.placeholders.notes')}
+            />
+          </div>
+        </div>
+      </SimpleModal>
+
+      {/* Reverse Modal (T3.13) */}
+      <SimpleModal
+        isOpen={showReverseModal}
+        onClose={() => setShowReverseModal(false)}
+        title={t('expenses.modal.reverseTitle', 'عكس قيد المصروف')}
+        size="md"
+        footer={
+          <div className="d-flex gap-2">
+            <button
+              className="btn btn-secondary"
+              onClick={() => setShowReverseModal(false)}
+              disabled={processing}
+            >
+              {t('common.cancel')}
+            </button>
+            <button
+              className="btn btn-warning"
+              onClick={submitReverse}
+              disabled={processing}
+            >
+              {processing ? (
+                <>
+                  <Spinner size="sm"/>
+                  {t('common.processing')}
+                </>
+              ) : (
+                t('expenses.actions.confirmReverse', 'تأكيد العكس')
+              )}
+            </button>
+          </div>
+        }
+      >
+        <div>
+          <p className="text-warning">
+            {t('expenses.modal.reverseMessage', 'سيتم إنشاء قيد محاسبي عكسي بنفس القيمة وإلغاء تأثير المصروف على الخزينة. هذه العملية لا يمكن التراجع عنها.')}
+          </p>
+          <div className="mb-3">
+            <label className="form-label">{t('expenses.fields.reversalDate', 'تاريخ العكس')} *</label>
+            <input
+              type="date"
+              className="form-input"
+              value={reverseDate}
+              onChange={(e) => setReverseDate(e.target.value)}
+            />
+          </div>
+          <div className="mb-3">
+            <label className="form-label">{t('expenses.fields.reversalReason', 'سبب العكس')} *</label>
+            <textarea
+              className="form-input"
+              rows="3"
+              value={reverseReason}
+              onChange={(e) => setReverseReason(e.target.value)}
+              placeholder={t('expenses.placeholders.reversalReason', 'اذكر سبب عكس المصروف')}
+              required
+              minLength={3}
             />
           </div>
         </div>

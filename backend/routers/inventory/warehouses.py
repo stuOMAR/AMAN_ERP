@@ -5,7 +5,7 @@ Inventory Module - Warehouses CRUD + Current Stock
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
@@ -145,7 +145,7 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
         db.close()
 
 
-@warehouses_router.delete("/warehouses/{id}", dependencies=[Depends(require_permission("stock.manage"))])
+@warehouses_router.delete("/warehouses/{id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -229,7 +229,7 @@ def get_warehouse(id: int, current_user: dict = Depends(get_current_user)):
         db.close()
 
 
-@warehouses_router.get("/warehouses/{id}/current-stock", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
+@warehouses_router.get("/warehouses/{id}/current-stock", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))], response_model=List[Dict[str, Any]])
 def get_warehouse_current_stock(id: int, current_user: dict = Depends(get_current_user)):
     """جرد المستودع: المنتجات والكميات (مخصص للمستودع المحدد)"""
     db = get_db_connection(current_user.company_id)

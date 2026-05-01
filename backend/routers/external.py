@@ -9,7 +9,7 @@ TAX-001: Withholding Tax (WHT)
 from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
@@ -20,6 +20,7 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
@@ -79,26 +80,22 @@ class WHTTransactionCreate(BaseModel):
 
 # ======================== API-001: API Keys ========================
 
-@router.get("/api-keys", dependencies=[Depends(require_permission("admin"))])
+@router.get("/api-keys", dependencies=[Depends(require_permission("admin"))], response_model=List[Dict[str, Any]])
 def list_api_keys(current_user=Depends(get_current_user)):
     """List all API keys (without revealing the actual key)."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("""
             SELECT id, name, key_prefix, permissions, rate_limit_per_minute,
                    is_active, expires_at, last_used_at, usage_count, created_at, notes
             FROM api_keys ORDER BY created_at DESC
         """)).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.post("/api-keys", status_code=201, dependencies=[Depends(require_permission("admin"))])
+@router.post("/api-keys", status_code=201, dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
 def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
     """Create a new API key. The raw key is returned ONLY ONCE."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         raw_key = f"aman_{secrets.token_hex(32)}"
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         key_prefix = raw_key[:12]
@@ -123,7 +120,6 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
             "expires": expires_at,
             "notes": data.notes
         }).scalar()
-        db.commit()
         
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
@@ -137,45 +133,36 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
             "prefix": key_prefix,
             "message": "احفظ المفتاح الآن — لن يظهر مرة أخرى"
         }
-    finally:
-        db.close()
 
 
-@router.delete("/api-keys/{key_id}", dependencies=[Depends(require_permission("admin"))])
+@router.delete("/api-keys/{key_id}", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
 def revoke_api_key(key_id: int, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(text("UPDATE api_keys SET is_active = FALSE WHERE id = :id"), {"id": key_id})
-        db.commit()
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="revoke", resource_type="api_keys",
             resource_id=str(key_id), details={}
         )
         return {"message": "تم إلغاء المفتاح"}
-    finally:
-        db.close()
 
 
 # ======================== API-002: Webhooks ========================
 
-@router.get("/webhooks/events", dependencies=[Depends(require_permission(["settings.view", "admin"]))])
+@router.get("/webhooks/events", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=Dict[str, Any])
 def list_webhook_events(current_user=Depends(get_current_user)):
     """List all available webhook events."""
     return WEBHOOK_EVENTS
 
 
-@router.get("/webhooks", dependencies=[Depends(require_permission(["settings.view", "admin"]))])
+@router.get("/webhooks", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
 def list_webhooks(current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM webhooks ORDER BY created_at DESC")).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.post("/webhooks", status_code=201, dependencies=[Depends(require_permission(["settings.manage", "admin"]))])
+@router.post("/webhooks", status_code=201, dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
     # Validate events
     invalid = [e for e in data.events if e not in WEBHOOK_EVENTS]
@@ -187,8 +174,7 @@ def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
     except ValueError:
         raise HTTPException(**http_error(400, "url_not_allowed"))
 
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         auto_secret = data.secret or secrets.token_hex(32)
         encrypted_secret = encrypt_webhook_secret(auto_secret)
         row = db.execute(text("""
@@ -204,26 +190,22 @@ def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
             "timeout": data.timeout_seconds,
             "user": current_user.id
         }).scalar()
-        db.commit()
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="create", resource_type="webhook",
             resource_id=str(row), details={"name": data.name, "url": data.url}
         )
         return {"id": row, "secret": auto_secret, "message": "تم إنشاء الـ webhook"}
-    finally:
-        db.close()
 
 
-@router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))])
+@router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(get_current_user)):
     if data.url is not None:
         try:
             validate_webhook_url(data.url)
         except ValueError:
             raise HTTPException(**http_error(400, "url_not_allowed"))
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         updates = {}
         if data.name is not None: updates["name"] = data.name
         if data.url is not None: updates["url"] = data.url
@@ -239,118 +221,104 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
         updates["id"] = webhook_id
         db.execute(text(f"UPDATE webhooks SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
-        db.commit()
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="update", resource_type="webhook",
             resource_id=str(webhook_id), details={k: v for k, v in updates.items() if k != "id"}
         )
         return {"message": "تم التحديث"}
-    finally:
-        db.close()
 
 
-@router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))])
+@router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
 def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(text("DELETE FROM webhooks WHERE id = :id"), {"id": webhook_id})
-        db.commit()
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="delete", resource_type="webhook",
             resource_id=str(webhook_id), details={}
         )
         return {"message": "تم الحذف"}
-    finally:
-        db.close()
 
 
-@router.get("/webhooks/{webhook_id}/logs", dependencies=[Depends(require_permission(["settings.view", "admin"]))])
+@router.get("/webhooks/{webhook_id}/logs", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
 def get_webhook_logs(webhook_id: int, limit: int = 50, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("""
             SELECT id, event, response_status, success, attempt, error_message, created_at
             FROM webhook_logs WHERE webhook_id = :wid ORDER BY created_at DESC LIMIT :lim
         """), {"wid": webhook_id, "lim": limit}).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
 # ======================== ZATCA: QR + Signing ========================
 
-@router.post("/zatca/generate-qr", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))])
+@router.post("/zatca/generate-qr", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
 def generate_qr_code(
     invoice_id: int,
     current_user=Depends(get_current_user)
 ):
     """Generate ZATCA QR code for an invoice."""
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Get invoice details
-        inv = db.execute(text("""
-            SELECT i.id, i.invoice_number, i.invoice_date, i.total, i.tax_amount,
-                   p.name as customer_name
-            FROM invoices i
-            LEFT JOIN parties p ON i.party_id = p.id
-            WHERE i.id = :id
-        """), {"id": invoice_id}).fetchone()
-        
-        if not inv:
-            raise HTTPException(**http_error(404, "invoice_not_found"))
-        
-        # Get company info
-        seller_name = db.execute(text(
-            "SELECT setting_value FROM company_settings WHERE setting_key = 'company_name'"
-        )).scalar() or "AMAN ERP"
-        
-        vat_number = db.execute(text(
-            "SELECT setting_value FROM company_settings WHERE setting_key = 'zatca_vat_number'"
-        )).scalar() or db.execute(text(
-            "SELECT setting_value FROM company_settings WHERE setting_key = 'tax_number'"
-        )).scalar() or "000000000000000"
-        
-        # Get private key for signing (optional)
-        # T2.5: read via secret_settings helper so legacy plaintext or new ciphertext both work.
-        from utils.secret_settings import get_secret_setting
-        private_key = get_secret_setting(db, "zatca_private_key", tenant_id=current_user.company_id)
-        
-        result = process_invoice_for_zatca(
-            db=db,
-            invoice_id=inv.id,
-            company_id=current_user.company_id,
-            seller_name=seller_name,
-            vat_number=vat_number,
-            invoice_number=inv.invoice_number,
-            invoice_date=str(inv.invoice_date),
-            total=float(inv.total),
-            vat_amount=float(inv.tax_amount or 0),
-            private_key_pem=private_key
-        )
-        db.commit()
-        
-        return {
-            "invoice_id": invoice_id,
-            "invoice_number": inv.invoice_number,
-            **result
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("ZATCA QR generation failed")
-        raise HTTPException(500, "خطأ في توليد QR")
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            # Get invoice details
+            inv = db.execute(text("""
+                SELECT i.id, i.invoice_number, i.invoice_date, i.total, i.tax_amount,
+                       p.name as customer_name
+                FROM invoices i
+                LEFT JOIN parties p ON i.party_id = p.id
+                WHERE i.id = :id
+            """), {"id": invoice_id}).fetchone()
+            
+            if not inv:
+                raise HTTPException(**http_error(404, "invoice_not_found"))
+            
+            # Get company info
+            seller_name = db.execute(text(
+                "SELECT setting_value FROM company_settings WHERE setting_key = 'company_name'"
+            )).scalar() or "AMAN ERP"
+            
+            vat_number = db.execute(text(
+                "SELECT setting_value FROM company_settings WHERE setting_key = 'zatca_vat_number'"
+            )).scalar() or db.execute(text(
+                "SELECT setting_value FROM company_settings WHERE setting_key = 'tax_number'"
+            )).scalar() or "000000000000000"
+            
+            # Get private key for signing (optional)
+            # T2.5: read via secret_settings helper so legacy plaintext or new ciphertext both work.
+            from utils.secret_settings import get_secret_setting
+            private_key = get_secret_setting(db, "zatca_private_key", tenant_id=current_user.company_id)
+            
+            result = process_invoice_for_zatca(
+                db=db,
+                invoice_id=inv.id,
+                company_id=current_user.company_id,
+                seller_name=seller_name,
+                vat_number=vat_number,
+                invoice_number=inv.invoice_number,
+                invoice_date=str(inv.invoice_date),
+                total=float(inv.total),
+                vat_amount=float(inv.tax_amount or 0),
+                private_key_pem=private_key
+            )
+            
+            return {
+                "invoice_id": invoice_id,
+                "invoice_number": inv.invoice_number,
+                **result
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("ZATCA QR generation failed")
+            raise HTTPException(500, "خطأ في توليد QR")
 
 
-@router.post("/zatca/generate-keypair", dependencies=[Depends(require_permission("admin"))])
+@router.post("/zatca/generate-keypair", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
 def generate_keypair(current_user=Depends(get_current_user)):
     """Generate RSA keypair for ZATCA signing and store in company settings."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         private_pem, public_pem = generate_rsa_keypair()
         
         # Store in company settings — T2.5: encrypt private key at rest.
@@ -370,20 +338,16 @@ def generate_keypair(current_user=Depends(get_current_user)):
                     ON CONFLICT (setting_key) DO UPDATE SET setting_value = :val
                 """), {"key": key, "val": val})
         
-        db.commit()
         return {
             "message": "تم توليد مفتاح التوقيع الرقمي",
             "public_key": public_pem
         }
-    finally:
-        db.close()
 
 
-@router.get("/zatca/verify/{invoice_id}", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))])
+@router.get("/zatca/verify/{invoice_id}", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
 def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
     """Verify a ZATCA QR code and signature for an invoice."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         inv = db.execute(text("""
             SELECT zatca_hash, zatca_signature, zatca_qr, zatca_status
             FROM invoices WHERE id = :id
@@ -411,26 +375,20 @@ def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
                 )
         
         return result
-    finally:
-        db.close()
 
 
 # ======================== TAX-001: Withholding Tax ========================
 
-@router.get("/wht/rates", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))])
+@router.get("/wht/rates", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_wht_rates(current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM wht_rates WHERE is_active = TRUE ORDER BY category, name")).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.post("/wht/rates", status_code=201, dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))])
+@router.post("/wht/rates", status_code=201, dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))], response_model=Dict[str, Any])
 def create_wht_rate(data: WHTRateCreate, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rid = db.execute(text("""
             INSERT INTO wht_rates (name, name_ar, rate, category, description)
             VALUES (:name, :name_ar, :rate, :cat, :desc) RETURNING id
@@ -438,17 +396,13 @@ def create_wht_rate(data: WHTRateCreate, current_user=Depends(get_current_user))
             "name": data.name, "name_ar": data.name_ar, "rate": data.rate,
             "cat": data.category, "desc": data.description
         }).scalar()
-        db.commit()
         return {"id": rid}
-    finally:
-        db.close()
 
 
-@router.post("/wht/calculate", dependencies=[Depends(require_permission(["accounting.view", "buying.view"]))])
+@router.post("/wht/calculate", dependencies=[Depends(require_permission(["accounting.view", "buying.view"]))], response_model=Dict[str, Any])
 def calculate_wht(data: WHTTransactionCreate, current_user=Depends(get_current_user)):
     """Calculate WHT amount without creating a transaction."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rate_row = db.execute(text("SELECT rate FROM wht_rates WHERE id = :id AND is_active = TRUE"),
                               {"id": data.wht_rate_id}).fetchone()
         if not rate_row:
@@ -465,77 +419,71 @@ def calculate_wht(data: WHTTransactionCreate, current_user=Depends(get_current_u
             "wht_amount": wht_amount,
             "net_amount": net_amount
         }
-    finally:
-        db.close()
 
 
 @router.post("/wht/transactions", status_code=201, 
-             dependencies=[Depends(require_permission(["accounting.edit", "taxes.manage"]))])
+             dependencies=[Depends(require_permission(["accounting.edit", "taxes.manage"]))], response_model=Dict[str, Any])
 def create_wht_transaction(data: WHTTransactionCreate, current_user=Depends(get_current_user)):
     """Create a WHT transaction and optionally post GL entries."""
-    db = get_db_connection(current_user.company_id)
-    try:
-        rate_row = db.execute(text("SELECT rate, name FROM wht_rates WHERE id = :id"),
-                              {"id": data.wht_rate_id}).fetchone()
-        if not rate_row:
-            raise HTTPException(**http_error(404, "wht_rate_not_found"))
-        
-        wht_rate = _dec(rate_row.rate)
-        gross_amount = _dec(data.gross_amount)
-        wht_amount = (gross_amount * wht_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
-        net_amount = (gross_amount - wht_amount).quantize(_D2, ROUND_HALF_UP)
-        
-        # Generate certificate number
-        cert_num = f"WHT-{datetime.now().year}-{datetime.now().strftime('%m%d%H%M%S')}"
-        
-        tid = db.execute(text("""
-            INSERT INTO wht_transactions (
-                invoice_id, payment_id, supplier_id, wht_rate_id,
-                gross_amount, wht_rate, wht_amount, net_amount,
-                certificate_number, period_date, created_by
-            ) VALUES (
-                :inv, :pay, :sup, :rate_id,
-                :gross, :rate, :wht, :net,
-                :cert, :period, :user
-            ) RETURNING id
-        """), {
-            "inv": data.invoice_id, "pay": data.payment_id,
-            "sup": data.supplier_id, "rate_id": data.wht_rate_id,
-            "gross": gross_amount, "rate": wht_rate,
-            "wht": wht_amount, "net": net_amount,
-            "cert": cert_num, "period": datetime.now().date(),
-            "user": current_user.id
-        }).scalar()
-        
-        db.commit()
-        
-        return {
-            "id": tid,
-            "certificate_number": cert_num,
-            "gross_amount": data.gross_amount,
-            "wht_rate": wht_rate,
-            "wht_amount": wht_amount,
-            "net_amount": net_amount
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Error creating WHT transaction")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            rate_row = db.execute(text("SELECT rate, name FROM wht_rates WHERE id = :id"),
+                                  {"id": data.wht_rate_id}).fetchone()
+            if not rate_row:
+                raise HTTPException(**http_error(404, "wht_rate_not_found"))
+            
+            wht_rate = _dec(rate_row.rate)
+            gross_amount = _dec(data.gross_amount)
+            wht_amount = (gross_amount * wht_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
+            net_amount = (gross_amount - wht_amount).quantize(_D2, ROUND_HALF_UP)
+            
+            # Generate certificate number
+            cert_num = f"WHT-{datetime.now().year}-{datetime.now().strftime('%m%d%H%M%S')}"
+            
+            tid = db.execute(text("""
+                INSERT INTO wht_transactions (
+                    invoice_id, payment_id, supplier_id, wht_rate_id,
+                    gross_amount, wht_rate, wht_amount, net_amount,
+                    certificate_number, period_date, created_by
+                ) VALUES (
+                    :inv, :pay, :sup, :rate_id,
+                    :gross, :rate, :wht, :net,
+                    :cert, :period, :user
+                ) RETURNING id
+            """), {
+                "inv": data.invoice_id, "pay": data.payment_id,
+                "sup": data.supplier_id, "rate_id": data.wht_rate_id,
+                "gross": gross_amount, "rate": wht_rate,
+                "wht": wht_amount, "net": net_amount,
+                "cert": cert_num, "period": datetime.now().date(),
+                "user": current_user.id
+            }).scalar()
+            
+            
+            return {
+                "id": tid,
+                "certificate_number": cert_num,
+                "gross_amount": data.gross_amount,
+                "wht_rate": wht_rate,
+                "wht_amount": wht_amount,
+                "net_amount": net_amount
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Error creating WHT transaction")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.get("/wht/transactions", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))])
+@router.get("/wht/transactions", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_wht_transactions(
     supplier_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
     current_user=Depends(get_current_user)
 ):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT wt.*, wr.name as rate_name, p.name as supplier_name
             FROM wht_transactions wt
@@ -557,8 +505,6 @@ def list_wht_transactions(
         query += " ORDER BY wt.created_at DESC"
         rows = db.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -577,8 +523,7 @@ def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
         raise HTTPException(status_code=500, detail="reportlab not installed")
     from fastapi.responses import StreamingResponse
 
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             SELECT wt.id, wt.certificate_number, wt.gross_amount, wt.wht_amount,
                    wt.net_amount, wt.wht_rate, wt.period_date, wt.created_at,
@@ -675,5 +620,3 @@ def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
             media_type="application/pdf",
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
-    finally:
-        db.close()

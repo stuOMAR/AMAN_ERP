@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List
+from typing import Any, Dict, List
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -19,7 +19,7 @@ logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/costing-policies", tags=["Costing Policies"], dependencies=[Depends(require_module("costing"))])
 
-@router.get("/current", dependencies=[Depends(require_permission("settings.view"))])
+@router.get("/current", dependencies=[Depends(require_permission("settings.view"))], response_model=Dict[str, Any])
 @limiter.limit("200/minute")
 def get_current_policy(request: Request, current_user: dict = Depends(get_current_user)):
     """Get the currently active costing policy"""
@@ -44,7 +44,7 @@ def get_current_policy(request: Request, current_user: dict = Depends(get_curren
     finally:
         db.close()
 
-@router.post("/set", dependencies=[Depends(require_permission("settings.edit"))])
+@router.post("/set", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def set_costing_policy(request: Request, policy_data: CostingPolicySet, current_user: dict = Depends(get_current_user)):
     """Change the costing policy with impact analysis"""

@@ -29,8 +29,6 @@ export const inventoryAPI = {
 
     // Transfers
     transferStock: (data) => api.post('/inventory/transfer', data),
-    createStockReceipt: (data) => api.post('/inventory/receipt', data),
-    createStockDelivery: (data) => api.post('/inventory/delivery', data),
 
     getSummary: (params) => api.get('/inventory/summary', { params }),
 

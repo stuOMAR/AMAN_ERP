@@ -8,13 +8,14 @@ INV-103: Expiry Date tracking
 from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from pydantic import BaseModel
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import require_permission
 
@@ -74,7 +75,7 @@ class SerialUpdate(BaseModel):
 
 # ============ BATCH ENDPOINTS ============
 
-@batches_router.get("/batches", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/batches", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def list_batches(
     product_id: Optional[int] = None,
     warehouse_id: Optional[int] = None,
@@ -86,8 +87,7 @@ def list_batches(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الدفعات مع إمكانية الفلترة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT b.*, 
                    p.product_name, p.product_code,
@@ -144,19 +144,16 @@ def list_batches(
             "items": [dict(r._mapping) for r in rows],
             "total": total
         }
-    finally:
-        db.close()
 
 
-@batches_router.get("/batches/expiry-alerts", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/batches/expiry-alerts", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_expiry_alerts(
     days: int = Query(default=30, description="عدد الأيام للتنبيه"),
     warehouse_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """تنبيهات المنتجات قريبة الانتهاء والمنتهية"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT b.*, 
                    p.product_name, p.product_code,
@@ -203,15 +200,12 @@ def get_expiry_alerts(
             "expiring_soon_count": len(expiring_soon),
             "total_alerts": len(expired) + len(expiring_soon)
         }
-    finally:
-        db.close()
 
 
-@batches_router.get("/batches/{batch_id}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/batches/{batch_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_batch(batch_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل دفعة محددة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         batch = db.execute(text("""
             SELECT b.*, 
                    p.product_name, p.product_code,
@@ -251,193 +245,186 @@ def get_batch(batch_id: int, current_user: dict = Depends(get_current_user)):
         result["serials"] = [dict(s._mapping) for s in serials]
 
         return result
-    finally:
-        db.close()
 
 
-@batches_router.post("/batches", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.post("/batches", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_batch(
     batch: BatchCreate,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء دفعة جديدة"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Check product exists and has batch tracking
-        product = db.execute(text("""
-            SELECT id, product_name, has_batch_tracking FROM products WHERE id = :id
-        """), {"id": batch.product_id}).fetchone()
-
-        if not product:
-            raise HTTPException(**http_error(404, "product_not_found"))
-
-        # Check duplicate batch number
-        exists = db.execute(text("""
-            SELECT 1 FROM product_batches 
-            WHERE product_id = :pid AND warehouse_id = :wid AND batch_number = :bn
-        """), {"pid": batch.product_id, "wid": batch.warehouse_id, "bn": batch.batch_number}).fetchone()
-
-        if exists:
-            raise HTTPException(status_code=400, detail="رقم الدفعة موجود بالفعل لهذا المنتج في هذا المستودع")
-
-        result = db.execute(text("""
-            INSERT INTO product_batches (
-                product_id, warehouse_id, batch_number, manufacturing_date, expiry_date,
-                quantity, available_quantity, unit_cost, supplier_id, notes, 
-                created_by, status
-            ) VALUES (
-                :pid, :wid, :bn, :mdate, :edate,
-                :qty, :qty, :cost, :sid, :notes,
-                :uid, 'active'
-            ) RETURNING id, created_at
-        """), {
-            "pid": batch.product_id,
-            "wid": batch.warehouse_id,
-            "bn": batch.batch_number,
-            "mdate": batch.manufacturing_date,
-            "edate": batch.expiry_date,
-            "qty": batch.quantity,
-            "cost": batch.unit_cost,
-            "sid": batch.supplier_id,
-            "notes": batch.notes,
-            "uid": current_user.id
-        }).fetchone()
-
-        # If quantity > 0, update inventory and log movement
-        if batch.quantity > 0:
-            # Upsert inventory
-            inv = db.execute(text("""
-                SELECT id FROM inventory WHERE product_id = :pid AND warehouse_id = :wid
-            """), {"pid": batch.product_id, "wid": batch.warehouse_id}).fetchone()
-
-            if inv:
-                db.execute(text("""
-                    UPDATE inventory SET quantity = quantity + :qty, updated_at = NOW()
-                    WHERE product_id = :pid AND warehouse_id = :wid
-                """), {"qty": batch.quantity, "pid": batch.product_id, "wid": batch.warehouse_id})
-            else:
-                db.execute(text("""
-                    INSERT INTO inventory (product_id, warehouse_id, quantity)
-                    VALUES (:pid, :wid, :qty)
-                """), {"pid": batch.product_id, "wid": batch.warehouse_id, "qty": batch.quantity})
-
-            # Log inventory transaction
-            db.execute(text("""
-                INSERT INTO inventory_transactions (
-                    product_id, warehouse_id, transaction_type, reference_type,
-                    reference_id, quantity, unit_cost, total_cost, notes, created_by
+    with transactional(current_user.company_id) as db:
+        try:
+            # Check product exists and has batch tracking
+            product = db.execute(text("""
+                SELECT id, product_name, has_batch_tracking FROM products WHERE id = :id
+            """), {"id": batch.product_id}).fetchone()
+    
+            if not product:
+                raise HTTPException(**http_error(404, "product_not_found"))
+    
+            # Check duplicate batch number
+            exists = db.execute(text("""
+                SELECT 1 FROM product_batches 
+                WHERE product_id = :pid AND warehouse_id = :wid AND batch_number = :bn
+            """), {"pid": batch.product_id, "wid": batch.warehouse_id, "bn": batch.batch_number}).fetchone()
+    
+            if exists:
+                raise HTTPException(status_code=400, detail="رقم الدفعة موجود بالفعل لهذا المنتج في هذا المستودع")
+    
+            result = db.execute(text("""
+                INSERT INTO product_batches (
+                    product_id, warehouse_id, batch_number, manufacturing_date, expiry_date,
+                    quantity, available_quantity, unit_cost, supplier_id, notes, 
+                    created_by, status
                 ) VALUES (
-                    :pid, :wid, 'batch_in', 'batch',
-                    :bid, :qty, :cost, :total, :notes, :uid
-                )
+                    :pid, :wid, :bn, :mdate, :edate,
+                    :qty, :qty, :cost, :sid, :notes,
+                    :uid, 'active'
+                ) RETURNING id, created_at
             """), {
                 "pid": batch.product_id,
                 "wid": batch.warehouse_id,
-                "bid": result.id,
+                "bn": batch.batch_number,
+                "mdate": batch.manufacturing_date,
+                "edate": batch.expiry_date,
                 "qty": batch.quantity,
                 "cost": batch.unit_cost,
-                "total": batch.quantity * batch.unit_cost,
-                "notes": f"إضافة دفعة {batch.batch_number}",
+                "sid": batch.supplier_id,
+                "notes": batch.notes,
                 "uid": current_user.id
-            })
-
-            # Log batch movement
+            }).fetchone()
+    
+            # If quantity > 0, update inventory and log movement
+            if batch.quantity > 0:
+                # Upsert inventory
+                inv = db.execute(text("""
+                    SELECT id FROM inventory WHERE product_id = :pid AND warehouse_id = :wid
+                """), {"pid": batch.product_id, "wid": batch.warehouse_id}).fetchone()
+    
+                if inv:
+                    db.execute(text("""
+                        UPDATE inventory SET quantity = quantity + :qty, updated_at = NOW()
+                        WHERE product_id = :pid AND warehouse_id = :wid
+                    """), {"qty": batch.quantity, "pid": batch.product_id, "wid": batch.warehouse_id})
+                else:
+                    db.execute(text("""
+                        INSERT INTO inventory (product_id, warehouse_id, quantity)
+                        VALUES (:pid, :wid, :qty)
+                    """), {"pid": batch.product_id, "wid": batch.warehouse_id, "qty": batch.quantity})
+    
+                # Log inventory transaction
+                db.execute(text("""
+                    INSERT INTO inventory_transactions (
+                        product_id, warehouse_id, transaction_type, reference_type,
+                        reference_id, quantity, unit_cost, total_cost, notes, created_by
+                    ) VALUES (
+                        :pid, :wid, 'batch_in', 'batch',
+                        :bid, :qty, :cost, :total, :notes, :uid
+                    )
+                """), {
+                    "pid": batch.product_id,
+                    "wid": batch.warehouse_id,
+                    "bid": result.id,
+                    "qty": batch.quantity,
+                    "cost": batch.unit_cost,
+                    "total": batch.quantity * batch.unit_cost,
+                    "notes": f"إضافة دفعة {batch.batch_number}",
+                    "uid": current_user.id
+                })
+    
+                # Log batch movement
+                db.execute(text("""
+                    INSERT INTO batch_serial_movements (
+                        product_id, batch_id, warehouse_id, movement_type,
+                        reference_type, quantity, notes, created_by
+                    ) VALUES (
+                        :pid, :bid, :wid, 'batch_create',
+                        'batch', :qty, :notes, :uid
+                    )
+                """), {
+                    "pid": batch.product_id,
+                    "bid": result.id,
+                    "wid": batch.warehouse_id,
+                    "qty": batch.quantity,
+                    "notes": f"إنشاء دفعة {batch.batch_number}",
+                    "uid": current_user.id
+                })
+    
+            # Enable batch tracking on product if not already
             db.execute(text("""
-                INSERT INTO batch_serial_movements (
-                    product_id, batch_id, warehouse_id, movement_type,
-                    reference_type, quantity, notes, created_by
-                ) VALUES (
-                    :pid, :bid, :wid, 'batch_create',
-                    'batch', :qty, :notes, :uid
-                )
-            """), {
-                "pid": batch.product_id,
-                "bid": result.id,
-                "wid": batch.warehouse_id,
-                "qty": batch.quantity,
-                "notes": f"إنشاء دفعة {batch.batch_number}",
-                "uid": current_user.id
-            })
-
-        # Enable batch tracking on product if not already
-        db.execute(text("""
-            UPDATE products SET has_batch_tracking = TRUE WHERE id = :pid AND has_batch_tracking = FALSE
-        """), {"pid": batch.product_id})
-
-        db.commit()
-
-        # INV-L01: Audit log for batch creation
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action="batch.create", resource_type="product_batch",
-            resource_id=str(result.id),
-            details={"batch_number": batch.batch_number, "product_id": batch.product_id, "warehouse_id": batch.warehouse_id, "quantity": batch.quantity},
-            request=request
-        )
-
-        return {
-            "id": result.id,
-            "batch_number": batch.batch_number,
-            "message": "تم إنشاء الدفعة بنجاح"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating batch: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+                UPDATE products SET has_batch_tracking = TRUE WHERE id = :pid AND has_batch_tracking = FALSE
+            """), {"pid": batch.product_id})
+    
+    
+            # INV-L01: Audit log for batch creation
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action="batch.create", resource_type="product_batch",
+                resource_id=str(result.id),
+                details={"batch_number": batch.batch_number, "product_id": batch.product_id, "warehouse_id": batch.warehouse_id, "quantity": batch.quantity},
+                request=request
+            )
+    
+            return {
+                "id": result.id,
+                "batch_number": batch.batch_number,
+                "message": "تم إنشاء الدفعة بنجاح"
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error creating batch: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@batches_router.put("/batches/{batch_id}", dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.put("/batches/{batch_id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def update_batch(
     batch_id: int,
     data: BatchUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث بيانات دفعة"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        batch = db.execute(text("SELECT id FROM product_batches WHERE id = :id"), {"id": batch_id}).fetchone()
-        if not batch:
-            raise HTTPException(**http_error(404, "batch_not_found"))
-
-        updates = []
-        params = {"id": batch_id}
-
-        if data.manufacturing_date is not None:
-            updates.append("manufacturing_date = :mdate")
-            params["mdate"] = data.manufacturing_date
-        if data.expiry_date is not None:
-            updates.append("expiry_date = :edate")
-            params["edate"] = data.expiry_date
-        if data.notes is not None:
-            updates.append("notes = :notes")
-            params["notes"] = data.notes
-        if data.status is not None:
-            updates.append("status = :status")
-            params["status"] = data.status
-
-        if updates:
-            updates.append("updated_at = NOW()")
-            db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params)
-            db.commit()
-
-        return {"message": "تم تحديث الدفعة بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            batch = db.execute(text("SELECT id FROM product_batches WHERE id = :id"), {"id": batch_id}).fetchone()
+            if not batch:
+                raise HTTPException(**http_error(404, "batch_not_found"))
+    
+            updates = []
+            params = {"id": batch_id}
+    
+            if data.manufacturing_date is not None:
+                updates.append("manufacturing_date = :mdate")
+                params["mdate"] = data.manufacturing_date
+            if data.expiry_date is not None:
+                updates.append("expiry_date = :edate")
+                params["edate"] = data.expiry_date
+            if data.notes is not None:
+                updates.append("notes = :notes")
+                params["notes"] = data.notes
+            if data.status is not None:
+                updates.append("status = :status")
+                params["status"] = data.status
+    
+            if updates:
+                updates.append("updated_at = NOW()")
+                db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params)
+                db.commit()
+    
+            return {"message": "تم تحديث الدفعة بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@batches_router.get("/batches/product/{product_id}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/batches/product/{product_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=List[Dict[str, Any]])
 def get_product_batches(
     product_id: int,
     warehouse_id: Optional[int] = None,
@@ -445,8 +432,7 @@ def get_product_batches(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب دفعات منتج محدد (FEFO: الأقرب انتهاءً أولاً)"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT b.*, w.warehouse_name
             FROM product_batches b
@@ -466,13 +452,11 @@ def get_product_batches(
 
         rows = db.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
 # ============ SERIAL NUMBER ENDPOINTS ============
 
-@batches_router.get("/serials", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/serials", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def list_serials(
     product_id: Optional[int] = None,
     warehouse_id: Optional[int] = None,
@@ -484,8 +468,7 @@ def list_serials(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الأرقام التسلسلية"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT s.*, 
                    p.product_name, p.product_code,
@@ -534,15 +517,12 @@ def list_serials(
             "items": [dict(r._mapping) for r in rows],
             "total": total
         }
-    finally:
-        db.close()
 
 
-@batches_router.get("/serials/{serial_id}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/serials/{serial_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_serial(serial_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل رقم تسلسلي محدد"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         serial = db.execute(text("""
             SELECT s.*, 
                    p.product_name, p.product_code,
@@ -574,15 +554,12 @@ def get_serial(serial_id: int, current_user: dict = Depends(get_current_user)):
         result["movements"] = [dict(m._mapping) for m in movements]
 
         return result
-    finally:
-        db.close()
 
 
-@batches_router.get("/serials/lookup/{serial_number}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/serials/lookup/{serial_number}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def lookup_serial(serial_number: str, current_user: dict = Depends(get_current_user)):
     """البحث عن رقم تسلسلي بالرقم"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         serial = db.execute(text("""
             SELECT s.*, 
                    p.product_name, p.product_code,
@@ -614,222 +591,212 @@ def lookup_serial(serial_number: str, current_user: dict = Depends(get_current_u
         result["movements"] = [dict(m._mapping) for m in movements]
 
         return result
-    finally:
-        db.close()
 
 
-@batches_router.post("/serials", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.post("/serials", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_serial(
     serial: SerialCreate,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء رقم تسلسلي واحد"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Validate product
-        product = db.execute(text("SELECT id, product_name FROM products WHERE id = :id"), {"id": serial.product_id}).fetchone()
-        if not product:
-            raise HTTPException(**http_error(404, "product_not_found"))
-
-        # Check duplicate
-        exists = db.execute(text("""
-            SELECT 1 FROM product_serials WHERE product_id = :pid AND serial_number = :sn
-        """), {"pid": serial.product_id, "sn": serial.serial_number}).fetchone()
-
-        if exists:
-            raise HTTPException(status_code=400, detail="الرقم التسلسلي موجود بالفعل لهذا المنتج")
-
-        result = db.execute(text("""
-            INSERT INTO product_serials (
-                product_id, warehouse_id, serial_number, batch_id,
-                purchase_price, warranty_start, warranty_end,
-                status, notes, created_by
-            ) VALUES (
-                :pid, :wid, :sn, :bid,
-                :price, :ws, :we,
-                'available', :notes, :uid
-            ) RETURNING id, created_at
-        """), {
-            "pid": serial.product_id,
-            "wid": serial.warehouse_id,
-            "sn": serial.serial_number,
-            "bid": serial.batch_id,
-            "price": serial.purchase_price,
-            "ws": serial.warranty_start,
-            "we": serial.warranty_end,
-            "notes": serial.notes,
-            "uid": current_user.id
-        }).fetchone()
-
-        # Log movement
-        db.execute(text("""
-            INSERT INTO batch_serial_movements (
-                product_id, serial_id, warehouse_id, movement_type,
-                reference_type, quantity, notes, created_by
-            ) VALUES (
-                :pid, :sid, :wid, 'serial_create',
-                'serial', 1, :notes, :uid
+    with transactional(current_user.company_id) as db:
+        try:
+            # Validate product
+            product = db.execute(text("SELECT id, product_name FROM products WHERE id = :id"), {"id": serial.product_id}).fetchone()
+            if not product:
+                raise HTTPException(**http_error(404, "product_not_found"))
+    
+            # Check duplicate
+            exists = db.execute(text("""
+                SELECT 1 FROM product_serials WHERE product_id = :pid AND serial_number = :sn
+            """), {"pid": serial.product_id, "sn": serial.serial_number}).fetchone()
+    
+            if exists:
+                raise HTTPException(status_code=400, detail="الرقم التسلسلي موجود بالفعل لهذا المنتج")
+    
+            result = db.execute(text("""
+                INSERT INTO product_serials (
+                    product_id, warehouse_id, serial_number, batch_id,
+                    purchase_price, warranty_start, warranty_end,
+                    status, notes, created_by
+                ) VALUES (
+                    :pid, :wid, :sn, :bid,
+                    :price, :ws, :we,
+                    'available', :notes, :uid
+                ) RETURNING id, created_at
+            """), {
+                "pid": serial.product_id,
+                "wid": serial.warehouse_id,
+                "sn": serial.serial_number,
+                "bid": serial.batch_id,
+                "price": serial.purchase_price,
+                "ws": serial.warranty_start,
+                "we": serial.warranty_end,
+                "notes": serial.notes,
+                "uid": current_user.id
+            }).fetchone()
+    
+            # Log movement
+            db.execute(text("""
+                INSERT INTO batch_serial_movements (
+                    product_id, serial_id, warehouse_id, movement_type,
+                    reference_type, quantity, notes, created_by
+                ) VALUES (
+                    :pid, :sid, :wid, 'serial_create',
+                    'serial', 1, :notes, :uid
+                )
+            """), {
+                "pid": serial.product_id,
+                "sid": result.id,
+                "wid": serial.warehouse_id,
+                "notes": f"إنشاء رقم تسلسلي {serial.serial_number}",
+                "uid": current_user.id
+            })
+    
+            # Enable serial tracking
+            db.execute(text("UPDATE products SET has_serial_tracking = TRUE WHERE id = :pid"), {"pid": serial.product_id})
+    
+            # INV-L01: Audit log for serial creation
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action="serial.create", resource_type="product_serial",
+                resource_id=str(result.id),
+                details={"serial_number": serial.serial_number, "product_id": serial.product_id, "warehouse_id": serial.warehouse_id},
+                request=request
             )
-        """), {
-            "pid": serial.product_id,
-            "sid": result.id,
-            "wid": serial.warehouse_id,
-            "notes": f"إنشاء رقم تسلسلي {serial.serial_number}",
-            "uid": current_user.id
-        })
-
-        # Enable serial tracking
-        db.execute(text("UPDATE products SET has_serial_tracking = TRUE WHERE id = :pid"), {"pid": serial.product_id})
-
-        db.commit()
-        # INV-L01: Audit log for serial creation
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action="serial.create", resource_type="product_serial",
-            resource_id=str(result.id),
-            details={"serial_number": serial.serial_number, "product_id": serial.product_id, "warehouse_id": serial.warehouse_id},
-            request=request
-        )
-        return {"id": result.id, "serial_number": serial.serial_number, "message": "تم إنشاء الرقم التسلسلي بنجاح"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating serial: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+            return {"id": result.id, "serial_number": serial.serial_number, "message": "تم إنشاء الرقم التسلسلي بنجاح"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error creating serial: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@batches_router.post("/serials/bulk", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.post("/serials/bulk", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_serials_bulk(
     data: SerialBulkCreate,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء أرقام تسلسلية دفعة واحدة"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        if data.count > 1000:
-            raise HTTPException(status_code=400, detail="الحد الأقصى 1000 رقم تسلسلي في المرة الواحدة")
-
-        product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": data.product_id}).fetchone()
-        if not product:
-            raise HTTPException(**http_error(404, "product_not_found"))
-
-        created = []
-        failed = []
-
-        for i in range(data.count):
-            num = data.start_number + i
-            serial_number = f"{data.prefix}{str(num).zfill(len(str(data.start_number + data.count)))}"
-
-            try:
-                result = db.execute(text("""
-                    INSERT INTO product_serials (
-                        product_id, warehouse_id, serial_number, batch_id,
-                        purchase_price, status, notes, created_by
-                    ) VALUES (
-                        :pid, :wid, :sn, :bid,
-                        :price, 'available', :notes, :uid
-                    ) RETURNING id
-                """), {
-                    "pid": data.product_id,
-                    "wid": data.warehouse_id,
-                    "sn": serial_number,
-                    "bid": data.batch_id,
-                    "price": data.purchase_price,
-                    "notes": data.notes,
-                    "uid": current_user.id
-                }).fetchone()
-
-                # Log movement
-                db.execute(text("""
-                    INSERT INTO batch_serial_movements (
-                        product_id, serial_id, warehouse_id, movement_type,
-                        reference_type, quantity, notes, created_by
-                    ) VALUES (:pid, :sid, :wid, 'serial_create', 'serial', 1, :notes, :uid)
-                """), {
-                    "pid": data.product_id, "sid": result.id, "wid": data.warehouse_id,
-                    "notes": f"إنشاء رقم تسلسلي {serial_number}", "uid": current_user.id
-                })
-
-                created.append(serial_number)
-            except Exception as e:
-                failed.append({"serial": serial_number, "error": str(e)})
-                db.rollback()
-                continue
-
-        # Enable serial tracking
-        db.execute(text("UPDATE products SET has_serial_tracking = TRUE WHERE id = :pid"), {"pid": data.product_id})
-
-        db.commit()
-        return {
-            "message": f"تم إنشاء {len(created)} رقم تسلسلي",
-            "created_count": len(created),
-            "failed_count": len(failed),
-            "created": created[:20],  # Return first 20 only
-            "failed": failed
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            if data.count > 1000:
+                raise HTTPException(status_code=400, detail="الحد الأقصى 1000 رقم تسلسلي في المرة الواحدة")
+    
+            product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": data.product_id}).fetchone()
+            if not product:
+                raise HTTPException(**http_error(404, "product_not_found"))
+    
+            created = []
+            failed = []
+    
+            for i in range(data.count):
+                num = data.start_number + i
+                serial_number = f"{data.prefix}{str(num).zfill(len(str(data.start_number + data.count)))}"
+    
+                try:
+                    result = db.execute(text("""
+                        INSERT INTO product_serials (
+                            product_id, warehouse_id, serial_number, batch_id,
+                            purchase_price, status, notes, created_by
+                        ) VALUES (
+                            :pid, :wid, :sn, :bid,
+                            :price, 'available', :notes, :uid
+                        ) RETURNING id
+                    """), {
+                        "pid": data.product_id,
+                        "wid": data.warehouse_id,
+                        "sn": serial_number,
+                        "bid": data.batch_id,
+                        "price": data.purchase_price,
+                        "notes": data.notes,
+                        "uid": current_user.id
+                    }).fetchone()
+    
+                    # Log movement
+                    db.execute(text("""
+                        INSERT INTO batch_serial_movements (
+                            product_id, serial_id, warehouse_id, movement_type,
+                            reference_type, quantity, notes, created_by
+                        ) VALUES (:pid, :sid, :wid, 'serial_create', 'serial', 1, :notes, :uid)
+                    """), {
+                        "pid": data.product_id, "sid": result.id, "wid": data.warehouse_id,
+                        "notes": f"إنشاء رقم تسلسلي {serial_number}", "uid": current_user.id
+                    })
+    
+                    created.append(serial_number)
+                except Exception as e:
+                    failed.append({"serial": serial_number, "error": str(e)})
+                    db.rollback()
+                    continue
+    
+            # Enable serial tracking
+            db.execute(text("UPDATE products SET has_serial_tracking = TRUE WHERE id = :pid"), {"pid": data.product_id})
+    
+            return {
+                "message": f"تم إنشاء {len(created)} رقم تسلسلي",
+                "created_count": len(created),
+                "failed_count": len(failed),
+                "created": created[:20],  # Return first 20 only
+                "failed": failed
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@batches_router.put("/serials/{serial_id}", dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.put("/serials/{serial_id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def update_serial(
     serial_id: int,
     data: SerialUpdate,
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث بيانات رقم تسلسلي"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        serial = db.execute(text("SELECT id, serial_number FROM product_serials WHERE id = :id"), {"id": serial_id}).fetchone()
-        if not serial:
-            raise HTTPException(**http_error(404, "serial_number_not_found"))
-
-        updates = []
-        params = {"id": serial_id}
-
-        if data.status is not None:
-            updates.append("status = :status")
-            params["status"] = data.status
-        if data.warranty_start is not None:
-            updates.append("warranty_start = :ws")
-            params["ws"] = data.warranty_start
-        if data.warranty_end is not None:
-            updates.append("warranty_end = :we")
-            params["we"] = data.warranty_end
-        if data.notes is not None:
-            updates.append("notes = :notes")
-            params["notes"] = data.notes
-
-        if updates:
-            updates.append("updated_at = NOW()")
-            db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params)
-            db.commit()
-
-        return {"message": "تم تحديث الرقم التسلسلي بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            serial = db.execute(text("SELECT id, serial_number FROM product_serials WHERE id = :id"), {"id": serial_id}).fetchone()
+            if not serial:
+                raise HTTPException(**http_error(404, "serial_number_not_found"))
+    
+            updates = []
+            params = {"id": serial_id}
+    
+            if data.status is not None:
+                updates.append("status = :status")
+                params["status"] = data.status
+            if data.warranty_start is not None:
+                updates.append("warranty_start = :ws")
+                params["ws"] = data.warranty_start
+            if data.warranty_end is not None:
+                updates.append("warranty_end = :we")
+                params["we"] = data.warranty_end
+            if data.notes is not None:
+                updates.append("notes = :notes")
+                params["notes"] = data.notes
+    
+            if updates:
+                updates.append("updated_at = NOW()")
+                db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params)
+                db.commit()
+    
+            return {"message": "تم تحديث الرقم التسلسلي بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ============ PRODUCT TRACKING CONFIG ============
 
-@batches_router.put("/products/{product_id}/tracking", dependencies=[Depends(require_permission("products.edit"))])
+@batches_router.put("/products/{product_id}/tracking", dependencies=[Depends(require_permission("products.edit"))], response_model=Dict[str, Any])
 def update_product_tracking(
     product_id: int,
     has_batch_tracking: Optional[bool] = None,
@@ -840,49 +807,47 @@ def update_product_tracking(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث إعدادات تتبع المنتج"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": product_id}).fetchone()
-        if not product:
-            raise HTTPException(**http_error(404, "product_not_found"))
-
-        updates = []
-        params = {"id": product_id}
-
-        if has_batch_tracking is not None:
-            updates.append("has_batch_tracking = :hbt")
-            params["hbt"] = has_batch_tracking
-        if has_serial_tracking is not None:
-            updates.append("has_serial_tracking = :hst")
-            params["hst"] = has_serial_tracking
-        if has_expiry_tracking is not None:
-            updates.append("has_expiry_tracking = :het")
-            params["het"] = has_expiry_tracking
-        if shelf_life_days is not None:
-            updates.append("shelf_life_days = :sld")
-            params["sld"] = shelf_life_days
-        if expiry_alert_days is not None:
-            updates.append("expiry_alert_days = :ead")
-            params["ead"] = expiry_alert_days
-
-        if updates:
-            db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params)
-            db.commit()
-
-        return {"message": "تم تحديث إعدادات التتبع بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": product_id}).fetchone()
+            if not product:
+                raise HTTPException(**http_error(404, "product_not_found"))
+    
+            updates = []
+            params = {"id": product_id}
+    
+            if has_batch_tracking is not None:
+                updates.append("has_batch_tracking = :hbt")
+                params["hbt"] = has_batch_tracking
+            if has_serial_tracking is not None:
+                updates.append("has_serial_tracking = :hst")
+                params["hst"] = has_serial_tracking
+            if has_expiry_tracking is not None:
+                updates.append("has_expiry_tracking = :het")
+                params["het"] = has_expiry_tracking
+            if shelf_life_days is not None:
+                updates.append("shelf_life_days = :sld")
+                params["sld"] = shelf_life_days
+            if expiry_alert_days is not None:
+                updates.append("expiry_alert_days = :ead")
+                params["ead"] = expiry_alert_days
+    
+            if updates:
+                db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params)
+                db.commit()
+    
+            return {"message": "تم تحديث إعدادات التتبع بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ============ QUALITY CONTROL ============
 
-@batches_router.get("/quality-inspections", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/quality-inspections", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def list_quality_inspections(
     product_id: Optional[int] = None,
     status: Optional[str] = None,
@@ -892,8 +857,7 @@ def list_quality_inspections(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة فحوصات الجودة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT qi.*, 
                    p.product_name, p.product_code,
@@ -925,15 +889,12 @@ def list_quality_inspections(
         total = db.execute(text("SELECT COUNT(*) FROM quality_inspections"), {}).scalar() or 0
 
         return {"items": [dict(r._mapping) for r in rows], "total": total}
-    finally:
-        db.close()
 
 
-@batches_router.get("/quality-inspections/{inspection_id}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/quality-inspections/{inspection_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_quality_inspection(inspection_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل فحص جودة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         qi = db.execute(text("""
             SELECT qi.*, p.product_name, p.product_code, w.warehouse_name,
                    b.batch_number, ins.full_name as inspector_name
@@ -957,8 +918,6 @@ def get_quality_inspection(inspection_id: int, current_user: dict = Depends(get_
 
         result["criteria"] = [dict(c._mapping) for c in criteria]
         return result
-    finally:
-        db.close()
 
 
 class QualityInspectionCreate(BaseModel):
@@ -982,124 +941,118 @@ class QualityInspectionComplete(BaseModel):
     criteria: Optional[list] = []
 
 
-@batches_router.post("/quality-inspections", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.post("/quality-inspections", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_quality_inspection(
     data: QualityInspectionCreate,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء فحص جودة جديد"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Generate inspection number
-        count = db.execute(text("SELECT COUNT(*) FROM quality_inspections")).scalar() or 0
-        inspection_number = f"QI-{datetime.now().year}-{str(count + 1).zfill(5)}"
-
-        result = db.execute(text("""
-            INSERT INTO quality_inspections (
-                inspection_number, inspection_type, product_id, warehouse_id,
-                batch_id, reference_type, reference_id, inspected_quantity,
-                status, created_by
-            ) VALUES (
-                :num, :type, :pid, :wid, :bid, :rtype, :rid, :qty,
-                'pending', :uid
-            ) RETURNING id
-        """), {
-            "num": inspection_number,
-            "type": data.inspection_type,
-            "pid": data.product_id,
-            "wid": data.warehouse_id,
-            "bid": data.batch_id,
-            "rtype": data.reference_type,
-            "rid": data.reference_id,
-            "qty": data.inspected_quantity,
-            "uid": current_user.id
-        }).fetchone()
-
-        # Add criteria
-        for criterion in (data.criteria or []):
-            db.execute(text("""
-                INSERT INTO quality_inspection_criteria (
-                    inspection_id, criteria_name, expected_value
-                ) VALUES (:iid, :name, :expected)
+    with transactional(current_user.company_id) as db:
+        try:
+            # Generate inspection number
+            count = db.execute(text("SELECT COUNT(*) FROM quality_inspections")).scalar() or 0
+            inspection_number = f"QI-{datetime.now().year}-{str(count + 1).zfill(5)}"
+    
+            result = db.execute(text("""
+                INSERT INTO quality_inspections (
+                    inspection_number, inspection_type, product_id, warehouse_id,
+                    batch_id, reference_type, reference_id, inspected_quantity,
+                    status, created_by
+                ) VALUES (
+                    :num, :type, :pid, :wid, :bid, :rtype, :rid, :qty,
+                    'pending', :uid
+                ) RETURNING id
             """), {
-                "iid": result.id,
-                "name": criterion.get("name", ""),
-                "expected": criterion.get("expected_value", "")
-            })
+                "num": inspection_number,
+                "type": data.inspection_type,
+                "pid": data.product_id,
+                "wid": data.warehouse_id,
+                "bid": data.batch_id,
+                "rtype": data.reference_type,
+                "rid": data.reference_id,
+                "qty": data.inspected_quantity,
+                "uid": current_user.id
+            }).fetchone()
+    
+            # Add criteria
+            for criterion in (data.criteria or []):
+                db.execute(text("""
+                    INSERT INTO quality_inspection_criteria (
+                        inspection_id, criteria_name, expected_value
+                    ) VALUES (:iid, :name, :expected)
+                """), {
+                    "iid": result.id,
+                    "name": criterion.get("name", ""),
+                    "expected": criterion.get("expected_value", "")
+                })
+    
+            return {"id": result.id, "inspection_number": inspection_number, "message": "تم إنشاء فحص الجودة بنجاح"}
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error creating QI: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
-        db.commit()
-        return {"id": result.id, "inspection_number": inspection_number, "message": "تم إنشاء فحص الجودة بنجاح"}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating QI: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
-
-@batches_router.put("/quality-inspections/{inspection_id}/complete", dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.put("/quality-inspections/{inspection_id}/complete", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def complete_quality_inspection(
     inspection_id: int,
     data: QualityInspectionComplete,
     current_user: dict = Depends(get_current_user)
 ):
     """إكمال فحص الجودة وتسجيل النتيجة"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        qi = db.execute(text("SELECT * FROM quality_inspections WHERE id = :id"), {"id": inspection_id}).fetchone()
-        if not qi:
-            raise HTTPException(**http_error(404, "quality_check_not_found"))
-
-        db.execute(text("""
-            UPDATE quality_inspections SET
-                accepted_quantity = :accepted,
-                rejected_quantity = :rejected,
-                status = :status,
-                result_notes = :notes,
-                rejection_reason = :reason,
-                inspector_id = :uid,
-                completed_date = NOW(),
-                updated_at = NOW()
-            WHERE id = :id
-        """), {
-            "accepted": data.accepted_quantity,
-            "rejected": data.rejected_quantity,
-            "status": data.status,
-            "notes": data.result_notes,
-            "reason": data.rejection_reason,
-            "uid": current_user.id,
-            "id": inspection_id
-        })
-
-        # Update criteria
-        for criterion in (data.criteria or []):
-            if criterion.get("id"):
-                db.execute(text("""
-                    UPDATE quality_inspection_criteria SET
-                        actual_value = :actual,
-                        is_passed = :passed,
-                        notes = :notes
-                    WHERE id = :id
-                """), {
-                    "actual": criterion.get("actual_value", ""),
-                    "passed": criterion.get("is_passed", False),
-                    "notes": criterion.get("notes", ""),
-                    "id": criterion["id"]
-                })
-
-        db.commit()
-        return {"message": "تم إكمال فحص الجودة بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            qi = db.execute(text("SELECT * FROM quality_inspections WHERE id = :id"), {"id": inspection_id}).fetchone()
+            if not qi:
+                raise HTTPException(**http_error(404, "quality_check_not_found"))
+    
+            db.execute(text("""
+                UPDATE quality_inspections SET
+                    accepted_quantity = :accepted,
+                    rejected_quantity = :rejected,
+                    status = :status,
+                    result_notes = :notes,
+                    rejection_reason = :reason,
+                    inspector_id = :uid,
+                    completed_date = NOW(),
+                    updated_at = NOW()
+                WHERE id = :id
+            """), {
+                "accepted": data.accepted_quantity,
+                "rejected": data.rejected_quantity,
+                "status": data.status,
+                "notes": data.result_notes,
+                "reason": data.rejection_reason,
+                "uid": current_user.id,
+                "id": inspection_id
+            })
+    
+            # Update criteria
+            for criterion in (data.criteria or []):
+                if criterion.get("id"):
+                    db.execute(text("""
+                        UPDATE quality_inspection_criteria SET
+                            actual_value = :actual,
+                            is_passed = :passed,
+                            notes = :notes
+                        WHERE id = :id
+                    """), {
+                        "actual": criterion.get("actual_value", ""),
+                        "passed": criterion.get("is_passed", False),
+                        "notes": criterion.get("notes", ""),
+                        "id": criterion["id"]
+                    })
+    
+            return {"message": "تم إكمال فحص الجودة بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ============ CYCLE COUNTS ============
@@ -1123,7 +1076,7 @@ class CycleCountComplete(BaseModel):
     auto_adjust: bool = False
 
 
-@batches_router.get("/cycle-counts", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/cycle-counts", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def list_cycle_counts(
     warehouse_id: Optional[int] = None,
     status: Optional[str] = None,
@@ -1132,8 +1085,7 @@ def list_cycle_counts(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الجرد الدوري"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT cc.*, w.warehouse_name, cu.full_name as created_by_name
             FROM cycle_counts cc
@@ -1156,15 +1108,12 @@ def list_cycle_counts(
         total = db.execute(text("SELECT COUNT(*) FROM cycle_counts"), {}).scalar() or 0
 
         return {"items": [dict(r._mapping) for r in rows], "total": total}
-    finally:
-        db.close()
 
 
-@batches_router.get("/cycle-counts/{count_id}", dependencies=[Depends(require_permission("stock.view"))])
+@batches_router.get("/cycle-counts/{count_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل الجرد الدوري"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         cc = db.execute(text("""
             SELECT cc.*, w.warehouse_name, cu.full_name as created_by_name
             FROM cycle_counts cc
@@ -1191,289 +1140,278 @@ def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user
 
         result["items"] = [dict(i._mapping) for i in items]
         return result
-    finally:
-        db.close()
 
 
-@batches_router.post("/cycle-counts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.post("/cycle-counts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_cycle_count(
     data: CycleCountCreate,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء جرد دوري جديد"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Generate count number
-        count = db.execute(text("SELECT COUNT(*) FROM cycle_counts")).scalar() or 0
-        count_number = f"CC-{datetime.now().year}-{str(count + 1).zfill(5)}"
-
-        # Get products to count
-        if data.count_type == "full":
-            # All products in warehouse
-            products = db.execute(text("""
-                SELECT i.product_id, i.quantity, COALESCE(p.cost_price, 0) as cost
-                FROM inventory i
-                JOIN products p ON i.product_id = p.id
-                WHERE i.warehouse_id = :wid AND p.product_type = 'product'
-            """), {"wid": data.warehouse_id}).fetchall()
-        elif data.product_ids:
-            products = db.execute(text("""
-                SELECT i.product_id, i.quantity, COALESCE(p.cost_price, 0) as cost
-                FROM inventory i
-                JOIN products p ON i.product_id = p.id
-                WHERE i.warehouse_id = :wid AND i.product_id = ANY(:pids)
-            """), {"wid": data.warehouse_id, "pids": data.product_ids}).fetchall()
-        else:
-            products = []
-
-        result = db.execute(text("""
-            INSERT INTO cycle_counts (
-                count_number, warehouse_id, count_type, status,
-                scheduled_date, total_items, notes, created_by
-            ) VALUES (
-                :num, :wid, :type, 'draft',
-                :sdate, :total, :notes, :uid
-            ) RETURNING id
-        """), {
-            "num": count_number,
-            "wid": data.warehouse_id,
-            "type": data.count_type,
-            "sdate": data.scheduled_date,
-            "total": len(products),
-            "notes": data.notes,
-            "uid": current_user.id
-        }).fetchone()
-
-        # Create count items
-        for prod in products:
-            db.execute(text("""
-                INSERT INTO cycle_count_items (
-                    cycle_count_id, product_id, system_quantity, unit_cost, status
-                ) VALUES (:ccid, :pid, :qty, :cost, 'pending')
+    with transactional(current_user.company_id) as db:
+        try:
+            # Generate count number
+            count = db.execute(text("SELECT COUNT(*) FROM cycle_counts")).scalar() or 0
+            count_number = f"CC-{datetime.now().year}-{str(count + 1).zfill(5)}"
+    
+            # Get products to count
+            if data.count_type == "full":
+                # All products in warehouse
+                products = db.execute(text("""
+                    SELECT i.product_id, i.quantity, COALESCE(p.cost_price, 0) as cost
+                    FROM inventory i
+                    JOIN products p ON i.product_id = p.id
+                    WHERE i.warehouse_id = :wid AND p.product_type = 'product'
+                """), {"wid": data.warehouse_id}).fetchall()
+            elif data.product_ids:
+                products = db.execute(text("""
+                    SELECT i.product_id, i.quantity, COALESCE(p.cost_price, 0) as cost
+                    FROM inventory i
+                    JOIN products p ON i.product_id = p.id
+                    WHERE i.warehouse_id = :wid AND i.product_id = ANY(:pids)
+                """), {"wid": data.warehouse_id, "pids": data.product_ids}).fetchall()
+            else:
+                products = []
+    
+            result = db.execute(text("""
+                INSERT INTO cycle_counts (
+                    count_number, warehouse_id, count_type, status,
+                    scheduled_date, total_items, notes, created_by
+                ) VALUES (
+                    :num, :wid, :type, 'draft',
+                    :sdate, :total, :notes, :uid
+                ) RETURNING id
             """), {
-                "ccid": result.id,
-                "pid": prod.product_id,
-                "qty": str(prod.quantity),
-                "cost": str(prod.cost)
-            })
+                "num": count_number,
+                "wid": data.warehouse_id,
+                "type": data.count_type,
+                "sdate": data.scheduled_date,
+                "total": len(products),
+                "notes": data.notes,
+                "uid": current_user.id
+            }).fetchone()
+    
+            # Create count items
+            for prod in products:
+                db.execute(text("""
+                    INSERT INTO cycle_count_items (
+                        cycle_count_id, product_id, system_quantity, unit_cost, status
+                    ) VALUES (:ccid, :pid, :qty, :cost, 'pending')
+                """), {
+                    "ccid": result.id,
+                    "pid": prod.product_id,
+                    "qty": str(prod.quantity),
+                    "cost": str(prod.cost)
+                })
+    
+            return {
+                "id": result.id,
+                "count_number": count_number,
+                "total_items": len(products),
+                "message": "تم إنشاء الجرد الدوري بنجاح"
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error creating cycle count: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
-        db.commit()
-        return {
-            "id": result.id,
-            "count_number": count_number,
-            "total_items": len(products),
-            "message": "تم إنشاء الجرد الدوري بنجاح"
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating cycle count: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
-
-@batches_router.put("/cycle-counts/{count_id}/start", dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.put("/cycle-counts/{count_id}/start", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def start_cycle_count(count_id: int, current_user: dict = Depends(get_current_user)):
     """بدء الجرد الدوري"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        cc = db.execute(text("SELECT status FROM cycle_counts WHERE id = :id"), {"id": count_id}).fetchone()
-        if not cc:
-            raise HTTPException(**http_error(404, "inventory_not_found"))
-        if cc.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن بدء جرد ليس في حالة مسودة")
-
-        db.execute(text("""
-            UPDATE cycle_counts SET status = 'in_progress', start_date = NOW(), updated_at = NOW()
-            WHERE id = :id
-        """), {"id": count_id})
-        db.commit()
-        return {"message": "تم بدء الجرد الدوري"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            cc = db.execute(text("SELECT status FROM cycle_counts WHERE id = :id"), {"id": count_id}).fetchone()
+            if not cc:
+                raise HTTPException(**http_error(404, "inventory_not_found"))
+            if cc.status != 'draft':
+                raise HTTPException(status_code=400, detail="لا يمكن بدء جرد ليس في حالة مسودة")
+    
+            db.execute(text("""
+                UPDATE cycle_counts SET status = 'in_progress', start_date = NOW(), updated_at = NOW()
+                WHERE id = :id
+            """), {"id": count_id})
+            return {"message": "تم بدء الجرد الدوري"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@batches_router.put("/cycle-counts/{count_id}/complete", dependencies=[Depends(require_permission("stock.manage"))])
+@batches_router.put("/cycle-counts/{count_id}/complete", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def complete_cycle_count(
     count_id: int,
     data: CycleCountComplete,
     current_user: dict = Depends(get_current_user)
 ):
     """إكمال الجرد الدوري وحساب الفروقات"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        cc = db.execute(text("SELECT * FROM cycle_counts WHERE id = :id"), {"id": count_id}).fetchone()
-        if not cc:
-            raise HTTPException(**http_error(404, "inventory_not_found"))
-
-        variance_count = 0
-        counted_count = 0
-
-        for item in data.items:
-            # Get count item
-            cci = db.execute(text("""
-                SELECT * FROM cycle_count_items WHERE id = :id AND cycle_count_id = :ccid
-            """), {"id": item.id, "ccid": count_id}).fetchone()
-
-            if not cci:
-                continue
-
-            variance = item.counted_quantity - (cci.system_quantity or 0)
-            variance_value = variance * (cci.unit_cost or 0)
-
+    with transactional(current_user.company_id) as db:
+        try:
+            cc = db.execute(text("SELECT * FROM cycle_counts WHERE id = :id"), {"id": count_id}).fetchone()
+            if not cc:
+                raise HTTPException(**http_error(404, "inventory_not_found"))
+    
+            variance_count = 0
+            counted_count = 0
+    
+            for item in data.items:
+                # Get count item
+                cci = db.execute(text("""
+                    SELECT * FROM cycle_count_items WHERE id = :id AND cycle_count_id = :ccid
+                """), {"id": item.id, "ccid": count_id}).fetchone()
+    
+                if not cci:
+                    continue
+    
+                variance = item.counted_quantity - (cci.system_quantity or 0)
+                variance_value = variance * (cci.unit_cost or 0)
+    
+                db.execute(text("""
+                    UPDATE cycle_count_items SET
+                        counted_quantity = :qty,
+                        variance = :var,
+                        variance_value = :vval,
+                        status = 'counted',
+                        counted_by = :uid,
+                        counted_at = NOW(),
+                        notes = :notes
+                    WHERE id = :id
+                """), {
+                    "qty": item.counted_quantity,
+                    "var": variance,
+                    "vval": variance_value,
+                    "uid": current_user.id,
+                    "notes": item.notes,
+                    "id": item.id
+                })
+    
+                counted_count += 1
+                if variance != 0:
+                    variance_count += 1
+    
+                    # Auto adjust inventory if requested
+                    if data.auto_adjust:
+                        # T024: Hard-block negative stock — check reserved qty
+                        inv_row = db.execute(text("""
+                            SELECT reserved, available FROM inventory
+                            WHERE product_id = :pid AND warehouse_id = :wid
+                        """), {"pid": cci.product_id, "wid": cc.warehouse_id}).fetchone()
+                        reserved = (inv_row.reserved if inv_row else 0) or 0
+                        new_available = item.counted_quantity - reserved
+                        if new_available < 0:
+                            prod_name = db.execute(text("SELECT item_name FROM products WHERE id = :pid"), {"pid": cci.product_id}).scalar() or cci.product_id
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"لا يمكن تعديل المخزون للمنتج {prod_name}: الكمية المحجوزة ({reserved}) أكبر من الكمية المحسوبة ({item.counted_quantity})"
+                            )
+    
+                        db.execute(text("""
+                            UPDATE inventory SET quantity = :qty, updated_at = NOW()
+                            WHERE product_id = :pid AND warehouse_id = :wid
+                        """), {
+                            "qty": item.counted_quantity,
+                            "pid": cci.product_id,
+                            "wid": cc.warehouse_id
+                        })
+    
+                        # Log adjustment
+                        adj_type = 'adjustment_in' if variance > 0 else 'adjustment_out'
+                        db.execute(text("""
+                            INSERT INTO inventory_transactions (
+                                product_id, warehouse_id, transaction_type, reference_type,
+                                reference_id, quantity, notes, created_by
+                            ) VALUES (
+                                :pid, :wid, :type, 'cycle_count', :ccid, :qty,
+                                :notes, :uid
+                            )
+                        """), {
+                            "pid": cci.product_id,
+                            "wid": cc.warehouse_id,
+                            "type": adj_type,
+                            "ccid": count_id,
+                            "qty": variance,
+                            "notes": f"تسوية جرد دوري {cc.count_number}",
+                            "uid": current_user.id
+                        })
+    
+            # T023: Post GL journal entries for cycle count variances
+            if data.auto_adjust and variance_count > 0:
+                from utils.accounting import get_mapped_account_id, get_base_currency
+                from utils.fiscal_lock import check_fiscal_period_open
+                from services.gl_service import create_journal_entry as gl_create_journal_entry
+    
+                acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
+                acc_variance = get_mapped_account_id(db, "acc_map_inventory_adjustment")
+                base_currency = get_base_currency(db)
+    
+                if acc_inventory and acc_variance:
+                    check_fiscal_period_open(db, datetime.now().date())
+    
+                    branch_id = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": cc.warehouse_id}).scalar()
+    
+                    # Gather all variance items for GL posting
+                    variance_items = db.execute(text("""
+                        SELECT cci.product_id, cci.variance, cci.variance_value, cci.unit_cost
+                        FROM cycle_count_items cci
+                        WHERE cci.cycle_count_id = :ccid AND cci.variance != 0
+                    """), {"ccid": count_id}).fetchall()
+    
+                    for vi in variance_items:
+                        abs_value = abs(float(vi.variance_value or 0))
+                        if abs_value < 0.01:
+                            continue
+    
+                        if vi.variance > 0:
+                            # Surplus: Dr. Inventory Asset / Cr. Inventory Variance
+                            lines = [
+                                {"account_id": acc_inventory, "debit": abs_value, "credit": 0, "description": f"Cycle Count Surplus - {cc.count_number}"},
+                                {"account_id": acc_variance, "debit": 0, "credit": abs_value, "description": f"Inventory Variance - {cc.count_number}"},
+                            ]
+                        else:
+                            # Shortage: Dr. Inventory Variance / Cr. Inventory Asset
+                            lines = [
+                                {"account_id": acc_variance, "debit": abs_value, "credit": 0, "description": f"Inventory Variance - {cc.count_number}"},
+                                {"account_id": acc_inventory, "debit": 0, "credit": abs_value, "description": f"Cycle Count Shortage - {cc.count_number}"},
+                            ]
+    
+                        gl_create_journal_entry(
+                            db,
+                            company_id=current_user.company_id,
+                            date=datetime.now().strftime("%Y-%m-%d"),
+                            description=f"Cycle Count Variance - {cc.count_number}",
+                            lines=lines,
+                            user_id=current_user.id,
+                            branch_id=branch_id,
+                            reference=cc.count_number,
+                            currency=base_currency,
+                        )
+    
+            # Update cycle count
             db.execute(text("""
-                UPDATE cycle_count_items SET
-                    counted_quantity = :qty,
-                    variance = :var,
-                    variance_value = :vval,
-                    status = 'counted',
-                    counted_by = :uid,
-                    counted_at = NOW(),
-                    notes = :notes
+                UPDATE cycle_counts SET
+                    status = 'completed',
+                    end_date = NOW(),
+                    counted_items = :counted,
+                    variance_items = :variance,
+                    updated_at = NOW()
                 WHERE id = :id
-            """), {
-                "qty": item.counted_quantity,
-                "var": variance,
-                "vval": variance_value,
-                "uid": current_user.id,
-                "notes": item.notes,
-                "id": item.id
-            })
-
-            counted_count += 1
-            if variance != 0:
-                variance_count += 1
-
-                # Auto adjust inventory if requested
-                if data.auto_adjust:
-                    # T024: Hard-block negative stock — check reserved qty
-                    inv_row = db.execute(text("""
-                        SELECT reserved, available FROM inventory
-                        WHERE product_id = :pid AND warehouse_id = :wid
-                    """), {"pid": cci.product_id, "wid": cc.warehouse_id}).fetchone()
-                    reserved = (inv_row.reserved if inv_row else 0) or 0
-                    new_available = item.counted_quantity - reserved
-                    if new_available < 0:
-                        prod_name = db.execute(text("SELECT item_name FROM products WHERE id = :pid"), {"pid": cci.product_id}).scalar() or cci.product_id
-                        raise HTTPException(
-                            status_code=400,
-                            detail=f"لا يمكن تعديل المخزون للمنتج {prod_name}: الكمية المحجوزة ({reserved}) أكبر من الكمية المحسوبة ({item.counted_quantity})"
-                        )
-
-                    db.execute(text("""
-                        UPDATE inventory SET quantity = :qty, updated_at = NOW()
-                        WHERE product_id = :pid AND warehouse_id = :wid
-                    """), {
-                        "qty": item.counted_quantity,
-                        "pid": cci.product_id,
-                        "wid": cc.warehouse_id
-                    })
-
-                    # Log adjustment
-                    adj_type = 'adjustment_in' if variance > 0 else 'adjustment_out'
-                    db.execute(text("""
-                        INSERT INTO inventory_transactions (
-                            product_id, warehouse_id, transaction_type, reference_type,
-                            reference_id, quantity, notes, created_by
-                        ) VALUES (
-                            :pid, :wid, :type, 'cycle_count', :ccid, :qty,
-                            :notes, :uid
-                        )
-                    """), {
-                        "pid": cci.product_id,
-                        "wid": cc.warehouse_id,
-                        "type": adj_type,
-                        "ccid": count_id,
-                        "qty": variance,
-                        "notes": f"تسوية جرد دوري {cc.count_number}",
-                        "uid": current_user.id
-                    })
-
-        # T023: Post GL journal entries for cycle count variances
-        if data.auto_adjust and variance_count > 0:
-            from utils.accounting import get_mapped_account_id, get_base_currency
-            from utils.fiscal_lock import check_fiscal_period_open
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
-
-            acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
-            acc_variance = get_mapped_account_id(db, "acc_map_inventory_adjustment")
-            base_currency = get_base_currency(db)
-
-            if acc_inventory and acc_variance:
-                check_fiscal_period_open(db, datetime.now().date())
-
-                branch_id = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": cc.warehouse_id}).scalar()
-
-                # Gather all variance items for GL posting
-                variance_items = db.execute(text("""
-                    SELECT cci.product_id, cci.variance, cci.variance_value, cci.unit_cost
-                    FROM cycle_count_items cci
-                    WHERE cci.cycle_count_id = :ccid AND cci.variance != 0
-                """), {"ccid": count_id}).fetchall()
-
-                for vi in variance_items:
-                    abs_value = abs(float(vi.variance_value or 0))
-                    if abs_value < 0.01:
-                        continue
-
-                    if vi.variance > 0:
-                        # Surplus: Dr. Inventory Asset / Cr. Inventory Variance
-                        lines = [
-                            {"account_id": acc_inventory, "debit": abs_value, "credit": 0, "description": f"Cycle Count Surplus - {cc.count_number}"},
-                            {"account_id": acc_variance, "debit": 0, "credit": abs_value, "description": f"Inventory Variance - {cc.count_number}"},
-                        ]
-                    else:
-                        # Shortage: Dr. Inventory Variance / Cr. Inventory Asset
-                        lines = [
-                            {"account_id": acc_variance, "debit": abs_value, "credit": 0, "description": f"Inventory Variance - {cc.count_number}"},
-                            {"account_id": acc_inventory, "debit": 0, "credit": abs_value, "description": f"Cycle Count Shortage - {cc.count_number}"},
-                        ]
-
-                    gl_create_journal_entry(
-                        db,
-                        company_id=current_user.company_id,
-                        date=datetime.now().strftime("%Y-%m-%d"),
-                        description=f"Cycle Count Variance - {cc.count_number}",
-                        lines=lines,
-                        user_id=current_user.id,
-                        branch_id=branch_id,
-                        reference=cc.count_number,
-                        currency=base_currency,
-                    )
-
-        # Update cycle count
-        db.execute(text("""
-            UPDATE cycle_counts SET
-                status = 'completed',
-                end_date = NOW(),
-                counted_items = :counted,
-                variance_items = :variance,
-                updated_at = NOW()
-            WHERE id = :id
-        """), {"counted": counted_count, "variance": variance_count, "id": count_id})
-
-        db.commit()
-        return {
-            "message": "تم إكمال الجرد الدوري بنجاح",
-            "counted_items": counted_count,
-            "variance_items": variance_count,
-            "auto_adjusted": data.auto_adjust
-        }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error completing cycle count: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+            """), {"counted": counted_count, "variance": variance_count, "id": count_id})
+    
+            return {
+                "message": "تم إكمال الجرد الدوري بنجاح",
+                "counted_items": counted_count,
+                "variance_items": variance_count,
+                "auto_adjusted": data.auto_adjust
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error completing cycle count: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))

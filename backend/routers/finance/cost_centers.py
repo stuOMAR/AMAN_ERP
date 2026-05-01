@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List
+from typing import Any, Dict, List
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission, require_module
@@ -132,7 +132,7 @@ def update_cost_center(request: Request, cc_id: int, cc: CostCenterUpdate, curre
     finally:
         conn.close()
 
-@router.delete("/{cc_id}", dependencies=[Depends(require_permission("accounting.cost_centers.manage"))])
+@router.delete("/{cc_id}", dependencies=[Depends(require_permission("accounting.cost_centers.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def delete_cost_center(request: Request, cc_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a cost center (if unused)"""

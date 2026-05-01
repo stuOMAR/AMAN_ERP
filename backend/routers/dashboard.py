@@ -1,13 +1,14 @@
 from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Dict, Any, List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 import logging
 from datetime import date, timedelta, datetime
 import json
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission, validate_branch_access
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
@@ -212,8 +213,7 @@ def get_financial_chart(
 ):
     """الرسم البياني المالي (مبيعات vs مصروفات)"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(get_user_company_id(current_user))
-    try:
+    with transactional(get_user_company_id(current_user)) as db:
         start_date = date.today() - timedelta(days=days)
         params = {"start": start_date}
         if branch_id:
@@ -279,8 +279,6 @@ def get_financial_chart(
             })
             
         return result
-    finally:
-        db.close()
 
 @router.get("/charts/products", response_model=List[Dict[str, Any]], dependencies=[Depends(require_permission("dashboard.view"))])
 def get_top_products(
@@ -290,8 +288,7 @@ def get_top_products(
 ):
     """أكثر المنتجات مبيعاً"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(get_user_company_id(current_user))
-    try:
+    with transactional(get_user_company_id(current_user)) as db:
         params = {"limit": limit}
         branch_filter = ""
         if branch_id:
@@ -332,8 +329,6 @@ def get_top_products(
 
 
         return [{"name": row.name, "value": float(row.value)} for row in result]
-    finally:
-        db.close()
 @router.get("/system-stats", response_model=Dict[str, Any])
 def get_system_stats(
     current_user: dict = Depends(get_current_user)
@@ -451,7 +446,7 @@ DEFAULT_WIDGETS = [
 ]
 
 
-@router.get("/layouts", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/layouts", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def get_dashboard_layouts(current_user=Depends(get_current_user)):
     """جلب تخطيطات لوحة التحكم للمستخدم"""
     company_id = get_user_company_id(current_user)
@@ -485,7 +480,7 @@ def get_dashboard_layouts(current_user=Depends(get_current_user)):
         db.close()
 
 
-@router.post("/layouts", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.post("/layouts", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def save_dashboard_layout(data: LayoutCreate, current_user=Depends(get_current_user)):
     """حفظ تخطيط لوحة التحكم"""
     company_id = get_user_company_id(current_user)
@@ -512,7 +507,7 @@ def save_dashboard_layout(data: LayoutCreate, current_user=Depends(get_current_u
         db.close()
 
 
-@router.put("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.put("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Depends(get_current_user)):
     """تحديث تخطيط لوحة التحكم (تغيير ترتيب/حجم الـ widgets)"""
     company_id = get_user_company_id(current_user)
@@ -534,7 +529,7 @@ def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Dep
         db.close()
 
 
-@router.delete("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.delete("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def delete_dashboard_layout(layout_id: int, current_user=Depends(get_current_user)):
     """حذف تخطيط لوحة التحكم"""
     company_id = get_user_company_id(current_user)
@@ -555,7 +550,7 @@ def delete_dashboard_layout(layout_id: int, current_user=Depends(get_current_use
 
 # ===================== DASH-002: Additional Widgets Data =====================
 
-@router.get("/widgets/sales-summary", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/sales-summary", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_sales_summary(
     period: str = "today",
     branch_id: int = None,
@@ -652,7 +647,7 @@ def widget_sales_summary(
         db.close()
 
 
-@router.get("/widgets/top-products", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/top-products", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_top_products(
     limit: int = 10,
     period: str = "month",
@@ -704,7 +699,7 @@ def widget_top_products(
         db.close()
 
 
-@router.get("/widgets/low-stock", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/low-stock", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_low_stock(
     limit: int = 10,
     branch_id: int = None,
@@ -757,7 +752,7 @@ def widget_low_stock(
         db.close()
 
 
-@router.get("/widgets/pending-tasks", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/pending-tasks", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_pending_tasks(
     limit: int = 10,
     current_user=Depends(get_current_user)
@@ -850,7 +845,7 @@ def widget_pending_tasks(
         db.close()
 
 
-@router.get("/widgets/cash-flow", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/cash-flow", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_cash_flow(
     days: int = 30,
     branch_id: int = None,
@@ -924,7 +919,7 @@ def widget_cash_flow(
         db.close()
 
 
-@router.get("/widgets/available", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/widgets/available", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def get_available_widgets(current_user=Depends(get_current_user)):
     """قائمة الـ widgets المتاحة للإضافة"""
     return {"widgets": [
@@ -948,20 +943,17 @@ def get_available_widgets(current_user=Depends(get_current_user)):
 # Industry-specific endpoints
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/industry-widgets", dependencies=[Depends(require_permission("dashboard.view"))])
+@router.get("/industry-widgets", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def get_industry_widgets(current_user = Depends(get_current_user)):
     """Return industry-specific dashboard widgets based on company's industry type."""
     company_id = get_user_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         industry_type = db.execute(
             text("SELECT setting_value FROM company_settings WHERE setting_key = 'industry_type'")
         ).scalar() or "general"
         
         widgets = _get_industry_widgets(industry_type, db)
         return {"industry_type": industry_type, "widgets": widgets}
-    finally:
-        db.close()
 
 
 def _get_industry_widgets(industry_type: str, db) -> list:
@@ -1030,12 +1022,11 @@ def _get_industry_widgets(industry_type: str, db) -> list:
     return widgets
 
 
-@router.get("/gl-rules", dependencies=[Depends(require_permission("accounting.view"))])
+@router.get("/gl-rules", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
 def get_company_gl_rules(current_user = Depends(get_current_user)):
     """Return GL auto-posting rules for the company's industry type."""
     company_id = get_user_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         industry_type = db.execute(
             text("SELECT setting_value FROM company_settings WHERE setting_key = 'industry_type'")
         ).scalar() or "general"
@@ -1048,16 +1039,13 @@ def get_company_gl_rules(current_user = Depends(get_current_user)):
             "rules": get_gl_rules_summary(industry_type),
             "default_accounts": get_default_accounts(industry_type),
         }
-    finally:
-        db.close()
 
 
-@router.get("/coa-summary", dependencies=[Depends(require_permission("accounting.view"))])
+@router.get("/coa-summary", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
 def get_company_coa_summary(current_user = Depends(get_current_user)):
     """Return COA template summary for the company's industry type."""
     company_id = get_user_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         industry_type = db.execute(
             text("SELECT setting_value FROM company_settings WHERE setting_key = 'industry_type'")
         ).scalar() or "general"
@@ -1065,8 +1053,6 @@ def get_company_coa_summary(current_user = Depends(get_current_user)):
         from services.industry_coa_templates import get_industry_coa_summary, normalize_industry_key
         industry_type = normalize_industry_key(industry_type)
         return get_industry_coa_summary(industry_type)
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════
@@ -1164,12 +1150,11 @@ def _query_widget_data(db, data_source: str, filters: dict = None):
         return []
 
 
-@router.get("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_view"))])
+@router.get("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
 def list_analytics_dashboards(current_user: dict = Depends(get_current_user)):
     """List available analytics dashboards filtered by user role + branch."""
     company_id = get_user_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         user_role = getattr(current_user, "role", "")
         try:
             rows = db.execute(text("""
@@ -1179,7 +1164,6 @@ def list_analytics_dashboards(current_user: dict = Depends(get_current_user)):
                 ORDER BY is_system DESC, name
             """)).fetchall()
         except Exception as e:
-            db.rollback()
             if "does not exist" in str(e):
                 return {"dashboards": []}
             raise
@@ -1192,17 +1176,14 @@ def list_analytics_dashboards(current_user: dict = Depends(get_current_user)):
                 dashboards.append(d)
 
         return {"dashboards": dashboards}
-    finally:
-        db.close()
 
 
-@router.get("/analytics/widget-data/{widget_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))])
+@router.get("/analytics/widget-data/{widget_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
 def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_user)):
     """Refresh data for a single widget."""
     company_id = get_user_company_id(current_user)
     branch_id = validate_branch_access(current_user, None)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         widget = db.execute(text("""
             SELECT id, widget_type, title, data_source, filters
             FROM analytics_dashboard_widgets WHERE id = :id
@@ -1220,17 +1201,14 @@ def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_use
             "widget_id": widget_id,
             "data": _query_widget_data(db, wd["data_source"], widget_filters)
         }
-    finally:
-        db.close()
 
 
-@router.get("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))])
+@router.get("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
 def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_current_user)):
     """Get a dashboard with its widget data queried from materialized views."""
     company_id = get_user_company_id(current_user)
     branch_id = validate_branch_access(current_user, None)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         dashboard = db.execute(text("""
             SELECT id, name, description, is_system, access_roles, branch_scope,
                    refresh_interval_minutes, created_at, created_by
@@ -1266,11 +1244,9 @@ def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_
 
         d["widgets"] = widget_list
         return d
-    finally:
-        db.close()
 
 
-@router.post("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_manage"))])
+@router.post("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
 def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = Depends(get_current_user)):
     """Create a custom analytics dashboard."""
     company_id = get_user_company_id(current_user)
@@ -1325,7 +1301,7 @@ def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = De
         db.close()
 
 
-@router.put("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))])
+@router.put("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
 def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, current_user: dict = Depends(get_current_user)):
     """Update dashboard layout and/or widgets."""
     company_id = get_user_company_id(current_user)
@@ -1400,7 +1376,7 @@ def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, curr
         db.close()
 
 
-@router.delete("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))])
+@router.delete("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
 def delete_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a custom analytics dashboard. System dashboards cannot be deleted."""
     company_id = get_user_company_id(current_user)

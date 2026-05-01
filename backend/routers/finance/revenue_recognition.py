@@ -12,7 +12,7 @@ from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import json
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -49,7 +49,7 @@ rev_router = APIRouter(
 )
 
 
-@rev_router.get("/schedules", dependencies=[Depends(require_permission("accounting.view"))])
+@rev_router.get("/schedules", dependencies=[Depends(require_permission("accounting.view"))], response_model=List[Dict[str, Any]])
 def list_revenue_schedules(status_filter: Optional[str] = None, current_user=Depends(get_current_user)):
     """قائمة جداول الاعتراف بالإيرادات"""
     db = get_db_connection(current_user.company_id)
@@ -74,7 +74,7 @@ def list_revenue_schedules(status_filter: Optional[str] = None, current_user=Dep
 
 
 @rev_router.post("/schedules", status_code=201,
-                 dependencies=[Depends(require_permission("accounting.edit"))])
+                 dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
 def create_revenue_schedule(data: RevenueScheduleCreate, current_user=Depends(get_current_user)):
     """إنشاء جدول اعتراف بالإيرادات — IFRS 15"""
     db = get_db_connection(current_user.company_id)
@@ -151,7 +151,7 @@ def create_revenue_schedule(data: RevenueScheduleCreate, current_user=Depends(ge
         db.close()
 
 
-@rev_router.get("/schedules/{schedule_id}", dependencies=[Depends(require_permission("accounting.view"))])
+@rev_router.get("/schedules/{schedule_id}", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
 def get_revenue_schedule(schedule_id: int, current_user=Depends(get_current_user)):
     """تفاصيل جدول الاعتراف"""
     db = get_db_connection(current_user.company_id)
@@ -171,7 +171,7 @@ def get_revenue_schedule(schedule_id: int, current_user=Depends(get_current_user
 
 
 @rev_router.post("/schedules/{schedule_id}/recognize",
-                 dependencies=[Depends(require_permission("accounting.edit"))])
+                 dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
 def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_user=Depends(get_current_user)):
     """الاعتراف بإيرادات فترة محددة وإنشاء قيد محاسبي"""
     db = get_db_connection(current_user.company_id)
@@ -267,7 +267,7 @@ def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_us
         db.close()
 
 
-@rev_router.get("/summary", dependencies=[Depends(require_permission("accounting.view"))])
+@rev_router.get("/summary", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
 def revenue_recognition_summary(current_user=Depends(get_current_user)):
     """ملخص الاعتراف بالإيرادات"""
     db = get_db_connection(current_user.company_id)

@@ -5,11 +5,12 @@ AMAN ERP - Expenses Module
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from sqlalchemy import text
 from utils.permissions import require_permission, validate_branch_access, require_module
 from utils.accounting import (
@@ -120,7 +121,7 @@ def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_curr
 # Endpoints
 # ═══════════════════════════════════════════════════════════
 
-@router.get("/", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/", dependencies=[Depends(require_permission("expenses.view"))], response_model=List[Dict[str, Any]])
 async def list_expenses(
     branch_id: Optional[int] = None,
     start_date: Optional[date] = None,
@@ -132,9 +133,7 @@ async def list_expenses(
 ):
     """قائمة المصاريف مع الفلاتر"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         params = {"company_id": current_user.company_id}
         filters = ["e.is_deleted = false"]
         
@@ -183,11 +182,9 @@ async def list_expenses(
         """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
-    finally:
-        db.close()
 
 
-@router.get("/summary", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/summary", dependencies=[Depends(require_permission("expenses.view"))], response_model=Dict[str, Any])
 async def get_expenses_summary(
     branch_id: Optional[int] = None,
     start_date: Optional[date] = None,
@@ -196,9 +193,7 @@ async def get_expenses_summary(
 ):
     """إحصائيات المصاريف"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         params = {}
         filters = ["is_deleted = false"]
         
@@ -231,18 +226,15 @@ async def get_expenses_summary(
             "total_expenses": 0, "pending_approval": 0, "approved": 0, "rejected": 0,
             "total_amount": 0, "approved_amount": 0, "pending_amount": 0
         }
-    finally:
-        db.close()
 
 
 
 # ===================== C1: Expense Policies =====================
 
-@router.get("/policies", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/policies", dependencies=[Depends(require_permission("expenses.view"))], response_model=List[Dict[str, Any]])
 def list_expense_policies(current_user=Depends(get_current_user)):
     """سياسات المصروفات"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("""
             SELECT ep.*, d.department_name as department_name
             FROM expense_policies ep
@@ -251,93 +243,81 @@ def list_expense_policies(current_user=Depends(get_current_user)):
             ORDER BY ep.name
         """)).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.post("/policies", dependencies=[Depends(require_permission("expenses.manage"))])
+@router.post("/policies", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
 def create_expense_policy(policy: ExpensePolicyCreate, current_user=Depends(get_current_user)):
     """إنشاء سياسة مصروفات"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        result = db.execute(text("""
-            INSERT INTO expense_policies (name, expense_type, department_id,
-                daily_limit, monthly_limit, annual_limit, requires_receipt,
-                requires_approval, auto_approve_below, is_active)
-            VALUES (:n, :et, :did, :dl, :ml, :al, :rr, :ra, :aab, :ia)
-            RETURNING id
-        """), {
-            "n": policy.name, "et": policy.expense_type,
-            "did": policy.department_id, "dl": policy.daily_limit,
-            "ml": policy.monthly_limit, "al": policy.annual_limit,
-            "rr": policy.requires_receipt,
-            "ra": policy.requires_approval,
-            "aab": policy.auto_approve_below, "ia": policy.is_active
-        })
-        pid = result.fetchone()[0]
-        db.commit()
-        return {"id": pid, "message": "تم إنشاء سياسة المصروفات بنجاح"}
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            result = db.execute(text("""
+                INSERT INTO expense_policies (name, expense_type, department_id,
+                    daily_limit, monthly_limit, annual_limit, requires_receipt,
+                    requires_approval, auto_approve_below, is_active)
+                VALUES (:n, :et, :did, :dl, :ml, :al, :rr, :ra, :aab, :ia)
+                RETURNING id
+            """), {
+                "n": policy.name, "et": policy.expense_type,
+                "did": policy.department_id, "dl": policy.daily_limit,
+                "ml": policy.monthly_limit, "al": policy.annual_limit,
+                "rr": policy.requires_receipt,
+                "ra": policy.requires_approval,
+                "aab": policy.auto_approve_below, "ia": policy.is_active
+            })
+            pid = result.fetchone()[0]
+            return {"id": pid, "message": "تم إنشاء سياسة المصروفات بنجاح"}
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.put("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))])
+@router.put("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
 def update_expense_policy(policy_id: int, policy: ExpensePolicyUpdate, current_user=Depends(get_current_user)):
     """تحديث سياسة مصروفات"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        fields = []
-        params = {"id": policy_id}
-        for field_name in ["name", "expense_type", "department_id", "daily_limit",
-                           "monthly_limit", "annual_limit", "requires_receipt",
-                           "requires_approval", "auto_approve_below", "is_active"]:
-            value = getattr(policy, field_name)
-            if value is not None:
-                fields.append(f"{field_name} = :{field_name}")
-                params[field_name] = value
-        if not fields:
-            raise HTTPException(**http_error(400, "no_data_to_update"))
-        fields.append("updated_at = NOW()")
-        fields.append("updated_by = :uid")
-        params["uid"] = current_user.id
-        db.execute(text(f"UPDATE expense_policies SET {', '.join(fields)} WHERE id = :id AND is_deleted = false"), params)
-        db.commit()
-        return {"message": "تم تحديث السياسة بنجاح"}
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            fields = []
+            params = {"id": policy_id}
+            for field_name in ["name", "expense_type", "department_id", "daily_limit",
+                               "monthly_limit", "annual_limit", "requires_receipt",
+                               "requires_approval", "auto_approve_below", "is_active"]:
+                value = getattr(policy, field_name)
+                if value is not None:
+                    fields.append(f"{field_name} = :{field_name}")
+                    params[field_name] = value
+            if not fields:
+                raise HTTPException(**http_error(400, "no_data_to_update"))
+            fields.append("updated_at = NOW()")
+            fields.append("updated_by = :uid")
+            params["uid"] = current_user.id
+            db.execute(text(f"UPDATE expense_policies SET {', '.join(fields)} WHERE id = :id AND is_deleted = false"), params)
+            return {"message": "تم تحديث السياسة بنجاح"}
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.delete("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))])
+@router.delete("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
 def delete_expense_policy(policy_id: int, current_user=Depends(get_current_user)):
     """حذف سياسة مصروفات"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        db.execute(text(
-            "UPDATE expense_policies SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
-        ), {"id": policy_id, "uid": current_user.id})
-        db.commit()
-        return {"message": "تم حذف السياسة"}
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            db.execute(text(
+                "UPDATE expense_policies SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
+            ), {"id": policy_id, "uid": current_user.id})
+            return {"message": "تم حذف السياسة"}
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.post("/validate-policy")
+@router.post("/validate-policy", response_model=Dict[str, Any])
 def validate_expense_against_policy(expense: ExpenseValidation, current_user=Depends(get_current_user)):
     """التحقق من المصروف ضد السياسات"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         amount = expense.amount
         exp_type = expense.expense_type
         dept_id = expense.department_id
@@ -367,16 +347,12 @@ def validate_expense_against_policy(expense: ExpenseValidation, current_user=Dep
             "violations": violations,
             "policies_checked": len(policies)
         }
-    finally:
-        db.close()
 
 
-@router.get("/{expense_id}", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/{expense_id}", dependencies=[Depends(require_permission("expenses.view"))], response_model=Dict[str, Any])
 async def get_expense_details(expense_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل مصروف محدد"""
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         result = db.execute(text("""
             SELECT 
                 e.*,
@@ -414,12 +390,10 @@ async def get_expense_details(expense_id: int, current_user: dict = Depends(get_
         expense["journal_entry"] = dict(je._mapping) if je else None
         
         return expense
-    finally:
-        db.close()
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, 
-             dependencies=[Depends(require_permission("expenses.create"))])
+             dependencies=[Depends(require_permission("expenses.create"))], response_model=Dict[str, Any])
 async def create_expense(
     request: Request, 
     expense: ExpenseCreate, 
@@ -427,221 +401,217 @@ async def create_expense(
 ):
     """إنشاء مصروف جديد"""
     expense.branch_id = validate_branch_access(current_user, expense.branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
-        # Check fiscal period is open for the expense date
-        check_fiscal_period_open(db, str(expense.expense_date), raise_error=True)
-        
-        # Validate expense type
-        if expense.expense_type and expense.expense_type not in EXPENSE_TYPES:
-            raise HTTPException(status_code=400, detail=f"Invalid expense type. Must be one of: {', '.join(EXPENSE_TYPES)}")
-        
-        # Policy enforcement: check if expense exceeds policy limits
-        policy = db.execute(text("""
-            SELECT * FROM expense_policies
-            WHERE is_active = true AND is_deleted = false
-              AND (expense_type = :etype OR expense_type IS NULL OR expense_type = '')
-              AND (department_id = :dept OR department_id IS NULL)
-            ORDER BY
-              CASE WHEN expense_type = :etype THEN 0 ELSE 1 END,
-              CASE WHEN department_id = :dept THEN 0 ELSE 1 END
-            LIMIT 1
-        """), {"etype": expense.expense_type, "dept": getattr(expense, 'department_id', None)}).fetchone()
-        
-        policy_warning = None
-        if policy:
-            amount_val = Decimal(str(expense.amount))
-            if policy.daily_limit and amount_val > Decimal(str(policy.daily_limit)):
-                policy_warning = f"Amount exceeds daily limit of {policy.daily_limit} for policy '{policy.name}'"
-            if policy.monthly_limit:
-                # Check monthly total for this type
-                month_total = db.execute(text("""
-                    SELECT COALESCE(SUM(amount), 0) FROM expenses
-                    WHERE expense_type = :etype AND created_by = :uid
-                      AND EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-                      AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                      AND is_deleted = false AND approval_status != 'rejected'
-                """), {"etype": expense.expense_type, "uid": current_user.id}).scalar()
-                if (Decimal(str(month_total)) + amount_val) > Decimal(str(policy.monthly_limit)):
-                    policy_warning = f"Total would exceed monthly limit of {policy.monthly_limit} for policy '{policy.name}'"
-        
-        base_currency = get_base_currency(db)
-        
-        # Determine expense account
-        expense_account_id = expense.expense_account_id
-        if not expense_account_id:
-            expense_account_id = get_expense_account_by_type(db, expense.expense_type)
-        
-        if not expense_account_id:
-            raise HTTPException(status_code=400, detail="يجب تحديد حساب المصروف")
-        
-        # Determine cash/bank account
-        cash_account_id = None
-        if expense.treasury_id:
-            cash_account_id = db.execute(text(
-                "SELECT gl_account_id FROM treasury_accounts WHERE id = :id"
-            ), {"id": expense.treasury_id}).scalar()
-        
-        if not cash_account_id:
-            cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
-        
-        if not cash_account_id:
-            raise HTTPException(status_code=400, detail="يجب تحديد حساب النقدية")
-        
-        # Generate expense number
-        expense_number = generate_sequential_number(db, "EXP", "expenses", "expense_number")
-        
-        # Initial approval status
-        approval_status = "pending" if expense.requires_approval else "approved"
-        
-        # Insert expense record
-        expense_id = db.execute(text("""
-            INSERT INTO expenses (
-                expense_number, expense_date, expense_type, amount, description,
-                category, payment_method, treasury_id, expense_account_id,
-                cost_center_id, project_id, branch_id, approval_status,
-                receipt_number, vendor_name, created_by
-            ) VALUES (
-                :num, :date, :type, :amt, :desc,
-                :cat, :pm, :tid, :eaid,
-                :ccid, :pid, :bid, :status,
-                :receipt, :vendor, :uid
-            ) RETURNING id
-        """), {
-            "num": expense_number, "date": expense.expense_date, "type": expense.expense_type,
-            "amt": str(expense.amount), "desc": expense.description,
-            "cat": expense.category, "pm": expense.payment_method, "tid": expense.treasury_id,
-            "eaid": expense_account_id,
-            "ccid": expense.cost_center_id, "pid": expense.project_id, "bid": expense.branch_id,
-            "status": approval_status,
-            "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id
-        }).scalar()
-        
-        # T3.11: ALWAYS create a journal entry. Auto-approved expenses
-        # post immediately; pending expenses get a `draft` JE so the
-        # transaction is visible in GL but doesn't move balances until
-        # approval flips it to `posted`. This eliminates the previous
-        # split between "create now" and "create on approval" paths.
-        je_status = "posted" if approval_status == "approved" else "draft"
-        expense_data = {
-            "expense_date": expense.expense_date,
-            "expense_type": expense.expense_type,
-            "amount": str(expense.amount),
-            "description": expense.description,
-            "expense_account_id": expense_account_id,
-            "cash_account_id": cash_account_id,
-            "cost_center_id": expense.cost_center_id,
-            "branch_id": expense.branch_id,
-            "company_id": current_user.company_id,
-            "expense_id": expense_id
-        }
-        je_id, je_number = create_expense_journal_entry(
-            db, expense_data, current_user.id, base_currency, je_status=je_status
-        )
-
-        # Update expense with journal entry reference (always — even
-        # for drafts so approval can post the existing JE rather than
-        # creating a second one).
-        db.execute(text("""
-            UPDATE expenses SET journal_entry_id = :jid WHERE id = :id
-        """), {"jid": je_id, "id": expense_id})
-
-        # Treasury / project side-effects only fire for posted JEs.
-        if approval_status == "approved":
-            # Update treasury balance (with sufficiency check)
-            if expense.treasury_id:
-                treasury_balance = db.execute(text(
-                    "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
-                ), {"id": expense.treasury_id}).scalar() or 0
-                if Decimal(str(treasury_balance)) < Decimal(str(expense.amount)):
-                    raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense.amount)):.2f}")
-                db.execute(text("""
-                    UPDATE treasury_accounts 
-                    SET current_balance = current_balance - :amt 
-                    WHERE id = :id
-                """), {"amt": str(expense.amount), "id": expense.treasury_id})
+    with transactional(current_user.company_id) as db:
+        try:
+            # Check fiscal period is open for the expense date
+            check_fiscal_period_open(db, str(expense.expense_date), raise_error=True)
             
-            # Update project actual_cost if linked
-            if expense.project_id:
-                db.execute(text("""
-                    UPDATE projects 
-                    SET actual_cost = actual_cost + :amt
-                    WHERE id = :id
-                """), {"amt": str(expense.amount), "id": expense.project_id})
-        
-        db.commit()
-        
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action="expense.create", resource_type="expense", resource_id=str(expense_id),
-            details={"expense_number": expense_number, "amount": str(expense.amount)},
-            request=request, branch_id=expense.branch_id
-        )
-        
-        # Submit for approval workflow if pending
-        approval_info = None
-        if approval_status == "pending":
-            try:
-                from utils.approval_utils import try_submit_for_approval
-                approval_info = try_submit_for_approval(
-                    db,
-                    document_type="expense",
-                    document_id=expense_id,
-                    document_number=expense_number,
-                    amount=Decimal(str(expense.amount)),
-                    submitted_by=current_user.id,
-                    description=f"مصروف {expense.expense_type}: {expense.description or ''} - {Decimal(str(expense.amount)):,.2f}",
-                    link=f"/expenses/{expense_id}"
-                )
-                if approval_info:
+            # Validate expense type
+            if expense.expense_type and expense.expense_type not in EXPENSE_TYPES:
+                raise HTTPException(status_code=400, detail=f"Invalid expense type. Must be one of: {', '.join(EXPENSE_TYPES)}")
+            
+            # Policy enforcement: check if expense exceeds policy limits
+            policy = db.execute(text("""
+                SELECT * FROM expense_policies
+                WHERE is_active = true AND is_deleted = false
+                  AND (expense_type = :etype OR expense_type IS NULL OR expense_type = '')
+                  AND (department_id = :dept OR department_id IS NULL)
+                ORDER BY
+                  CASE WHEN expense_type = :etype THEN 0 ELSE 1 END,
+                  CASE WHEN department_id = :dept THEN 0 ELSE 1 END
+                LIMIT 1
+            """), {"etype": expense.expense_type, "dept": getattr(expense, 'department_id', None)}).fetchone()
+            
+            policy_warning = None
+            if policy:
+                amount_val = Decimal(str(expense.amount))
+                if policy.daily_limit and amount_val > Decimal(str(policy.daily_limit)):
+                    policy_warning = f"Amount exceeds daily limit of {policy.daily_limit} for policy '{policy.name}'"
+                if policy.monthly_limit:
+                    # Check monthly total for this type
+                    month_total = db.execute(text("""
+                        SELECT COALESCE(SUM(amount), 0) FROM expenses
+                        WHERE expense_type = :etype AND created_by = :uid
+                          AND EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
+                          AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
+                          AND is_deleted = false AND approval_status != 'rejected'
+                    """), {"etype": expense.expense_type, "uid": current_user.id}).scalar()
+                    if (Decimal(str(month_total)) + amount_val) > Decimal(str(policy.monthly_limit)):
+                        policy_warning = f"Total would exceed monthly limit of {policy.monthly_limit} for policy '{policy.name}'"
+            
+            base_currency = get_base_currency(db)
+            
+            # Determine expense account
+            expense_account_id = expense.expense_account_id
+            if not expense_account_id:
+                expense_account_id = get_expense_account_by_type(db, expense.expense_type)
+            
+            if not expense_account_id:
+                raise HTTPException(status_code=400, detail="يجب تحديد حساب المصروف")
+            
+            # Determine cash/bank account
+            cash_account_id = None
+            if expense.treasury_id:
+                cash_account_id = db.execute(text(
+                    "SELECT gl_account_id FROM treasury_accounts WHERE id = :id"
+                ), {"id": expense.treasury_id}).scalar()
+            
+            if not cash_account_id:
+                cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
+            
+            if not cash_account_id:
+                raise HTTPException(status_code=400, detail="يجب تحديد حساب النقدية")
+            
+            # Generate expense number
+            expense_number = generate_sequential_number(db, "EXP", "expenses", "expense_number")
+            
+            # Initial approval status
+            approval_status = "pending" if expense.requires_approval else "approved"
+            
+            # Insert expense record
+            expense_id = db.execute(text("""
+                INSERT INTO expenses (
+                    expense_number, expense_date, expense_type, amount, description,
+                    category, payment_method, treasury_id, expense_account_id,
+                    cost_center_id, project_id, branch_id, approval_status,
+                    receipt_number, vendor_name, created_by
+                ) VALUES (
+                    :num, :date, :type, :amt, :desc,
+                    :cat, :pm, :tid, :eaid,
+                    :ccid, :pid, :bid, :status,
+                    :receipt, :vendor, :uid
+                ) RETURNING id
+            """), {
+                "num": expense_number, "date": expense.expense_date, "type": expense.expense_type,
+                "amt": str(expense.amount), "desc": expense.description,
+                "cat": expense.category, "pm": expense.payment_method, "tid": expense.treasury_id,
+                "eaid": expense_account_id,
+                "ccid": expense.cost_center_id, "pid": expense.project_id, "bid": expense.branch_id,
+                "status": approval_status,
+                "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id
+            }).scalar()
+            
+            # T3.11: ALWAYS create a journal entry. Auto-approved expenses
+            # post immediately; pending expenses get a `draft` JE so the
+            # transaction is visible in GL but doesn't move balances until
+            # approval flips it to `posted`. This eliminates the previous
+            # split between "create now" and "create on approval" paths.
+            je_status = "posted" if approval_status == "approved" else "draft"
+            expense_data = {
+                "expense_date": expense.expense_date,
+                "expense_type": expense.expense_type,
+                "amount": str(expense.amount),
+                "description": expense.description,
+                "expense_account_id": expense_account_id,
+                "cash_account_id": cash_account_id,
+                "cost_center_id": expense.cost_center_id,
+                "branch_id": expense.branch_id,
+                "company_id": current_user.company_id,
+                "expense_id": expense_id
+            }
+            je_id, je_number = create_expense_journal_entry(
+                db, expense_data, current_user.id, base_currency, je_status=je_status
+            )
+    
+            # Update expense with journal entry reference (always — even
+            # for drafts so approval can post the existing JE rather than
+            # creating a second one).
+            db.execute(text("""
+                UPDATE expenses SET journal_entry_id = :jid WHERE id = :id
+            """), {"jid": je_id, "id": expense_id})
+    
+            # Treasury / project side-effects only fire for posted JEs.
+            if approval_status == "approved":
+                # Update treasury balance (with sufficiency check)
+                if expense.treasury_id:
+                    treasury_balance = db.execute(text(
+                        "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
+                    ), {"id": expense.treasury_id}).scalar() or 0
+                    if Decimal(str(treasury_balance)) < Decimal(str(expense.amount)):
+                        raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense.amount)):.2f}")
+                    db.execute(text("""
+                        UPDATE treasury_accounts 
+                        SET current_balance = current_balance - :amt 
+                        WHERE id = :id
+                    """), {"amt": str(expense.amount), "id": expense.treasury_id})
+                
+                # Update project actual_cost if linked
+                if expense.project_id:
+                    db.execute(text("""
+                        UPDATE projects 
+                        SET actual_cost = actual_cost + :amt
+                        WHERE id = :id
+                    """), {"amt": str(expense.amount), "id": expense.project_id})
+            
+            
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action="expense.create", resource_type="expense", resource_id=str(expense_id),
+                details={"expense_number": expense_number, "amount": str(expense.amount)},
+                request=request, branch_id=expense.branch_id
+            )
+            
+            # Submit for approval workflow if pending
+            approval_info = None
+            if approval_status == "pending":
+                try:
+                    from utils.approval_utils import try_submit_for_approval
+                    approval_info = try_submit_for_approval(
+                        db,
+                        document_type="expense",
+                        document_id=expense_id,
+                        document_number=expense_number,
+                        amount=Decimal(str(expense.amount)),
+                        submitted_by=current_user.id,
+                        description=f"مصروف {expense.expense_type}: {expense.description or ''} - {Decimal(str(expense.amount)):,.2f}",
+                        link=f"/expenses/{expense_id}"
+                    )
+                    if approval_info:
+                        db.commit()
+                except Exception:
+                    pass  # Non-blocking
+            
+            response = {
+                "success": True,
+                "id": expense_id,
+                "expense_number": expense_number,
+                "approval_status": approval_status,
+                "message": "تم إنشاء المصروف بنجاح" if approval_status == "approved" else "تم إنشاء المصروف - في انتظار الاعتماد",
+                "policy_warning": policy_warning,
+            }
+    
+            # Notify about expense submission
+            if approval_status == "pending":
+                try:
+                    db.execute(text("""
+                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                        SELECT DISTINCT u.id, 'expense', :title, :message, :link, FALSE, NOW()
+                        FROM company_users u
+                        WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
+                        AND u.id != :current_uid
+                    """), {
+                        "title": "🧳 طلب مصروف جديد",
+                        "message": f"مصروف {expense_number} — {Decimal(str(expense.amount)):,.2f} — {expense.description or expense.expense_type}",
+                        "link": f"/expenses/{expense_id}",
+                        "current_uid": current_user.id
+                    })
                     db.commit()
-            except Exception:
-                pass  # Non-blocking
-        
-        response = {
-            "success": True,
-            "id": expense_id,
-            "expense_number": expense_number,
-            "approval_status": approval_status,
-            "message": "تم إنشاء المصروف بنجاح" if approval_status == "approved" else "تم إنشاء المصروف - في انتظار الاعتماد",
-            "policy_warning": policy_warning,
-        }
-
-        # Notify about expense submission
-        if approval_status == "pending":
-            try:
-                db.execute(text("""
-                    INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                    SELECT DISTINCT u.id, 'expense', :title, :message, :link, FALSE, NOW()
-                    FROM company_users u
-                    WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
-                    AND u.id != :current_uid
-                """), {
-                    "title": "🧳 طلب مصروف جديد",
-                    "message": f"مصروف {expense_number} — {Decimal(str(expense.amount)):,.2f} — {expense.description or expense.expense_type}",
-                    "link": f"/expenses/{expense_id}",
-                    "current_uid": current_user.id
-                })
-                db.commit()
-            except Exception:
-                pass
-
-        if approval_info:
-            response["approval"] = approval_info
-        return response
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating expense: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+                except Exception:
+                    pass
+    
+            if approval_info:
+                response["approval"] = approval_info
+            return response
+        except HTTPException:
+            raise
+        except Exception as e:
+            pass
+            logger.error(f"Error creating expense: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.put("/{expense_id}", dependencies=[Depends(require_permission("expenses.edit"))])
+@router.put("/{expense_id}", dependencies=[Depends(require_permission("expenses.edit"))], response_model=Dict[str, Any])
 async def update_expense(
     request: Request,
     expense_id: int,
@@ -649,62 +619,58 @@ async def update_expense(
     current_user: dict = Depends(get_current_user)
 ):
     """تعديل مصروف"""
-    db = get_db_connection(current_user.company_id)
-    
-    try:
-        # Check if expense exists and is pending
-        existing = db.execute(text(
-            "SELECT id, approval_status FROM expenses WHERE id = :id AND is_deleted = false"
-        ), {"id": expense_id}).fetchone()
-        
-        if not existing:
-            raise HTTPException(**http_error(404, "expense_not_found"))
-        
-        if existing.approval_status != "pending":
-            raise HTTPException(status_code=400, detail="لا يمكن تعديل مصروف معتمد أو مرفوض")
-        
-        # Build update fields
-        update_fields = []
-        params = {"id": expense_id}
-        
-        for field in ["expense_date", "expense_type", "amount", "description", "category",
-                     "payment_method", "treasury_id", "expense_account_id", "cost_center_id",
-                     "project_id", "receipt_number", "vendor_name"]:
-            value = getattr(expense, field)
-            if value is not None:
-                update_fields.append(f"{field} = :{field}")
-                params[field] = value
-        
-        if not update_fields:
-            raise HTTPException(**http_error(400, "no_data_to_update"))
-        
-        update_fields.append("updated_at = CURRENT_TIMESTAMP")
-        
-        db.execute(text(f"""
-            UPDATE expenses SET {', '.join(update_fields)}
-            WHERE id = :id
-        """), params)
-        
-        db.commit()
-        
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action="expense.update", resource_type="expense", resource_id=str(expense_id),
-            details={"updates": update_fields}, request=request
-        )
-        
-        return {"success": True, "message": "تم تحديث المصروف بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            # Check if expense exists and is pending
+            existing = db.execute(text(
+                "SELECT id, approval_status FROM expenses WHERE id = :id AND is_deleted = false"
+            ), {"id": expense_id}).fetchone()
+            
+            if not existing:
+                raise HTTPException(**http_error(404, "expense_not_found"))
+            
+            if existing.approval_status != "pending":
+                raise HTTPException(status_code=400, detail="لا يمكن تعديل مصروف معتمد أو مرفوض")
+            
+            # Build update fields
+            update_fields = []
+            params = {"id": expense_id}
+            
+            for field in ["expense_date", "expense_type", "amount", "description", "category",
+                         "payment_method", "treasury_id", "expense_account_id", "cost_center_id",
+                         "project_id", "receipt_number", "vendor_name"]:
+                value = getattr(expense, field)
+                if value is not None:
+                    update_fields.append(f"{field} = :{field}")
+                    params[field] = value
+            
+            if not update_fields:
+                raise HTTPException(**http_error(400, "no_data_to_update"))
+            
+            update_fields.append("updated_at = CURRENT_TIMESTAMP")
+            
+            db.execute(text(f"""
+                UPDATE expenses SET {', '.join(update_fields)}
+                WHERE id = :id
+            """), params)
+            
+            
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action="expense.update", resource_type="expense", resource_id=str(expense_id),
+                details={"updates": update_fields}, request=request
+            )
+            
+            return {"success": True, "message": "تم تحديث المصروف بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.post("/{expense_id}/approve", dependencies=[Depends(require_permission("expenses.approve"))])
+@router.post("/{expense_id}/approve", dependencies=[Depends(require_permission("expenses.approve"))], response_model=Dict[str, Any])
 async def approve_expense(
     request: Request,
     expense_id: int,
@@ -712,170 +678,166 @@ async def approve_expense(
     current_user: dict = Depends(get_current_user)
 ):
     """اعتماد أو رفض مصروف"""
-    db = get_db_connection(current_user.company_id)
-    
-    try:
-        # T3.12: lock the expense row for the duration of the approval
-        # so two concurrent approvers can't both post the JE. The lock
-        # is taken first thing — before any JE work — so the second
-        # caller waits until the first one's transaction completes and
-        # then sees the updated approval_status.
-        db.execute(text(
-            "SELECT id FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
-        ), {"id": expense_id})
-
-        # Get expense details
-        expense_row = db.execute(text("""
-            SELECT e.*, a.id as expense_account_id, ta.gl_account_id as cash_account_id
-            FROM expenses e
-            LEFT JOIN accounts a ON e.expense_account_id = a.id
-            LEFT JOIN treasury_accounts ta ON e.treasury_id = ta.id
-            WHERE e.id = :id AND e.is_deleted = false
-        """), {"id": expense_id}).fetchone()
-        
-        if not expense_row:
-            raise HTTPException(**http_error(404, "expense_not_found"))
-        
-        expense = dict(expense_row._mapping)
-        
-        if expense["approval_status"] != "pending":
-            raise HTTPException(status_code=400, detail="المصروف تم اعتماده أو رفضه مسبقاً")
-        
-        # Validate approval_status value
-        if approval.approval_status not in VALID_APPROVAL_STATUSES:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Invalid approval status. Must be one of: {', '.join(VALID_APPROVAL_STATUSES)}"
-            )
-        
-        # Update approval status
-        db.execute(text("""
-            UPDATE expenses 
-            SET approval_status = :status, 
-                approved_by = :uid, 
-                approved_at = CURRENT_TIMESTAMP,
-                approval_notes = :notes
-            WHERE id = :id
-        """), {
-            "status": approval.approval_status, 
-            "uid": current_user.id, 
-            "notes": approval.approval_notes,
-            "id": expense_id
-        })
-        
-        # If approved, transition the existing draft JE to posted.
-        # T3.11: ``create_expense`` now always inserts the JE on
-        # creation (draft when pending) so approval is a pure status
-        # flip plus side-effect application — no second JE is ever
-        # created.
-        if approval.approval_status == "approved":
-            base_currency = get_base_currency(db)
-
-            # Determine cash account
-            cash_account_id = expense["cash_account_id"]
-            if not cash_account_id:
-                cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
-
-            if not cash_account_id:
-                raise HTTPException(status_code=400, detail="حساب النقدية غير محدد")
-
-            existing_je_id = expense.get("journal_entry_id")
-            if existing_je_id:
-                from services.gl_service import post_draft_journal_entry
-                post_draft_journal_entry(db, existing_je_id, current_user.id)
-            else:
-                # Backwards-compat: legacy expenses created before T3.11
-                # don't have a draft JE attached. Create-and-post one
-                # in a single shot to keep them auditable.
-                expense_data = {
-                    "expense_date": expense["expense_date"],
-                    "expense_type": expense["expense_type"],
-                    "amount": str(expense["amount"]),
-                    "description": expense["description"],
-                    "expense_account_id": expense["expense_account_id"],
-                    "cash_account_id": cash_account_id,
-                    "cost_center_id": expense["cost_center_id"],
-                    "branch_id": expense["branch_id"],
-                    "company_id": current_user.company_id,
-                    "expense_id": expense_id
-                }
-                je_id, je_number = create_expense_journal_entry(
-                    db, expense_data, current_user.id, base_currency, je_status="posted"
-                )
-                db.execute(text(
-                    "UPDATE expenses SET journal_entry_id = :jid WHERE id = :id"
-                ), {"jid": je_id, "id": expense_id})
-
-            # Update treasury balance (with sufficiency check)
-            if expense["treasury_id"]:
-                treasury_balance = db.execute(text(
-                    "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
-                ), {"id": expense["treasury_id"]}).scalar() or 0
-                if Decimal(str(treasury_balance)) < Decimal(str(expense["amount"])):
-                    raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense['amount'])):.2f}")
-                db.execute(text("""
-                    UPDATE treasury_accounts 
-                    SET current_balance = current_balance - :amt 
-                    WHERE id = :id
-                """), {"amt": str(expense["amount"]), "id": expense["treasury_id"]})
-            
-            # Update project actual_cost if linked
-            if expense["project_id"]:
-                db.execute(text("""
-                    UPDATE projects 
-                    SET actual_cost = actual_cost + :amt
-                    WHERE id = :id
-                """), {"amt": str(expense["amount"]), "id": expense["project_id"]})
-        
-        db.commit()
-        
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action=f"expense.{approval.approval_status}", resource_type="expense",
-            resource_id=str(expense_id),
-            details={"approval_status": approval.approval_status, "notes": approval.approval_notes},
-            request=request
-        )
-        
-        message = "تم اعتماد المصروف بنجاح" if approval.approval_status == "approved" else "تم رفض المصروف"
-
-        # Notify the expense submitter
+    with transactional(current_user.company_id) as db:
         try:
-            submitted_by = db.execute(text("SELECT created_by FROM expenses WHERE id = :id"), {"id": expense_id}).scalar()
-            if submitted_by:
-                icon = "✅" if approval.approval_status == "approved" else "❌"
-                status_ar = "اعتُمد" if approval.approval_status == "approved" else "رُفض"
-                exp_num = expense.get('expense_number', '') if isinstance(expense, dict) else ''
-                db.execute(text("""
-                    INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
-                    VALUES (:uid, 'expense_status', :title, :message, :link, FALSE, NOW())
-                """), {
-                    "uid": submitted_by,
-                    "title": f"{icon} مصروفك {status_ar}",
-                    "message": f"تم {status_ar} المصروف {exp_num} بمبلغ {Decimal(str(expense.get('amount', 0))):,.2f}" if isinstance(expense, dict) else f"تم {status_ar} طلب المصروف",
-                    "link": f"/expenses/{expense_id}"
-                })
-                db.commit()
-        except Exception:
+            # T3.12: lock the expense row for the duration of the approval
+            # so two concurrent approvers can't both post the JE. The lock
+            # is taken first thing — before any JE work — so the second
+            # caller waits until the first one's transaction completes and
+            # then sees the updated approval_status.
+            db.execute(text(
+                "SELECT id FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
+            ), {"id": expense_id})
+    
+            # Get expense details
+            expense_row = db.execute(text("""
+                SELECT e.*, a.id as expense_account_id, ta.gl_account_id as cash_account_id
+                FROM expenses e
+                LEFT JOIN accounts a ON e.expense_account_id = a.id
+                LEFT JOIN treasury_accounts ta ON e.treasury_id = ta.id
+                WHERE e.id = :id AND e.is_deleted = false
+            """), {"id": expense_id}).fetchone()
+            
+            if not expense_row:
+                raise HTTPException(**http_error(404, "expense_not_found"))
+            
+            expense = dict(expense_row._mapping)
+            
+            if expense["approval_status"] != "pending":
+                raise HTTPException(status_code=400, detail="المصروف تم اعتماده أو رفضه مسبقاً")
+            
+            # Validate approval_status value
+            if approval.approval_status not in VALID_APPROVAL_STATUSES:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"Invalid approval status. Must be one of: {', '.join(VALID_APPROVAL_STATUSES)}"
+                )
+            
+            # Update approval status
+            db.execute(text("""
+                UPDATE expenses 
+                SET approval_status = :status, 
+                    approved_by = :uid, 
+                    approved_at = CURRENT_TIMESTAMP,
+                    approval_notes = :notes
+                WHERE id = :id
+            """), {
+                "status": approval.approval_status, 
+                "uid": current_user.id, 
+                "notes": approval.approval_notes,
+                "id": expense_id
+            })
+            
+            # If approved, transition the existing draft JE to posted.
+            # T3.11: ``create_expense`` now always inserts the JE on
+            # creation (draft when pending) so approval is a pure status
+            # flip plus side-effect application — no second JE is ever
+            # created.
+            if approval.approval_status == "approved":
+                base_currency = get_base_currency(db)
+    
+                # Determine cash account
+                cash_account_id = expense["cash_account_id"]
+                if not cash_account_id:
+                    cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
+    
+                if not cash_account_id:
+                    raise HTTPException(status_code=400, detail="حساب النقدية غير محدد")
+    
+                existing_je_id = expense.get("journal_entry_id")
+                if existing_je_id:
+                    from services.gl_service import post_draft_journal_entry
+                    post_draft_journal_entry(db, existing_je_id, current_user.id)
+                else:
+                    # Backwards-compat: legacy expenses created before T3.11
+                    # don't have a draft JE attached. Create-and-post one
+                    # in a single shot to keep them auditable.
+                    expense_data = {
+                        "expense_date": expense["expense_date"],
+                        "expense_type": expense["expense_type"],
+                        "amount": str(expense["amount"]),
+                        "description": expense["description"],
+                        "expense_account_id": expense["expense_account_id"],
+                        "cash_account_id": cash_account_id,
+                        "cost_center_id": expense["cost_center_id"],
+                        "branch_id": expense["branch_id"],
+                        "company_id": current_user.company_id,
+                        "expense_id": expense_id
+                    }
+                    je_id, je_number = create_expense_journal_entry(
+                        db, expense_data, current_user.id, base_currency, je_status="posted"
+                    )
+                    db.execute(text(
+                        "UPDATE expenses SET journal_entry_id = :jid WHERE id = :id"
+                    ), {"jid": je_id, "id": expense_id})
+    
+                # Update treasury balance (with sufficiency check)
+                if expense["treasury_id"]:
+                    treasury_balance = db.execute(text(
+                        "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
+                    ), {"id": expense["treasury_id"]}).scalar() or 0
+                    if Decimal(str(treasury_balance)) < Decimal(str(expense["amount"])):
+                        raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense['amount'])):.2f}")
+                    db.execute(text("""
+                        UPDATE treasury_accounts 
+                        SET current_balance = current_balance - :amt 
+                        WHERE id = :id
+                    """), {"amt": str(expense["amount"]), "id": expense["treasury_id"]})
+                
+                # Update project actual_cost if linked
+                if expense["project_id"]:
+                    db.execute(text("""
+                        UPDATE projects 
+                        SET actual_cost = actual_cost + :amt
+                        WHERE id = :id
+                    """), {"amt": str(expense["amount"]), "id": expense["project_id"]})
+            
+            
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action=f"expense.{approval.approval_status}", resource_type="expense",
+                resource_id=str(expense_id),
+                details={"approval_status": approval.approval_status, "notes": approval.approval_notes},
+                request=request
+            )
+            
+            message = "تم اعتماد المصروف بنجاح" if approval.approval_status == "approved" else "تم رفض المصروف"
+    
+            # Notify the expense submitter
+            try:
+                submitted_by = db.execute(text("SELECT created_by FROM expenses WHERE id = :id"), {"id": expense_id}).scalar()
+                if submitted_by:
+                    icon = "✅" if approval.approval_status == "approved" else "❌"
+                    status_ar = "اعتُمد" if approval.approval_status == "approved" else "رُفض"
+                    exp_num = expense.get('expense_number', '') if isinstance(expense, dict) else ''
+                    db.execute(text("""
+                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                        VALUES (:uid, 'expense_status', :title, :message, :link, FALSE, NOW())
+                    """), {
+                        "uid": submitted_by,
+                        "title": f"{icon} مصروفك {status_ar}",
+                        "message": f"تم {status_ar} المصروف {exp_num} بمبلغ {Decimal(str(expense.get('amount', 0))):,.2f}" if isinstance(expense, dict) else f"تم {status_ar} طلب المصروف",
+                        "link": f"/expenses/{expense_id}"
+                    })
+                    db.commit()
+            except Exception:
+                pass
+    
+            return {"success": True, "message": message}
+        except HTTPException:
+            raise
+        except Exception as e:
             pass
-
-        return {"success": True, "message": message}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error approving expense: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+            logger.error(f"Error approving expense: {e}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ═══════════════════════════════════════════════════════════
 # T3.13 — Reverse an approved expense
 # ═══════════════════════════════════════════════════════════
 
-@router.post("/{expense_id}/reverse", dependencies=[Depends(require_permission("expenses.approve"))])
+@router.post("/{expense_id}/reverse", dependencies=[Depends(require_permission("expenses.approve"))], response_model=Dict[str, Any])
 async def reverse_expense(
     request: Request,
     expense_id: int,
@@ -1003,49 +965,45 @@ async def reverse_expense(
         db.close()
 
 
-@router.delete("/{expense_id}", dependencies=[Depends(require_permission("expenses.delete"))])
+@router.delete("/{expense_id}", dependencies=[Depends(require_permission("expenses.delete"))], response_model=Dict[str, Any])
 async def delete_expense(
     request: Request,
     expense_id: int,
     current_user: dict = Depends(get_current_user)
 ):
     """حذف مصروف (فقط إذا كان معلق)"""
-    db = get_db_connection(current_user.company_id)
-    
-    try:
-        expense = db.execute(text(
-            "SELECT approval_status FROM expenses WHERE id = :id AND is_deleted = false"
-        ), {"id": expense_id}).fetchone()
-        
-        if not expense:
-            raise HTTPException(**http_error(404, "expense_not_found"))
-        
-        if expense.approval_status != "pending":
-            raise HTTPException(status_code=400, detail="لا يمكن حذف مصروف معتمد - يجب إنشاء قيد عكسي")
-        
-        db.execute(text(
-            "UPDATE expenses SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
-        ), {"id": expense_id, "uid": current_user.id})
-        db.commit()
-        
-        log_activity(
-            db, user_id=current_user.id, username=current_user.username,
-            action="expense.delete", resource_type="expense", resource_id=str(expense_id),
-            request=request
-        )
-        
-        return {"success": True, "message": "تم حذف المصروف بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            expense = db.execute(text(
+                "SELECT approval_status FROM expenses WHERE id = :id AND is_deleted = false"
+            ), {"id": expense_id}).fetchone()
+            
+            if not expense:
+                raise HTTPException(**http_error(404, "expense_not_found"))
+            
+            if expense.approval_status != "pending":
+                raise HTTPException(status_code=400, detail="لا يمكن حذف مصروف معتمد - يجب إنشاء قيد عكسي")
+            
+            db.execute(text(
+                "UPDATE expenses SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
+            ), {"id": expense_id, "uid": current_user.id})
+            
+            log_activity(
+                db, user_id=current_user.id, username=current_user.username,
+                action="expense.delete", resource_type="expense", resource_id=str(expense_id),
+                request=request
+            )
+            
+            return {"success": True, "message": "تم حذف المصروف بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.get("/reports/by-type", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/reports/by-type", dependencies=[Depends(require_permission("expenses.view"))], response_model=List[Dict[str, Any]])
 async def get_expenses_by_type(
     branch_id: Optional[int] = None,
     start_date: Optional[date] = None,
@@ -1054,9 +1012,7 @@ async def get_expenses_by_type(
 ):
     """تقرير المصاريف حسب النوع"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         params = {}
         filters = ["approval_status = 'approved'", "is_deleted = false"]
         
@@ -1087,11 +1043,9 @@ async def get_expenses_by_type(
         """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
-    finally:
-        db.close()
 
 
-@router.get("/reports/by-cost-center", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/reports/by-cost-center", dependencies=[Depends(require_permission("expenses.view"))], response_model=List[Dict[str, Any]])
 async def get_expenses_by_cost_center(
     branch_id: Optional[int] = None,
     start_date: Optional[date] = None,
@@ -1100,9 +1054,7 @@ async def get_expenses_by_cost_center(
 ):
     """تقرير المصاريف حسب مركز التكلفة"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         params = {}
         filters = ["e.approval_status = 'approved'", "e.is_deleted = false"]
         
@@ -1131,11 +1083,9 @@ async def get_expenses_by_cost_center(
         """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
-    finally:
-        db.close()
 
 
-@router.get("/reports/monthly", dependencies=[Depends(require_permission("expenses.view"))])
+@router.get("/reports/monthly", dependencies=[Depends(require_permission("expenses.view"))], response_model=List[Dict[str, Any]])
 async def get_monthly_expenses(
     branch_id: Optional[int] = None,
     year: Optional[int] = None,
@@ -1143,9 +1093,7 @@ async def get_monthly_expenses(
 ):
     """تقرير المصاريف الشهري"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    
-    try:
+    with transactional(current_user.company_id) as db:
         from datetime import datetime
         current_year = year or datetime.now().year
         
@@ -1170,6 +1118,4 @@ async def get_monthly_expenses(
         """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
-    finally:
-        db.close()
 

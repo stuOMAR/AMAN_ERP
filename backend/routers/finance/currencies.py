@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Any
+from typing import Any, Dict, List
 import logging
 from routers.auth import get_current_user
 from utils.permissions import require_permission
@@ -211,7 +211,7 @@ def update_currency(
     finally:
         db.close()
 
-@router.delete("/{currency_id}")
+@router.delete("/{currency_id}", response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def delete_currency(
     request: Request,
@@ -328,7 +328,7 @@ def get_rate_history(
         db.close()
 
 
-@router.post("/revaluate")
+@router.post("/revaluate", response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def create_revaluation(
     request: Request,

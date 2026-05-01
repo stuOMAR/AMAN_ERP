@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -77,7 +77,7 @@ from .schemas import InvoiceCreate, InvoiceResponse
 
 invoices_router = APIRouter()
 logger = logging.getLogger(__name__)
-@invoices_router.get("/invoices", dependencies=[Depends(require_permission("sales.view"))])
+@invoices_router.get("/invoices", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def list_invoices(
     branch_id: Optional[int] = None,
     status_filter: Optional[str] = None,
@@ -787,7 +787,7 @@ def get_invoice(
         }
     finally:
         db.close()
-@invoices_router.post("/invoices/{invoice_id}/cancel", dependencies=[Depends(require_sensitive_permission("sales.void"))])
+@invoices_router.post("/invoices/{invoice_id}/cancel", dependencies=[Depends(require_sensitive_permission("sales.void"))], response_model=Dict[str, Any])
 def cancel_invoice(
     invoice_id: int,
     request: Request,

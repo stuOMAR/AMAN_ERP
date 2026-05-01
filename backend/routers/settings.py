@@ -7,7 +7,7 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Dict, Any
+from typing import Any, Dict, List
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
@@ -302,7 +302,7 @@ def get_company_settings(
     finally:
         db.close()
 
-@router.post("/bulk", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))])
+@router.post("/bulk", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
 def update_settings_bulk(
     request: SettingsUpdateRequest,
     req: Request = None,
@@ -425,7 +425,7 @@ def update_settings_bulk(
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
-@router.post("/test-email", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))])
+@router.post("/test-email", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
 def test_email_connection(
     request: SettingsUpdateRequest,
     current_user: UserResponse = Depends(get_current_user)
@@ -455,7 +455,7 @@ def test_email_connection(
     except Exception:
         raise HTTPException(status_code=400, detail="فشل الاتصال بالخادم")
 
-@router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))])
+@router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
 def generate_csid(
     request: SettingsUpdateRequest,
     current_user: UserResponse = Depends(get_current_user)

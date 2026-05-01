@@ -11,7 +11,7 @@ Endpoints under /hr/self-service:
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import date
 import logging
 
@@ -71,7 +71,7 @@ def _notify_leave(conn, recipients_sql: str, params: dict) -> None:
 
 # --------------- Profile ------------------------------------------------
 
-@router.get("/profile", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.get("/profile", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def get_own_profile(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
@@ -100,7 +100,7 @@ def get_own_profile(
         conn.close()
 
 
-@router.put("/profile", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.put("/profile", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def update_own_profile(
     body: ProfileUpdateRequest,
     request: Request,
@@ -196,7 +196,7 @@ def list_own_payslips(
         conn.close()
 
 
-@router.get("/payslips/{payslip_id}", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.get("/payslips/{payslip_id}", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def get_payslip_detail(
     payslip_id: int,
     current_user: UserResponse = Depends(get_current_user),
@@ -237,7 +237,7 @@ def get_payslip_detail(
 
 # --------------- Leave Balance ------------------------------------------
 
-@router.get("/leave-balance", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.get("/leave-balance", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def get_leave_balance(
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
@@ -292,7 +292,7 @@ def get_leave_balance(
 
 # --------------- Leave Requests -----------------------------------------
 
-@router.post("/leave-request", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.post("/leave-request", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def submit_leave_request(
     body: LeaveRequestCreate,
     request: Request,
@@ -424,7 +424,7 @@ def submit_leave_request(
         conn.close()
 
 
-@router.get("/leave-requests", dependencies=[Depends(require_permission("hr.self_service"))])
+@router.get("/leave-requests", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def list_own_leave_requests(
     status: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
@@ -459,7 +459,7 @@ def list_own_leave_requests(
 
 # --------------- Manager: Team Requests ---------------------------------
 
-@router.get("/team-requests", dependencies=[Depends(require_permission("hr.self_service_approve"))])
+@router.get("/team-requests", dependencies=[Depends(require_permission("hr.self_service_approve"))], response_model=Dict[str, Any])
 def list_team_requests(
     status: Optional[str] = "pending",
     current_user: UserResponse = Depends(get_current_user),
@@ -492,7 +492,7 @@ def list_team_requests(
         conn.close()
 
 
-@router.post("/leave-request/{request_id}/approve", dependencies=[Depends(require_permission("hr.self_service_approve"))])
+@router.post("/leave-request/{request_id}/approve", dependencies=[Depends(require_permission("hr.self_service_approve"))], response_model=Dict[str, Any])
 def approve_leave_request(
     request_id: int,
     request: Request,
@@ -563,7 +563,7 @@ def approve_leave_request(
         conn.close()
 
 
-@router.post("/leave-request/{request_id}/reject", dependencies=[Depends(require_permission("hr.self_service_approve"))])
+@router.post("/leave-request/{request_id}/reject", dependencies=[Depends(require_permission("hr.self_service_approve"))], response_model=Dict[str, Any])
 def reject_leave_request(
     request_id: int,
     request: Request,

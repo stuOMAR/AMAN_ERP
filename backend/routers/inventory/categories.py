@@ -5,7 +5,7 @@ Inventory Module - Categories CRUD
 from fastapi import APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
@@ -45,7 +45,7 @@ def list_categories(
         db.close()
 
 
-@categories_router.get("/categories/next-code", dependencies=[Depends(require_permission("products.create"))])
+@categories_router.get("/categories/next-code", dependencies=[Depends(require_permission("products.create"))], response_model=Dict[str, Any])
 def get_next_category_code(current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -151,7 +151,7 @@ def update_category(
         db.close()
 
 
-@categories_router.delete("/categories/{id}", dependencies=[Depends(require_permission("products.delete"))])
+@categories_router.delete("/categories/{id}", dependencies=[Depends(require_permission("products.delete"))], response_model=Dict[str, Any])
 def delete_category(
     id: int, 
     request: Request,

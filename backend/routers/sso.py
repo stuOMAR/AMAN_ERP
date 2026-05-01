@@ -6,7 +6,7 @@ Endpoints for SSO configuration management and SSO authentication flows.
 import json
 import logging
 import uuid
-from typing import Optional, List
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from sqlalchemy import text
@@ -122,7 +122,7 @@ async def update_sso_config(config_id: int, body: SsoConfigUpdate, current_user=
 
 
 @router.delete("/config/{config_id}", status_code=200,
-               dependencies=[Depends(require_permission("sso.manage"))])
+               dependencies=[Depends(require_permission("sso.manage"))], response_model=Dict[str, Any])
 async def deactivate_sso_config(config_id: int, current_user=Depends(get_current_user)):
     company_id = _get_company_id_from_user(current_user)
     try:
@@ -175,7 +175,7 @@ async def create_mapping(body: GroupRoleMappingCreate, current_user=Depends(get_
 # ---------------------------------------------------------------------------
 
 @router.post("/ldap/test",
-             dependencies=[Depends(require_permission("sso.manage"))])
+             dependencies=[Depends(require_permission("sso.manage"))], response_model=Dict[str, Any])
 async def test_ldap(body: LdapTestRequest):
     result = sso_service.test_ldap_connection(
         ldap_host=body.ldap_host,
@@ -194,7 +194,7 @@ async def test_ldap(body: LdapTestRequest):
 # Public endpoints — SAML metadata, ACS callback, SSO login initiation
 # ---------------------------------------------------------------------------
 
-@router.get("/providers")
+@router.get("/providers", response_model=Dict[str, Any])
 async def list_active_providers(
     company_id: Optional[str] = None,
     company_code: Optional[str] = None,
@@ -207,7 +207,7 @@ async def list_active_providers(
     return sso_service.get_active_sso_configs(cid)
 
 
-@router.get("/saml/metadata")
+@router.get("/saml/metadata", response_model=Dict[str, Any])
 async def saml_metadata(
     company_id: Optional[str] = None,
     company_code: Optional[str] = None,
@@ -319,7 +319,7 @@ async def saml_acs(request: Request, response: Response):
     )
 
 
-@router.post("/exchange")
+@router.post("/exchange", response_model=Dict[str, Any])
 async def sso_exchange(payload: dict):
     """
     Exchange a one-time SSO ticket (issued by /saml/acs) for access & refresh
@@ -340,7 +340,7 @@ async def sso_exchange(payload: dict):
     }
 
 
-@router.post("/login")
+@router.post("/login", response_model=Dict[str, Any])
 async def sso_login(body: SsoLoginRequest, response: Response):
     """
     Initiate SSO login.

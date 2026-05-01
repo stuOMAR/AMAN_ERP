@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { MessageSquare, Phone } from 'lucide-react';
+import IntegrationKeysVault from './IntegrationKeysVault';
 
 const IntegrationSettings = ({ settings, handleSettingChange }) => {
     const { t } = useTranslation();
@@ -61,6 +62,9 @@ const IntegrationSettings = ({ settings, handleSettingChange }) => {
                     <span>{t('settings.integrations.coming_soon')}</span>
                 </div>
             </div>
+
+            {/* Integration Keys Vault */}
+            <IntegrationKeysVault />
         </div>
     );
 };

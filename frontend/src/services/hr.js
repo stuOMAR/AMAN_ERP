@@ -143,7 +143,7 @@ export const wpsAPI = {
     previewWPS: (periodId) => api.get(`/hr/wps/preview/${periodId}`),
     getSaudizationDashboard: () => api.get('/hr/saudization/dashboard'),
     getSaudizationReport: (params) => api.get('/hr/saudization/report', { params }),
-    settleEndOfService: (data) => api.post('/hr/end-of-service/settle', data),
+    settleEndOfService: (data) => api.post('/hr/end-of-service/calculate', data),
 }
 
 // Employee Self-Service (US6)

@@ -5,7 +5,7 @@ Endpoints for mobile sync, dashboard, and device registration.
 
 import logging
 from datetime import datetime, timezone
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.limiter import limiter
@@ -122,8 +123,7 @@ async def batch_sync(
     errors = 0
     results: list[SyncResultItem] = []
 
-    conn = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as conn:
         with conn.begin():
             for idx, item in enumerate(body.items):
                 try:
@@ -193,8 +193,6 @@ async def batch_sync(
                     results.append(SyncResultItem(
                         index=idx, status="error", message="حدث خطأ أثناء المزامنة",
                     ))
-    finally:
-        conn.close()
 
     log_activity(
         user_id=user_id,
@@ -219,8 +217,7 @@ async def sync_status(
     current_user=Depends(get_current_user),
 ):
     company_id = _get_company_id(current_user)
-    conn = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as conn:
         row = conn.execute(text("""
             SELECT
                 COUNT(*) FILTER (WHERE sync_status = 'pending')  AS pending,
@@ -229,8 +226,6 @@ async def sync_status(
             FROM sync_queue
             WHERE device_id = :did AND user_id = :uid
         """), {"did": device_id, "uid": current_user.id}).mappings().first()
-    finally:
-        conn.close()
 
     return SyncStatusResponse(
         device_id=device_id,
@@ -245,15 +240,14 @@ async def sync_status(
 # ---------------------------------------------------------------------------
 
 @router.post("/sync/resolve",
-             dependencies=[Depends(require_permission("mobile.sync"))])
+             dependencies=[Depends(require_permission("mobile.sync"))], response_model=Dict[str, Any])
 async def resolve_conflict(
     body: ConflictResolveRequest,
     request: Request,
     current_user=Depends(get_current_user),
 ):
     company_id = _get_company_id(current_user)
-    conn = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as conn:
         with conn.begin():
             row = conn.execute(text("""
                 SELECT id, entity_type, entity_id, payload, conflict_resolution, sync_status
@@ -289,8 +283,6 @@ async def resolve_conflict(
                     updated_at = now()
                 WHERE id = :sid
             """), {"sid": body.sync_queue_id, "res": f'"{body.resolution}"'})
-    finally:
-        conn.close()
 
     log_activity(
         user_id=current_user.id,
@@ -313,8 +305,7 @@ async def resolve_conflict(
             dependencies=[Depends(require_permission("mobile.dashboard"))])
 async def mobile_dashboard(current_user=Depends(get_current_user)):
     company_id = _get_company_id(current_user)
-    conn = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as conn:
         # Company currency settings
         currency_row = conn.execute(text("""
             SELECT setting_value
@@ -434,8 +425,6 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
             total_invoices = inv_cnt_row["cnt"] if inv_cnt_row else 0
         except Exception:
             conn.rollback()
-    finally:
-        conn.close()
 
     return DashboardResponse(
         inventory_summary=inventory_summary,
@@ -459,14 +448,13 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
 # ---------------------------------------------------------------------------
 
 @router.post("/register-device", status_code=201,
-             dependencies=[Depends(require_permission("mobile.sync"))])
+             dependencies=[Depends(require_permission("mobile.sync"))], response_model=Dict[str, Any])
 async def register_device(
     body: DeviceRegisterRequest,
     current_user=Depends(get_current_user),
 ):
     company_id = _get_company_id(current_user)
-    conn = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as conn:
         with conn.begin():
             # NOTE: push_devices table must be created via Alembic migration,
             # not via DDL here.  The migration should include:
@@ -489,8 +477,6 @@ async def register_device(
                 "platform": body.platform,
                 "fcm_token": body.fcm_token,
             })
-    finally:
-        conn.close()
 
     return {"status": "registered", "device_id": body.device_id}
 

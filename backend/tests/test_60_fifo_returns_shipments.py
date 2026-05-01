@@ -323,10 +323,16 @@ def test_handle_return_legacy_path_creates_new_layer_when_no_original_ref(
 
 
 def test_purchase_return_router_wires_handle_return():
-    """Filesystem regression: routers/purchases.py must call handle_return
+    """Filesystem regression: purchases return router must call handle_return
     with original_source_document_type='purchase_invoice' on the return path.
+
+    After T6.3 the monolithic purchases.py was split into a package — scan
+    the dedicated returns sub-router.
     """
-    path = os.path.join(ROOT, "routers", "purchases.py")
+    path = os.path.join(ROOT, "routers", "purchases", "returns.py")
+    if not os.path.exists(path):
+        # backward-compat fallback for pre-T6.3 layout
+        path = os.path.join(ROOT, "routers", "purchases.py")
     with open(path, "r", encoding="utf-8") as f:
         src = f.read()
     assert "CostingService.handle_return(" in src, (

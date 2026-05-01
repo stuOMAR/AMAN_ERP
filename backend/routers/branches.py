@@ -1,8 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
-from typing import List
+from typing import Any, Dict, List
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from schemas import BranchCreate, BranchResponse
 from utils.permissions import require_permission
 from utils.audit import log_activity
@@ -25,63 +26,61 @@ def list_branches(
             return []
         raise HTTPException(status_code=400, detail="User not associated with any company")
         
-    conn = get_db_connection(company_id)
-    try:
-        # Robust user info extraction
-        if isinstance(current_user, dict):
-            user_id = current_user.get('id')
-            user_role = current_user.get('role', 'user')
-        else:
-            user_id = getattr(current_user, 'id', None)
-            user_role = getattr(current_user, 'role', 'user')
-
-        if user_role in ['admin', 'superuser', 'system_admin']:
-            query = text("""
-                SELECT id, branch_code, branch_name, branch_name_en, address, 
-                       city, country, country_code, default_currency, phone, email, is_active, is_default, created_at
-                FROM branches
-                ORDER BY id
-            """)
-            result = conn.execute(query).fetchall()
-        else:
-            # Filter by allowed branches
-            query = text("""
-                SELECT b.id, b.branch_code, b.branch_name, b.branch_name_en, b.address, 
-                       b.city, b.country, b.country_code, b.default_currency, b.phone, b.email, b.is_active, b.is_default, b.created_at
-                FROM branches b
-                JOIN user_branches ub ON b.id = ub.branch_id
-                WHERE ub.user_id = :uid
-                ORDER BY b.id
-            """)
-            result = conn.execute(query, {"uid": user_id}).fetchall()
+    with transactional(company_id) as conn:
+        try:
+            # Robust user info extraction
+            if isinstance(current_user, dict):
+                user_id = current_user.get('id')
+                user_role = current_user.get('role', 'user')
+            else:
+                user_id = getattr(current_user, 'id', None)
+                user_role = getattr(current_user, 'role', 'user')
+    
+            if user_role in ['admin', 'superuser', 'system_admin']:
+                query = text("""
+                    SELECT id, branch_code, branch_name, branch_name_en, address, 
+                           city, country, country_code, default_currency, phone, email, is_active, is_default, created_at
+                    FROM branches
+                    ORDER BY id
+                """)
+                result = conn.execute(query).fetchall()
+            else:
+                # Filter by allowed branches
+                query = text("""
+                    SELECT b.id, b.branch_code, b.branch_name, b.branch_name_en, b.address, 
+                           b.city, b.country, b.country_code, b.default_currency, b.phone, b.email, b.is_active, b.is_default, b.created_at
+                    FROM branches b
+                    JOIN user_branches ub ON b.id = ub.branch_id
+                    WHERE ub.user_id = :uid
+                    ORDER BY b.id
+                """)
+                result = conn.execute(query, {"uid": user_id}).fetchall()
+                
+                if not result:
+                    return []
             
-            if not result:
-                return []
-        
-        branches = []
-        for row in result:
-            branches.append({
-                "id": row.id,
-                "branch_code": row.branch_code,
-                "branch_name": row.branch_name,
-                "branch_name_en": row.branch_name_en,
-                "address": row.address,
-                "city": row.city,
-                "country": row.country,
-                "country_code": getattr(row, 'country_code', None),
-                "default_currency": getattr(row, 'default_currency', None),
-                "phone": row.phone,
-                "email": row.email,
-                "is_active": row.is_active,
-                "is_default": row.is_default,
-                "created_at": row.created_at
-            })
-        return branches
-    except Exception:
-        logger.exception("Operation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-    finally:
-        conn.close()
+            branches = []
+            for row in result:
+                branches.append({
+                    "id": row.id,
+                    "branch_code": row.branch_code,
+                    "branch_name": row.branch_name,
+                    "branch_name_en": row.branch_name_en,
+                    "address": row.address,
+                    "city": row.city,
+                    "country": row.country,
+                    "country_code": getattr(row, 'country_code', None),
+                    "default_currency": getattr(row, 'default_currency', None),
+                    "phone": row.phone,
+                    "email": row.email,
+                    "is_active": row.is_active,
+                    "is_default": row.is_default,
+                    "created_at": row.created_at
+                })
+            return branches
+        except Exception:
+            logger.exception("Operation failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.post("", response_model=BranchResponse)
 def create_branch(
@@ -89,99 +88,96 @@ def create_branch(
     current_user = Depends(require_permission("admin.branches"))
 ):
     """Create a new branch"""
-    conn = get_db_connection(current_user.company_id)
-    try:
-        # Validate country_code — required for tax calculation
-        if not branch.country_code or not branch.country_code.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="Branch country_code is required for tax calculation"
-            )
-
-        # Check if this is the first branch
-        count_res = conn.execute(text("SELECT COUNT(*) FROM branches")).scalar()
-        is_first = (count_res == 0)
-        
-        # Check duplicate code
-        if branch.branch_code:
-            existing = conn.execute(
-                text("SELECT 1 FROM branches WHERE branch_code = :code"),
-                {"code": branch.branch_code}
-            ).fetchone()
-            if existing:
-                raise HTTPException(status_code=400, detail="Branch code already exists")
-        
-        query = text("""
-            INSERT INTO branches (
-                branch_code, branch_name, branch_name_en, address, 
-                city, country, country_code, default_currency, phone, email, is_active, is_default
-            ) VALUES (
-                :code, :name, :name_en, :address, 
-                :city, :country, :country_code, :default_currency, :phone, :email, :active, :is_default
-            ) RETURNING id, created_at, is_default
-        """)
-        
-        params = {
-            "code": branch.branch_code,
-            "name": branch.branch_name,
-            "name_en": branch.branch_name_en,
-            "address": branch.address,
-            "city": branch.city,
-            "country": branch.country,
-            "country_code": branch.country_code,
-            "default_currency": branch.default_currency,
-            "phone": branch.phone,
-            "email": branch.email,
-            "active": branch.is_active,
-            "is_default": is_first  # Make first branch default
-        }
-        
-        result = conn.execute(query, params).fetchone()
-        branch_id = result.id
-        
-        # 2. Link creator to the branch in user_branches
-        # Extract user_id robustly
-        if isinstance(current_user, dict):
-            user_id = current_user.get('id')
-        else:
-            user_id = getattr(current_user, 'id', None)
+    with transactional(current_user.company_id) as conn:
+        try:
+            # Validate country_code — required for tax calculation
+            if not branch.country_code or not branch.country_code.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Branch country_code is required for tax calculation"
+                )
+    
+            # Check if this is the first branch
+            count_res = conn.execute(text("SELECT COUNT(*) FROM branches")).scalar()
+            is_first = (count_res == 0)
             
-        if user_id:
-            conn.execute(
-                text("INSERT INTO user_branches (user_id, branch_id) VALUES (:uid, :bid) ON CONFLICT DO NOTHING"),
-                {"uid": user_id, "bid": branch_id}
-            )
+            # Check duplicate code
+            if branch.branch_code:
+                existing = conn.execute(
+                    text("SELECT 1 FROM branches WHERE branch_code = :code"),
+                    {"code": branch.branch_code}
+                ).fetchone()
+                if existing:
+                    raise HTTPException(status_code=400, detail="Branch code already exists")
             
-        conn.commit()
-        
-        # Audit log
-        if user_id:
-            try:
-                username = current_user.get('username', '') if isinstance(current_user, dict) else getattr(current_user, 'username', '')
-                log_activity(conn, user_id, username, "create",
-                             resource_type="branch", resource_id=str(branch_id),
-                             details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
-                             branch_id=branch_id)
-                conn.commit()
-            except Exception:
-                logger.warning("Failed to write branch create audit log")
-        
-        # Construct response
-        response_data = branch.model_dump()
-        response_data["id"] = branch_id
-        response_data["created_at"] = result.created_at
-        response_data["is_default"] = result.is_default
-        
-        return response_data
-        
-    except HTTPException:
-        raise
-    except Exception:
-        conn.rollback()
-        logger.exception("Operation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-    finally:
-        conn.close()
+            query = text("""
+                INSERT INTO branches (
+                    branch_code, branch_name, branch_name_en, address, 
+                    city, country, country_code, default_currency, phone, email, is_active, is_default
+                ) VALUES (
+                    :code, :name, :name_en, :address, 
+                    :city, :country, :country_code, :default_currency, :phone, :email, :active, :is_default
+                ) RETURNING id, created_at, is_default
+            """)
+            
+            params = {
+                "code": branch.branch_code,
+                "name": branch.branch_name,
+                "name_en": branch.branch_name_en,
+                "address": branch.address,
+                "city": branch.city,
+                "country": branch.country,
+                "country_code": branch.country_code,
+                "default_currency": branch.default_currency,
+                "phone": branch.phone,
+                "email": branch.email,
+                "active": branch.is_active,
+                "is_default": is_first  # Make first branch default
+            }
+            
+            result = conn.execute(query, params).fetchone()
+            branch_id = result.id
+            
+            # 2. Link creator to the branch in user_branches
+            # Extract user_id robustly
+            if isinstance(current_user, dict):
+                user_id = current_user.get('id')
+            else:
+                user_id = getattr(current_user, 'id', None)
+                
+            if user_id:
+                conn.execute(
+                    text("INSERT INTO user_branches (user_id, branch_id) VALUES (:uid, :bid) ON CONFLICT DO NOTHING"),
+                    {"uid": user_id, "bid": branch_id}
+                )
+                
+            
+            # Audit log
+            if user_id:
+                try:
+                    username = current_user.get('username', '') if isinstance(current_user, dict) else getattr(current_user, 'username', '')
+                    log_activity(conn, user_id, username, "create",
+                                 resource_type="branch", resource_id=str(branch_id),
+                                 details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
+                                 branch_id=branch_id)
+                    conn.commit()
+                except Exception:
+                    logger.warning("Failed to write branch create audit log")
+            
+            # Construct response
+            response_data = branch.model_dump()
+            response_data["id"] = branch_id
+            response_data["created_at"] = result.created_at
+            response_data["is_default"] = result.is_default
+            
+            return response_data
+            
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            logger.exception("Operation failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
 @router.put("/{branch_id}", response_model=BranchResponse)
 def update_branch(
@@ -190,98 +186,95 @@ def update_branch(
     current_user = Depends(require_permission("admin.branches"))
 ):
     """Update a branch"""
-    conn = get_db_connection(current_user.company_id)
-    try:
-        # Check existence
-        existing = conn.execute(
-            text("SELECT 1 FROM branches WHERE id = :id"),
-            {"id": branch_id}
-        ).fetchone()
-        
-        if not existing:
-            raise HTTPException(status_code=404, detail="Branch not found")
-
-        # Validate country_code — required for tax calculation
-        if not branch.country_code or not branch.country_code.strip():
-            raise HTTPException(
-                status_code=422,
-                detail="Branch country_code is required for tax calculation"
-            )
-
-        # Check duplicate code if changed
-        if branch.branch_code:
-            duplicate = conn.execute(
-                text("SELECT 1 FROM branches WHERE branch_code = :code AND id != :id"),
-                {"code": branch.branch_code, "id": branch_id}
-            ).fetchone()
-            if duplicate:
-                raise HTTPException(status_code=400, detail="Branch code already used by another branch")
-
-        query = text("""
-            UPDATE branches SET
-                branch_code = :code,
-                branch_name = :name,
-                branch_name_en = :name_en,
-                address = :address,
-                city = :city,
-                country = :country,
-                country_code = :country_code,
-                default_currency = :default_currency,
-                phone = :phone,
-                email = :email,
-                is_active = :active
-            WHERE id = :id
-            RETURNING id, created_at, is_default
-        """)
-        
-        params = {
-            "id": branch_id,
-            "code": branch.branch_code,
-            "name": branch.branch_name,
-            "name_en": branch.branch_name_en,
-            "address": branch.address,
-            "city": branch.city,
-            "country": branch.country,
-            "country_code": branch.country_code,
-            "default_currency": branch.default_currency,
-            "phone": branch.phone,
-            "email": branch.email,
-            "active": branch.is_active
-        }
-        
-        result = conn.execute(query, params).fetchone()
-        conn.commit()
-        
-        # Audit log
+    with transactional(current_user.company_id) as conn:
         try:
-            user_id = current_user.get('id') if isinstance(current_user, dict) else getattr(current_user, 'id', None)
-            username = current_user.get('username', '') if isinstance(current_user, dict) else getattr(current_user, 'username', '')
-            if user_id:
-                log_activity(conn, user_id, username, "update",
-                             resource_type="branch", resource_id=str(branch_id),
-                             details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
-                             branch_id=branch_id)
-                conn.commit()
+            # Check existence
+            existing = conn.execute(
+                text("SELECT 1 FROM branches WHERE id = :id"),
+                {"id": branch_id}
+            ).fetchone()
+            
+            if not existing:
+                raise HTTPException(status_code=404, detail="Branch not found")
+    
+            # Validate country_code — required for tax calculation
+            if not branch.country_code or not branch.country_code.strip():
+                raise HTTPException(
+                    status_code=422,
+                    detail="Branch country_code is required for tax calculation"
+                )
+    
+            # Check duplicate code if changed
+            if branch.branch_code:
+                duplicate = conn.execute(
+                    text("SELECT 1 FROM branches WHERE branch_code = :code AND id != :id"),
+                    {"code": branch.branch_code, "id": branch_id}
+                ).fetchone()
+                if duplicate:
+                    raise HTTPException(status_code=400, detail="Branch code already used by another branch")
+    
+            query = text("""
+                UPDATE branches SET
+                    branch_code = :code,
+                    branch_name = :name,
+                    branch_name_en = :name_en,
+                    address = :address,
+                    city = :city,
+                    country = :country,
+                    country_code = :country_code,
+                    default_currency = :default_currency,
+                    phone = :phone,
+                    email = :email,
+                    is_active = :active
+                WHERE id = :id
+                RETURNING id, created_at, is_default
+            """)
+            
+            params = {
+                "id": branch_id,
+                "code": branch.branch_code,
+                "name": branch.branch_name,
+                "name_en": branch.branch_name_en,
+                "address": branch.address,
+                "city": branch.city,
+                "country": branch.country,
+                "country_code": branch.country_code,
+                "default_currency": branch.default_currency,
+                "phone": branch.phone,
+                "email": branch.email,
+                "active": branch.is_active
+            }
+            
+            result = conn.execute(query, params).fetchone()
+            
+            # Audit log
+            try:
+                user_id = current_user.get('id') if isinstance(current_user, dict) else getattr(current_user, 'id', None)
+                username = current_user.get('username', '') if isinstance(current_user, dict) else getattr(current_user, 'username', '')
+                if user_id:
+                    log_activity(conn, user_id, username, "update",
+                                 resource_type="branch", resource_id=str(branch_id),
+                                 details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
+                                 branch_id=branch_id)
+                    conn.commit()
+            except Exception:
+                logger.warning("Failed to write branch update audit log")
+            
+            response_data = branch.model_dump()
+            response_data["id"] = result.id
+            response_data["created_at"] = result.created_at
+            response_data["is_default"] = result.is_default
+            
+            return response_data
+            
+        except HTTPException:
+            raise
         except Exception:
-            logger.warning("Failed to write branch update audit log")
-        
-        response_data = branch.model_dump()
-        response_data["id"] = result.id
-        response_data["created_at"] = result.created_at
-        response_data["is_default"] = result.is_default
-        
-        return response_data
-        
-    except HTTPException:
-        raise
-    except Exception:
-        conn.rollback()
-        logger.exception("Operation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
-    finally:
-        conn.close()
+            pass
+            logger.exception("Operation failed")
+            raise HTTPException(status_code=500, detail="Internal server error")
 
-@router.delete("/{branch_id}")
+@router.delete("/{branch_id}", response_model=Dict[str, Any])
 def delete_branch(
     branch_id: int,
     current_user = Depends(require_permission("admin.branches"))

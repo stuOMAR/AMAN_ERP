@@ -79,7 +79,7 @@ class CreateShipmentRequest(BaseModel):
 
 
 @router.post("/shipments",
-             dependencies=[Depends(require_permission("inventory.shipments_create"))])
+             dependencies=[Depends(require_permission("inventory.shipments_create"))], response_model=Dict[str, Any])
 def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -143,7 +143,7 @@ def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_curren
 
 
 @router.post("/shipments/{shipment_id}/track",
-             dependencies=[Depends(require_permission("inventory.shipments_view"))])
+             dependencies=[Depends(require_permission("inventory.shipments_view"))], response_model=Dict[str, Any])
 def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -175,7 +175,7 @@ def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
 
 
 @router.get("/shipments",
-            dependencies=[Depends(require_permission("inventory.shipments_view"))])
+            dependencies=[Depends(require_permission("inventory.shipments_view"))], response_model=List[Dict[str, Any]])
 def list_shipments(limit: int = 50, current_user=Depends(get_current_user)):
     limit = max(1, min(int(limit), 500))
     db = get_db_connection(current_user.company_id)
@@ -200,6 +200,6 @@ def list_shipments(limit: int = 50, current_user=Depends(get_current_user)):
         _close(db)
 
 
-@router.get("/carriers")
+@router.get("/carriers", response_model=Dict[str, Any])
 def list_carriers() -> List[str]:
     return sorted(_SHIP_REGISTRY.keys())

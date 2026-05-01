@@ -10,7 +10,7 @@ INV-110: Product Ledger
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -84,7 +84,7 @@ class ProductKitUpdate(BaseModel):
 
 # ==================== PRODUCT VARIANTS (INV-106) ====================
 
-@advanced_router.get("/variants")
+@advanced_router.get("/variants", response_model=Dict[str, Any])
 async def list_variants(
     product_id: Optional[int] = None,
     limit: int = Query(100, le=500),
@@ -132,7 +132,7 @@ async def list_variants(
         db.close()
 
 
-@advanced_router.post("/variants")
+@advanced_router.post("/variants", response_model=Dict[str, Any])
 async def create_variant(data: ProductVariantCreate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -167,7 +167,7 @@ async def create_variant(data: ProductVariantCreate, request: Request, current_u
         db.close()
 
 
-@advanced_router.put("/variants/{variant_id}")
+@advanced_router.put("/variants/{variant_id}", response_model=Dict[str, Any])
 async def update_variant(variant_id: int, data: ProductVariantUpdate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -198,7 +198,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
 
 # ==================== BIN LOCATIONS (INV-107) ====================
 
-@advanced_router.get("/bins")
+@advanced_router.get("/bins", response_model=Dict[str, Any])
 async def list_bins(
     warehouse_id: Optional[int] = None,
     limit: int = Query(100, le=500),
@@ -236,7 +236,7 @@ async def list_bins(
         db.close()
 
 
-@advanced_router.post("/bins")
+@advanced_router.post("/bins", response_model=Dict[str, Any])
 async def create_bin(data: BinLocationCreate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -260,7 +260,7 @@ async def create_bin(data: BinLocationCreate, request: Request, current_user: di
         db.close()
 
 
-@advanced_router.put("/bins/{bin_id}")
+@advanced_router.put("/bins/{bin_id}", response_model=Dict[str, Any])
 async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -291,7 +291,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
 
 # ==================== PRODUCT KITS (INV-108) ====================
 
-@advanced_router.get("/kits")
+@advanced_router.get("/kits", response_model=Dict[str, Any])
 async def list_kits(
     limit: int = Query(100, le=500),
     offset: int = 0,
@@ -317,7 +317,7 @@ async def list_kits(
         db.close()
 
 
-@advanced_router.get("/kits/{kit_id}")
+@advanced_router.get("/kits/{kit_id}", response_model=Dict[str, Any])
 async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -351,7 +351,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
         db.close()
 
 
-@advanced_router.post("/kits")
+@advanced_router.post("/kits", response_model=Dict[str, Any])
 async def create_kit(data: ProductKitCreate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -382,7 +382,7 @@ async def create_kit(data: ProductKitCreate, request: Request, current_user: dic
         db.close()
 
 
-@advanced_router.put("/kits/{kit_id}")
+@advanced_router.put("/kits/{kit_id}", response_model=Dict[str, Any])
 async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, current_user: dict = Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -413,7 +413,7 @@ async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, curr
 
 # ==================== COSTING POLICIES (INV-109) ====================
 
-@advanced_router.get("/costing-policies")
+@advanced_router.get("/costing-policies", response_model=Dict[str, Any])
 async def list_costing_policies():
     """Get available costing policies"""
     return {
@@ -428,7 +428,7 @@ async def list_costing_policies():
 
 # ==================== PRODUCT LEDGER (INV-110) ====================
 
-@advanced_router.get("/ledger")
+@advanced_router.get("/ledger", response_model=Dict[str, Any])
 async def get_product_ledger(
     product_id: int = Query(...),
     warehouse_id: Optional[int] = None,

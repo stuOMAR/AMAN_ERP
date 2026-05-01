@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
@@ -135,7 +135,7 @@ def get_customer_transactions(customer_id: int, current_user: dict = Depends(get
         db.close()
 
 
-@customers_router.post("/customers", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(["parties.manage", "sales.create"]))])
+@customers_router.post("/customers", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(["parties.manage", "sales.create"]))], response_model=Dict[str, Any])
 def create_customer(request: Request, customer: CustomerCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء عميل جديد"""
     db = get_db_connection(current_user.company_id)
@@ -324,7 +324,7 @@ def list_customer_groups(current_user: dict = Depends(get_current_user)):
         db.close()
 
 
-@customers_router.post("/customer-groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
+@customers_router.post("/customer-groups", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_customer_group(
     group: CustomerGroupCreate, 
     request: Request,
@@ -365,7 +365,7 @@ def create_customer_group(
         db.close()
 
 
-@customers_router.put("/customer-groups/{group_id}", dependencies=[Depends(require_permission("sales.edit"))])
+@customers_router.put("/customer-groups/{group_id}", dependencies=[Depends(require_permission("sales.edit"))], response_model=Dict[str, Any])
 def update_customer_group(
     group_id: int, 
     group: CustomerGroupCreate, 
@@ -408,7 +408,7 @@ def update_customer_group(
         db.close()
 
 
-@customers_router.delete("/customer-groups/{group_id}", dependencies=[Depends(require_permission("sales.delete"))])
+@customers_router.delete("/customer-groups/{group_id}", dependencies=[Depends(require_permission("sales.delete"))], response_model=Dict[str, Any])
 def delete_customer_group(
     group_id: int, 
     request: Request,

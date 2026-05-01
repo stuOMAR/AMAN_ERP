@@ -212,13 +212,31 @@ async def lifespan(app: FastAPI):
 
         conn.commit()
     logger.info("✅ Database connected")
-    
+
+    # T4.2 — supervised coroutine runner with exponential backoff ──────────────
+    async def run_supervised(coro_fn, *, name: str, base_delay: float = 1.0, max_delay: float = 60.0):
+        """Re-launch *coro_fn()* after failures with exponential back-off.
+        *coro_fn* must be a **callable** that returns a fresh coroutine each call."""
+        import asyncio as _asyncio
+        attempt = 0
+        while True:
+            try:
+                await coro_fn()
+            except Exception:
+                delay = min(base_delay * (2 ** attempt), max_delay)
+                attempt += 1
+                logger.exception("Background task '%s' failed (attempt %d) — retrying in %.1fs", name, attempt, delay)
+                await _asyncio.sleep(delay)
+                continue
+            # Coroutine returned normally — reset back-off
+            attempt = 0
+
     # Start Background Stats Worker
     from routers.dashboard import update_system_stats_task
     import asyncio
-    asyncio.create_task(update_system_stats_task())
+    asyncio.create_task(run_supervised(update_system_stats_task, name="system_stats"))
     logger.info("📡 System Stats Background Worker Started")
-    
+
     # SEC-201: Start token blacklist cleanup task
     async def _blacklist_cleanup_loop():
         from routers.auth import cleanup_expired_blacklist
@@ -228,8 +246,9 @@ async def lifespan(app: FastAPI):
             except Exception:
                 pass
             await asyncio.sleep(3600)  # Every hour
-    asyncio.create_task(_blacklist_cleanup_loop())
+    asyncio.create_task(run_supervised(_blacklist_cleanup_loop, name="blacklist_cleanup"))
     logger.info("🧹 Token Blacklist Cleanup Worker Started")
+
     
     # Start Report Scheduler
     # TASK-028: web process only starts the in-process scheduler when mode is
@@ -608,6 +627,18 @@ app.include_router(sms_router.router, prefix="/api")
 app.include_router(shipping_router.router, prefix="/api")
 app.include_router(governance_router.router, prefix="/api")
 
+# T4.3 — Smart Alerts router
+try:
+    from routers import smart_alerts as smart_alerts_router
+    app.include_router(smart_alerts_router.router, prefix="/api")
+    from routers import email_templates as email_templates_router
+    app.include_router(email_templates_router.router, prefix="/api")
+    # T5.3 — Integration keys + circuit breakers admin
+    from routers import integrations_admin as integrations_admin_router
+    app.include_router(integrations_admin_router.router, prefix="/api")
+except ImportError:
+    pass
+
 
 @app.get("/")
 def root():
@@ -678,3 +709,29 @@ def health_check():
 def health_check_root():
     """Alias for /api/health — used by Docker/load balancer health probes"""
     return health_check()
+
+
+# T4.1 — Scheduler health endpoint
+@app.get("/api/health/scheduler", tags=["Health"], summary="Scheduler Health", include_in_schema=True)
+def scheduler_health():
+    """فحص حالة المجدول — آخر تشغيل لكل وظيفة مع حالتها"""
+    from services.scheduler import scheduler, _job_execution_log, _SCHEDULER_TZ
+    running = scheduler.running
+    jobs = []
+    for job in scheduler.get_jobs():
+        log = _job_execution_log.get(job.id, {})
+        jobs.append({
+            "id": job.id,
+            "name": job.name,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "last_run": log.get("last_run"),
+            "last_status": log.get("status"),
+            "last_error": log.get("error"),
+        })
+    return {
+        "scheduler_running": running,
+        "timezone": _SCHEDULER_TZ,
+        "job_count": len(jobs),
+        "jobs": jobs,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }

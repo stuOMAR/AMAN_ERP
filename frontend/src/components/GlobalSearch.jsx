@@ -270,6 +270,9 @@ function useSearchablePages() {
     add('/settings/sso', 'الدخول الموحد', 'SSO Configuration', '🔑', 'Admin', 'الإدارة', 'settings.view', null, ['sso', 'دخول موحد', 'SAML', 'OAuth'])
     add('/settings/sso/new', 'إعداد SSO جديد', 'New SSO Configuration', '➕', 'Admin', 'الإدارة', 'settings.manage', null, ['sso', 'create', 'إنشاء'])
     add('/settings/print-templates', 'قوالب الطباعة', 'Print Templates', '🖨️', 'Admin', 'الإدارة', 'settings.view', null, ['print', 'طباعة', 'قالب', 'فاتورة'])
+    add('/settings/smart-alerts', 'التنبيهات الذكية', 'Smart Alerts', '🔔', 'Admin', 'الإدارة', 'settings.view', null, ['alerts', 'تنبيهات', 'إشعارات', 'smart'])
+    add('/settings/email-templates', 'قوالب البريد الإلكتروني', 'Email Templates', '✉️', 'Admin', 'الإدارة', 'settings.view', null, ['email', 'بريد', 'قالب', 'template'])
+    add('/settings/integration-dlq', 'قوائم الفشل - DLQ', 'Integration DLQ', '⚠️', 'Admin', 'الإدارة', 'admin', null, ['dlq', 'retry', 'إعادة', 'فشل', 'integration'])
     add('/admin/company-profile', 'ملف الشركة', 'Company Profile', '🏢', 'Admin', 'الإدارة', null, null, ['company', 'شركة', 'ملف'])
     add('/profile', 'الملف الشخصي', 'My Profile', '👤', 'General', 'عام', null, null, ['profile', 'ملف شخصي', 'حساب'])
 

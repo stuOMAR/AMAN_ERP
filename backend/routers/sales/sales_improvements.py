@@ -8,7 +8,7 @@ Phase 8.12 Sales Improvements:
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -29,7 +29,7 @@ sales_improvements_router = APIRouter()
 # SALES-001: Quote → Order Conversion
 # =====================================================
 
-@sales_improvements_router.post("/quotations/{sq_id}/convert", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.post("/quotations/{sq_id}/convert", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def convert_quotation_to_order(sq_id: int, current_user=Depends(get_current_user)):
     """Auto-convert a sales quotation into a sales order."""
     db = get_db_connection(current_user.company_id)
@@ -102,7 +102,7 @@ def convert_quotation_to_order(sq_id: int, current_user=Depends(get_current_user
 # SALES-002: Commission Tracking
 # =====================================================
 
-@sales_improvements_router.get("/commissions/rules", dependencies=[Depends(require_permission("sales.view"))])
+@sales_improvements_router.get("/commissions/rules", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def list_commission_rules(current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -112,7 +112,7 @@ def list_commission_rules(current_user=Depends(get_current_user)):
         db.close()
 
 
-@sales_improvements_router.post("/commissions/rules", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.post("/commissions/rules", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_commission_rule(data: dict, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -138,7 +138,7 @@ def create_commission_rule(data: dict, current_user=Depends(get_current_user)):
         db.close()
 
 
-@sales_improvements_router.get("/commissions", dependencies=[Depends(require_permission("sales.view"))])
+@sales_improvements_router.get("/commissions", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def list_commissions(
     salesperson_id: Optional[int] = None,
     status: Optional[str] = None,
@@ -169,7 +169,7 @@ def list_commissions(
         db.close()
 
 
-@sales_improvements_router.post("/commissions/calculate", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.post("/commissions/calculate", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def calculate_commission(data: dict, current_user=Depends(get_current_user)):
     """Calculate commission entry. If invoice_id provided, for that invoice only. Otherwise bulk-calculate all unprocessed invoices."""
     db = get_db_connection(current_user.company_id)
@@ -277,7 +277,7 @@ def calculate_commission(data: dict, current_user=Depends(get_current_user)):
         db.close()
 
 
-@sales_improvements_router.get("/commissions/summary", dependencies=[Depends(require_permission("sales.view"))])
+@sales_improvements_router.get("/commissions/summary", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def commission_summary(current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -297,7 +297,7 @@ def commission_summary(current_user=Depends(get_current_user)):
         db.close()
 
 
-@sales_improvements_router.post("/commissions/pay", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.post("/commissions/pay", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def pay_commission(data: dict, current_user=Depends(get_current_user)):
     """
     صرف العمولات وإنشاء قيد محاسبي.
@@ -390,7 +390,7 @@ def pay_commission(data: dict, current_user=Depends(get_current_user)):
 # SALES-003: Partial Invoicing
 # =====================================================
 
-@sales_improvements_router.post("/orders/{order_id}/partial-invoice", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.post("/orders/{order_id}/partial-invoice", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_current_user)):
     """Create a partial invoice from a sales order."""
     db = get_db_connection(current_user.company_id)
@@ -465,7 +465,7 @@ def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_c
 # SALES-004: Smart Credit Limit
 # =====================================================
 
-@sales_improvements_router.get("/customers/{party_id}/credit-status", dependencies=[Depends(require_permission("sales.view"))])
+@sales_improvements_router.get("/customers/{party_id}/credit-status", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -487,7 +487,7 @@ def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
         db.close()
 
 
-@sales_improvements_router.put("/customers/{party_id}/credit-limit", dependencies=[Depends(require_permission("sales.create"))])
+@sales_improvements_router.put("/customers/{party_id}/credit-limit", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def update_credit_limit(party_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
@@ -510,7 +510,7 @@ def update_credit_limit(party_id: int, data: dict, request: Request, current_use
         db.close()
 
 
-@sales_improvements_router.post("/credit-check", dependencies=[Depends(require_permission("sales.view"))])
+@sales_improvements_router.post("/credit-check", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def check_credit(data: dict, current_user=Depends(get_current_user)):
     """Check if a customer can place an order of given amount."""
     db = get_db_connection(current_user.company_id)

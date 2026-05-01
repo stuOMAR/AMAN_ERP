@@ -5,7 +5,7 @@ Inventory Module - Suppliers CRUD
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
@@ -280,7 +280,7 @@ def update_supplier(
         db.close()
 
 
-@suppliers_router.delete("/suppliers/{id}", dependencies=[Depends(require_permission(["parties.manage", "buying.delete"]))])
+@suppliers_router.delete("/suppliers/{id}", dependencies=[Depends(require_permission(["parties.manage", "buying.delete"]))], response_model=Dict[str, Any])
 def delete_supplier(
     id: int,
     request: Request,

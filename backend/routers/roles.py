@@ -6,11 +6,12 @@ API endpoints for managing roles and permissions.
 from fastapi import APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional, List, Any
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
+from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.tenant_isolation import resolve_target_company_id
 from schemas.roles import RoleCreate, RoleUpdate
@@ -586,7 +587,7 @@ def list_permission_sections(current_user: UserResponse = Depends(get_current_us
     return PERMISSION_SECTIONS
 
 
-@router.post("/init-defaults", dependencies=[Depends(require_permission("admin.roles"))])
+@router.post("/init-defaults", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
 def init_default_roles(
     company_id: Optional[str] = None,
     current_user: Any = Depends(get_current_user)
@@ -668,8 +669,7 @@ def list_roles(
     if not target_company_id:
         return []
 
-    db = get_db_connection(target_company_id)
-    try:
+    with transactional(target_company_id) as db:
         result = db.execute(text("""
             SELECT id, role_name, role_name_ar, description, permissions, 
                    is_system_role, created_at
@@ -690,8 +690,6 @@ def list_roles(
             })
         
         return roles
-    finally:
-        db.close()
 
 
 @router.get("/{role_id}", response_model=dict, dependencies=[Depends(require_permission("admin.roles"))])
@@ -705,8 +703,7 @@ def get_role(
     if not target_company_id:
         raise HTTPException(status_code=400, detail="Company ID missing")
 
-    db = get_db_connection(target_company_id)
-    try:
+    with transactional(target_company_id) as db:
         row = db.execute(text("""
             SELECT id, role_name, role_name_ar, description, permissions, 
                    is_system_role, created_at
@@ -725,11 +722,9 @@ def get_role(
             "is_system_role": row.is_system_role,
             "created_at": row.created_at.isoformat() if row.created_at else None
         }
-    finally:
-        db.close()
 
 
-@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("admin.roles"))])
+@router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
 def create_role(
     role: RoleCreate, 
     company_id: Optional[str] = None,
@@ -779,7 +774,7 @@ def create_role(
         db.close()
 
 
-@router.put("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))])
+@router.put("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
 def update_role(
     role_id: int, 
     role: RoleUpdate, 
@@ -844,7 +839,7 @@ def update_role(
         db.close()
 
 
-@router.delete("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))])
+@router.delete("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
 def delete_role(
     role_id: int, 
     company_id: Optional[str] = None,

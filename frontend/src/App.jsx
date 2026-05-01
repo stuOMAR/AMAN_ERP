@@ -377,6 +377,15 @@ const WebhooksPage = React.lazy(() => import('./pages/Settings/Webhooks'))
 
 // Print Templates
 const PrintTemplates = React.lazy(() => import('./pages/Settings/PrintTemplates'))
+
+// Smart Alerts (T4.3)
+const SmartAlerts = React.lazy(() => import('./pages/Settings/SmartAlerts'))
+
+// Email Templates (T4.11)
+const EmailTemplates = React.lazy(() => import('./pages/Settings/EmailTemplates'))
+
+// Integration Retry Queues & DLQ (T5.4)
+const IntegrationDLQ = React.lazy(() => import('./pages/Settings/IntegrationDLQ'))
 const ReportCenter = React.lazy(() => import('./pages/Reports/ReportCenter'))
 const ScheduledReports = React.lazy(() => import('./pages/Reports/ScheduledReports'))
 const ReportBuilder = React.lazy(() => import('./pages/Reports/ReportBuilder'))
@@ -907,6 +916,9 @@ function App() {
                 <Route path="/settings/api-keys" element={<PrivateRoute permission="settings.view"><ApiKeys /></PrivateRoute>} />
                 <Route path="/settings/webhooks" element={<PrivateRoute permission="settings.view"><WebhooksPage /></PrivateRoute>} />
                 <Route path="/settings/print-templates" element={<PrivateRoute permission="settings.view"><PrintTemplates /></PrivateRoute>} />
+                <Route path="/settings/smart-alerts" element={<PrivateRoute permission="settings.view"><SmartAlerts /></PrivateRoute>} />
+                <Route path="/settings/email-templates" element={<PrivateRoute permission="settings.view"><EmailTemplates /></PrivateRoute>} />
+                <Route path="/settings/integration-dlq" element={<PrivateRoute permission="admin"><IntegrationDLQ /></PrivateRoute>} />
 
                 {/* SSO Configuration */}
                 <Route path="/settings/sso" element={<PrivateRoute permission="settings.view"><SsoConfigList /></PrivateRoute>} />

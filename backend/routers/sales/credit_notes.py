@@ -11,7 +11,7 @@ Debit Note (إشعار مدين): Increases customer balance (e.g., undercharge 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
@@ -41,7 +41,7 @@ def _dec(v) -> Decimal:
 
 # ==================== CREDIT NOTES (إشعار دائن) ====================
 
-@credit_notes_router.get("/credit-notes", dependencies=[Depends(require_permission("sales.view"))])
+@credit_notes_router.get("/credit-notes", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def list_sales_credit_notes(
     party_id: Optional[int] = None,
     status_filter: Optional[str] = None,
@@ -110,7 +110,7 @@ def list_sales_credit_notes(
         db.close()
 
 
-@credit_notes_router.get("/credit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))])
+@credit_notes_router.get("/credit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_sales_credit_note(note_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل إشعار دائن"""
     db = get_db_connection(current_user.company_id)
@@ -150,7 +150,7 @@ def get_sales_credit_note(note_id: int, current_user: dict = Depends(get_current
 
 
 @credit_notes_router.post("/credit-notes", status_code=status.HTTP_201_CREATED,
-                          dependencies=[Depends(require_sensitive_permission("sales.manage_credit_notes"))])
+                          dependencies=[Depends(require_sensitive_permission("sales.manage_credit_notes"))], response_model=Dict[str, Any])
 def create_sales_credit_note(
     request: Request,
     data: dict = Body(...),
@@ -378,7 +378,7 @@ def create_sales_credit_note(
 
 # ==================== DEBIT NOTES (إشعار مدين) ====================
 
-@credit_notes_router.get("/debit-notes", dependencies=[Depends(require_permission("sales.view"))])
+@credit_notes_router.get("/debit-notes", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def list_sales_debit_notes(
     party_id: Optional[int] = None,
     status_filter: Optional[str] = None,
@@ -447,7 +447,7 @@ def list_sales_debit_notes(
         db.close()
 
 
-@credit_notes_router.get("/debit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))])
+@credit_notes_router.get("/debit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_sales_debit_note(note_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل إشعار مدين"""
     db = get_db_connection(current_user.company_id)
@@ -487,7 +487,7 @@ def get_sales_debit_note(note_id: int, current_user: dict = Depends(get_current_
 
 
 @credit_notes_router.post("/debit-notes", status_code=status.HTTP_201_CREATED,
-                          dependencies=[Depends(require_sensitive_permission("sales.manage_credit_notes"))])
+                          dependencies=[Depends(require_sensitive_permission("sales.manage_credit_notes"))], response_model=Dict[str, Any])
 def create_sales_debit_note(
     request: Request,
     data: dict = Body(...),

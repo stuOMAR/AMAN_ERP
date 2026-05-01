@@ -264,6 +264,38 @@ function InvoiceDetails() {
                                 </span>
                             </div>
                         )}
+                        {/* T1.5c — ZATCA Clearance Status */}
+                        {invoice.zatca_clearance_status && (
+                            <div style={{ marginTop: '6px' }}>
+                                <span
+                                    className="badge"
+                                    style={{
+                                        background:
+                                            invoice.zatca_clearance_status === 'cleared' ? '#d1fae5' :
+                                            invoice.zatca_clearance_status === 'rejected' ? '#fee2e2' :
+                                            '#fef3c7',
+                                        color:
+                                            invoice.zatca_clearance_status === 'cleared' ? '#065f46' :
+                                            invoice.zatca_clearance_status === 'rejected' ? '#991b1b' :
+                                            '#92400e',
+                                        padding: '4px 10px',
+                                        borderRadius: '6px',
+                                        fontSize: '12px',
+                                    }}
+                                    title={invoice.zatca_clearance_message || ''}
+                                >
+                                    {invoice.zatca_clearance_status === 'cleared' ? '✓ تمت المقاصة' :
+                                     invoice.zatca_clearance_status === 'rejected' ? '✗ مرفوضة' :
+                                     invoice.zatca_clearance_status === 'pending_clearance' ? '⏳ بانتظار المقاصة' :
+                                     invoice.zatca_clearance_status}
+                                </span>
+                                {invoice.zatca_cleared_at && (
+                                    <small className="text-muted ms-2" style={{ fontSize: '11px' }}>
+                                        {new Date(invoice.zatca_cleared_at).toLocaleString('ar')}
+                                    </small>
+                                )}
+                            </div>
+                        )}
                     </div>
                 )}
 

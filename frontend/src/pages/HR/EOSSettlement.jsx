@@ -23,7 +23,10 @@ function EOSSettlement() {
         if (!selectedEmp) return
         setLoading(true)
         try {
-            const res = await wpsAPI.settleEndOfService({ employee_id: selectedEmp, reason })
+            const res = await wpsAPI.settleEndOfService({
+                employee_id: Number(selectedEmp),
+                termination_reason: reason,
+            })
             setResult(res.data)
             toastEmitter.emit(t('eos.settled_success'), 'success')
         } catch (err) {
@@ -77,21 +80,30 @@ function EOSSettlement() {
                     <h3 className="card-title mb-3">{t('eos.settlement_result')}</h3>
                     <div className="grid grid-2" style={{ gap: 16 }}>
                         <div className="detail-grid">
-                            <div><strong>{t('eos.years_of_service')}:</strong> {result.years_of_service}</div>
-                            <div><strong>{t('eos.last_salary')}:</strong> {formatNumber(result.last_salary)} {currency}</div>
-                            <div><strong>{t('eos.reason')}:</strong> {t(`eos.${result.reason}`, result.reason)}</div>
+                            <div><strong>{t('eos.years_of_service')}:</strong> {result.service_years_display || result.service_years}</div>
+                            <div><strong>{t('common.employee')}:</strong> {result.employee_name}</div>
+                            <div><strong>{t('eos.reason')}:</strong> {t(`eos.${result.termination_reason}`, result.termination_reason)}</div>
+                            <div><strong>{t('eos.join_date')}:</strong> {result.join_date}</div>
+                            <div><strong>{t('eos.termination_date')}:</strong> {result.termination_date}</div>
                         </div>
                         <div className="detail-grid">
-                            <div><strong>{t('eos.gratuity')}:</strong> {formatNumber(result.gratuity_amount)} {currency}</div>
-                            <div><strong>{t('eos.vacation_balance')}:</strong> {formatNumber(result.vacation_balance || 0)} {currency}</div>
-                            <div><strong>{t('eos.pending_salary')}:</strong> {formatNumber(result.pending_salary || 0)} {currency}</div>
+                            <div><strong>{t('eos.base_salary')}:</strong> {formatNumber(result.base_salary)} {currency}</div>
+                            <div><strong>{t('eos.total_salary_used')}:</strong> {formatNumber(result.total_salary_used)} {currency}</div>
+                            <div><strong>{t('eos.full_gratuity')}:</strong> {formatNumber(result.full_gratuity)} {currency}</div>
+                            {Number(result.unpaid_leave_days) > 0 && (
+                                <div className="text-warning">
+                                    <strong>{t('eos.unpaid_leave_deduction')}:</strong> −{formatNumber(result.unpaid_leave_deduction)} {currency}
+                                    <span className="text-muted text-xs ms-1">({result.unpaid_leave_days} {t('eos.days')})</span>
+                                </div>
+                            )}
                         </div>
                     </div>
                     <div className="mt-4 p-3 bg-light rounded text-center">
-                        <div className="text-muted">{t('eos.total_settlement')}</div>
+                        <div className="text-muted">{t('eos.final_gratuity')}</div>
                         <div className="text-2xl font-bold text-primary">
-                            {formatNumber(result.total_settlement)} {currency}
+                            {formatNumber(result.final_gratuity)} {currency}
                         </div>
+                        {result.notes && <div className="text-xs text-muted mt-1">{result.notes}</div>}
                     </div>
                 </div>
             )}

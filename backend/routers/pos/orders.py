@@ -1,0 +1,899 @@
+"""pos sub-router — split from monolithic pos.py (T6.3).
+
+Mounted under the parent router via pos/__init__.py.
+"""
+from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.i18n import http_error
+from sqlalchemy.orm import Session
+from sqlalchemy import text
+from typing import Any, Dict, List, Optional
+from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
+import logging
+from database import get_company_db
+from routers.auth import get_current_user
+from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.fiscal_lock import check_fiscal_period_open
+from utils.audit import log_activity
+from schemas import UserResponse
+from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
+from services.gl_service import create_journal_entry as gl_create_journal_entry
+
+logger = logging.getLogger(__name__)
+
+_D2 = Decimal('0.01')
+_D4 = Decimal('0.0001')
+def _dec(v) -> Decimal:
+    return Decimal(str(v)) if v is not None else Decimal('0')
+
+def get_db(current_user: UserResponse = Depends(get_current_user)):
+    yield from get_company_db(current_user.company_id)
+
+router = APIRouter()
+
+from .core import _D2, _D4, _dec, get_db
+
+@router.post("/orders", response_model=OrderResponse, dependencies=[Depends(require_permission("pos.create"))])
+def create_order(
+    order_in: OrderCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    # Get base currency
+    from utils.accounting import get_base_currency
+    base_currency = get_base_currency(db)
+    
+    # UOM Validation: Discrete units must have integer quantities
+    from utils.quantity_validation import validate_quantity_for_product
+    for item in order_in.items:
+        validate_quantity_for_product(db, item.product_id, item.quantity)
+
+    # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
+    # produces the same numbers as routers/sales/invoices for the same
+    # inputs. Per-line OrderLineCreate.discount_amount is an *absolute*
+    # currency amount, while compute_line_amounts expects a percentage —
+    # convert per line so the unified helper sees consistent semantics.
+    from utils.accounting import compute_invoice_totals, compute_line_amounts
+
+    def _line_discount_pct(qty, unit_price, disc_amt) -> Decimal:
+        gross = (_dec(qty) * _dec(unit_price)).quantize(_D2, ROUND_HALF_UP)
+        if gross <= 0:
+            return Decimal("0")
+        amt = _dec(disc_amt)
+        if amt <= 0:
+            return Decimal("0")
+        if amt > gross:
+            amt = gross
+        return (amt * Decimal("100") / gross).quantize(Decimal("0.000001"), ROUND_HALF_UP)
+
+    line_dicts = [
+        {
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "tax_rate": item.tax_rate,
+            "discount": _line_discount_pct(item.quantity, item.unit_price, item.discount_amount),
+        }
+        for item in order_in.items
+    ]
+
+    # T3.10: resolve backend-side promotion/coupon. Either coupon_code or
+    # promotion_id may be provided; server validates and converts the
+    # promotion into a header discount percentage so the unified ZATCA
+    # rule (proportional tax reduction) applies — exactly like
+    # routers/sales/invoices uses header_discount_pct.
+    promotion_row = None
+    if order_in.promotion_id:
+        promotion_row = db.execute(text("""
+            SELECT id, promotion_type, value, coupon_code, min_order_amount
+            FROM pos_promotions
+            WHERE id = :id AND is_active = TRUE
+              AND (start_date IS NULL OR start_date <= NOW())
+              AND (end_date   IS NULL OR end_date   >  NOW())
+        """), {"id": order_in.promotion_id}).fetchone()
+        if promotion_row is None:
+            raise HTTPException(status_code=400, detail="العرض الترويجي غير صالح أو منتهي الصلاحية")
+    elif order_in.coupon_code:
+        promotion_row = db.execute(text("""
+            SELECT id, promotion_type, value, coupon_code, min_order_amount
+            FROM pos_promotions
+            WHERE coupon_code = :code AND is_active = TRUE
+              AND (start_date IS NULL OR start_date <= NOW())
+              AND (end_date   IS NULL OR end_date   >  NOW())
+        """), {"code": order_in.coupon_code.strip()}).fetchone()
+        if promotion_row is None:
+            raise HTTPException(status_code=400, detail="كود الكوبون غير صالح أو منتهي الصلاحية")
+
+    # Pre-compute the gross subtotal (qty*price summed) to translate any
+    # absolute header discount into a percentage and to enforce
+    # min_order_amount on promotions.
+    gross_subtotal = sum(
+        (_dec(it.quantity) * _dec(it.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        for it in order_in.items
+    )
+
+    header_discount_pct = Decimal("0")
+    if promotion_row is not None:
+        min_oa = _dec(promotion_row.min_order_amount or 0)
+        if min_oa > 0 and gross_subtotal < min_oa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"الحد الأدنى لتطبيق العرض هو {min_oa:.2f}",
+            )
+        ptype = (promotion_row.promotion_type or "percentage").lower()
+        pvalue = _dec(promotion_row.value or 0)
+        if ptype == "percentage":
+            header_discount_pct = pvalue
+        elif ptype in ("amount", "fixed", "fixed_amount"):
+            if gross_subtotal > 0:
+                header_discount_pct = (pvalue * Decimal("100") / gross_subtotal)
+        # Other promo shapes (BOGO etc.) are not supported here yet.
+    elif _dec(order_in.discount_amount) > 0 and gross_subtotal > 0:
+        # Manual header discount: treat the absolute amount as the
+        # equivalent percentage so tax is reduced proportionally
+        # (ZATCA), matching routers/sales/invoices.
+        header_discount_pct = (
+            _dec(order_in.discount_amount) * Decimal("100") / gross_subtotal
+        )
+
+    if header_discount_pct < 0:
+        header_discount_pct = Decimal("0")
+    if header_discount_pct > Decimal("100"):
+        header_discount_pct = Decimal("100")
+
+    _totals = compute_invoice_totals(line_dicts, header_discount_pct=header_discount_pct)
+    subtotal = _totals["subtotal"] - _totals["total_discount"]  # net taxable base after all discounts
+    tax_total = _totals["total_tax"]
+    total = _totals["grand_total"]
+    effective_discount_amount = _totals["total_discount"].quantize(_D2, ROUND_HALF_UP)
+
+    # FISCAL-LOCK: Reject if accounting period is closed
+    check_fiscal_period_open(db, datetime.now().date())
+    
+    # T3.10: total already includes the header discount via
+    # compute_invoice_totals(header_discount_pct=...) — do NOT subtract
+    # order_in.discount_amount again here, that would double-count it
+    # and break the POS == sales-invoice equivalence.
+    
+    # Validate branch and warehouse access
+    if order_in.branch_id:
+        validate_branch_access(current_user, order_in.branch_id)
+    
+    if order_in.warehouse_id:
+        wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": order_in.warehouse_id}).scalar()
+        if wh_branch:
+             validate_branch_access(current_user, wh_branch)
+
+    # Validate payments cover total for paid orders
+    if order_in.status == 'paid':
+        total_payments = sum(_dec(p.amount) for p in order_in.payments)
+        if total_payments < total:
+            if len(order_in.payments) == 1 and abs(total_payments - total) < _D2:
+                # Auto-adjust only for rounding differences
+                order_in.payments[0].amount = total
+            elif total_payments < total:
+                raise HTTPException(status_code=400, detail=f"المبلغ المدفوع ({total_payments:.2f}) أقل من إجمالي الطلب ({total:.2f})")
+
+    # Fetch session info for branch_id if not provided
+    pos_session = db.execute(text("SELECT branch_id, warehouse_id, treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order_in.session_id}).fetchone()
+    branch_id = order_in.branch_id or (pos_session.branch_id if pos_session else None)
+    warehouse_id = order_in.warehouse_id or (pos_session.warehouse_id if pos_session else None)
+    treasury_id = pos_session.treasury_account_id if pos_session else None
+
+    import uuid
+    order_number = f"POS-{uuid.uuid4().hex[:8].upper()}"
+    
+    # 1. Create Order
+    total_cogs = Decimal('0')
+    result = db.execute(text("""
+        INSERT INTO pos_orders (
+            order_number, session_id, customer_id, walk_in_customer_name, 
+            warehouse_id, branch_id, status, subtotal, tax_amount, 
+            discount_amount, total_amount, paid_amount, note, created_by
+        ) VALUES (
+            :num, :sess, :cust, :walkin, :wh, :branch, :status, :subtotal, :tax,
+            :disc, :total, :paid, :note, :uid
+        ) RETURNING id
+    """), {
+        "num": order_number,
+        "sess": order_in.session_id,
+        "cust": order_in.customer_id,
+        "walkin": order_in.walk_in_customer_name,
+        "wh": warehouse_id,
+        "branch": branch_id,
+        "status": order_in.status,
+        "subtotal": subtotal,
+        "tax": tax_total,
+        "disc": effective_discount_amount,
+        "total": total,
+        "paid": _dec(order_in.paid_amount).quantize(_D2, ROUND_HALF_UP),
+        "note": order_in.note,
+        "uid": current_user.id
+    }).fetchone()
+    
+    order_id = result.id
+    
+    # 2. Create Items
+    for item in order_in.items:
+        # Fetch product details for the record
+        prod_info = db.execute(text("SELECT product_name, product_code, barcode FROM products WHERE id = :id"), {"id": item.product_id}).fetchone()
+        
+        item_subtotal = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        # T3.10: pass per-line discount as a *percentage* (already
+        # converted from item.discount_amount) so the helper applies
+        # discount before tax — matching routers/sales/invoices.
+        _line_disc_pct = _line_discount_pct(item.quantity, item.unit_price, item.discount_amount)
+        _la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, _line_disc_pct)
+        tax_amount = _la["tax_amount"]
+        item_total = _la["line_total"]
+
+        db.execute(text("""
+            INSERT INTO pos_order_lines (
+                order_id, product_id, description,
+                quantity, original_price, unit_price,
+                tax_rate, tax_amount, subtotal, total,
+                warehouse_id
+            ) VALUES (
+                :oid, :pid, :desc,
+                :qty, :orig, :price,
+                :tax_r, :tax_a, :sub, :tot,
+                :wh
+            )
+        """), {
+            "oid": order_id,
+            "pid": item.product_id,
+            "desc": f"{prod_info[0]} ({prod_info[1]})" if prod_info else "Unknown",
+            "qty": item.quantity,
+            "orig": _dec(item.unit_price).quantize(_D2, ROUND_HALF_UP),
+            "price": _dec(item.unit_price).quantize(_D2, ROUND_HALF_UP),
+            "tax_r": _dec(item.tax_rate),
+            "tax_a": tax_amount,
+            "sub": item_subtotal,
+            "tot": item_total,
+            "wh": warehouse_id
+        })
+        
+        # 3. Update Inventory if Paid
+        if order_in.status == 'paid':
+            # CONC-FIX: Lock inventory row to prevent overselling under concurrent POS load
+            current_stock = db.execute(text("""
+                SELECT COALESCE(quantity, 0) as qty FROM inventory
+                WHERE product_id = :pid AND warehouse_id = :wh
+                FOR UPDATE
+            """), {"pid": item.product_id, "wh": warehouse_id}).fetchone()
+            avail_qty = _dec(current_stock.qty) if current_stock else Decimal('0')
+            if avail_qty < _dec(item.quantity):
+                prod_name = prod_info[0] if prod_info else str(item.product_id)
+                raise HTTPException(status_code=400, detail=f"المخزون غير كافٍ للمنتج {prod_name}. المتوفر: {avail_qty:.0f}, المطلوب: {item.quantity}")
+
+            # Fetch cost price for COGS (FIFO/LIFO or WAC)
+            try:
+                from services.costing_service import CostingService
+                method = CostingService._get_product_costing_method(db, item.product_id, warehouse_id)
+                if method in ("fifo", "lifo"):
+                    item_cogs = CostingService.consume_layers(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=warehouse_id,
+                        quantity=item.quantity,
+                        sale_document_type="pos_order",
+                        sale_document_id=order_id,
+                        costing_method=method,
+                    )
+                    cost_price = (item_cogs / _dec(item.quantity)).quantize(_D4, ROUND_HALF_UP) if item.quantity else _dec(0)
+                    total_cogs += _dec(item_cogs).quantize(_D2, ROUND_HALF_UP)
+                else:
+                    cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": item.product_id}).scalar() or 0)
+                    total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
+            except Exception:
+                cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": item.product_id}).scalar() or 0)
+                total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
+
+            db.execute(text("""
+                UPDATE inventory 
+                SET quantity = quantity - :qty 
+                WHERE product_id = :pid AND warehouse_id = :wh
+            """), {
+                "qty": item.quantity,
+                "pid": item.product_id,
+                "wh": warehouse_id
+            })
+
+            # Log Inventory Transaction
+            db.execute(text("""
+                INSERT INTO inventory_transactions (
+                    product_id, warehouse_id, transaction_type, 
+                    reference_type, reference_id, reference_document,
+                    quantity, unit_cost, total_cost, created_by
+                ) VALUES (
+                    :pid, :wh, 'sales', 'pos_order', :order_id, :order_num,
+                    :qty, :cost, :total_cost, :user
+                )
+            """), {
+                "pid": item.product_id,
+                "wh": warehouse_id,
+                "order_id": order_id,
+                "order_num": order_number,
+                "qty": -item.quantity,
+                "cost": cost_price,
+                "total_cost": (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP),
+                "user": current_user.id
+            })
+            
+    # 4. Create Payments
+    for payment in order_in.payments:
+        db.execute(text("""
+            INSERT INTO pos_payments (order_id, session_id, payment_method, amount, reference_number)
+            VALUES (:oid, :sess, :meth, :amt, :ref)
+        """), {
+            "oid": order_id,
+            "sess": order_in.session_id,
+            "meth": payment.method,
+            "amt": payment.amount,
+            "ref": payment.reference
+        })
+        
+    # 5. Update Session Totals & Accounting
+    if order_in.status == 'paid':
+        # Update gross sales
+        db.execute(text("""
+            UPDATE pos_sessions
+            SET total_sales = total_sales + :amount
+            WHERE id = :id
+        """), {
+            "amount": total,
+            "id": order_in.session_id
+        })
+
+        # --- Automated Accounting (GL Entries) ---
+        # GL-FIX: Use configured account mappings with fallback to account_code lookup
+        from utils.accounting import get_mapped_account_id
+
+        def get_acc_id(code):
+             return db.execute(text("SELECT id FROM accounts WHERE account_code = :code"), {"code": code}).scalar()
+
+        acc_sales = get_mapped_account_id(db, "acc_map_sales") or get_acc_id("SALE-G")
+        acc_vat_out = get_mapped_account_id(db, "acc_map_vat_output") or get_acc_id("VAT-OUT")
+
+        # DYNAMIC TREASURY MAPPING
+        acc_cash = None
+        if treasury_id:
+             acc_cash = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).scalar()
+        if not acc_cash:
+             acc_cash = get_mapped_account_id(db, "acc_map_cash_main") or get_acc_id("BOX")
+
+        acc_bank = get_mapped_account_id(db, "acc_map_bank_main") or get_acc_id("BNK")
+        acc_cogs = get_mapped_account_id(db, "acc_map_cogs") or get_acc_id("CGS")
+        acc_inventory = get_mapped_account_id(db, "acc_map_inventory") or get_acc_id("INV")
+
+        je_lines = []
+        # A. Debit: Payments (Cash/Bank)
+        for pmt in order_in.payments:
+            acc_id = acc_cash if pmt.method == 'cash' else acc_bank
+            if acc_id:
+                je_lines.append({
+                    "account_id": acc_id,
+                    "debit": _dec(pmt.amount).quantize(_D2, ROUND_HALF_UP),
+                    "credit": 0,
+                    "description": f"POS Payment ({pmt.method}) - {order_number}"
+                })
+
+        # B. Credit: Sales Revenue (Gross Subtotal) & Debit: Sales Discount (if any)
+        # T3.10: GL must reflect the *effective* discount (computed by
+        # compute_invoice_totals incl. coupon/promotion), not the raw
+        # request body field.
+        discount_dec = effective_discount_amount
+        if acc_sales and subtotal > 0:
+            je_lines.append({
+                "account_id": acc_sales,
+                "debit": 0,
+                "credit": subtotal,
+                "description": f"POS Gross Sales - {order_number}"
+            })
+
+        # Sales Discount (separate account for proper reporting)
+        if discount_dec > 0:
+            acc_discount = get_acc_id("DISC-SALE") or get_acc_id("SALE-DISC")
+            if acc_discount:
+                je_lines.append({
+                    "account_id": acc_discount,
+                    "debit": discount_dec,
+                    "credit": 0,
+                    "description": f"POS Discount - {order_number}"
+                })
+            else:
+                # Fallback: If no discount account, net into sales (legacy behavior)
+                # Adjust the sales credit we just added
+                if je_lines and je_lines[-1]["account_id"] == acc_sales:
+                    je_lines[-1]["credit"] = (subtotal - discount_dec).quantize(_D2, ROUND_HALF_UP)
+
+        # C. Credit: VAT
+        if acc_vat_out and tax_total > 0:
+            je_lines.append({
+                "account_id": acc_vat_out,
+                "debit": 0,
+                "credit": tax_total,
+                "description": f"POS Tax - {order_number}"
+            })
+
+        # D. Perpetual Inventory: COGS & Inventory Reduction
+        if total_cogs > 0:
+            total_cogs_q = total_cogs.quantize(_D2, ROUND_HALF_UP)
+            if acc_cogs:
+                je_lines.append({
+                    "account_id": acc_cogs,
+                    "debit": total_cogs_q,
+                    "credit": 0,
+                    "description": f"POS COGS - {order_number}"
+                })
+            if acc_inventory:
+                je_lines.append({
+                    "account_id": acc_inventory,
+                    "debit": 0,
+                    "credit": total_cogs_q,
+                    "description": f"POS Inventory Deduct - {order_number}"
+                })
+
+        # Create Journal Entry if accounts are mapped
+        if je_lines:
+            # Validate JE lines (balance, None accounts, negatives)
+            from utils.accounting import prepare_je_lines
+            try:
+                je_lines = prepare_je_lines(je_lines, source=f"POS-{order_number}")
+            except Exception as e:
+                logger.error(f"POS JE validation failed for {order_number}: {e}")
+                raise
+
+            import uuid
+            je_num = f"JE-POS-{order_number}"
+            # Get treasury currency
+            treasury_info = db.execute(text("SELECT currency FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).fetchone() if treasury_id else None
+            pos_currency = treasury_info[0] if treasury_info else base_currency
+
+            gl_create_journal_entry(
+                db=db,
+                company_id=current_user.company_id,
+                date=datetime.now().date(),
+                description=f"POS Order {order_number} ({pos_currency})",
+                lines=je_lines,
+                user_id=current_user.id,
+                branch_id=branch_id,
+                reference=order_number,
+                currency=pos_currency,
+                source="POS-Order",
+                source_id=order_id
+            )
+        
+        # Update individual payment method totals if you have columns for them
+        # For now, we assume total_sales covers it all, but you might want 
+        # specifically to log cash_sales and bank_sales for reconciliation.
+        
+        # 6. Update Treasury Balance — T1.3a idempotent recompute
+        if treasury_id:
+            from utils.treasury_balance import recalc_treasury_from_gl
+            recalc_treasury_from_gl(db, treasury_id)
+
+        # 7. Update Customer Balance (if customer-linked POS sale)
+        if order_in.customer_id and order_in.status == 'paid':
+            try:
+                credit_payments = sum(_dec(p.amount) for p in order_in.payments if p.method in ('credit', 'on_account'))
+                if credit_payments > 0:
+                    db.execute(text("""
+                        UPDATE parties
+                        SET current_balance = current_balance + :amt, updated_at = CURRENT_TIMESTAMP
+                        WHERE id = :pid
+                    """), {"amt": credit_payments.quantize(_D2, ROUND_HALF_UP), "pid": order_in.customer_id})
+            except Exception:
+                # SEC-T2.11: silently dropping a credit-balance UPDATE leaves the
+                # customer ledger out of sync with the GL. Surface the failure
+                # and let the outer transaction roll back instead of swallowing.
+                logger.exception("POS: failed to update party balance for credit sale")
+                db.rollback()
+                raise HTTPException(
+                    status_code=500,
+                    detail="تعذّر تحديث رصيد العميل لطلب البيع الآجل",
+                )
+
+    db.commit()
+
+    log_activity(
+        db, user_id=current_user.id, username=current_user.username,
+        action="create_pos_order", resource_type="pos_order",
+        resource_id=str(order_id),
+        details={"order_number": order_number, "total": str(total), "status": order_in.status, "branch_id": branch_id},
+        request=request, branch_id=branch_id
+    )
+
+    return OrderResponse(
+        id=order_id,
+        order_number=order_number,
+        total_amount=total,
+        status=order_in.status,
+        created_at=datetime.now()
+    )
+
+
+# --- Hold Orders ---
+
+@router.get("/orders/held", response_model=List[dict], dependencies=[Depends(require_permission("pos.view"))])
+def get_held_orders(
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get all held orders for current session"""
+    try:
+        allowed_branches = current_user.allowed_branches or []
+        if current_user.role == "admin" or not allowed_branches:
+            result = db.execute(text("""
+                SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
+                       COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
+                       (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count
+                FROM pos_orders po
+                LEFT JOIN parties c ON po.customer_id = c.id
+                WHERE po.status = 'hold'
+                ORDER BY po.created_at DESC
+            """)).fetchall()
+        else:
+            result = db.execute(text("""
+                SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
+                       COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
+                       (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count
+                FROM pos_orders po
+                LEFT JOIN parties c ON po.customer_id = c.id
+                WHERE po.status = 'hold' AND po.branch_id = ANY(:branches)
+                ORDER BY po.created_at DESC
+            """), {"branches": allowed_branches}).fetchall()
+        
+        return [dict(r._mapping) for r in result]
+    except Exception as e:
+        logger.error(f"Error fetching held orders: {str(e)}")
+        return []
+
+
+@router.post("/orders/{order_id}/resume", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
+def resume_held_order(
+    order_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Resume a held order - returns full order details"""
+    order = db.execute(text("""
+        SELECT po.*, 
+               COALESCE(c.name, po.walk_in_customer_name) as customer_name
+        FROM pos_orders po
+        LEFT JOIN parties c ON po.customer_id = c.id
+        WHERE po.id = :id AND po.status = 'hold'
+    """), {"id": order_id}).fetchone()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Held order not found")
+
+    if order.branch_id:
+        validate_branch_access(current_user, order.branch_id)
+
+    # Get order items
+    items = db.execute(text("""
+        SELECT poi.*, p.product_name as name, p.product_code as code, p.barcode
+        FROM pos_order_lines poi
+        JOIN products p ON poi.product_id = p.id
+        WHERE poi.order_id = :id
+    """), {"id": order_id}).fetchall()
+    
+    return {
+        "order": dict(order._mapping),
+        "items": [dict(i._mapping) for i in items]
+    }
+
+
+@router.delete("/orders/{order_id}/cancel-held", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
+def cancel_held_order(
+    order_id: int,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Cancel a held order"""
+    order = db.execute(text("""
+        SELECT id, branch_id, order_number FROM pos_orders 
+        WHERE id = :id AND status = 'hold'
+    """), {"id": order_id}).fetchone()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Held order not found")
+
+    if order.branch_id:
+        validate_branch_access(current_user, order.branch_id)
+
+    # Delete related records from all possible tables to avoid foreign key issues
+    db.execute(text("DELETE FROM pos_order_lines WHERE order_id = :id"), {"id": order_id})
+    db.execute(text("DELETE FROM pos_payments WHERE order_id = :id"), {"id": order_id})
+    db.execute(text("DELETE FROM pos_orders WHERE id = :id"), {"id": order_id})
+    db.commit()
+
+    log_activity(
+        db, user_id=current_user.id, username=current_user.username,
+        action="cancel_held_order", resource_type="pos_order",
+        resource_id=str(order_id),
+        details={"order_number": getattr(order, "order_number", None)},
+        request=request, branch_id=getattr(order, "branch_id", None)
+    )
+
+    return {"message": "Order cancelled successfully"}
+
+
+# --- Returns ---
+
+@router.post("/orders/{order_id}/return", dependencies=[Depends(require_permission("pos.returns"))], response_model=Dict[str, Any])
+def create_return(
+    order_id: int,
+    return_in: ReturnCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Process a return for a paid order"""
+    # Get base currency
+    from utils.accounting import get_base_currency
+    base_currency = get_base_currency(db)
+    # Verify original order exists and is paid
+    order = db.execute(text("""
+        SELECT o.id, o.order_number, o.session_id, o.warehouse_id, s.branch_id
+        FROM pos_orders o
+        JOIN pos_sessions s ON o.session_id = s.id
+        WHERE o.id = :id AND o.status = 'paid'
+    """), {"id": order_id}).fetchone()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Original order not found or not paid")
+        
+    # Validate branch access
+    if order.branch_id:
+        validate_branch_access(current_user, order.branch_id)
+    
+    total_refund = Decimal('0')
+
+    # Pre-calculate total refund to check cash sufficiency
+    for item in return_in.items:
+        orig_item_pre = db.execute(text("""
+            SELECT product_id, unit_price, quantity
+            FROM pos_order_lines WHERE id = :id AND order_id = :order_id
+        """), {"id": item.item_id, "order_id": order_id}).fetchone()
+        if orig_item_pre:
+            total_refund += (_dec(item.quantity) * _dec(orig_item_pre.unit_price)).quantize(_D2, ROUND_HALF_UP)
+
+    # Check cash sufficiency for cash refunds
+    if return_in.refund_method == 'cash' and total_refund > 0:
+        session_info = db.execute(text("""
+            SELECT s.treasury_account_id, COALESCE(ta.current_balance, 0) as cash_balance
+            FROM pos_sessions s
+            LEFT JOIN treasury_accounts ta ON s.treasury_account_id = ta.id
+            WHERE s.id = :sid
+        """), {"sid": order.session_id}).fetchone()
+        if session_info and _dec(session_info.cash_balance) < total_refund:
+            raise HTTPException(status_code=400, detail=f"رصيد الصندوق غير كافٍ للمرتجع. الرصيد الحالي: {_dec(session_info.cash_balance):.2f}, المطلوب: {total_refund:.2f}")
+
+    total_refund = Decimal('0')  # Reset for actual calculation
+    total_refund_tax = Decimal('0')  # Track VAT on returns
+    
+    for item in return_in.items:
+        # Get original item details
+        orig_item = db.execute(text("""
+            SELECT product_id, unit_price, quantity, tax_rate 
+            FROM pos_order_lines WHERE id = :id AND order_id = :order_id
+        """), {"id": item.item_id, "order_id": order_id}).fetchone()
+        
+        if not orig_item:
+            raise HTTPException(status_code=404, detail=f"Item {item.item_id} not found in order")
+        
+        if item.quantity > orig_item.quantity:
+            raise HTTPException(status_code=400, detail="Return quantity exceeds original quantity")
+        
+        refund_amount = (_dec(item.quantity) * _dec(orig_item.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        refund_tax = (refund_amount * (_dec(orig_item.tax_rate) / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
+        total_refund += refund_amount
+        total_refund_tax += refund_tax
+        
+        # Update stock (add back) - use 'inventory' table (not warehouse_stock)
+        if order.warehouse_id:
+            db.execute(text("""
+                UPDATE inventory 
+                SET quantity = quantity + :qty 
+                WHERE product_id = :pid AND warehouse_id = :wid
+            """), {
+                "qty": item.quantity,
+                "pid": orig_item.product_id,
+                "wid": order.warehouse_id
+            })
+            
+            # Log inventory transaction for return
+            cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": orig_item.product_id}).scalar() or 0)
+            db.execute(text("""
+                INSERT INTO inventory_transactions (
+                    product_id, warehouse_id, transaction_type,
+                    reference_type, reference_id,
+                    quantity, unit_cost, total_cost, created_by
+                ) VALUES (
+                    :pid, :wid, 'return_in',
+                    'pos_return', :order_id,
+                    :qty, :cost, :total_cost, :uid
+                )
+            """), {
+                "pid": orig_item.product_id,
+                "wid": order.warehouse_id,
+                "qty": item.quantity,
+                "order_id": order_id,
+                "cost": cost_price,
+                "total_cost": (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP),
+                "uid": current_user.id
+            })
+    
+    # Find active session to link this return to current cash count
+    active_session = db.execute(text("SELECT id FROM pos_sessions WHERE user_id = :uid AND status = 'opened'"), {"uid": current_user.id}).fetchone()
+    curr_session_id = active_session.id if active_session else None
+
+    # Create return record
+    return_id = db.execute(text("""
+        INSERT INTO pos_returns (
+            original_order_id, user_id, session_id, refund_amount, refund_method, notes, created_at
+        ) VALUES (:order_id, :user_id, :sess_id, :amount, :method, :notes, CURRENT_TIMESTAMP)
+        RETURNING id
+    """), {
+        "order_id": order_id,
+        "user_id": current_user.id,
+        "sess_id": curr_session_id,
+        "amount": total_refund,
+        "method": return_in.refund_method,
+        "notes": return_in.notes
+    }).scalar()
+    
+    # Insert return items
+    for item in return_in.items:
+        db.execute(text("""
+            INSERT INTO pos_return_items (return_id, original_item_id, quantity, reason)
+            VALUES (:rid, :iid, :qty, :reason)
+        """), {
+            "rid": return_id,
+            "iid": item.item_id,
+            "qty": item.quantity,
+            "reason": item.reason
+        })
+    
+    # Update session totals (subtract refund)
+    db.execute(text("""
+        UPDATE pos_sessions 
+        SET total_returns = COALESCE(total_returns, 0) + :amount 
+        WHERE id = :id
+    """), {"amount": total_refund, "id": order.session_id})
+    
+    # FISCAL-LOCK: Reject if accounting period is closed
+    check_fiscal_period_open(db, datetime.now().date())
+
+    # --- Create GL Journal Entries for Return ---
+    # GL-FIX: Use configured account mappings with fallback to account_code lookup
+    from utils.accounting import get_mapped_account_id
+
+    def get_acc_id(code):
+        return db.execute(text("SELECT id FROM accounts WHERE account_code = :code"), {"code": code}).scalar()
+
+    acc_sales = get_mapped_account_id(db, "acc_map_sales") or get_acc_id("SALE-G")
+    acc_cash = get_mapped_account_id(db, "acc_map_cash_main") or get_acc_id("BOX")
+    acc_cogs = get_mapped_account_id(db, "acc_map_cogs") or get_acc_id("CGS")
+    acc_inventory = get_mapped_account_id(db, "acc_map_inventory") or get_acc_id("INV")
+    acc_vat_out = get_mapped_account_id(db, "acc_map_vat_output") or get_acc_id("VAT-OUT")
+    
+    # Get treasury for session
+    session_treasury = db.execute(text("SELECT treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order.session_id}).fetchone()
+    if session_treasury and session_treasury.treasury_account_id:
+        acc_cash = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": session_treasury.treasury_account_id}).scalar() or acc_cash
+    
+    total_refund_with_tax = (total_refund + total_refund_tax).quantize(_D2, ROUND_HALF_UP)
+
+    if acc_sales and acc_cash:
+        je_lines = []
+        # Reverse: Debit Sales Revenue (net subtotal)
+        je_lines.append({
+            "account_id": acc_sales, "debit": total_refund, "credit": 0, "description": "POS Return Revenue Reversal"
+        })
+        # Reverse: Debit VAT Output (tax portion)
+        if total_refund_tax > 0 and acc_vat_out:
+            je_lines.append({
+                "account_id": acc_vat_out, "debit": total_refund_tax, "credit": 0, "description": "POS Return VAT Reversal"
+            })
+        # Credit: Cash/Bank (total including tax)
+        je_lines.append({
+            "account_id": acc_cash, "debit": 0, "credit": total_refund_with_tax, "description": "POS Return Cash Refund"
+        })
+
+        # Reverse COGS if applicable
+        total_cogs_return = Decimal('0')
+        for item in return_in.items:
+            orig_item = db.execute(text("SELECT product_id FROM pos_order_lines WHERE id = :id"), {"id": item.item_id}).fetchone()
+            if orig_item:
+                cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": orig_item.product_id}).scalar() or 0)
+                total_cogs_return += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
+
+        if total_cogs_return > 0 and acc_cogs and acc_inventory:
+            total_cogs_ret_q = total_cogs_return.quantize(_D2, ROUND_HALF_UP)
+            je_lines.append({
+                "account_id": acc_inventory, "debit": total_cogs_ret_q, "credit": 0, "description": "POS Return Inventory Restore"
+            })
+            je_lines.append({
+                "account_id": acc_cogs, "debit": 0, "credit": total_cogs_ret_q, "description": "POS Return COGS Reversal"
+            })
+
+        gl_create_journal_entry(
+            db=db,
+            company_id=current_user.company_id,
+            date=datetime.now().date(),
+            description=f"POS Return for Order {order.order_number}",
+            lines=je_lines,
+            user_id=current_user.id,
+            branch_id=None,
+            reference=f"RTN-{order.order_number}",
+            currency=base_currency,
+            source="POS-Return",
+            source_id=return_id
+        )
+
+        # Update treasury balance only for cash refunds — T1.3a idempotent recompute
+        if return_in.refund_method == 'cash' and session_treasury and session_treasury.treasury_account_id:
+            from utils.treasury_balance import recalc_treasury_from_gl
+            recalc_treasury_from_gl(db, session_treasury.treasury_account_id)
+    
+    db.commit()
+
+    log_activity(
+        db, user_id=current_user.id, username=current_user.username,
+        action="create_pos_return", resource_type="pos_return",
+        resource_id=str(return_id),
+        details={"order_id": order_id, "order_number": order.order_number, "refund_amount": str(total_refund), "refund_method": return_in.refund_method},
+        request=request, branch_id=order.branch_id
+    )
+
+    return {
+        "return_id": return_id,
+        "refund_amount": str(total_refund),
+        "message": "Return processed successfully"
+    }
+
+
+@router.get("/orders/{order_id}/details", dependencies=[Depends(require_permission("pos.view"))], response_model=Dict[str, Any])
+def get_order_details(
+    order_id: int,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db)
+):
+    """Get full order details for returns"""
+    order = db.execute(text("""
+        SELECT po.*, 
+               COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name
+        FROM pos_orders po
+        LEFT JOIN parties c ON po.customer_id = c.id
+        WHERE po.id = :id
+    """), {"id": order_id}).fetchone()
+    
+    if not order:
+        raise HTTPException(status_code=404, detail="Order not found")
+
+    if hasattr(order, 'branch_id') and order.branch_id:
+        validate_branch_access(current_user, order.branch_id)
+
+    items = db.execute(text("""
+        SELECT poi.*, p.product_name as name
+        FROM pos_order_lines poi
+        JOIN products p ON poi.product_id = p.id
+        WHERE poi.order_id = :id
+    """), {"id": order_id}).fetchall()
+    
+    return {
+        "order": dict(order._mapping),
+        "items": [dict(i._mapping) for i in items]
+    }
+
+
+# =====================================================
+# 8.10 POS IMPROVEMENTS
+# =====================================================
+
+# ---------- POS-003: Promotions & Discounts ----------
+

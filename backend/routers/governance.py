@@ -11,7 +11,7 @@ import logging
 import math
 from datetime import datetime
 from decimal import Decimal
-from typing import List, Literal, Optional
+from typing import Any, Dict, List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
@@ -19,6 +19,7 @@ from sqlalchemy import text
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.accounting import get_mapped_account_id
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
@@ -49,22 +50,18 @@ class OvertimeRate(BaseModel):
     is_active: bool = True
 
 
-@router.get("/overtime-rates", dependencies=[Depends(require_permission(["hr.view", "settings.view"]))])
+@router.get("/overtime-rates", dependencies=[Depends(require_permission(["hr.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def list_overtime_rates(current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(
             text("SELECT rate_key, description, multiplier, is_active FROM overtime_rates_config ORDER BY rate_key")
         ).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.put("/overtime-rates", dependencies=[Depends(require_permission(["hr.manage", "settings.edit"]))])
+@router.put("/overtime-rates", dependencies=[Depends(require_permission(["hr.manage", "settings.edit"]))], response_model=Dict[str, Any])
 def upsert_overtime_rate(body: OvertimeRate, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(
             text(
                 """
@@ -79,10 +76,7 @@ def upsert_overtime_rate(body: OvertimeRate, current_user=Depends(get_current_us
             ),
             {"k": body.rate_key, "d": body.description, "m": body.multiplier, "a": body.is_active},
         )
-        db.commit()
         return {"ok": True, "rate_key": body.rate_key}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -97,7 +91,7 @@ class DocPermissionCreate(BaseModel):
     access_level: Literal["view", "edit", "owner"] = "view"
 
 
-@router.post("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.manage"))])
+@router.post("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.manage"))], response_model=Dict[str, Any])
 def grant_document_permission(
     doc_id: int,
     body: DocPermissionCreate,
@@ -105,8 +99,7 @@ def grant_document_permission(
 ):
     if body.department_id is None and body.role_id is None and body.user_id is None:
         raise HTTPException(status_code=400, detail="يجب تحديد قسم أو دور أو مستخدم")
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(
             text(
                 """
@@ -124,16 +117,12 @@ def grant_document_permission(
                 "by": current_user.id,
             },
         )
-        db.commit()
         return {"ok": True}
-    finally:
-        db.close()
 
 
-@router.get("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.view"))])
+@router.get("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.view"))], response_model=List[Dict[str, Any]])
 def list_document_permissions(doc_id: int, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(
             text(
                 """
@@ -146,8 +135,6 @@ def list_document_permissions(doc_id: int, current_user=Depends(get_current_user
             {"doc": doc_id},
         ).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -177,10 +164,9 @@ def _haversine_m(lat1, lng1, lat2, lng2) -> float:
     return 2 * R * math.asin(min(1.0, math.sqrt(a)))
 
 
-@router.post("/geofences", dependencies=[Depends(require_permission(["hr.manage", "branches.manage"]))])
+@router.post("/geofences", dependencies=[Depends(require_permission(["hr.manage", "branches.manage"]))], response_model=Dict[str, Any])
 def create_geofence(body: GeofenceCreate, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         row = db.execute(
             text(
                 """
@@ -191,17 +177,13 @@ def create_geofence(body: GeofenceCreate, current_user=Depends(get_current_user)
             ),
             {"n": body.name, "b": body.branch_id, "la": body.center_lat, "lg": body.center_lng, "r": body.radius_m},
         ).fetchone()
-        db.commit()
         return {"id": row[0]}
-    finally:
-        db.close()
 
 
-@router.post("/attendance/validate-location", dependencies=[Depends(require_permission("hr.view"))])
+@router.post("/attendance/validate-location", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
 def validate_checkin_location(body: CheckInValidate, current_user=Depends(get_current_user)):
     """Return ``inside=True`` when the caller is within any active geofence of the branch."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         fences = db.execute(
             text(
                 """
@@ -227,22 +209,19 @@ def validate_checkin_location(body: CheckInValidate, current_user=Depends(get_cu
             "nearest_geofence_id": nearest.id if nearest else None,
             "distance_m": round(min_dist, 2) if min_dist is not None else None,
         }
-    finally:
-        db.close()
 
 
 # ==========================================================================
 # Approval SLA escalation scanner
 # ==========================================================================
 
-@router.post("/approvals/sla/escalate", dependencies=[Depends(require_permission("approvals.manage"))])
+@router.post("/approvals/sla/escalate", dependencies=[Depends(require_permission("approvals.manage"))], response_model=Dict[str, Any])
 def scan_and_escalate_sla(current_user=Depends(get_current_user)):
     """Scan ``approval_requests`` in ``pending`` status past their workflow SLA and escalate.
 
     Idempotent: rows already stamped ``sla_escalated_at`` are skipped.
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(
             text(
                 """
@@ -271,22 +250,18 @@ def scan_and_escalate_sla(current_user=Depends(get_current_user)):
                 {"to": r.escalation_to, "id": r.id},
             )
             escalated += 1
-        db.commit()
         return {"scanned": len(rows), "escalated": escalated}
-    finally:
-        db.close()
 
 
 # ==========================================================================
 # Historical GOSI delta back-fill
 # ==========================================================================
 
-@router.post("/hr/gosi/historical-adjust", dependencies=[Depends(require_permission(["hr.manage", "accounting.manage"]))])
+@router.post("/hr/gosi/historical-adjust", dependencies=[Depends(require_permission(["hr.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def adjust_historical_gosi(request: Request, current_user=Depends(get_current_user)):
     """Back-fill the 0.25 % employer-GOSI delta for payroll entries booked before
     the rate correction. Touches only entries flagged ``gosi_adjusted IS NOT TRUE``."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(text("ALTER TABLE payroll_entries ADD COLUMN IF NOT EXISTS gosi_adjusted BOOLEAN DEFAULT FALSE"))
         db.execute(text("ALTER TABLE payroll_entries ADD COLUMN IF NOT EXISTS gosi_adjustment NUMERIC(18,4) DEFAULT 0"))
         rows = db.execute(
@@ -301,7 +276,6 @@ def adjust_historical_gosi(request: Request, current_user=Depends(get_current_us
                 """
             )
         ).fetchall()
-        db.commit()
         log_activity(
             db, user_id=current_user.id, username=current_user.username,
             action="hr.gosi_adjust", resource_type="payroll_entry",
@@ -309,8 +283,6 @@ def adjust_historical_gosi(request: Request, current_user=Depends(get_current_us
             request=request,
         )
         return {"adjusted_rows": len(rows)}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -324,10 +296,9 @@ class ZakatBaseItem(BaseModel):
     notes: Optional[str] = None
 
 
-@router.get("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))])
+@router.get("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_zakat_base_items(current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(
             text(
                 """
@@ -339,14 +310,11 @@ def list_zakat_base_items(current_user=Depends(get_current_user)):
             )
         ).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.post("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))])
+@router.post("/zakat/base-items", dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))], response_model=Dict[str, Any])
 def upsert_zakat_base_item(body: ZakatBaseItem, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(
             text(
                 """
@@ -360,10 +328,7 @@ def upsert_zakat_base_item(body: ZakatBaseItem, current_user=Depends(get_current
             ),
             {"a": body.account_id, "c": body.category, "w": body.weight, "n": body.notes},
         )
-        db.commit()
         return {"ok": True}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -377,20 +342,16 @@ class BranchTaxSetting(BaseModel):
     notes: Optional[str] = None
 
 
-@router.get("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.view", "settings.view"]))])
+@router.get("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def list_branch_tax_settings(current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("SELECT * FROM branch_tax_settings")).fetchall()
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.put("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.manage", "settings.edit"]))])
+@router.put("/tax/branch-settings", dependencies=[Depends(require_permission(["taxes.manage", "settings.edit"]))], response_model=Dict[str, Any])
 def upsert_branch_tax_setting(body: BranchTaxSetting, current_user=Depends(get_current_user)):
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS default_tax_rate DECIMAL(6,3) DEFAULT 15"))
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS tax_exempt BOOLEAN DEFAULT FALSE"))
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS notes TEXT"))
@@ -408,10 +369,7 @@ def upsert_branch_tax_setting(body: BranchTaxSetting, current_user=Depends(get_c
             ),
             {"b": body.branch_id, "r": body.default_tax_rate, "e": body.tax_exempt, "n": body.notes},
         )
-        db.commit()
         return {"ok": True, "branch_id": body.branch_id}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -427,7 +385,7 @@ class NoteDiscountRequest(BaseModel):
 
 
 @router.post("/treasury/notes-receivable/{note_id}/discount",
-             dependencies=[Depends(require_permission(["treasury.manage", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["treasury.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def discount_note_receivable(
     note_id: int,
     body: NoteDiscountRequest,
@@ -530,7 +488,7 @@ class BounceRequest(BaseModel):
 
 
 @router.post("/treasury/checks-receivable/{check_id}/bounce",
-             dependencies=[Depends(require_permission(["treasury.manage", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["treasury.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def bounce_check_receivable(
     check_id: int,
     body: BounceRequest,
@@ -613,7 +571,7 @@ class AssetRevaluationRequest(BaseModel):
 
 
 @router.post("/assets/{asset_id}/revalue",
-             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def revalue_asset(
     asset_id: int,
     body: AssetRevaluationRequest,
@@ -712,7 +670,7 @@ class UoPDepreciationRequest(BaseModel):
 
 
 @router.post("/assets/{asset_id}/depreciate-uop",
-             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def depreciate_asset_uop(
     asset_id: int,
     body: UoPDepreciationRequest,
@@ -815,7 +773,7 @@ class LeaseModificationRequest(BaseModel):
 
 
 @router.post("/leases/{lease_id}/modify",
-             dependencies=[Depends(require_permission(["accounting.manage"]))])
+             dependencies=[Depends(require_permission(["accounting.manage"]))], response_model=Dict[str, Any])
 def modify_lease(
     lease_id: int,
     body: LeaseModificationRequest,
@@ -932,7 +890,7 @@ class ServiceRequestCloseRequest(BaseModel):
 
 
 @router.post("/service-requests/{request_id}/post-gl",
-             dependencies=[Depends(require_permission(["services.edit", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["services.edit", "accounting.manage"]))], response_model=Dict[str, Any])
 def post_service_request_gl(
     request_id: int,
     body: ServiceRequestCloseRequest,
@@ -1082,7 +1040,7 @@ class BulkImpairmentRequest(BaseModel):
 
 
 @router.post("/assets/cgu/impairment-bulk",
-             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))])
+             dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
 def run_bulk_cgu_impairment(
     body: BulkImpairmentRequest,
     current_user=Depends(get_current_user),
@@ -1100,8 +1058,7 @@ def run_bulk_cgu_impairment(
     if not body.items:
         raise HTTPException(status_code=400, detail="items فارغة")
 
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         as_of = body.as_of_date or _date.today().isoformat()
         if body.post_journal:
             check_fiscal_period_open(db, as_of)
@@ -1134,8 +1091,6 @@ def run_bulk_cgu_impairment(
             except ValueError as e:
                 results.append({"cgu_id": item.cgu_id, "error": str(e)})
         return {"as_of_date": as_of, "count": len(results), "total_impairment_loss": float(total_loss), "tests": results}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -1150,7 +1105,7 @@ class LedgerBootstrapRequest(BaseModel):
 
 
 @router.post("/accounting/ledgers/bootstrap",
-             dependencies=[Depends(require_permission("accounting.manage"))])
+             dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
 def bootstrap_ledgers(
     body: LedgerBootstrapRequest,
     current_user=Depends(get_current_user),
@@ -1161,8 +1116,7 @@ def bootstrap_ledgers(
     seeded by ``database.create_all_tables`` already; this endpoint adds IFRS,
     tax and management ledgers idempotently.
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         targets = []
         if body.include_ifrs:
             targets.append(("ifrs", "IFRS Ledger", "ifrs"))
@@ -1185,11 +1139,8 @@ def bootstrap_ledgers(
             ).fetchone()
             if row:
                 created.append({"code": code, "id": row[0]})
-        db.commit()
         all_rows = db.execute(text("SELECT id, code, name, framework, is_primary, is_active FROM ledgers ORDER BY id")).fetchall()
         return {"created": created, "ledgers": [dict(r._mapping) for r in all_rows]}
-    finally:
-        db.close()
 
 
 # ==========================================================================
@@ -1207,7 +1158,7 @@ class POSBatchSyncRequest(BaseModel):
     sales: List[POSOfflineSale]
 
 
-@router.post("/pos/sync/batch", dependencies=[Depends(require_permission("pos.use"))])
+@router.post("/pos/sync/batch", dependencies=[Depends(require_permission("pos.use"))], response_model=Dict[str, Any])
 def pos_batch_sync(
     body: POSBatchSyncRequest,
     current_user=Depends(get_current_user),
@@ -1222,8 +1173,7 @@ def pos_batch_sync(
     if not body.sales:
         return {"accepted": 0, "duplicates": 0}
 
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         accepted = 0
         duplicates = 0
         import json as _json
@@ -1250,7 +1200,4 @@ def pos_batch_sync(
                 accepted += 1
             else:
                 duplicates += 1
-        db.commit()
         return {"accepted": accepted, "duplicates": duplicates, "queued": accepted}
-    finally:
-        db.close()

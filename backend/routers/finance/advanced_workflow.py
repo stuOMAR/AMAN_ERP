@@ -6,7 +6,7 @@ AMAN ERP - Advanced Workflow Engine
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 import logging
 import json
@@ -28,7 +28,7 @@ class WorkflowSLAUpdate(BaseModel):
     allow_parallel: bool = False
 
 
-@router.get("/advanced/{workflow_id}", dependencies=[Depends(require_permission("approvals.view"))])
+@router.get("/advanced/{workflow_id}", dependencies=[Depends(require_permission("approvals.view"))], response_model=Dict[str, Any])
 @limiter.limit("200/minute")
 def get_advanced_workflow(request: Request, workflow_id: int, current_user=Depends(get_current_user)):
     """عرض سير العمل المتقدم مع الشروط وSLA"""
@@ -56,7 +56,7 @@ def get_advanced_workflow(request: Request, workflow_id: int, current_user=Depen
 
 
 @router.put("/advanced/{workflow_id}/conditions",
-            dependencies=[Depends(require_permission("approvals.edit"))])
+            dependencies=[Depends(require_permission("approvals.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def update_workflow_conditions(
     request: Request,
@@ -77,7 +77,7 @@ def update_workflow_conditions(
 
 
 @router.put("/advanced/{workflow_id}/sla",
-            dependencies=[Depends(require_permission("approvals.edit"))])
+            dependencies=[Depends(require_permission("approvals.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def update_workflow_sla(
     request: Request,
@@ -104,7 +104,7 @@ def update_workflow_sla(
         db.close()
 
 
-@router.post("/check-escalation", dependencies=[Depends(require_permission("approvals.view"))])
+@router.post("/check-escalation", dependencies=[Depends(require_permission("approvals.view"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def check_sla_escalations(request: Request, current_user=Depends(get_current_user)):
     """فحص الطلبات المتأخرة وتصعيدها"""
@@ -153,7 +153,7 @@ def check_sla_escalations(request: Request, current_user=Depends(get_current_use
         db.close()
 
 
-@router.post("/auto-approve", dependencies=[Depends(require_permission("approvals.edit"))])
+@router.post("/auto-approve", dependencies=[Depends(require_permission("approvals.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def auto_approve_below_threshold(request: Request, current_user=Depends(get_current_user)):
     """الموافقة التلقائية على الطلبات تحت الحد الأدنى"""
@@ -190,7 +190,7 @@ def auto_approve_below_threshold(request: Request, current_user=Depends(get_curr
         db.close()
 
 
-@router.get("/analytics", dependencies=[Depends(require_permission("approvals.view"))])
+@router.get("/analytics", dependencies=[Depends(require_permission("approvals.view"))], response_model=Dict[str, Any])
 @limiter.limit("200/minute")
 def workflow_analytics(request: Request, current_user=Depends(get_current_user)):
     """تحليلات سير العمل"""

@@ -9,11 +9,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional, List, Any
+from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timezone
 from pydantic import BaseModel, Field, validator
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission, validate_branch_access, require_module
 from utils.audit import log_activity
 from decimal import Decimal, ROUND_HALF_UP
@@ -92,15 +93,14 @@ COUNTRY_META = {
 # 1. TAX REGIMES — Master list per country
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/regimes", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))])
+@router.get("/regimes", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_regimes(
     country_code: Optional[str] = None,
     is_active: Optional[bool] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب أنظمة الضرائب — يمكن تصفيتها حسب الدولة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         where = "WHERE 1=1"
         params = {}
         if country_code:
@@ -118,15 +118,12 @@ def list_tax_regimes(
         """), params).fetchall()
 
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.get("/countries")
+@router.get("/countries", response_model=Dict[str, Any])
 def list_supported_countries(current_user: dict = Depends(get_current_user)):
     """جلب قائمة الدول المدعومة مع خصائصها الضريبية"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Get countries that have tax regimes defined
         rows = db.execute(text("""
             SELECT DISTINCT country_code, 
@@ -152,19 +149,16 @@ def list_supported_countries(current_user: dict = Depends(get_current_user)):
                 "required_taxes": r.required_count,
             })
         return result
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 2. COMPANY TAX SETTINGS
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/company-settings", dependencies=[Depends(require_permission(["taxes.view", "settings.view"]))])
+@router.get("/company-settings", dependencies=[Depends(require_permission(["taxes.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def get_company_tax_settings(current_user: dict = Depends(get_current_user)):
     """جلب إعدادات الضرائب على مستوى الشركة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rows = db.execute(text("""
             SELECT * FROM company_tax_settings ORDER BY country_code
         """)).fetchall()
@@ -177,11 +171,9 @@ def get_company_tax_settings(current_user: dict = Depends(get_current_user)):
             return [{"country_code": cc, "is_vat_registered": False}]
 
         return [dict(r._mapping) for r in rows]
-    finally:
-        db.close()
 
 
-@router.put("/company-settings", dependencies=[Depends(require_permission(["taxes.manage", "settings.manage"]))])
+@router.put("/company-settings", dependencies=[Depends(require_permission(["taxes.manage", "settings.manage"]))], response_model=Dict[str, Any])
 def update_company_tax_settings(
     request: Request,
     data: CompanyTaxSettingsUpdate,
@@ -232,11 +224,10 @@ def update_company_tax_settings(
 # 3. BRANCH TAX SETTINGS — Per-branch jurisdiction
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/branch-settings/{branch_id}", dependencies=[Depends(require_permission(["taxes.view", "branches.view"]))])
+@router.get("/branch-settings/{branch_id}", dependencies=[Depends(require_permission(["taxes.view", "branches.view"]))], response_model=Dict[str, Any])
 def get_branch_tax_settings(branch_id: int, current_user: dict = Depends(get_current_user)):
     """جلب إعدادات الضرائب لفرع معين مع أنظمة الدولة المطبقة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Get branch info
         branch = db.execute(text(
             "SELECT id, branch_name, branch_name_en, country, country_code FROM branches WHERE id = :id"
@@ -270,11 +261,9 @@ def get_branch_tax_settings(branch_id: int, current_user: dict = Depends(get_cur
             "country_meta": COUNTRY_META.get(branch_cc, {}),
             "tax_settings": [dict(r._mapping) for r in regimes]
         }
-    finally:
-        db.close()
 
 
-@router.put("/branch-settings", dependencies=[Depends(require_permission(["taxes.manage", "branches.manage"]))])
+@router.put("/branch-settings", dependencies=[Depends(require_permission(["taxes.manage", "branches.manage"]))], response_model=Dict[str, Any])
 def update_branch_tax_setting(
     request: Request,
     data: BranchTaxSettingUpdate,
@@ -336,14 +325,13 @@ def update_branch_tax_setting(
 # 4. APPLICABLE TAXES — What taxes apply to a given branch
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/applicable-taxes/{branch_id}", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))])
+@router.get("/applicable-taxes/{branch_id}", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=Dict[str, Any])
 def get_applicable_taxes(branch_id: int, current_user: dict = Depends(get_current_user)):
     """
     جلب الضرائب المطبقة على فرع معين  
     يستخدم في الفواتير والمعاملات لتحديد الضرائب الواجبة تلقائياً
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         branch = db.execute(text(
             "SELECT id, country_code FROM branches WHERE id = :id"
         ), {"id": branch_id}).fetchone()
@@ -374,15 +362,13 @@ def get_applicable_taxes(branch_id: int, current_user: dict = Depends(get_curren
             "country": COUNTRY_META.get(branch_cc, {}).get("name_ar", branch_cc),
             "taxes": [dict(r._mapping) for r in taxes]
         }
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 5. OFFICIAL TAX REPORTS — Country-specific formats
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/reports/sa-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))])
+@router.get("/reports/sa-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
 def saudi_vat_return_report(
     period_start: Optional[date] = None,
     period_end: Optional[date] = None,
@@ -416,8 +402,7 @@ def saudi_vat_return_report(
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
         branch_filter = ""
         if branch_id:
@@ -553,11 +538,9 @@ def saudi_vat_return_report(
                 "status": "payable" if net_vat >= Decimal("0") else "refundable"
             }
         }
-    finally:
-        db.close()
 
 
-@router.get("/reports/sy-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))])
+@router.get("/reports/sy-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
 def syrian_income_tax_report(
     fiscal_year: Optional[int] = None,
     year: Optional[int] = None,
@@ -579,8 +562,7 @@ def syrian_income_tax_report(
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
@@ -674,11 +656,9 @@ def syrian_income_tax_report(
                 "tax_due": float(income_tax),
             }
         }
-    finally:
-        db.close()
 
 
-@router.get("/reports/ae-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))])
+@router.get("/reports/ae-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
 def uae_vat_return_report(
     period_start: Optional[date] = None,
     period_end: Optional[date] = None,
@@ -703,8 +683,7 @@ def uae_vat_return_report(
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
         bf = ""
         if branch_id:
@@ -773,11 +752,9 @@ def uae_vat_return_report(
                 "status": "payable" if net_vat_due >= Decimal("0") else "refundable"
             }
         }
-    finally:
-        db.close()
 
 
-@router.get("/reports/eg-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))])
+@router.get("/reports/eg-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
 def egypt_vat_return_report(
     period_start: Optional[date] = None,
     period_end: Optional[date] = None,
@@ -807,8 +784,7 @@ def egypt_vat_return_report(
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
         bf = ""
         if branch_id:
@@ -877,11 +853,9 @@ def egypt_vat_return_report(
                 "status": "payable" if net_vat_due >= Decimal("0") else "refundable"
             }
         }
-    finally:
-        db.close()
 
 
-@router.get("/reports/generic-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))])
+@router.get("/reports/generic-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
 def generic_income_tax_report(
     fiscal_year: Optional[int] = None,
     year: Optional[int] = None,
@@ -896,8 +870,7 @@ def generic_income_tax_report(
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
@@ -959,15 +932,13 @@ def generic_income_tax_report(
                 "tax_due": float(income_tax),
             }
         }
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # 6. COMPLIANCE OVERVIEW / DASHBOARD
 # ═══════════════════════════════════════════════════════════════════════════════
 
-@router.get("/overview", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))])
+@router.get("/overview", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=Dict[str, Any])
 def compliance_overview(current_user: dict = Depends(get_current_user)):
     """
     نظرة عامة على حالة الامتثال الضريبي

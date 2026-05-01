@@ -6,7 +6,7 @@ AMAN ERP - Treasury Router
 from fastapi import APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import date
 import logging
 
@@ -291,7 +291,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
     finally:
         db.close()
 
-@router.put("/accounts/{id}", dependencies=[Depends(require_permission("treasury.edit"))])
+@router.put("/accounts/{id}", dependencies=[Depends(require_permission("treasury.edit"))], response_model=Dict[str, Any])
 def update_treasury_account(
     id: int,
     account: TreasuryAccountCreate,
@@ -388,7 +388,7 @@ def update_treasury_account(
     finally:
         db.close()
 
-@router.delete("/accounts/{id}", dependencies=[Depends(require_permission("treasury.delete"))])
+@router.delete("/accounts/{id}", dependencies=[Depends(require_permission("treasury.delete"))], response_model=Dict[str, Any])
 def delete_treasury_account(
     id: int,
     request: Request,
@@ -448,7 +448,7 @@ def delete_treasury_account(
     finally:
         db.close()
 
-@router.post("/transactions/expense", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))])
+@router.post("/transactions/expense", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))], response_model=Dict[str, Any])
 async def create_expense(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
     """تسجيل مصروف جديد عبر الخزينة.
 
@@ -504,7 +504,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
         "expense_number": result.get("expense_number") if isinstance(result, dict) else None,
     }
 
-@router.post("/transactions/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))])
+@router.post("/transactions/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))], response_model=Dict[str, Any])
 def create_transfer(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
     """تحويل بين الخزائن/البنوك"""
     if data.transaction_type != 'transfer':
@@ -661,7 +661,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
 
 # ────────────────────────── Treasury Reports ──────────────────────────
 
-@router.get("/reports/balances", dependencies=[Depends(require_permission("treasury.view"))])
+@router.get("/reports/balances", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_treasury_balances_report(
     branch_id: Optional[int] = None,
     as_of_date: Optional[str] = None,
@@ -789,7 +789,7 @@ def get_treasury_balances_report(
         db.close()
 
 
-@router.get("/reports/cashflow", dependencies=[Depends(require_permission("treasury.view"))])
+@router.get("/reports/cashflow", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_treasury_cashflow_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,

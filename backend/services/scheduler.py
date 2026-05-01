@@ -1,5 +1,8 @@
 import logging
+import os
 from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
+from apscheduler.executors.pool import ThreadPoolExecutor
 from sqlalchemy import text
 from datetime import datetime, timedelta, date
 
@@ -10,7 +13,49 @@ from routers.reports import _get_profit_loss_data, _get_balance_sheet_data
 
 logger = logging.getLogger(__name__)
 
-scheduler = BackgroundScheduler()
+# ── T4.1: Production-grade scheduler ─────────────────────────────────────────
+# Use SQLAlchemyJobStore so jobs survive server restarts.
+# Falls back to MemoryJobStore when SCHEDULER_DB_URL is not configured
+# (e.g. unit-test environments).
+_SCHEDULER_TZ = os.environ.get("SCHEDULER_TIMEZONE", "Asia/Riyadh")
+_SCHEDULER_DB_URL = os.environ.get("SCHEDULER_DB_URL", os.environ.get("DATABASE_URL", ""))
+
+def _build_jobstores():
+    if _SCHEDULER_DB_URL:
+        try:
+            return {"default": SQLAlchemyJobStore(url=_SCHEDULER_DB_URL, tablename="apscheduler_jobs")}
+        except Exception as exc:
+            logger.warning("SQLAlchemyJobStore init failed (%s) — falling back to MemoryJobStore", exc)
+    return {}   # APScheduler default = MemoryJobStore
+
+_job_execution_log: dict[str, dict] = {}   # job_id → {last_run, status, error}
+
+def _wrap_job(fn, job_id: str):
+    """Wrap a scheduler job to track last execution and capture Sentry errors."""
+    def _inner(*args, **kwargs):
+        _job_execution_log[job_id] = {"last_run": datetime.utcnow().isoformat(), "status": "running", "error": None}
+        try:
+            fn(*args, **kwargs)
+            _job_execution_log[job_id]["status"] = "ok"
+        except Exception as exc:
+            _job_execution_log[job_id]["status"] = "error"
+            _job_execution_log[job_id]["error"] = str(exc)
+            logger.exception("Scheduler job '%s' failed", job_id)
+            try:
+                import sentry_sdk
+                sentry_sdk.capture_exception(exc)
+            except ImportError:
+                pass
+            raise
+    _inner.__name__ = fn.__name__
+    return _inner
+
+scheduler = BackgroundScheduler(
+    jobstores=_build_jobstores(),
+    executors={"default": ThreadPoolExecutor(max_workers=4)},
+    job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
+    timezone=_SCHEDULER_TZ,
+)
 
 
 def _get_company_engine_for_db(db_name: str):
@@ -586,20 +631,557 @@ def check_zatca_csid_expiry():
             logger.error(f"ZATCA CSID check failed in {db_name}: {e}")
 
 
+# ── T4.6 — Auto-activate cheques on due date ─────────────────────────────────
+def activate_due_cheques():
+    """Mark pending cheques as 'due' when their due_date has arrived, then notify."""
+    from database import _get_all_company_db_names
+    today = date.today()
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                for tbl in ("checks_receivable", "checks_payable"):
+                    rows = conn.execute(text(f"""
+                        UPDATE {tbl}
+                           SET status = 'due', updated_at = CURRENT_TIMESTAMP
+                         WHERE status = 'pending' AND due_date <= :today
+                        RETURNING id, amount, check_number
+                    """), {"today": today}).fetchall()
+                    for row in rows:
+                        try:
+                            conn.execute(text("""
+                                INSERT INTO notifications
+                                    (user_id, type, title, message, is_read, created_at)
+                                SELECT u.id, 'cheque_due',
+                                    :title, :msg, FALSE, CURRENT_TIMESTAMP
+                                FROM company_users u
+                                WHERE u.is_active = TRUE
+                                  AND u.role IN ('admin', 'manager', 'superuser')
+                            """), {
+                                "title": "شيك مستحق",
+                                "msg": f"شيك رقم {row.check_number} بمبلغ {row.amount} أصبح مستحقاً ({tbl})",
+                            })
+                        except Exception:
+                            pass
+                    if rows:
+                        logger.info("[%s] %s cheques activated as due in %s", db_name, len(rows), tbl)
+        except Exception as e:
+            logger.error("activate_due_cheques failed for %s: %s", db_name, e)
+
+
+# ── T4.7 — Recurring expense/journal templates daily run ─────────────────────
+def run_due_recurring_templates():
+    """Generate journal entries for all active recurring templates that are due today."""
+    from database import _get_all_company_db_names
+    today = date.today()
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                templates = conn.execute(text("""
+                    SELECT id, name, auto_post, frequency,
+                           next_run_date, currency, exchange_rate,
+                           branch_id, description
+                    FROM recurring_journal_templates
+                    WHERE is_active = TRUE
+                      AND next_run_date <= :today
+                      AND (end_date IS NULL OR end_date >= :today)
+                      AND (max_runs IS NULL OR run_count < max_runs)
+                    ORDER BY next_run_date
+                """), {"today": today}).fetchall()
+
+                for tmpl in templates:
+                    try:
+                        lines = conn.execute(text("""
+                            SELECT account_id, debit, credit, description, cost_center_id
+                            FROM recurring_journal_lines
+                            WHERE template_id = :tid ORDER BY id
+                        """), {"tid": tmpl.id}).fetchall()
+                        if not lines:
+                            continue
+
+                        entry_status = "posted" if tmpl.auto_post else "draft"
+                        entry_desc = f"{tmpl.name} - {today.strftime('%Y-%m-%d')}"
+                        if tmpl.description:
+                            entry_desc += f" / {tmpl.description}"
+
+                        entry_num_row = conn.execute(text(
+                            "SELECT COALESCE(MAX(CAST(SPLIT_PART(entry_number, '-', 2) AS INTEGER)), 0) + 1 "
+                            "FROM journal_entries"
+                        )).fetchone()
+                        seq = entry_num_row[0] if entry_num_row else 1
+                        entry_number = f"JE-{seq:06d}"
+
+                        entry_id_row = conn.execute(text("""
+                            INSERT INTO journal_entries
+                                (entry_number, entry_date, description, status,
+                                 currency, exchange_rate, branch_id,
+                                 source, created_at)
+                            VALUES (:num, :dt, :desc, :status,
+                                    :curr, :rate, :branch,
+                                    'recurring_template', CURRENT_TIMESTAMP)
+                            RETURNING id
+                        """), {
+                            "num": entry_number,
+                            "dt": today,
+                            "desc": entry_desc,
+                            "status": entry_status,
+                            "curr": tmpl.currency,
+                            "rate": tmpl.exchange_rate or 1,
+                            "branch": tmpl.branch_id,
+                        }).fetchone()
+                        entry_id = entry_id_row[0]
+
+                        for ln in lines:
+                            conn.execute(text("""
+                                INSERT INTO journal_lines
+                                    (journal_entry_id, account_id, debit, credit,
+                                     description, cost_center_id)
+                                VALUES (:je, :acc, :dr, :cr, :desc, :cc)
+                            """), {
+                                "je": entry_id,
+                                "acc": ln.account_id,
+                                "dr": ln.debit,
+                                "cr": ln.credit,
+                                "desc": ln.description,
+                                "cc": ln.cost_center_id,
+                            })
+
+                        # Advance next_run_date
+                        freq = tmpl.frequency or "monthly"
+                        if freq == "daily":
+                            next_run = today + timedelta(days=1)
+                        elif freq == "weekly":
+                            next_run = today + timedelta(weeks=1)
+                        elif freq == "quarterly":
+                            next_run = today + timedelta(days=91)
+                        elif freq == "yearly":
+                            next_run = today.replace(year=today.year + 1)
+                        else:  # monthly
+                            m = today.month % 12 + 1
+                            y = today.year + (1 if today.month == 12 else 0)
+                            import calendar as _cal
+                            last_day = _cal.monthrange(y, m)[1]
+                            next_run = today.replace(year=y, month=m,
+                                                     day=min(today.day, last_day))
+
+                        conn.execute(text("""
+                            UPDATE recurring_journal_templates
+                               SET next_run_date = :nrd,
+                                   run_count = run_count + 1,
+                                   updated_at = CURRENT_TIMESTAMP
+                             WHERE id = :tid
+                        """), {"nrd": next_run, "tid": tmpl.id})
+                        logger.info("[%s] Recurring template '%s' → %s (next %s)",
+                                    db_name, tmpl.name, entry_number, next_run)
+                    except Exception as tmpl_err:
+                        logger.error("[%s] recurring template %d failed: %s",
+                                     db_name, tmpl.id, tmpl_err)
+        except Exception as e:
+            logger.error("run_due_recurring_templates failed for %s: %s", db_name, e)
+
+
+# ── T4.8 — Auto bank reconciliation (daily, all draft reconciliations) ───────
+def auto_reconcile_all_drafts():
+    """Run auto-match for every draft bank reconciliation across all companies."""
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.connect() as conn:
+                recs = conn.execute(text("""
+                    SELECT id FROM bank_reconciliations
+                    WHERE status = 'draft'
+                    ORDER BY id
+                """)).fetchall()
+
+            for rec in recs:
+                try:
+                    with eng.begin() as conn:
+                        _auto_match_reconciliation(conn, rec.id)
+                    logger.info("[%s] auto-reconcile rec_id=%s done", db_name, rec.id)
+                except Exception as rec_err:
+                    logger.error("[%s] auto-reconcile rec_id=%s failed: %s",
+                                 db_name, rec.id, rec_err)
+        except Exception as e:
+            logger.error("auto_reconcile_all_drafts failed for %s: %s", db_name, e)
+
+
+def _auto_match_reconciliation(conn, reconciliation_id: int):
+    """Core auto-match logic reused by both the API and the scheduler."""
+    rec = conn.execute(text(
+        "SELECT id, account_id, start_date, end_date FROM bank_reconciliations WHERE id = :id"
+    ), {"id": reconciliation_id}).fetchone()
+    if not rec:
+        return
+
+    # Unmatched bank statement lines
+    bank_lines = conn.execute(text("""
+        SELECT id, transaction_date, amount, transaction_type
+        FROM bank_statement_lines
+        WHERE reconciliation_id = :rid AND is_matched = FALSE
+        ORDER BY transaction_date, id
+    """), {"rid": reconciliation_id}).fetchall()
+
+    for bl in bank_lines:
+        # Lock candidate journal lines to prevent concurrent match
+        match_dir = "debit" if bl.transaction_type in ("credit", "deposit") else "credit"
+        candidate = conn.execute(text(f"""
+            SELECT jl.id
+            FROM journal_lines jl
+            JOIN journal_entries je ON jl.journal_entry_id = je.id
+            WHERE jl.account_id = :acc
+              AND ABS(jl.{match_dir} - :amt) < 0.01
+              AND je.entry_date BETWEEN :start AND :end
+              AND jl.is_reconciled = FALSE
+            FOR UPDATE SKIP LOCKED
+            LIMIT 1
+        """), {
+            "acc": rec.account_id,
+            "amt": float(bl.amount),
+            "start": rec.start_date,
+            "end": rec.end_date,
+        }).fetchone()
+
+        if not candidate:
+            continue
+
+        conn.execute(text(
+            "UPDATE bank_statement_lines SET is_matched=TRUE, matched_journal_line_id=:jl WHERE id=:id"
+        ), {"jl": candidate.id, "id": bl.id})
+        conn.execute(text(
+            "UPDATE journal_lines SET is_reconciled=TRUE WHERE id=:id"
+        ), {"id": candidate.id})
+
+    # Update matched count on the reconciliation
+    matched = conn.execute(text(
+        "SELECT COUNT(*) FROM bank_statement_lines WHERE reconciliation_id=:rid AND is_matched=TRUE"
+    ), {"rid": reconciliation_id}).scalar() or 0
+    conn.execute(text(
+        "UPDATE bank_reconciliations SET matched_count=:cnt, updated_at=CURRENT_TIMESTAMP WHERE id=:id"
+    ), {"cnt": matched, "id": reconciliation_id})
+
+
+# ── T4.4 — Low stock alerts ───────────────────────────────────────────────────
+def check_low_stock_alerts():
+    """Flag inventory items where effective qty (quantity - reserved) <= reorder_level."""
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.connect() as conn:
+                low = conn.execute(text("""
+                    SELECT i.id, i.product_id, i.quantity,
+                           COALESCE(i.reserved_quantity, 0) AS reserved_quantity,
+                           i.reorder_level, i.warehouse_id,
+                           p.name AS product_name
+                    FROM inventory i
+                    LEFT JOIN products p ON i.product_id = p.id
+                    WHERE i.reorder_level > 0
+                      AND (i.quantity - COALESCE(i.reserved_quantity, 0)) <= i.reorder_level
+                """)).fetchall()
+
+            if not low:
+                continue
+
+            with eng.begin() as conn:
+                for item in low:
+                    effective = float(item.quantity) - float(item.reserved_quantity)
+                    try:
+                        conn.execute(text("""
+                            INSERT INTO notifications
+                                (user_id, type, title, message, is_read, created_at)
+                            SELECT u.id, 'low_stock',
+                                :title, :msg, FALSE, CURRENT_TIMESTAMP
+                            FROM company_users u
+                            WHERE u.is_active = TRUE
+                              AND u.role IN ('admin', 'manager', 'inventory_manager')
+                            ON CONFLICT DO NOTHING
+                        """), {
+                            "title": "تحذير: مخزون منخفض",
+                            "msg": (
+                                f"المنتج '{item.product_name or item.product_id}': "
+                                f"الكمية المتاحة {effective:.2f} "
+                                f"وصلت أو تجاوزت حد إعادة الطلب {float(item.reorder_level):.2f}"
+                            ),
+                        })
+                    except Exception:
+                        pass
+            logger.info("[%s] Low stock check: %d items at/below reorder level", db_name, len(low))
+        except Exception as e:
+            logger.error("check_low_stock_alerts failed for %s: %s", db_name, e)
+
+
+# ── T4.5 — POS Offline Inbox Worker ──────────────────────────────────────────
+def process_pos_offline_inbox():
+    """Process queued POS offline orders (FIFO), detect conflicts, create orders."""
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.connect() as conn:
+                items = conn.execute(text("""
+                    SELECT id, client_uuid, session_id, user_id, payload, client_created_at
+                    FROM pos_offline_inbox
+                    WHERE status = 'queued'
+                    ORDER BY received_at ASC
+                    LIMIT 100
+                """)).fetchall()
+
+            for item in items:
+                try:
+                    import json as _json
+                    payload = item.payload if isinstance(item.payload, dict) else _json.loads(item.payload or "{}")
+                    conflict_reason = None
+
+                    with eng.begin() as conn:
+                        # Conflict check 1 — price drift > 5%
+                        order_lines = payload.get("lines") or payload.get("items") or []
+                        for line in order_lines:
+                            pid = line.get("product_id")
+                            if not pid:
+                                continue
+                            cur_price_row = conn.execute(text(
+                                "SELECT sale_price FROM products WHERE id = :pid"
+                            ), {"pid": pid}).fetchone()
+                            if cur_price_row:
+                                cur = float(cur_price_row[0] or 0)
+                                ordered = float(line.get("unit_price") or line.get("price") or 0)
+                                if cur > 0 and ordered > 0 and abs(cur - ordered) / cur > 0.05:
+                                    conflict_reason = (
+                                        f"price drift >5% on product {pid}: "
+                                        f"ordered={ordered} current={cur}"
+                                    )
+                                    break
+
+                        # Conflict check 2 — insufficient stock
+                        if not conflict_reason:
+                            for line in order_lines:
+                                pid = line.get("product_id")
+                                qty = float(line.get("quantity") or line.get("qty") or 0)
+                                if not pid or qty <= 0:
+                                    continue
+                                stock_row = conn.execute(text("""
+                                    SELECT COALESCE(quantity,0) - COALESCE(reserved_quantity,0) AS avail
+                                    FROM inventory WHERE product_id = :pid
+                                    LIMIT 1
+                                """), {"pid": pid}).fetchone()
+                                if stock_row and float(stock_row.avail) < qty:
+                                    conflict_reason = (
+                                        f"insufficient stock for product {pid}: "
+                                        f"need {qty} have {float(stock_row.avail):.2f}"
+                                    )
+                                    break
+
+                        if conflict_reason:
+                            conn.execute(text("""
+                                UPDATE pos_offline_inbox
+                                   SET status = 'conflict',
+                                       error = :err,
+                                       processed_at = CURRENT_TIMESTAMP
+                                 WHERE id = :id
+                            """), {"err": conflict_reason[:500], "id": item.id})
+                            logger.warning("[%s] POS offline conflict id=%s: %s",
+                                           db_name, item.id, conflict_reason)
+                            continue
+
+                        # No conflict — create POS order
+                        order_payload = {
+                            **payload,
+                            "_offline_inbox_id": item.id,
+                            "_client_uuid": item.client_uuid,
+                        }
+                        try:
+                            from routers.pos import _create_pos_order_direct
+                            _create_pos_order_direct(conn, order_payload, user_id=item.user_id)
+                        except (ImportError, AttributeError):
+                            # If direct function not exposed, mark as conflict for manual review
+                            conn.execute(text("""
+                                UPDATE pos_offline_inbox
+                                   SET status = 'conflict',
+                                       error = 'direct order creation not available — manual review required',
+                                       processed_at = CURRENT_TIMESTAMP
+                                 WHERE id = :id
+                            """), {"id": item.id})
+                            continue
+
+                        conn.execute(text("""
+                            UPDATE pos_offline_inbox
+                               SET status = 'processed',
+                                   processed_at = CURRENT_TIMESTAMP
+                             WHERE id = :id
+                        """), {"id": item.id})
+
+                except Exception as item_err:
+                    logger.error("[%s] POS offline item id=%s error: %s",
+                                 db_name, item.id, item_err)
+                    try:
+                        with eng.begin() as conn:
+                            conn.execute(text("""
+                                UPDATE pos_offline_inbox
+                                   SET status = 'conflict',
+                                       error = :err,
+                                       processed_at = CURRENT_TIMESTAMP
+                                 WHERE id = :id
+                            """), {"err": str(item_err)[:500], "id": item.id})
+                    except Exception:
+                        pass
+        except Exception as e:
+            logger.error("process_pos_offline_inbox failed for %s: %s", db_name, e)
+
+
+# ── T4.3 — Smart Alert rule evaluation ───────────────────────────────────────
+def evaluate_smart_alerts():
+    """Evaluate enabled alert rules across all companies and fire notifications."""
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.connect() as conn:
+                # Check if alert_rules table exists (may not be created yet)
+                tbl_exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'alert_rules' LIMIT 1
+                """)).fetchone()
+                if not tbl_exists:
+                    continue
+
+                rules = conn.execute(text("""
+                    SELECT id, name, rule_type, condition_json, threshold, notify_users
+                    FROM alert_rules WHERE enabled = TRUE
+                """)).fetchall()
+
+            for rule in rules:
+                try:
+                    import json as _json
+                    condition = rule.condition_json if isinstance(rule.condition_json, dict) \
+                                else _json.loads(rule.condition_json or "{}")
+                    _evaluate_single_alert(eng, rule, condition)
+                except Exception as re:
+                    logger.error("[%s] alert rule %d failed: %s", db_name, rule.id, re)
+        except Exception as e:
+            logger.error("evaluate_smart_alerts failed for %s: %s", db_name, e)
+
+
+def _evaluate_single_alert(eng, rule, condition: dict):
+    """Evaluate one alert rule and insert an alert if triggered."""
+    import json as _json
+    rule_type = rule.rule_type
+    threshold = float(rule.threshold or 0)
+
+    with eng.begin() as conn:
+        triggered = False
+        details: dict = {}
+
+        if rule_type == "low_stock":
+            count_row = conn.execute(text("""
+                SELECT COUNT(*) FROM inventory
+                WHERE reorder_level > 0
+                  AND (quantity - COALESCE(reserved_quantity, 0)) <= reorder_level
+            """)).scalar() or 0
+            if count_row > threshold:
+                triggered = True
+                details = {"low_stock_items": count_row}
+
+        elif rule_type == "overdue_receivable":
+            days = int(condition.get("days_overdue", 30))
+            total_row = conn.execute(text("""
+                SELECT COALESCE(SUM(amount_due), 0) FROM receivables
+                WHERE status NOT IN ('paid','cancelled')
+                  AND due_date < CURRENT_DATE - INTERVAL ':days days'
+            """).bindparams(days=days) if False else text(f"""
+                SELECT COALESCE(SUM(amount_due), 0) FROM receivables
+                WHERE status NOT IN ('paid','cancelled')
+                  AND due_date < CURRENT_DATE - INTERVAL '{days} days'
+            """)).scalar() or 0
+            if float(total_row) > threshold:
+                triggered = True
+                details = {"overdue_amount": float(total_row), "days": days}
+
+        elif rule_type == "budget_overspend":
+            pct = float(condition.get("overspend_pct", 100))
+            over = conn.execute(text("""
+                SELECT COUNT(*) FROM budget_items
+                WHERE allocated_amount > 0
+                  AND actual_amount > allocated_amount * (:pct / 100.0)
+            """), {"pct": pct}).scalar() or 0
+            if over > threshold:
+                triggered = True
+                details = {"overspend_items": over, "threshold_pct": pct}
+
+        if not triggered:
+            return
+
+        # Insert alert record
+        alert_row = conn.execute(text("""
+            INSERT INTO alerts (rule_id, triggered_at, details_json, status)
+            VALUES (:rid, CURRENT_TIMESTAMP, :det, 'open')
+            RETURNING id
+        """), {"rid": rule.id, "det": _json.dumps(details)}).fetchone()
+        alert_id = alert_row[0]
+
+        # Notify target users
+        import json as _json2
+        notify_users = rule.notify_users
+        user_ids = notify_users if isinstance(notify_users, list) \
+                   else (_json2.loads(notify_users) if notify_users else [])
+        for uid in user_ids:
+            try:
+                conn.execute(text("""
+                    INSERT INTO notifications
+                        (user_id, type, title, message, is_read, created_at)
+                    VALUES (:uid, 'smart_alert', :title, :msg, FALSE, CURRENT_TIMESTAMP)
+                """), {
+                    "uid": uid,
+                    "title": f"تنبيه ذكي: {rule.name}",
+                    "msg": f"قاعدة '{rule.name}' أُطلقت — {_json2.dumps(details, ensure_ascii=False)}",
+                })
+            except Exception:
+                pass
+
+        logger.info("Smart alert '%s' (id=%d) fired — alert_id=%d", rule.name, rule.id, alert_id)
+
+
 def start_scheduler():
-    scheduler.add_job(check_scheduled_reports, 'interval', minutes=5, id='scheduled_reports',
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(check_subscription_billing, 'interval', hours=24, id='subscription_billing',
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(refresh_analytics_materialized_views, 'interval', minutes=15, id='analytics_mv_refresh',
-                      max_instances=1, coalesce=True, misfire_grace_time=60)
-    scheduler.add_job(archive_old_audit_logs, 'interval', hours=24, id='audit_archival',
-                      max_instances=1, coalesce=True, misfire_grace_time=60)  # Daily
-    scheduler.add_job(retry_failed_notifications, 'interval', minutes=1, id='notification_retry',
-                      max_instances=1, coalesce=True, misfire_grace_time=60)  # Every minute
-    scheduler.add_job(auto_fx_revaluation, 'cron', day=1, hour=2, id='fx_monthly_reval',
-                      max_instances=1, coalesce=True, misfire_grace_time=300)
-    scheduler.add_job(check_zatca_csid_expiry, 'interval', hours=12, id='zatca_csid_expiry',
-                      max_instances=1, coalesce=True, misfire_grace_time=600)
+    # Helper: register with execution tracking wrapper
+    def _add(fn, trigger, job_id, **kw):
+        scheduler.add_job(
+            _wrap_job(fn, job_id), trigger, id=job_id,
+            replace_existing=True, **kw,
+        )
+
+    _add(check_scheduled_reports,             'interval', 'scheduled_reports',      minutes=5)
+    _add(check_subscription_billing,          'interval', 'subscription_billing',   hours=24)
+    _add(refresh_analytics_materialized_views,'interval', 'analytics_mv_refresh',   minutes=15)
+    _add(archive_old_audit_logs,              'interval', 'audit_archival',          hours=24)
+    _add(retry_failed_notifications,          'interval', 'notification_retry',      minutes=1)
+    _add(auto_fx_revaluation,                 'cron',     'fx_monthly_reval',        day=1, hour=2)
+    _add(check_zatca_csid_expiry,             'interval', 'zatca_csid_expiry',       hours=12)
+    # T4.6 — auto-activate due cheques
+    _add(activate_due_cheques,                'cron',     'activate_due_cheques',    hour=6, minute=0)
+    # T4.7 — recurring journal templates
+    _add(run_due_recurring_templates,         'cron',     'recurring_templates',     hour=6, minute=30)
+    # T4.8 — auto bank reconciliation
+    _add(auto_reconcile_all_drafts,           'cron',     'auto_reconcile',          hour=7, minute=0)
+    # T4.4 — low stock alerts
+    _add(check_low_stock_alerts,              'interval', 'low_stock_alerts',        minutes=30)
+    # T4.5 — POS offline inbox worker
+    _add(process_pos_offline_inbox,           'interval', 'pos_offline_worker',      minutes=5)
+    # T4.3 — smart alert evaluation
+    _add(evaluate_smart_alerts,              'interval', 'smart_alerts',             minutes=int(
+        os.environ.get("SMART_ALERT_INTERVAL_MINUTES", "15")))
+
+    # T5.4 — payment + SMS retry queues (exponential backoff → DLQ)
+    try:
+        from services.integration_retry_service import (
+            process_payment_retries_all_tenants,
+            process_sms_retries_all_tenants,
+        )
+        _add(process_payment_retries_all_tenants, 'interval', 'payment_retry_queue', minutes=1)
+        _add(process_sms_retries_all_tenants,     'interval', 'sms_retry_queue',     minutes=1)
+    except ImportError:
+        logger.warning("integration_retry_service unavailable; skipping retry jobs")
+
     scheduler.start()
-    logger.info("🚀 Scheduler started.")
+    logger.info("🚀 Scheduler started (jobstore=%s, tz=%s).",
+                "SQLAlchemy" if _SCHEDULER_DB_URL else "Memory", _SCHEDULER_TZ)

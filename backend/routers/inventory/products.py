@@ -5,7 +5,7 @@ Inventory Module - Products CRUD + Cost Breakdown
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 import logging
 
@@ -13,13 +13,15 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
 from utils.permissions import require_permission
+from utils.tx import transactional
+from repositories import ProductRepository
 from .schemas import ProductCreate, ProductResponse
 
 products_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@products_router.get("/products/{product_id}/cost-breakdown", dependencies=[Depends(require_permission("stock.view_cost"))])
+@products_router.get("/products/{product_id}/cost-breakdown", dependencies=[Depends(require_permission("stock.view_cost"))], response_model=Dict[str, Any])
 def get_product_cost_breakdown(
     product_id: int,
     current_user: dict = Depends(get_current_user)
@@ -83,79 +85,38 @@ def list_products(
 ):
     """عرض قائمة المنتجات"""
     from utils.permissions import validate_branch_access
-    # Enforce branch restriction
     branch_id = validate_branch_access(current_user, branch_id)
 
-    db = get_db_connection(current_user.company_id)
-    try:
-        query = """
-            SELECT p.id, p.product_code as item_code, p.product_name as item_name, 
-                   p.product_name_en as item_name_en, p.product_type as item_type, 
-                   u.unit_name as unit,
-                   p.selling_price, p.cost_price as buying_price, 
-                   p.last_purchase_price as last_buying_price,
-                   p.tax_rate, 
-                   p.description, p.is_active, p.category_id,
-                   c.category_name,
-                   p.has_batch_tracking, p.has_serial_tracking, p.has_expiry_tracking,
-                   p.shelf_life_days, p.expiry_alert_days,
-                   COALESCE(SUM(i.quantity), 0) as current_stock, 
-                   COALESCE(SUM(i.reserved_quantity), 0) as reserved_quantity,
-                   p.created_at
-            FROM products p
-            LEFT JOIN product_units u ON p.unit_id = u.id
-            LEFT JOIN product_categories c ON p.category_id = c.id
-            LEFT JOIN inventory i ON p.id = i.product_id 
-        """
-
-        params = {"limit": limit, "skip": skip}
-
-        if branch_id:
-            # Filter inventory join by branch
-            query += " AND i.warehouse_id IN (SELECT id FROM warehouses WHERE branch_id = :bid)"
-            params["bid"] = branch_id
-
-        query += """
-            WHERE 1=1
-        """
-
-        if search:
-            query += " AND (p.product_name ILIKE :search OR p.product_code ILIKE :search)"
-            params["search"] = f"%{search}%"
-
-        query += " GROUP BY p.id, u.unit_name, c.category_name, p.has_batch_tracking, p.has_serial_tracking, p.has_expiry_tracking, p.shelf_life_days, p.expiry_alert_days ORDER BY p.created_at DESC LIMIT :limit OFFSET :skip"
-
-        result = db.execute(text(query), params).fetchall()
-
-        products = []
-        for row in result:
-            products.append({
-                "id": row.id,
-                "item_code": row.item_code,
-                "item_name": row.item_name,
-                "item_name_en": row.item_name_en,
-                "item_type": row.item_type,
-                "unit": row.unit or 'قطعة',
-                "selling_price": str(row.selling_price or 0),
-                "buying_price": str(row.buying_price or 0),
-                "last_buying_price": str(row.last_buying_price or 0),
-                "tax_rate": str(row.tax_rate or 0),
-                "description": row.description,
-                "is_active": row.is_active,
-                "current_stock": str(row.current_stock or 0),
-                "reserved_quantity": str(row.reserved_quantity or 0),
-                "category_id": row.category_id,
-                "category_name": row.category_name,
-                "has_batch_tracking": row.has_batch_tracking or False,
-                "has_serial_tracking": row.has_serial_tracking or False,
-                "has_expiry_tracking": row.has_expiry_tracking or False,
-                "shelf_life_days": row.shelf_life_days or 0,
-                "expiry_alert_days": row.expiry_alert_days or 30,
-                "created_at": row.created_at
-            })
-        return products
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        repo = ProductRepository(db)
+        rows = repo.list(branch_id=branch_id, search=search, limit=limit, offset=skip)
+        return [
+            {
+                "id": r["id"],
+                "item_code": r.get("product_code"),
+                "item_name": r.get("product_name"),
+                "item_name_en": r.get("product_name_en"),
+                "item_type": r.get("product_type"),
+                "unit": r.get("unit_of_measure") or "قطعة",
+                "selling_price": str(r.get("selling_price") or 0),
+                "buying_price": str(r.get("cost_price") or 0),
+                "last_buying_price": str(r.get("last_purchase_price") or 0),
+                "tax_rate": str(r.get("tax_rate") or 0),
+                "description": r.get("description"),
+                "is_active": r.get("is_active", True),
+                "current_stock": str(r.get("current_stock") or 0),
+                "reserved_quantity": "0",
+                "category_id": r.get("category_id"),
+                "category_name": r.get("category_name"),
+                "has_batch_tracking": r.get("has_batch_tracking") or False,
+                "has_serial_tracking": r.get("has_serial_tracking") or False,
+                "has_expiry_tracking": r.get("has_expiry_tracking") or False,
+                "shelf_life_days": r.get("shelf_life_days") or 0,
+                "expiry_alert_days": r.get("expiry_alert_days") or 30,
+                "created_at": r.get("created_at"),
+            }
+            for r in rows
+        ]
 
 
 @products_router.get("/products/{product_id}/stock", response_model=float, dependencies=[Depends(require_permission("stock.view"))])
@@ -454,7 +415,7 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
         db.close()
 
 
-@products_router.delete("/products/{id}", dependencies=[Depends(require_permission("products.delete"))])
+@products_router.delete("/products/{id}", dependencies=[Depends(require_permission("products.delete"))], response_model=Dict[str, Any])
 def delete_product(
     id: int,
     request: Request,

@@ -5,7 +5,7 @@ Inventory Module - Shipments Lifecycle
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal
 import logging
@@ -23,7 +23,7 @@ shipments_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@shipments_router.post("/shipments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.transfer"))])
+@shipments_router.post("/shipments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.transfer"))], response_model=Dict[str, Any])
 def create_shipment(
     shipment: ShipmentCreate,
     request: Request,
@@ -139,7 +139,7 @@ def create_shipment(
         db.close()
 
 
-@shipments_router.get("/shipments", dependencies=[Depends(require_permission("stock.view"))])
+@shipments_router.get("/shipments", dependencies=[Depends(require_permission("stock.view"))], response_model=List[Dict[str, Any]])
 def list_shipments(
     status_filter: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -184,7 +184,7 @@ def list_shipments(
         db.close()
 
 
-@shipments_router.get("/shipments/incoming", dependencies=[Depends(require_permission("stock.view"))])
+@shipments_router.get("/shipments/incoming", dependencies=[Depends(require_permission("stock.view"))], response_model=List[Dict[str, Any]])
 def list_incoming_shipments(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
@@ -231,7 +231,7 @@ def list_incoming_shipments(
         db.close()
 
 
-@shipments_router.get("/shipments/{id}", dependencies=[Depends(require_permission("stock.view"))])
+@shipments_router.get("/shipments/{id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def get_shipment_details(
     id: int,
     current_user: dict = Depends(get_current_user)
@@ -276,7 +276,7 @@ def get_shipment_details(
         db.close()
 
 
-@shipments_router.post("/shipments/{id}/confirm", dependencies=[Depends(require_permission("stock.transfer"))])
+@shipments_router.post("/shipments/{id}/confirm", dependencies=[Depends(require_permission("stock.transfer"))], response_model=Dict[str, Any])
 def confirm_shipment(
     id: int,
     request: Request,
@@ -547,7 +547,7 @@ def confirm_shipment(
         db.close()
 
 
-@shipments_router.post("/shipments/{id}/cancel", dependencies=[Depends(require_permission("stock.manage"))])
+@shipments_router.post("/shipments/{id}/cancel", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def cancel_shipment(
     id: int,
     request: Request,

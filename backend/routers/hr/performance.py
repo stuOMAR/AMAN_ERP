@@ -5,7 +5,7 @@ Performance Reviews Router - US12
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
-from typing import Optional
+from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 import json
 import logging
@@ -31,7 +31,7 @@ router = APIRouter(
 # دورات المراجعة - Review Cycles
 # =============================================
 
-@router.post("/cycles", dependencies=[Depends(require_permission("hr.performance_manage"))])
+@router.post("/cycles", dependencies=[Depends(require_permission("hr.performance_manage"))], response_model=Dict[str, Any])
 def create_cycle(
     data: ReviewCycleCreate,
     request: Request,
@@ -70,7 +70,7 @@ def create_cycle(
         conn.close()
 
 
-@router.get("/cycles", dependencies=[Depends(require_permission("hr.performance_view"))])
+@router.get("/cycles", dependencies=[Depends(require_permission("hr.performance_view"))], response_model=List[Dict[str, Any]])
 def list_cycles(
     status: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -119,7 +119,7 @@ def list_cycles(
         conn.close()
 
 
-@router.post("/cycles/{cycle_id}/launch", dependencies=[Depends(require_permission("hr.performance_manage"))])
+@router.post("/cycles/{cycle_id}/launch", dependencies=[Depends(require_permission("hr.performance_manage"))], response_model=Dict[str, Any])
 def launch_cycle(
     cycle_id: int,
     request: Request,
@@ -214,7 +214,7 @@ def launch_cycle(
 # مراجعاتي - My Reviews (Employee)
 # =============================================
 
-@router.get("/reviews", dependencies=[Depends(require_permission("hr.performance_self"))])
+@router.get("/reviews", dependencies=[Depends(require_permission("hr.performance_self"))], response_model=Dict[str, Any])
 def list_my_reviews(
     cycle_id: Optional[int] = None,
     branch_id: Optional[int] = None,
@@ -272,7 +272,7 @@ def list_my_reviews(
         conn.close()
 
 
-@router.put("/reviews/{review_id}/self-assessment", dependencies=[Depends(require_permission("hr.performance_self"))])
+@router.put("/reviews/{review_id}/self-assessment", dependencies=[Depends(require_permission("hr.performance_self"))], response_model=Dict[str, Any])
 def submit_self_assessment(
     review_id: int,
     data: SelfAssessmentSubmit,
@@ -335,7 +335,7 @@ def submit_self_assessment(
 # مراجعات الفريق - Team Reviews (Manager)
 # =============================================
 
-@router.get("/team-reviews", dependencies=[Depends(require_permission("hr.performance_review"))])
+@router.get("/team-reviews", dependencies=[Depends(require_permission("hr.performance_review"))], response_model=Dict[str, Any])
 def list_team_reviews(
     cycle_id: Optional[int] = None,
     branch_id: Optional[int] = None,
@@ -398,7 +398,7 @@ def list_team_reviews(
         conn.close()
 
 
-@router.put("/reviews/{review_id}/manager-assessment", dependencies=[Depends(require_permission("hr.performance_review"))])
+@router.put("/reviews/{review_id}/manager-assessment", dependencies=[Depends(require_permission("hr.performance_review"))], response_model=Dict[str, Any])
 def submit_manager_assessment(
     review_id: int,
     data: ManagerAssessmentSubmit,
@@ -463,7 +463,7 @@ def submit_manager_assessment(
 # إتمام المراجعة - Finalize Review
 # =============================================
 
-@router.post("/reviews/{review_id}/finalize", dependencies=[Depends(require_permission("hr.performance_manage"))])
+@router.post("/reviews/{review_id}/finalize", dependencies=[Depends(require_permission("hr.performance_manage"))], response_model=Dict[str, Any])
 def finalize_review(
     review_id: int,
     request: Request,
@@ -553,7 +553,7 @@ def finalize_review(
 # أهداف الأداء - Performance Goals
 # =============================================
 
-@router.post("/reviews/{review_id}/goals", dependencies=[Depends(require_permission("hr.performance_manage"))])
+@router.post("/reviews/{review_id}/goals", dependencies=[Depends(require_permission("hr.performance_manage"))], response_model=Dict[str, Any])
 def add_goal(
     review_id: int,
     data: GoalCreate,
@@ -596,7 +596,7 @@ def add_goal(
         conn.close()
 
 
-@router.get("/reviews/{review_id}/goals", dependencies=[Depends(require_permission("hr.performance_view"))])
+@router.get("/reviews/{review_id}/goals", dependencies=[Depends(require_permission("hr.performance_view"))], response_model=List[Dict[str, Any]])
 def list_goals(
     review_id: int,
     company_id: str = Depends(get_current_user_company),
@@ -611,7 +611,7 @@ def list_goals(
         conn.close()
 
 
-@router.delete("/goals/{goal_id}", dependencies=[Depends(require_permission("hr.performance_manage"))])
+@router.delete("/goals/{goal_id}", dependencies=[Depends(require_permission("hr.performance_manage"))], response_model=Dict[str, Any])
 def delete_goal(
     goal_id: int,
     request: Request,
@@ -645,7 +645,7 @@ def delete_goal(
 # تفاصيل المراجعة - Review Detail
 # =============================================
 
-@router.get("/reviews/{review_id}", dependencies=[Depends(require_permission("hr.performance_view"))])
+@router.get("/reviews/{review_id}", dependencies=[Depends(require_permission("hr.performance_view"))], response_model=Dict[str, Any])
 def get_review_detail(
     review_id: int,
     current_user: UserResponse = Depends(get_current_user),

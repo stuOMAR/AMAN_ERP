@@ -2,6 +2,8 @@
 Email & SMS Notification Service - NOT-001, NOT-002
 خدمة الإشعارات عبر البريد الإلكتروني و SMS
 """
+import hashlib
+import hmac
 import smtplib
 import ssl
 import logging
@@ -28,13 +30,27 @@ class EmailService:
         self.from_name = from_name
         self.use_tls = use_tls
 
-    def send(self, to: str, subject: str, html_body: str, text_body: str = None) -> bool:
+    def send(
+        self,
+        to: str,
+        subject: str,
+        html_body: str,
+        text_body: str = None,
+        unsubscribe_url: Optional[str] = None,
+    ) -> bool:
         """Send an email. Returns True on success, False on failure."""
         try:
             msg = MIMEMultipart("alternative")
             msg["Subject"] = subject
             msg["From"] = f"{self.from_name} <{self.from_email}>"
             msg["To"] = to
+            # RFC 8058 / RFC 2369 List-Unsubscribe header
+            if unsubscribe_url:
+                msg["List-Unsubscribe"] = (
+                    f"<mailto:unsubscribe@aman-erp.com?subject=unsubscribe>, "
+                    f"<{unsubscribe_url}>"
+                )
+                msg["List-Unsubscribe-Post"] = "List-Unsubscribe=One-Click"
 
             if text_body:
                 msg.attach(MIMEText(text_body, "plain", "utf-8"))
@@ -245,6 +261,93 @@ def expiry_alert_template(item_type: str, item_name: str, expiry_date: str,
     return get_base_template(content)
 
 
+# ===================== DB-backed Template Engine =====================
+
+def render_db_template(db, template_name: str, context: dict) -> Optional[str]:
+    """Render an HTML email template stored in the ``email_templates`` table.
+
+    Performs a simple ``str.format_map`` substitution using ``context``.
+    Returns the rendered HTML string, or ``None`` when the template is not
+    found in the database (callers should then fall back to hardcoded templates).
+
+    Security: context values are NOT html-escaped here — callers must ensure
+    that user-supplied values are sanitised before passing to this function.
+    """
+    try:
+        row = db.execute(
+            text(
+                "SELECT body, subject FROM email_templates "
+                "WHERE template_name = :name AND is_active = TRUE LIMIT 1"
+            ),
+            {"name": template_name},
+        ).fetchone()
+        if not row or not row.body:
+            return None
+        rendered = row.body.format_map(context)
+        return rendered
+    except Exception as exc:
+        logger.warning("render_db_template(%s) failed: %s", template_name, exc)
+        return None
+
+
+def get_db_template_subject(db, template_name: str) -> Optional[str]:
+    """Return the subject line for a DB-stored email template, or None."""
+    try:
+        row = db.execute(
+            text(
+                "SELECT subject FROM email_templates "
+                "WHERE template_name = :name AND is_active = TRUE LIMIT 1"
+            ),
+            {"name": template_name},
+        ).fetchone()
+        return row.subject if row and row.subject else None
+    except Exception:
+        return None
+
+
+# ===================== Unsubscribe Token Helpers =====================
+
+def _get_secret_key() -> bytes:
+    """Return the application secret key as bytes for HMAC signing."""
+    try:
+        from config import get_settings
+        return get_settings().SECRET_KEY.encode()
+    except Exception:
+        return b"aman-fallback-key"
+
+
+def generate_unsubscribe_token(user_id: int, event_type: Optional[str] = None) -> str:
+    """Generate a signed HMAC-SHA256 unsubscribe token.
+
+    Format: ``{user_id}:{event_type}:{signature}``
+    event_type may be empty string for 'all events'.
+    """
+    event_type = event_type or ""
+    payload = f"{user_id}:{event_type}"
+    sig = hmac.new(
+        _get_secret_key(), payload.encode(), hashlib.sha256
+    ).hexdigest()
+    return f"{payload}:{sig}"
+
+
+def verify_unsubscribe_token(token: str) -> Optional[dict]:
+    """Verify an unsubscribe token and return ``{user_id, event_type}`` or None."""
+    try:
+        parts = token.split(":")
+        if len(parts) != 3:
+            return None
+        user_id_str, event_type, sig = parts
+        payload = f"{user_id_str}:{event_type}"
+        expected = hmac.new(
+            _get_secret_key(), payload.encode(), hashlib.sha256
+        ).hexdigest()
+        if not hmac.compare_digest(sig, expected):
+            return None
+        return {"user_id": int(user_id_str), "event_type": event_type or None}
+    except Exception:
+        return None
+
+
 # ===================== Notification Helper =====================
 
 def get_email_service_from_settings(db, *, tenant_id: Optional[str] = None) -> Optional[EmailService]:
@@ -320,7 +423,17 @@ def send_notification_email(db, user_id: int, subject: str, html_body: str, *, t
             logger.warning("SMTP not configured, skipping email notification")
             return False
 
-        return email_service.send(user.email, subject, html_body)
+        # Generate unsubscribe URL so recipients can opt-out via email footer
+        try:
+            unsub_token = generate_unsubscribe_token(user_id)
+            from config import get_settings as _gs
+            base = getattr(_gs(), "BASE_URL", "https://aman-erp.com")
+        except Exception:
+            unsub_token = None
+            base = "https://aman-erp.com"
+        unsubscribe_url = f"{base}/api/notifications/unsubscribe?token={unsub_token}" if unsub_token else None
+
+        return email_service.send(user.email, subject, html_body, unsubscribe_url=unsubscribe_url)
     except Exception as e:
         logger.error(f"Failed to send notification email: {str(e)}")
         return False

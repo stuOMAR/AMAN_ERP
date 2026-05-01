@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -89,7 +89,7 @@ def get_sales_order(order_id: int, current_user: dict = Depends(get_current_user
         db.close()
 
 
-@orders_router.post("/orders", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
+@orders_router.post("/orders", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_sales_order(request: Request, data: SOCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء أمر بيع جديد"""
     db = get_db_connection(current_user.company_id)

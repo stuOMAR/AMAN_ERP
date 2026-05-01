@@ -1,12 +1,14 @@
 """Cash-flow forecast generation service.
 
-Generates forecast lines from open AR/AP invoices and recurring journal
-entries, then computes a running balance per bank account + consolidated.
+Generates forecast lines from open AR/AP invoices, deferred cheques,
+scheduled payroll, and recurring journal entries, then computes a running
+balance starting from the real opening bank balance.
 """
 
 import logging
 from datetime import date, timedelta
 from decimal import Decimal
+from typing import Optional
 
 from sqlalchemy import text
 
@@ -22,6 +24,23 @@ def _dec(val) -> Decimal:
     return Decimal(str(val))
 
 
+def _get_lag_days(db, setting_key: str, default: int) -> int:
+    """Read configurable lag days from company_settings with a fallback default."""
+    try:
+        row = db.execute(
+            text(
+                "SELECT setting_value FROM company_settings "
+                "WHERE setting_key = :k LIMIT 1"
+            ),
+            {"k": setting_key},
+        ).fetchone()
+        if row and row[0]:
+            return int(row[0])
+    except Exception:
+        pass
+    return default
+
+
 def generate_cashflow_forecast(
     db,
     *,
@@ -30,10 +49,14 @@ def generate_cashflow_forecast(
     mode: str,
     user_id: int,
     scenario_weights: dict | None = None,
+    bank_account_id: Optional[int] = None,
 ) -> dict:
     """Build a cashflow forecast and persist it.
 
     Returns dict with ``forecast_id`` and ``line_count``.
+
+    Optional ``bank_account_id`` limits the opening balance and cheque sources
+    to a specific treasury account; AR/AP/recurring are always included.
 
     TREAS-F3 (Phase-11 Sprint-5): optional ``scenario_weights`` produces a
     probability-weighted projected balance. Accepted keys: ``best``, ``likely``,
@@ -55,6 +78,10 @@ def generate_cashflow_forecast(
             # Normalize
             weights = {k: (_w[k] / s) for k in _w}
 
+    # ── Configurable collection / payment lag from company_settings ──────
+    collection_lag = _get_lag_days(db, "forecast_collection_lag_days", 7)
+    payment_lag = _get_lag_days(db, "forecast_payment_lag_days", 3)
+
     # 1) Create the forecast header
     row = db.execute(
         text(
@@ -64,6 +91,25 @@ def generate_cashflow_forecast(
         {"name": name, "fd": today, "hd": horizon_days, "mode": mode, "uid": user_id},
     ).fetchone()
     forecast_id = row[0]
+
+    # ── Opening balance: sum of active treasury/bank account balances ─────
+    if bank_account_id:
+        ob_row = db.execute(
+            text(
+                "SELECT COALESCE(current_balance, 0) FROM treasury_accounts "
+                "WHERE id = :bid AND is_active = TRUE LIMIT 1"
+            ),
+            {"bid": bank_account_id},
+        ).fetchone()
+        opening_balance = _dec(ob_row[0]) if ob_row else _ZERO
+    else:
+        ob_row = db.execute(
+            text(
+                "SELECT COALESCE(SUM(current_balance), 0) FROM treasury_accounts "
+                "WHERE is_active = TRUE"
+            )
+        ).fetchone()
+        opening_balance = _dec(ob_row[0]) if ob_row else _ZERO
 
     # 2) Collect projected cash-flow items
     lines: list[dict] = []
@@ -79,13 +125,12 @@ def generate_cashflow_forecast(
     for inv in db.execute(ar_sql, {"start": today, "end": end_date}):
         due = inv.due_date
         if mode == "expected":
-            # Shift by average collection lag (simple: +7 days)
-            due = due + timedelta(days=7)
+            due = due + timedelta(days=collection_lag)
             if due > end_date:
                 continue
         lines.append({
             "date": due,
-            "bank_account_id": None,
+            "bank_account_id": bank_account_id,
             "source_type": "ar",
             "source_document_id": inv.id,
             "inflow": _dec(inv.balance),
@@ -103,16 +148,80 @@ def generate_cashflow_forecast(
     for inv in db.execute(ap_sql, {"start": today, "end": end_date}):
         due = inv.due_date
         if mode == "expected":
-            due = due + timedelta(days=3)
+            due = due + timedelta(days=payment_lag)
             if due > end_date:
                 continue
         lines.append({
             "date": due,
-            "bank_account_id": None,
+            "bank_account_id": bank_account_id,
             "source_type": "ap",
             "source_document_id": inv.id,
             "inflow": _ZERO,
             "outflow": _dec(inv.balance),
+        })
+
+    # --- Checks receivable: deferred inflows ---
+    cr_params: dict = {"start": today, "end": end_date}
+    cr_filter = ""
+    if bank_account_id:
+        cr_filter = " AND treasury_account_id = :bid"
+        cr_params["bid"] = bank_account_id
+    cr_sql = text(
+        "SELECT id, due_date, amount, treasury_account_id "
+        "FROM checks_receivable "
+        "WHERE status = 'pending' AND due_date BETWEEN :start AND :end"
+        + cr_filter
+    )
+    for chk in db.execute(cr_sql, cr_params):
+        lines.append({
+            "date": chk.due_date,
+            "bank_account_id": chk.treasury_account_id,
+            "source_type": "check_in",
+            "source_document_id": chk.id,
+            "inflow": _dec(chk.amount),
+            "outflow": _ZERO,
+        })
+
+    # --- Checks payable: deferred outflows ---
+    cp_params: dict = {"start": today, "end": end_date}
+    cp_filter = ""
+    if bank_account_id:
+        cp_filter = " AND treasury_account_id = :bid"
+        cp_params["bid"] = bank_account_id
+    cp_sql = text(
+        "SELECT id, due_date, amount, treasury_account_id "
+        "FROM checks_payable "
+        "WHERE status IN ('issued', 'pending') AND due_date BETWEEN :start AND :end"
+        + cp_filter
+    )
+    for chk in db.execute(cp_sql, cp_params):
+        lines.append({
+            "date": chk.due_date,
+            "bank_account_id": chk.treasury_account_id,
+            "source_type": "check_out",
+            "source_document_id": chk.id,
+            "inflow": _ZERO,
+            "outflow": _dec(chk.amount),
+        })
+
+    # --- Payroll: approved entries grouped by payment_date ---
+    payroll_sql = text(
+        "SELECT pp.payment_date, SUM(pe.net_salary) AS total_salary "
+        "FROM payroll_entries pe "
+        "JOIN payroll_periods pp ON pe.period_id = pp.id "
+        "WHERE pe.status = 'approved' "
+        "  AND pp.payment_date BETWEEN :start AND :end "
+        "  AND pp.payment_date IS NOT NULL "
+        "GROUP BY pp.payment_date"
+    )
+    for pr in db.execute(payroll_sql, {"start": today, "end": end_date}):
+        lines.append({
+            "date": pr.payment_date,
+            "bank_account_id": bank_account_id,
+            "source_type": "payroll",
+            "source_document_id": None,
+            "inflow": _ZERO,
+            "outflow": _dec(pr.total_salary),
         })
 
     # --- Recurring journal entries ---
@@ -125,16 +234,16 @@ def generate_cashflow_forecast(
         amt = _dec(rec.total_amount)
         lines.append({
             "date": rec.next_run_date,
-            "bank_account_id": None,
+            "bank_account_id": bank_account_id,
             "source_type": "recurring",
             "source_document_id": rec.id,
             "inflow": amt if amt > 0 else _ZERO,
             "outflow": abs(amt) if amt < 0 else _ZERO,
         })
 
-    # 3) Sort by date and compute running balance
+    # 3) Sort by date and compute running balance starting from opening_balance
     lines.sort(key=lambda l: l["date"])
-    running_balance = _ZERO
+    running_balance = opening_balance
     for line in lines:
         if weights:
             # Probability-weighted scenario math (TREAS-F3)
@@ -176,6 +285,12 @@ def generate_cashflow_forecast(
             })
 
     db.commit()
-    logger.info("Forecast %s created with %d lines (horizon=%d, mode=%s)",
-                forecast_id, len(lines), horizon_days, mode)
-    return {"forecast_id": forecast_id, "line_count": len(lines)}
+    logger.info(
+        "Forecast %s created with %d lines (horizon=%d, mode=%s, opening_balance=%s)",
+        forecast_id, len(lines), horizon_days, mode, opening_balance,
+    )
+    return {
+        "forecast_id": forecast_id,
+        "line_count": len(lines),
+        "opening_balance": float(opening_balance),
+    }

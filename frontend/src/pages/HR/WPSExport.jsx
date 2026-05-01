@@ -9,6 +9,7 @@ function WPSExport() {
     const { t } = useTranslation()
     const [periods, setPeriods] = useState([])
     const [selectedPeriod, setSelectedPeriod] = useState('')
+    const [exportFormat, setExportFormat] = useState('sif')
     const [preview, setPreview] = useState(null)
     const [loading, setLoading] = useState(false)
 
@@ -31,12 +32,15 @@ function WPSExport() {
         if (!selectedPeriod) return
         setLoading(true)
         try {
-            const res = await wpsAPI.exportWPS({ payroll_period_id: selectedPeriod })
-            const blob = new Blob([res.data], { type: 'text/csv' })
+            const res = await wpsAPI.exportWPS({ period_id: Number(selectedPeriod), format: exportFormat })
+            const isSif = exportFormat === 'sif'
+            const mimeType = isSif ? 'text/plain' : 'text/csv'
+            const ext = isSif ? 'sif' : 'csv'
+            const blob = new Blob([res.data], { type: mimeType })
             const url = window.URL.createObjectURL(blob)
             const a = document.createElement('a')
             a.href = url
-            a.download = `WPS_SIF_${selectedPeriod}.csv`
+            a.download = `WPS_${selectedPeriod}.${ext}`
             a.click()
             window.URL.revokeObjectURL(url)
             toastEmitter.emit(t('wps.exported'), 'success')
@@ -67,6 +71,13 @@ function WPSExport() {
                             {periods.map(p => (
                                 <option key={p.id} value={p.id}>{p.name || `${p.month}/${p.year}`}</option>
                             ))}
+                        </select>
+                    </div>
+                    <div className="form-group">
+                        <label>{t('wps.format')}</label>
+                        <select className="form-select" value={exportFormat} onChange={e => setExportFormat(e.target.value)}>
+                            <option value="sif">SIF — SAMA Fixed-Width (بنكي)</option>
+                            <option value="csv">CSV — Spreadsheet (قراءة)</option>
                         </select>
                     </div>
                     <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end', gap: 8 }}>

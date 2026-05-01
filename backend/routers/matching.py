@@ -5,7 +5,7 @@ and managing tolerance configurations.
 """
 
 import logging
-from typing import Optional
+from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
@@ -13,6 +13,7 @@ from sqlalchemy import text
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.i18n import http_error, i18n_message
 from utils.permissions import require_permission, require_module, validate_branch_access
 
@@ -71,7 +72,7 @@ def _get_user_id(current_user):
 # Match listing & detail
 # ---------------------------------------------------------------------------
 
-@router.get("/matches", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))])
+@router.get("/matches", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))], response_model=List[Dict[str, Any]])
 def list_matches(
     status: Optional[str] = None,
     branch_id: Optional[int] = Query(None),
@@ -79,8 +80,7 @@ def list_matches(
 ):
     company_id = _get_company_id(current_user)
     resolved_branch = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         q = """
             SELECT m.id, m.purchase_order_id, m.invoice_id, m.match_status,
                    m.matched_at, m.matched_by, m.exception_notes,
@@ -116,15 +116,12 @@ def list_matches(
             }
             for r in rows
         ]
-    finally:
-        db.close()
 
 
-@router.get("/matches/{match_id}", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))])
+@router.get("/matches/{match_id}", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))], response_model=Dict[str, Any])
 def get_match(match_id: int, current_user=Depends(get_current_user)):
     company_id = _get_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         row = db.execute(text("""
             SELECT m.id, m.purchase_order_id, m.invoice_id, m.match_status,
                    m.matched_at, m.matched_by, m.exception_approved_by,
@@ -183,15 +180,13 @@ def get_match(match_id: int, current_user=Depends(get_current_user)):
                 for ln in lines
             ],
         }
-    finally:
-        db.close()
 
 
 # ---------------------------------------------------------------------------
 # Approve / Reject held matches
 # ---------------------------------------------------------------------------
 
-@router.put("/matches/{match_id}/approve", dependencies=[Depends(require_permission(["matching.approve", "buying.edit"]))])
+@router.put("/matches/{match_id}/approve", dependencies=[Depends(require_permission(["matching.approve", "buying.edit"]))], response_model=Dict[str, Any])
 def approve_match(
     match_id: int,
     body: MatchActionRequest,
@@ -199,8 +194,7 @@ def approve_match(
 ):
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         row = db.execute(text(
             "SELECT id, match_status FROM three_way_matches WHERE id = :mid AND is_deleted = false"
         ), {"mid": match_id}).fetchone()
@@ -216,13 +210,10 @@ def approve_match(
                 updated_at = NOW()
             WHERE id = :mid
         """), {"mid": match_id, "uid": user_id, "notes": body.exception_notes})
-        db.commit()
         return {"detail": i18n_message("match_approved_with_exception")}
-    finally:
-        db.close()
 
 
-@router.put("/matches/{match_id}/reject", dependencies=[Depends(require_permission(["matching.approve", "buying.edit"]))])
+@router.put("/matches/{match_id}/reject", dependencies=[Depends(require_permission(["matching.approve", "buying.edit"]))], response_model=Dict[str, Any])
 def reject_match(
     match_id: int,
     body: MatchActionRequest,
@@ -230,8 +221,7 @@ def reject_match(
 ):
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         row = db.execute(text(
             "SELECT id, match_status FROM three_way_matches WHERE id = :mid AND is_deleted = false"
         ), {"mid": match_id}).fetchone()
@@ -247,21 +237,17 @@ def reject_match(
                 updated_at = NOW()
             WHERE id = :mid
         """), {"mid": match_id, "uid": user_id, "notes": body.exception_notes})
-        db.commit()
         return {"detail": i18n_message("match_rejected")}
-    finally:
-        db.close()
 
 
 # ---------------------------------------------------------------------------
 # Tolerance configuration
 # ---------------------------------------------------------------------------
 
-@router.get("/tolerances", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))])
+@router.get("/tolerances", dependencies=[Depends(require_permission(["matching.view", "buying.view"]))], response_model=List[Dict[str, Any]])
 def list_tolerances(current_user=Depends(get_current_user)):
     company_id = _get_company_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         rows = db.execute(text(
             "SELECT * FROM match_tolerances WHERE is_deleted = false ORDER BY id"
         )).fetchall()
@@ -278,16 +264,13 @@ def list_tolerances(current_user=Depends(get_current_user)):
             }
             for r in rows
         ]
-    finally:
-        db.close()
 
 
-@router.post("/tolerances", dependencies=[Depends(require_permission(["matching.manage", "buying.edit"]))])
+@router.post("/tolerances", dependencies=[Depends(require_permission(["matching.manage", "buying.edit"]))], response_model=Dict[str, Any])
 def save_tolerance(body: ToleranceSave, current_user=Depends(get_current_user)):
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         if body.id:
             # Update existing
             existing = db.execute(text(
@@ -309,7 +292,6 @@ def save_tolerance(body: ToleranceSave, current_user=Depends(get_current_user)):
                 "sid": body.supplier_id, "cid": body.product_category_id,
                 "uid": str(user_id) if user_id else None,
             })
-            db.commit()
             return {"id": body.id, "detail": i18n_message("tolerance_updated")}
         else:
             # Create new
@@ -327,7 +309,4 @@ def save_tolerance(body: ToleranceSave, current_user=Depends(get_current_user)):
                 "uid": str(user_id) if user_id else None,
             })
             new_id = result.scalar()
-            db.commit()
             return {"id": new_id, "detail": i18n_message("tolerance_created")}
-    finally:
-        db.close()

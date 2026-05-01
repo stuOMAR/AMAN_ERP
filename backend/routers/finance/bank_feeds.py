@@ -16,7 +16,9 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy import text
 
 from database import get_db_connection
-from integrations.bank_feeds import parse_mt940, parse_csv_statement, CSVStatementConfig
+from integrations.bank_feeds import (
+    parse_mt940, parse_csv_statement, CSVStatementConfig, parse_camt053,
+)
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 
@@ -109,6 +111,36 @@ async def import_statement(
                      "raw": json.dumps(r.get("raw") or {}, default=str)},
                 )
             created.append(stmt_id)
+        elif fmt in ("camt053", "camt.053", "camt", "iso20022"):
+            try:
+                statements = parse_camt053(raw)
+            except ValueError as e:
+                raise HTTPException(400, f"CAMT.053 parse failed: {e}")
+            for st in statements:
+                stmt_id = _insert_statement(
+                    db, bank_account_id=bank_account_id, iban=st.account,
+                    statement_number=st.statement_number, currency=st.currency,
+                    opening=st.opening_balance, closing=st.closing_balance,
+                    period_start=st.period_start,
+                    period_end=st.period_end,
+                    source_format="camt053", source_filename=file.filename,
+                    imported_by=current_user.id,
+                )
+                for i, t in enumerate(st.transactions, start=1):
+                    db.execute(
+                        text("""INSERT INTO bank_statement_lines
+                                    (statement_id, line_no, value_date, posting_date,
+                                     amount, currency, tx_type, reference,
+                                     bank_reference, description)
+                                VALUES (:sid, :n, :vd, :pd, :amt, :cur, :tt, :ref, :br, :desc)"""),
+                        {"sid": stmt_id, "n": i, "vd": t.value_date,
+                         "pd": t.entry_date or t.value_date,
+                         "amt": t.amount, "cur": t.currency or st.currency,
+                         "tt": t.transaction_type,
+                         "ref": (t.reference or "")[:120] or None,
+                         "br": t.bank_reference, "desc": t.description},
+                    )
+                created.append(stmt_id)
         else:
             raise HTTPException(400, f"unsupported source_format: {source_format!r}")
         db.commit()

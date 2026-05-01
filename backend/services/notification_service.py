@@ -16,6 +16,7 @@ Usage:
     )
 """
 
+import html
 import logging
 from datetime import datetime, timezone
 from typing import Optional
@@ -45,11 +46,19 @@ class NotificationService:
         reference_type: Optional[str] = None,
         reference_id: Optional[int] = None,
         link: Optional[str] = None,
+        depth: int = 0,
     ) -> None:
         """Send a notification to all enabled channels for the recipient.
 
         Falls back to all channels enabled when no preference row exists.
+        depth guard prevents infinite dispatch loops (max 5 levels).
         """
+        if depth >= 5:
+            logger.warning(
+                "Notification dispatch depth limit reached for user %s (%s) — aborting",
+                recipient_id, event_type,
+            )
+            return
         channels = self._get_enabled_channels(db, recipient_id, event_type)
         for channel in channels:
             try:
@@ -156,6 +165,9 @@ class NotificationService:
         link: Optional[str],
     ) -> None:
         """Insert notification row and push via WebSocket."""
+        # Sanitize user-supplied content before persisting / sending
+        title = html.escape(title)
+        body = html.escape(body)
         now = datetime.now(timezone.utc)
         result = db.execute(
             text(
@@ -255,21 +267,46 @@ class NotificationService:
         ).fetchone()
         return row.fcm_token if row and hasattr(row, "fcm_token") else None
 
-    def _mark_delivery_failed(self, db, recipient_id: int, channel: str) -> None:
-        """T023: Mark the latest notification as failed for retry tracking."""
+    def _mark_delivery_failed(
+        self,
+        db,
+        recipient_id: int,
+        channel: str,
+        *,
+        notification_id: Optional[int] = None,
+    ) -> None:
+        """T023: Mark a notification as failed for retry tracking.
+
+        When ``notification_id`` is provided the update targets that specific
+        row; otherwise the most-recent unread in_app notification for the
+        recipient is updated as a best-effort fallback.
+        """
         try:
-            db.execute(
-                text(
-                    "UPDATE notifications SET delivery_status = 'failed', "
-                    "delivery_channel = :channel, retry_count = 0, last_retry_at = NOW() "
-                    "WHERE id = (SELECT id FROM notifications WHERE user_id = :uid "
-                    "ORDER BY created_at DESC LIMIT 1)"
-                ),
-                {"channel": channel, "uid": recipient_id},
-            )
+            if notification_id is not None:
+                db.execute(
+                    text(
+                        "UPDATE notifications SET delivery_status = 'failed', "
+                        "delivery_channel = :channel, retry_count = 0, last_retry_at = NOW() "
+                        "WHERE id = :notif_id"
+                    ),
+                    {"channel": channel, "notif_id": notification_id},
+                )
+            else:
+                db.execute(
+                    text(
+                        "UPDATE notifications SET delivery_status = 'failed', "
+                        "delivery_channel = :channel, retry_count = 0, last_retry_at = NOW() "
+                        "WHERE id = ("
+                        "  SELECT id FROM notifications "
+                        "  WHERE user_id = :uid AND channel = 'in_app' "
+                        "  ORDER BY created_at DESC LIMIT 1"
+                        ")"
+                    ),
+                    {"channel": channel, "uid": recipient_id},
+                )
             db.commit()
         except Exception:
-            pass  # Column may not exist yet
+            pass  # Column may not exist yet in all tenant schemas
 
 
 # Module-level singleton

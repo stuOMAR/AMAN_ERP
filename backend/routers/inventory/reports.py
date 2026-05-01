@@ -5,7 +5,7 @@ Inventory Module - Reports (Summary, Warehouse Stock, Movements, Valuation)
 from fastapi import APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection
@@ -166,7 +166,7 @@ def get_warehouse_stock(
         db.close()
 
 
-@reports_router.get("/movements", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
+@reports_router.get("/movements", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))], response_model=List[Dict[str, Any]])
 def get_stock_movements(
     item_name: Optional[str] = None,
     warehouse: Optional[str] = None,

@@ -12,6 +12,7 @@ import logging
 
 from database import get_db_connection, engine
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission, require_module
 from utils.tenant_isolation import resolve_target_company_id
 
@@ -105,8 +106,7 @@ def list_audit_logs(
     if not target_company_id:
         raise HTTPException(status_code=400, detail="Company ID missing and not a system view")
 
-    db = get_db_connection(target_company_id)
-    try:
+    with transactional(target_company_id) as db:
         query = """
             SELECT al.id, al.user_id, al.username, al.action, al.resource_type, al.resource_id, 
                    al.details, al.ip_address, al.created_at, al.branch_id, b.branch_name
@@ -184,8 +184,6 @@ def list_audit_logs(
             })
         
         return logs
-    finally:
-        db.close()
 
 
 @router.get("/logs/actions", response_model=List[str], dependencies=[Depends(require_permission("audit.view"))])
@@ -207,12 +205,9 @@ def list_available_actions(
     if not target_company_id:
          return []
 
-    db = get_db_connection(target_company_id)
-    try:
+    with transactional(target_company_id) as db:
         result = db.execute(text("SELECT DISTINCT action FROM audit_logs ORDER BY action")).fetchall()
         return [row[0] for row in result]
-    finally:
-        db.close()
 
 
 @router.get("/logs/stats", response_model=dict, dependencies=[Depends(require_permission("audit.view"))])
@@ -263,8 +258,7 @@ def get_audit_stats(
     if not target_company_id:
         return {"total_logs": 0, "today_logs": 0, "top_actions": [], "top_users": []}
 
-    db = get_db_connection(target_company_id)
-    try:
+    with transactional(target_company_id) as db:
         permissions = getattr(current_user, 'permissions', []) or []
         is_admin = "*" in permissions or getattr(current_user, 'role', None) in ['admin', 'system_admin', 'superuser']
         
@@ -324,5 +318,3 @@ def get_audit_stats(
             "top_actions": [{"action": r[0], "count": r[1]} for r in top_actions],
             "top_users": [{"username": r[0], "count": r[1]} for r in top_users]
         }
-    finally:
-        db.close()

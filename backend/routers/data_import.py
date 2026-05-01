@@ -7,6 +7,7 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import require_permission
 import logging
@@ -215,102 +216,99 @@ async def execute_import(
     if not rows:
         raise HTTPException(**http_error(400, "file_empty"))
 
-    db = get_db_connection(current_user.company_id)
-    try:
-        inserted = 0
-        updated = 0
-        skipped = 0
-        errors = []
-        all_columns = config["required_columns"] + config["optional_columns"]
-
-        for i, row in enumerate(rows):
-            try:
-                # Validate required fields
-                missing = [c for c in config["required_columns"] if not row.get(c) or str(row[c]).strip() == ""]
-                if missing:
-                    if skip_errors:
-                        skipped += 1
-                        errors.append(f"سطر {i + 2}: حقول ناقصة: {', '.join(missing)}")
-                        continue
-                    else:
-                        raise HTTPException(400, f"سطر {i + 2}: الحقول المطلوبة ناقصة: {', '.join(missing)}")
-
-                # Build columns/values
-                # SEC-FIX-012: Validate column names are safe SQL identifiers
-                from utils.sql_safety import validate_sql_identifier
-                row_cols = [c for c in all_columns if c in row and row[c] is not None and str(row[c]).strip() != ""]
-                for col in row_cols:
-                    validate_sql_identifier(col, "column name")
-                col_names = ", ".join(row_cols)
-                col_params = ", ".join([f":{c}" for c in row_cols])
-                params = {c: row[c] for c in row_cols}
-
-                # Upsert logic
-                unique_key = config["unique_key"]
-                if unique_key in params:
-                    # Check if exists
-                    existing = db.execute(text(f"""
-                        SELECT id FROM {config['table']} WHERE {unique_key} = :ukey
-                    """), {"ukey": params[unique_key]}).fetchone()
-
-                    if existing:
-                        # Update
-                        set_clause = ", ".join([f"{c} = :{c}" for c in row_cols if c != unique_key])
-                        if set_clause:
-                            db.execute(text(f"""
-                                UPDATE {config['table']} SET {set_clause} WHERE {unique_key} = :{unique_key}
-                            """), params)
-                            updated += 1
-                        else:
+    with transactional(current_user.company_id) as db:
+        try:
+            inserted = 0
+            updated = 0
+            skipped = 0
+            errors = []
+            all_columns = config["required_columns"] + config["optional_columns"]
+    
+            for i, row in enumerate(rows):
+                try:
+                    # Validate required fields
+                    missing = [c for c in config["required_columns"] if not row.get(c) or str(row[c]).strip() == ""]
+                    if missing:
+                        if skip_errors:
                             skipped += 1
+                            errors.append(f"سطر {i + 2}: حقول ناقصة: {', '.join(missing)}")
+                            continue
+                        else:
+                            raise HTTPException(400, f"سطر {i + 2}: الحقول المطلوبة ناقصة: {', '.join(missing)}")
+    
+                    # Build columns/values
+                    # SEC-FIX-012: Validate column names are safe SQL identifiers
+                    from utils.sql_safety import validate_sql_identifier
+                    row_cols = [c for c in all_columns if c in row and row[c] is not None and str(row[c]).strip() != ""]
+                    for col in row_cols:
+                        validate_sql_identifier(col, "column name")
+                    col_names = ", ".join(row_cols)
+                    col_params = ", ".join([f":{c}" for c in row_cols])
+                    params = {c: row[c] for c in row_cols}
+    
+                    # Upsert logic
+                    unique_key = config["unique_key"]
+                    if unique_key in params:
+                        # Check if exists
+                        existing = db.execute(text(f"""
+                            SELECT id FROM {config['table']} WHERE {unique_key} = :ukey
+                        """), {"ukey": params[unique_key]}).fetchone()
+    
+                        if existing:
+                            # Update
+                            set_clause = ", ".join([f"{c} = :{c}" for c in row_cols if c != unique_key])
+                            if set_clause:
+                                db.execute(text(f"""
+                                    UPDATE {config['table']} SET {set_clause} WHERE {unique_key} = :{unique_key}
+                                """), params)
+                                updated += 1
+                            else:
+                                skipped += 1
+                        else:
+                            # Insert
+                            db.execute(text(f"""
+                                INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
+                            """), params)
+                            inserted += 1
                     else:
-                        # Insert
                         db.execute(text(f"""
                             INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
                         """), params)
                         inserted += 1
-                else:
-                    db.execute(text(f"""
-                        INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
-                    """), params)
-                    inserted += 1
-
-            except HTTPException:
-                raise
+    
+                except HTTPException:
+                    raise
+                except Exception:
+                    if skip_errors:
+                        skipped += 1
+                        errors.append(f"سطر {i + 2}: خطأ في البيانات")
+                        logger.warning(f"Import row {i + 2} error", exc_info=True)
+                    else:
+                        logger.exception(f"Import error at row {i + 2}")
+                        raise HTTPException(400, f"خطأ في السطر {i + 2}")
+    
+    
+            try:
+                log_activity(db, current_user.id, current_user.username, "import",
+                             config["table"], "batch",
+                             {"entity_type": entity_type, "inserted": inserted, "updated": updated, "skipped": skipped})
             except Exception:
-                if skip_errors:
-                    skipped += 1
-                    errors.append(f"سطر {i + 2}: خطأ في البيانات")
-                    logger.warning(f"Import row {i + 2} error", exc_info=True)
-                else:
-                    logger.exception(f"Import error at row {i + 2}")
-                    raise HTTPException(400, f"خطأ في السطر {i + 2}")
-
-        db.commit()
-
-        try:
-            log_activity(db, current_user.id, current_user.username, "import",
-                         config["table"], "batch",
-                         {"entity_type": entity_type, "inserted": inserted, "updated": updated, "skipped": skipped})
+                pass
+    
+            return {
+                "message": "تم الاستيراد بنجاح",
+                "inserted": inserted,
+                "updated": updated,
+                "skipped": skipped,
+                "total": len(rows),
+                "errors": errors[:50]
+            }
+        except HTTPException:
+            raise
         except Exception:
             pass
-
-        return {
-            "message": "تم الاستيراد بنجاح",
-            "inserted": inserted,
-            "updated": updated,
-            "skipped": skipped,
-            "total": len(rows),
-            "errors": errors[:50]
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ===================== Export =====================
@@ -331,47 +329,44 @@ def export_data(
     from utils.sql_safety import validate_sql_identifier
     validate_sql_identifier(config["table"], "table name")
 
-    db = get_db_connection(current_user.company_id)
-
-    try:
-        all_columns = config["required_columns"] + config["optional_columns"]
-        
-        # Get actual columns in the table to avoid missing column errors
-        actual_cols = db.execute(text("""
-            SELECT column_name FROM information_schema.columns 
-            WHERE table_name = :table
-        """), {"table": config["table"]}).fetchall()
-        existing_cols = {r[0] for r in actual_cols}
-        col_list_filtered = [c for c in all_columns if c in existing_cols]
-        
-        if not col_list_filtered:
-            raise HTTPException(500, "لا توجد أعمدة مطابقة في الجدول")
-        
-        col_list = ", ".join(col_list_filtered)
-
-        rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall()
-        data = [dict(r._mapping) for r in rows]
-
-        if format == "json":
-            from fastapi.responses import JSONResponse
-            return JSONResponse(content=data)
-        else:
-            from fastapi.responses import StreamingResponse
-            csv_lines = [",".join(col_list_filtered)]
-            for row in data:
-                csv_lines.append(",".join([_csv_escape(str(row.get(c, "") or "")) for c in col_list_filtered]))
-
-            csv_content = "\n".join(csv_lines)
-            return StreamingResponse(
-                io.StringIO(csv_content),
-                media_type="text/csv",
-                headers={"Content-Disposition": f"attachment; filename={entity_type}_export_{datetime.now().strftime('%Y%m%d')}.csv"}
-            )
-    except Exception:
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            all_columns = config["required_columns"] + config["optional_columns"]
+            
+            # Get actual columns in the table to avoid missing column errors
+            actual_cols = db.execute(text("""
+                SELECT column_name FROM information_schema.columns 
+                WHERE table_name = :table
+            """), {"table": config["table"]}).fetchall()
+            existing_cols = {r[0] for r in actual_cols}
+            col_list_filtered = [c for c in all_columns if c in existing_cols]
+            
+            if not col_list_filtered:
+                raise HTTPException(500, "لا توجد أعمدة مطابقة في الجدول")
+            
+            col_list = ", ".join(col_list_filtered)
+    
+            rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall()
+            data = [dict(r._mapping) for r in rows]
+    
+            if format == "json":
+                from fastapi.responses import JSONResponse
+                return JSONResponse(content=data)
+            else:
+                from fastapi.responses import StreamingResponse
+                csv_lines = [",".join(col_list_filtered)]
+                for row in data:
+                    csv_lines.append(",".join([_csv_escape(str(row.get(c, "") or "")) for c in col_list_filtered]))
+    
+                csv_content = "\n".join(csv_lines)
+                return StreamingResponse(
+                    io.StringIO(csv_content),
+                    media_type="text/csv",
+                    headers={"Content-Disposition": f"attachment; filename={entity_type}_export_{datetime.now().strftime('%Y%m%d')}.csv"}
+                )
+        except Exception:
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 
 # ===================== Import History =====================
@@ -383,21 +378,19 @@ def import_history(
     current_user=Depends(get_current_user)
 ):
     """سجل عمليات الاستيراد السابقة"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        offset = (page - 1) * limit
-        rows = db.execute(text("""
-            SELECT * FROM audit_logs
-            WHERE action = 'import'
-            ORDER BY created_at DESC
-            LIMIT :limit OFFSET :offset
-        """), {"limit": limit, "offset": offset}).fetchall()
-
-        return {"items": [dict(r._mapping) for r in rows], "page": page}
-    except Exception:
-        return {"items": [], "page": page}
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            offset = (page - 1) * limit
+            rows = db.execute(text("""
+                SELECT * FROM audit_logs
+                WHERE action = 'import'
+                ORDER BY created_at DESC
+                LIMIT :limit OFFSET :offset
+            """), {"limit": limit, "offset": offset}).fetchall()
+    
+            return {"items": [dict(r._mapping) for r in rows], "page": page}
+        except Exception:
+            return {"items": [], "page": page}
 
 
 # ===================== Helpers =====================

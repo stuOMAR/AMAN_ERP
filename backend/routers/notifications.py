@@ -2,11 +2,12 @@
 from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 from datetime import datetime
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.ws_manager import ws_manager
@@ -47,8 +48,7 @@ async def get_notifications(
     if not company_id:
         return []
 
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         result = db.execute(text("""
             SELECT id, user_id, title, message, link, is_read, 
                    type, created_at
@@ -58,68 +58,55 @@ async def get_notifications(
             LIMIT :limit
         """), {"uid": current_user.id, "limit": limit}).fetchall()
         return [dict(r._mapping) for r in result]
-    finally:
-        db.close()
 
-@router.get("/unread-count")
+@router.get("/unread-count", response_model=Dict[str, Any])
 async def get_unread_count(current_user: dict = Depends(get_current_user)):
     """عدد الإشعارات غير المقروءة"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
         return {"count": 0}
 
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         count = db.execute(text("""
             SELECT COUNT(*) FROM notifications 
             WHERE user_id = :uid AND is_read = FALSE
         """), {"uid": current_user.id}).scalar()
         return {"count": count}
-    finally:
-        db.close()
 
-@router.put("/{notification_id}/read")
+@router.put("/{notification_id}/read", response_model=Dict[str, Any])
 async def mark_read(notification_id: int, current_user: dict = Depends(get_current_user)):
     """تحديد إشعار كمقروء"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
         return {"success": False}
 
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         db.execute(text("""
             UPDATE notifications 
             SET is_read = TRUE 
             WHERE id = :id AND user_id = :uid
         """), {"id": notification_id, "uid": current_user.id})
-        db.commit()
         return {"success": True}
-    finally:
-        db.close()
 
-@router.post("/mark-all-read")
+@router.post("/mark-all-read", response_model=Dict[str, Any])
 async def mark_all_read(current_user: dict = Depends(get_current_user)):
     """تحديد الكل كمقروء"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
         return {"success": False}
 
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         db.execute(text("""
             UPDATE notifications 
             SET is_read = TRUE 
             WHERE user_id = :uid AND is_read = FALSE
         """), {"uid": current_user.id})
-        db.commit()
         return {"success": True}
-    finally:
-        db.close()
 
 
 # ===================== Create Notification with Email/SMS =====================
 
-@router.post("/send", dependencies=[Depends(require_permission(["notifications.send", "admin"]))])
+@router.post("/send", dependencies=[Depends(require_permission(["notifications.send", "admin"]))], response_model=Dict[str, Any])
 async def create_and_send_notification(
     data: NotificationCreate,
     current_user: dict = Depends(get_current_user)
@@ -201,15 +188,14 @@ async def create_and_send_notification(
 
 # ===================== Notification Settings (SMTP / SMS) =====================
 
-@router.get("/settings", dependencies=[Depends(require_permission("settings.view"))])
+@router.get("/settings", dependencies=[Depends(require_permission("settings.view"))], response_model=Dict[str, Any])
 async def get_notification_settings(current_user: dict = Depends(get_current_user)):
     """إعدادات البريد الإلكتروني و SMS"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
         return {}
 
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         keys = [
             'smtp_host', 'smtp_port', 'smtp_username', 'smtp_from_email',
             'smtp_from_name', 'smtp_tls',
@@ -227,11 +213,9 @@ async def get_notification_settings(current_user: dict = Depends(get_current_use
         settings["smtp_password"] = "********" if settings.get("smtp_host") else ""
         settings["sms_api_key"] = "********" if settings.get("sms_api_url") else ""
         return settings
-    finally:
-        db.close()
 
 
-@router.put("/settings", dependencies=[Depends(require_permission("settings.edit"))])
+@router.put("/settings", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 async def update_notification_settings(
     data: dict,
     request: Request,
@@ -306,15 +290,14 @@ class PreferenceUpdate(BaseModel):
     push_enabled: bool = True
 
 
-@router.get("/preferences")
+@router.get("/preferences", response_model=List[Dict[str, Any]])
 async def get_preferences(current_user: dict = Depends(get_current_user)):
     """جلب تفضيلات الإشعارات للمستخدم"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
         return []
     user_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         rows = db.execute(text(
             "SELECT event_type, email_enabled, in_app_enabled, push_enabled "
             "FROM notification_preferences WHERE user_id = :uid"
@@ -328,11 +311,9 @@ async def get_preferences(current_user: dict = Depends(get_current_user)):
             }
             for r in rows
         ]
-    finally:
-        db.close()
 
 
-@router.put("/preferences")
+@router.put("/preferences", response_model=Dict[str, Any])
 async def update_preference(body: PreferenceUpdate, request: Request, current_user: dict = Depends(get_current_user)):
     """تحديث تفضيل إشعار واحد (upsert)"""
     company_id = getattr(current_user, "company_id", None)
@@ -379,7 +360,7 @@ async def update_preference(body: PreferenceUpdate, request: Request, current_us
         db.close()
 
 
-@router.post("/test-email", dependencies=[Depends(require_permission("settings.edit"))])
+@router.post("/test-email", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 async def test_email_connection(current_user: dict = Depends(get_current_user)):
     """اختبار اتصال SMTP"""
     company_id = getattr(current_user, "company_id", None)
@@ -487,4 +468,65 @@ async def push_notification(company_id: str, user_id: int, notification: dict):
         })
     except Exception as e:
         logger.debug(f"WS push failed for {company_id}:{user_id}: {e}")
+
+
+# ===================== Unsubscribe Endpoint =====================
+
+@router.get("/unsubscribe")
+async def unsubscribe_from_notifications(
+    token: str,
+    company_id: Optional[str] = None,
+):
+    """Honour a one-click unsubscribe link included in email footers.
+
+    Verifies the HMAC token and disables the matching notification preference
+    (or all preferences when event_type is absent).
+    Returns a plain HTML confirmation page.
+    """
+    from services.email_service import verify_unsubscribe_token
+    from fastapi.responses import HTMLResponse
+
+    payload = verify_unsubscribe_token(token)
+    if not payload:
+        return HTMLResponse(
+            "<h2>رابط إلغاء الاشتراك غير صالح أو منتهي الصلاحية.</h2>",
+            status_code=400,
+        )
+
+    user_id = payload["user_id"]
+    event_type = payload.get("event_type")
+
+    # Attempt to update notification preferences in the user's company DB.
+    # We need company_id — callers should embed it in the unsubscribe URL.
+    if company_id:
+        try:
+            from database import get_db_connection
+            with transactional(company_id) as db:
+                if event_type:
+                    db.execute(
+                        text(
+                            "UPDATE notification_preferences "
+                            "SET email_enabled = FALSE, updated_at = NOW() "
+                            "WHERE user_id = :uid AND event_type = :evt"
+                        ),
+                        {"uid": user_id, "evt": event_type},
+                    )
+                else:
+                    db.execute(
+                        text(
+                            "UPDATE notification_preferences "
+                            "SET email_enabled = FALSE, updated_at = NOW() "
+                            "WHERE user_id = :uid"
+                        ),
+                        {"uid": user_id},
+                    )
+        except Exception as exc:
+            logger.warning("Unsubscribe DB update failed: %s", exc)
+
+    scope = f"إشعارات '{event_type}'" if event_type else "جميع الإشعارات البريدية"
+    return HTMLResponse(
+        f"<h2>✅ تم إلغاء اشتراكك من {scope} بنجاح.</h2>"
+        "<p>يمكنك إعادة تفعيل الإشعارات في إعدادات حسابك.</p>",
+        status_code=200,
+    )
 

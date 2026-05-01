@@ -8,7 +8,7 @@ from sqlalchemy import text
 import logging
 import os
 from datetime import datetime, timezone
-from typing import List, Optional, Any
+from typing import Any, Dict, List, Optional
 
 from database import (
     get_system_db, 
@@ -282,12 +282,13 @@ def list_companies(
 
 
 from routers.auth import get_current_user
+from utils.tx import transactional
 from schemas import UserResponse
 
 
 # ===================== Public Templates (MUST be before /{company_id}) =====================
 
-@router.get("/public/templates")
+@router.get("/public/templates", response_model=List[Dict[str, Any]])
 def get_industry_templates():
     """عرض قوالب الأنشطة المتاحة للجمهور"""
     from database import get_system_db
@@ -319,7 +320,7 @@ def get_industry_templates():
 
 # ===================== Enabled Modules Management (MUST be before /{company_id}) =====================
 
-@router.get("/modules")
+@router.get("/modules", response_model=Dict[str, Any])
 def get_enabled_modules(current_user=Depends(get_current_user)):
     """الحصول على الوحدات المفعّلة"""
     # Read from system_companies (source of truth, same as login)
@@ -340,7 +341,7 @@ def get_enabled_modules(current_user=Depends(get_current_user)):
         db.close()
 
 
-@router.put("/modules", dependencies=[Depends(require_permission("settings.manage"))])
+@router.put("/modules", dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
 def update_enabled_modules(modules: Any = Body(...), current_user=Depends(get_current_user)):
     """تحديث الوحدات المفعّلة — يقبل list أو dict"""
     import json
@@ -399,25 +400,22 @@ def update_enabled_modules(modules: Any = Body(...), current_user=Depends(get_cu
         sys_db.close()
     
     # 2. نسخة احتياطية في company_settings (key-value)
-    db = get_db_connection(current_user.company_id)
-    try:
-        exists = db.execute(text(
-            "SELECT 1 FROM company_settings WHERE setting_key = 'enabled_modules'"
-        )).fetchone()
-        if exists:
-            db.execute(text(
-                "UPDATE company_settings SET setting_value = :m WHERE setting_key = 'enabled_modules'"
-            ), {"m": modules_json})
-        else:
-            db.execute(text(
-                "INSERT INTO company_settings (setting_key, setting_value) VALUES ('enabled_modules', :m)"
-            ), {"m": modules_json})
-        db.commit()
-    except Exception as e:
-        logger.warning(f"Failed to update company_settings.enabled_modules: {e}")
-        db.rollback()
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            exists = db.execute(text(
+                "SELECT 1 FROM company_settings WHERE setting_key = 'enabled_modules'"
+            )).fetchone()
+            if exists:
+                db.execute(text(
+                    "UPDATE company_settings SET setting_value = :m WHERE setting_key = 'enabled_modules'"
+                ), {"m": modules_json})
+            else:
+                db.execute(text(
+                    "INSERT INTO company_settings (setting_key, setting_value) VALUES ('enabled_modules', :m)"
+                ), {"m": modules_json})
+        except Exception as e:
+            logger.warning(f"Failed to update company_settings.enabled_modules: {e}")
+            pass
     
     # Audit log for module update
     try:
@@ -449,7 +447,7 @@ def update_enabled_modules(modules: Any = Body(...), current_user=Depends(get_cu
 
 # ===================== Company Details (catch-all path param) =====================
 
-@router.get("/{company_id}")
+@router.get("/{company_id}", response_model=Dict[str, Any])
 def get_company(
     company_id: str,
     current_user: UserResponse = Depends(get_current_user)
@@ -499,7 +497,7 @@ def get_company(
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
-@router.put("/update/{company_id}", dependencies=[Depends(require_permission("settings.manage"))])
+@router.put("/update/{company_id}", dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
 def update_company(
     company_id: str,
     request: CompanyUpdateRequest,
@@ -572,7 +570,7 @@ def update_company(
     finally:
         db.close()
 
-@router.post("/upload-logo/{company_id}", dependencies=[Depends(require_permission("settings.edit"))])
+@router.post("/upload-logo/{company_id}", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
 async def upload_company_logo(
     company_id: str,
     file: UploadFile = File(...),
@@ -607,8 +605,7 @@ async def upload_company_logo(
         
         # Save to company_settings
         from database import get_db_connection
-        db = get_db_connection(company_id)
-        try:
+        with transactional(company_id) as db:
             logo_url = f"/uploads/logos/{filename}"
             # Check if key exists
             exists = db.execute(text("SELECT 1 FROM company_settings WHERE setting_key = 'company_logo'")).fetchone()
@@ -627,20 +624,16 @@ async def upload_company_logo(
                 pass  # logo_url might not exist yet in system_companies
 
             # Commit to company db
-            db.commit()
             
             # Audit log
             try:
                 log_activity(db, current_user.id, current_user.username, "upload_logo",
                              resource_type="company", resource_id=company_id,
                              details={"logo_url": logo_url})
-                db.commit()
             except Exception:
                 logger.warning("Failed to write logo upload audit log")
             
             return {"success": True, "logo_url": logo_url}
-        finally:
-            db.close()
             
     except Exception:
         logger.exception("Error uploading logo")

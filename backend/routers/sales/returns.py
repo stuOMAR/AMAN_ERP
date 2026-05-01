@@ -2,7 +2,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -53,6 +53,77 @@ def list_sales_returns(branch_id: Optional[int] = None, current_user: dict = Dep
         db.close()
 
 
+@returns_router.get(
+    "/returns/unified",
+    response_model=List[dict],
+    dependencies=[Depends(require_permission("sales.view"))],
+)
+def list_unified_returns(
+    branch_id: Optional[int] = None,
+    source: Optional[str] = None,
+    limit: int = 200,
+    current_user: dict = Depends(get_current_user),
+):
+    """T6.6: قائمة موحّدة لجميع المرتجعات (مبيعات + نقطة بيع).
+
+    تستعلم من الـ VIEW ``returns_unified`` الذي يجمع ``sales_returns``
+    و ``pos_returns`` في صف واحد لكل مرتجع. ``source`` اختياري للتصفية
+    (``sales`` أو ``pos``).
+    """
+    from utils.permissions import validate_branch_access
+    branch_id = validate_branch_access(current_user, branch_id)
+
+    if source not in (None, "sales", "pos"):
+        raise HTTPException(status_code=400, detail="source must be 'sales' or 'pos'")
+    limit = max(1, min(int(limit or 200), 1000))
+
+    db = get_db_connection(current_user.company_id)
+    try:
+        # Defensive: if migration 0019 has not yet been applied on this tenant
+        # (or the view was dropped), fall back to an inline UNION ALL so the
+        # endpoint stays available.
+        view_exists = db.execute(
+            text("SELECT to_regclass('public.returns_unified') AS v")
+        ).scalar()
+        if view_exists:
+            query_str = "SELECT * FROM returns_unified WHERE 1=1"
+        else:
+            query_str = """
+            SELECT * FROM (
+                SELECT 'sales'::text AS source, sr.id AS return_id,
+                       sr.return_number, sr.return_date::timestamp AS return_date,
+                       sr.party_id, sr.branch_id, sr.warehouse_id,
+                       sr.invoice_id AS original_doc_id,
+                       COALESCE(sr.refund_amount, sr.total, 0)::numeric(18,4) AS refund_amount,
+                       sr.refund_method, sr.status, sr.notes,
+                       sr.created_at, sr.created_by
+                FROM sales_returns sr
+                UNION ALL
+                SELECT 'pos'::text, pr.id, ('POS-RET-'||pr.id::text),
+                       pr.created_at, NULL::int, NULL::int, NULL::int,
+                       pr.original_order_id,
+                       COALESCE(pr.refund_amount,0)::numeric(18,4),
+                       pr.refund_method, 'completed'::text, pr.notes,
+                       pr.created_at, pr.created_by
+                FROM pos_returns pr
+            ) u WHERE 1=1
+            """
+        params: dict = {}
+        if branch_id is not None:
+            query_str += " AND branch_id = :branch_id"
+            params["branch_id"] = branch_id
+        if source:
+            query_str += " AND source = :source"
+            params["source"] = source
+        query_str += " ORDER BY return_date DESC NULLS LAST LIMIT :limit"
+        params["limit"] = limit
+
+        rows = db.execute(text(query_str), params).fetchall()
+        return [dict(r._mapping) for r in rows]
+    finally:
+        db.close()
+
+
 @returns_router.get("/returns/{return_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_sales_return(return_id: int, current_user: dict = Depends(get_current_user)):
     """جلب تفاصيل مرتجع مبيعات"""
@@ -89,7 +160,7 @@ def get_sales_return(return_id: int, current_user: dict = Depends(get_current_us
         db.close()
 
 
-@returns_router.post("/returns", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
+@returns_router.post("/returns", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_sales_return(request: Request, data: SalesReturnCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء مرتجع مبيعات جديد (مسودة)"""
     db = get_db_connection(current_user.company_id)
@@ -221,7 +292,7 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         db.close()
 
 
-@returns_router.post("/returns/{return_id}/approve", dependencies=[Depends(require_sensitive_permission("sales.approve_return"))])
+@returns_router.post("/returns/{return_id}/approve", dependencies=[Depends(require_sensitive_permission("sales.approve_return"))], response_model=Dict[str, Any])
 def approve_sales_return(return_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """اعتماد مرتجع المبيعات (تحديث المخزون وقيد محاسبي)"""
     db = get_db_connection(current_user.company_id)

@@ -5,7 +5,7 @@ Inventory Module - Price Lists CRUD
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List
+from typing import Any, Dict, List
 import logging
 
 from database import get_db_connection, get_system_db
@@ -34,7 +34,7 @@ def list_price_lists(current_user: dict = Depends(get_current_user)):
         db.close()
 
 
-@price_lists_router.post("/price-lists", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("products.create"))])
+@price_lists_router.post("/price-lists", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("products.create"))], response_model=Dict[str, Any])
 def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء قائمة أسعار جديدة"""
 
@@ -80,7 +80,7 @@ def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_cu
         db.close()
 
 
-@price_lists_router.put("/price-lists/{id}", dependencies=[Depends(require_permission("products.edit"))])
+@price_lists_router.put("/price-lists/{id}", dependencies=[Depends(require_permission("products.edit"))], response_model=Dict[str, Any])
 def update_price_list(
     id: int,
     data: PriceListCreate,
@@ -124,7 +124,7 @@ def update_price_list(
         db.close()
 
 
-@price_lists_router.delete("/price-lists/{id}", dependencies=[Depends(require_permission("products.delete"))])
+@price_lists_router.delete("/price-lists/{id}", dependencies=[Depends(require_permission("products.delete"))], response_model=Dict[str, Any])
 def delete_price_list(
     id: int,
     request: Request,
@@ -192,7 +192,7 @@ def get_price_list_items(id: int, current_user: dict = Depends(get_current_user)
         db.close()
 
 
-@price_lists_router.post("/price-lists/{id}/items", dependencies=[Depends(require_permission("stock.manage"))])
+@price_lists_router.post("/price-lists/{id}/items", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def update_price_list_items(
     id: int,
     items: List[PriceListItemUpdate],

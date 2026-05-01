@@ -1,7 +1,7 @@
 from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import date, datetime
 import csv
 import io
@@ -13,6 +13,7 @@ logger = logging.getLogger(__name__)
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.tx import transactional
 from utils.permissions import require_permission, require_module, validate_branch_access
 from utils.audit import log_activity
 from schemas.reconciliation import ReconciliationCreate, StatementLineCreate, MatchRequest, UnmatchRequest
@@ -27,7 +28,7 @@ def _dec(v) -> Decimal:
 
 # --- Endpoints ---
 
-@router.get("", dependencies=[Depends(require_permission("reconciliation.view"))])
+@router.get("", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=List[Dict[str, Any]])
 def list_reconciliations(
     account_id: Optional[int] = None, 
     branch_id: Optional[int] = None,
@@ -35,8 +36,7 @@ def list_reconciliations(
 ):
     """عرض قائمة التسويات"""
     branch_id = validate_branch_access(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         query = """
             SELECT r.*, t.name as account_name, t.currency,
                    u.username as created_by_name,
@@ -69,16 +69,13 @@ def list_reconciliations(
         
         result = db.execute(text(query), params).fetchall()
         return [dict(row._mapping) for row in result]
-    finally:
-        db.close()
 
-@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء مسودة تسوية جديدة"""
     if data.branch_id:
         validate_branch_access(current_user, data.branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Check if draft already exists for this account
         existing = db.execute(text("""
             SELECT id FROM bank_reconciliations 
@@ -103,20 +100,16 @@ def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depen
             "notes": data.notes, "uid": current_user.id, "bid": data.branch_id
         }).scalar()
         
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="reconciliation.create",
                      resource_type="bank_reconciliation", resource_id=str(rec_id),
                      details={"treasury_account_id": data.treasury_account_id, "statement_date": str(data.statement_date)})
         return {"id": rec_id, "message": "تم إنشاء التسوية بنجاح"}
-    finally:
-        db.close()
 
-@router.get("/{id}", dependencies=[Depends(require_permission("reconciliation.view"))])
+@router.get("/{id}", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=Dict[str, Any])
 def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
     """جلب تفاصيل التسوية"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec = db.execute(text("""
             SELECT r.*, t.name as account_name, t.currency, t.current_balance as book_balance
             FROM bank_reconciliations r
@@ -171,14 +164,11 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
                 "difference": float(difference.quantize(_D2, ROUND_HALF_UP)),
             }
         }
-    finally:
-        db.close()
 
-@router.post("/{id}/lines", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/lines", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def add_statement_lines(id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """إضافة أسطر كشف الحساب يدوياً"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
@@ -209,10 +199,7 @@ def add_statement_lines(id: int, lines: List[StatementLineCreate], current_user:
             })
             added.append(result.scalar())
             
-        db.commit()
         return {"message": f"تم إضافة {len(added)} أسطر بنجاح", "line_ids": added}
-    finally:
-        db.close()
 
 
 # ──────── BANK STATEMENT FILE IMPORT ────────
@@ -284,151 +271,148 @@ def _parse_amount(val) -> Decimal:
         return Decimal("0")
 
 
-@router.post("/{id}/import-preview", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/import-preview", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 async def preview_import(
     id: int,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
     """معاينة ملف كشف الحساب قبل الاستيراد (CSV / Excel)"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
-        if not rec:
-            raise HTTPException(**http_error(404, "reconciliation_not_found"))
-        if rec.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن الاستيراد في تسوية معتمدة")
-
-        content = await file.read()
-        filename = file.filename.lower() if file.filename else ""
-
-        rows = []
-        headers = []
-
-        if filename.endswith(('.xlsx', '.xls')):
-            try:
-                import openpyxl
-            except ImportError:
-                raise HTTPException(status_code=400, detail="يرجى تثبيت مكتبة openpyxl لدعم ملفات Excel")
-            wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
-            ws = wb.active
-            all_rows = list(ws.iter_rows(values_only=True))
-            if not all_rows:
-                raise HTTPException(**http_error(400, "file_empty"))
-            # Skip empty leading rows
-            start_idx = 0
-            for i, row in enumerate(all_rows):
-                if any(cell is not None and str(cell).strip() for cell in row):
-                    start_idx = i
-                    break
-            headers = [str(cell or '').strip() for cell in all_rows[start_idx]]
-            for row in all_rows[start_idx + 1:]:
-                rows.append([str(cell or '').strip() for cell in row])
-        else:
-            # Treat as CSV
-            try:
-                text_content = content.decode('utf-8-sig')
-            except UnicodeDecodeError:
+    with transactional(current_user.company_id) as db:
+        try:
+            rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+            if not rec:
+                raise HTTPException(**http_error(404, "reconciliation_not_found"))
+            if rec.status != 'draft':
+                raise HTTPException(status_code=400, detail="لا يمكن الاستيراد في تسوية معتمدة")
+    
+            content = await file.read()
+            filename = file.filename.lower() if file.filename else ""
+    
+            rows = []
+            headers = []
+    
+            if filename.endswith(('.xlsx', '.xls')):
                 try:
-                    text_content = content.decode('cp1256')  # Arabic Windows encoding
-                except UnicodeDecodeError:
-                    text_content = content.decode('latin-1')
-
-            # Detect delimiter
-            sample = text_content[:2000]
-            if sample.count('\t') > sample.count(',') and sample.count('\t') > sample.count(';'):
-                delimiter = '\t'
-            elif sample.count(';') > sample.count(','):
-                delimiter = ';'
+                    import openpyxl
+                except ImportError:
+                    raise HTTPException(status_code=400, detail="يرجى تثبيت مكتبة openpyxl لدعم ملفات Excel")
+                wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
+                ws = wb.active
+                all_rows = list(ws.iter_rows(values_only=True))
+                if not all_rows:
+                    raise HTTPException(**http_error(400, "file_empty"))
+                # Skip empty leading rows
+                start_idx = 0
+                for i, row in enumerate(all_rows):
+                    if any(cell is not None and str(cell).strip() for cell in row):
+                        start_idx = i
+                        break
+                headers = [str(cell or '').strip() for cell in all_rows[start_idx]]
+                for row in all_rows[start_idx + 1:]:
+                    rows.append([str(cell or '').strip() for cell in row])
             else:
-                delimiter = ','
-
-            reader = csv.reader(io.StringIO(text_content), delimiter=delimiter)
-            all_rows = list(reader)
-            if not all_rows:
-                raise HTTPException(**http_error(400, "file_empty"))
-            # Skip empty leading rows
-            start_idx = 0
-            for i, row in enumerate(all_rows):
-                if any(cell.strip() for cell in row):
-                    start_idx = i
-                    break
-            headers = [h.strip() for h in all_rows[start_idx]]
-            rows = all_rows[start_idx + 1:]
-
-        # Auto-detect columns
-        col_mapping = _detect_csv_columns(headers)
-
-        # Parse rows into preview lines
-        preview_lines = []
-        skipped = 0
-        for row in rows:
-            if not any(str(cell).strip() for cell in row):
-                continue  # skip empty rows
-
-            # Extract date
-            raw_date = row[col_mapping['date']] if 'date' in col_mapping and col_mapping['date'] < len(row) else ''
-            parsed_date = _parse_date(raw_date)
-            if not parsed_date:
-                skipped += 1
-                continue
-
-            desc = row[col_mapping['description']] if 'description' in col_mapping and col_mapping['description'] < len(row) else ''
-            ref = row[col_mapping['reference']] if 'reference' in col_mapping and col_mapping['reference'] < len(row) else ''
-
-            debit_val = Decimal("0")
-            credit_val = Decimal("0")
-
-            if 'debit' in col_mapping and 'credit' in col_mapping:
-                debit_val = _parse_amount(row[col_mapping['debit']] if col_mapping['debit'] < len(row) else '')
-                credit_val = _parse_amount(row[col_mapping['credit']] if col_mapping['credit'] < len(row) else '')
-            elif 'amount' in col_mapping:
-                amt = _parse_amount(row[col_mapping['amount']] if col_mapping['amount'] < len(row) else '')
-                if amt < 0:
-                    debit_val = abs(amt)
+                # Treat as CSV
+                try:
+                    text_content = content.decode('utf-8-sig')
+                except UnicodeDecodeError:
+                    try:
+                        text_content = content.decode('cp1256')  # Arabic Windows encoding
+                    except UnicodeDecodeError:
+                        text_content = content.decode('latin-1')
+    
+                # Detect delimiter
+                sample = text_content[:2000]
+                if sample.count('\t') > sample.count(',') and sample.count('\t') > sample.count(';'):
+                    delimiter = '\t'
+                elif sample.count(';') > sample.count(','):
+                    delimiter = ';'
                 else:
-                    credit_val = amt
+                    delimiter = ','
+    
+                reader = csv.reader(io.StringIO(text_content), delimiter=delimiter)
+                all_rows = list(reader)
+                if not all_rows:
+                    raise HTTPException(**http_error(400, "file_empty"))
+                # Skip empty leading rows
+                start_idx = 0
+                for i, row in enumerate(all_rows):
+                    if any(cell.strip() for cell in row):
+                        start_idx = i
+                        break
+                headers = [h.strip() for h in all_rows[start_idx]]
+                rows = all_rows[start_idx + 1:]
+    
+            # Auto-detect columns
+            col_mapping = _detect_csv_columns(headers)
+    
+            # Parse rows into preview lines
+            preview_lines = []
+            skipped = 0
+            for row in rows:
+                if not any(str(cell).strip() for cell in row):
+                    continue  # skip empty rows
+    
+                # Extract date
+                raw_date = row[col_mapping['date']] if 'date' in col_mapping and col_mapping['date'] < len(row) else ''
+                parsed_date = _parse_date(raw_date)
+                if not parsed_date:
+                    skipped += 1
+                    continue
+    
+                desc = row[col_mapping['description']] if 'description' in col_mapping and col_mapping['description'] < len(row) else ''
+                ref = row[col_mapping['reference']] if 'reference' in col_mapping and col_mapping['reference'] < len(row) else ''
+    
+                debit_val = Decimal("0")
+                credit_val = Decimal("0")
+    
+                if 'debit' in col_mapping and 'credit' in col_mapping:
+                    debit_val = _parse_amount(row[col_mapping['debit']] if col_mapping['debit'] < len(row) else '')
+                    credit_val = _parse_amount(row[col_mapping['credit']] if col_mapping['credit'] < len(row) else '')
+                elif 'amount' in col_mapping:
+                    amt = _parse_amount(row[col_mapping['amount']] if col_mapping['amount'] < len(row) else '')
+                    if amt < 0:
+                        debit_val = abs(amt)
+                    else:
+                        credit_val = amt
+    
+                # Ensure positive values
+                debit_val = abs(debit_val)
+                credit_val = abs(credit_val)
+    
+                if debit_val == 0 and credit_val == 0:
+                    skipped += 1
+                    continue
+    
+                preview_lines.append({
+                    "transaction_date": parsed_date,
+                    "description": desc.strip(),
+                    "reference": ref.strip(),
+                    "debit": float(debit_val.quantize(_D2, ROUND_HALF_UP)),
+                    "credit": float(credit_val.quantize(_D2, ROUND_HALF_UP)),
+                })
+    
+            return {
+                "filename": file.filename,
+                "headers": headers,
+                "column_mapping": col_mapping,
+                "total_rows": len(rows),
+                "parsed_lines": len(preview_lines),
+                "skipped_rows": skipped,
+                "preview": preview_lines[:200],  # Max 200 for preview
+                "all_lines": preview_lines,
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Error parsing reconciliation file")
+            raise HTTPException(status_code=400, detail="خطأ في تحليل الملف")
 
-            # Ensure positive values
-            debit_val = abs(debit_val)
-            credit_val = abs(credit_val)
 
-            if debit_val == 0 and credit_val == 0:
-                skipped += 1
-                continue
-
-            preview_lines.append({
-                "transaction_date": parsed_date,
-                "description": desc.strip(),
-                "reference": ref.strip(),
-                "debit": float(debit_val.quantize(_D2, ROUND_HALF_UP)),
-                "credit": float(credit_val.quantize(_D2, ROUND_HALF_UP)),
-            })
-
-        return {
-            "filename": file.filename,
-            "headers": headers,
-            "column_mapping": col_mapping,
-            "total_rows": len(rows),
-            "parsed_lines": len(preview_lines),
-            "skipped_rows": skipped,
-            "preview": preview_lines[:200],  # Max 200 for preview
-            "all_lines": preview_lines,
-        }
-    except HTTPException:
-        raise
-    except Exception:
-        logger.exception("Error parsing reconciliation file")
-        raise HTTPException(status_code=400, detail="خطأ في تحليل الملف")
-    finally:
-        db.close()
-
-
-@router.post("/{id}/import-confirm", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/import-confirm", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """تأكيد استيراد أسطر كشف الحساب بعد المعاينة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
@@ -461,19 +445,15 @@ def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict
             })
             added.append(result.scalar())
 
-        db.commit()
         return {"message": f"تم استيراد {len(added)} سطر بنجاح", "line_ids": added, "imported_count": len(added)}
-    finally:
-        db.close()
 
 
 # ──────── AUTO RECONCILIATION ────────
 
-@router.post("/{id}/auto-match", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/auto-match", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(get_current_user)):
     """مطابقة تلقائية بناءً على المبلغ والتاريخ"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec_info = db.execute(text("""
             SELECT r.status, t.gl_account_id, r.statement_date, r.branch_id,
                    COALESCE(r.tolerance_amount, 0) AS tolerance_amount
@@ -517,6 +497,7 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
             AND je.entry_date <= :stmt_date
             {branch_filter}
             ORDER BY je.entry_date
+            FOR UPDATE OF jl SKIP LOCKED
         """), ledger_params).fetchall()
 
         matched_stmt_ids = set()
@@ -581,21 +562,17 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
                     })
                     break  # Move to next statement line
 
-        db.commit()
         return {
             "matched_count": len(matches),
             "matches": matches,
             "remaining_unmatched": len(stmt_lines) - len(matches),
             "message": f"تم مطابقة {len(matches)} حركة تلقائياً"
         }
-    finally:
-        db.close()
 
-@router.delete("/{id}/lines/{line_id}", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.delete("/{id}/lines/{line_id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def delete_statement_line(id: int, line_id: int, current_user: dict = Depends(get_current_user)):
     """حذف سطر من كشف الحساب البنكي"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
@@ -617,16 +594,12 @@ def delete_statement_line(id: int, line_id: int, current_user: dict = Depends(ge
             """), {"jid": line.matched_journal_line_id})
         
         db.execute(text("DELETE FROM bank_statement_lines WHERE id = :lid"), {"lid": line_id})
-        db.commit()
         return {"message": "تم حذف السطر بنجاح"}
-    finally:
-        db.close()
 
-@router.get("/{id}/ledger", dependencies=[Depends(require_permission("reconciliation.view"))])
+@router.get("/{id}/ledger", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=List[Dict[str, Any]])
 def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
     """جلب قيود النظام غير المطابقة لهذا الحساب"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec_info = db.execute(text("""
             SELECT t.gl_account_id, r.statement_date
             FROM bank_reconciliations r
@@ -654,14 +627,11 @@ def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
         """), {"gl_id": gl_id, "stmt_date": stmt_date}).fetchall()
         
         return [dict(r._mapping) for r in ledger]
-    finally:
-        db.close()
 
-@router.post("/{id}/match", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/match", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends(get_current_user)):
     """مطابقة سطر بنكي مع قيد محاسبي"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
@@ -720,16 +690,12 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
             WHERE id = :jid
         """), {"rid": id, "jid": match.journal_line_id})
         
-        db.commit()
         return {"success": True, "message": "تمت المطابقة بنجاح"}
-    finally:
-        db.close()
 
-@router.post("/{id}/unmatch", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.post("/{id}/unmatch", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depends(get_current_user)):
     """إلغاء مطابقة سطر بنكي"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
@@ -758,47 +724,40 @@ def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depe
             WHERE id = :sid
         """), {"sid": data.statement_line_id})
         
-        db.commit()
         return {"success": True, "message": "تم إلغاء المطابقة بنجاح"}
-    finally:
-        db.close()
 
-@router.delete("/{id}", dependencies=[Depends(require_permission("reconciliation.create"))])
+@router.delete("/{id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
     """حذف تسوية بنكية (مسودة فقط)"""
-    db = get_db_connection(current_user.company_id)
-    try:
-        rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
-        if not rec:
-            raise HTTPException(**http_error(404, "reconciliation_not_found"))
-        
-        if rec.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن حذف تسوية معتمدة. يمكن حذف التسويات في حالة المسودة فقط")
-        
-        # Un-reconcile any matched journal lines first
-        db.execute(text("""
-            UPDATE journal_lines SET is_reconciled = FALSE, reconciliation_id = NULL
-            WHERE reconciliation_id = :id
-        """), {"id": id})
-        
-        db.execute(text("DELETE FROM bank_statement_lines WHERE reconciliation_id = :id"), {"id": id})
-        db.execute(text("DELETE FROM bank_reconciliations WHERE id = :id"), {"id": id})
-        db.commit()
-        return {"message": "تم حذف التسوية بنجاح"}
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(status_code=500, detail="حدث خطأ أثناء حذف التسوية")
-    finally:
-        db.close()
+    with transactional(current_user.company_id) as db:
+        try:
+            rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+            if not rec:
+                raise HTTPException(**http_error(404, "reconciliation_not_found"))
+            
+            if rec.status != 'draft':
+                raise HTTPException(status_code=400, detail="لا يمكن حذف تسوية معتمدة. يمكن حذف التسويات في حالة المسودة فقط")
+            
+            # Un-reconcile any matched journal lines first
+            db.execute(text("""
+                UPDATE journal_lines SET is_reconciled = FALSE, reconciliation_id = NULL
+                WHERE reconciliation_id = :id
+            """), {"id": id})
+            
+            db.execute(text("DELETE FROM bank_statement_lines WHERE reconciliation_id = :id"), {"id": id})
+            db.execute(text("DELETE FROM bank_reconciliations WHERE id = :id"), {"id": id})
+            return {"message": "تم حذف التسوية بنجاح"}
+        except HTTPException:
+            raise
+        except Exception:
+            pass
+            raise HTTPException(status_code=500, detail="حدث خطأ أثناء حذف التسوية")
 
 
-@router.post("/{id}/finalize", dependencies=[Depends(require_permission("reconciliation.approve"))])
+@router.post("/{id}/finalize", dependencies=[Depends(require_permission("reconciliation.approve"))], response_model=Dict[str, Any])
 def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
     """اعتماد التسوية وإغلاقها"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         rec = db.execute(text("""
             SELECT start_balance, end_balance, status, branch_id 
             FROM bank_reconciliations WHERE id = :id
@@ -862,11 +821,8 @@ def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_us
             UPDATE bank_reconciliations SET status = 'posted', updated_at = NOW() 
             WHERE id = :id
         """), {"id": id})
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="reconciliation.finalize",
                      resource_type="bank_reconciliation", resource_id=str(id),
                      details={"end_balance": float(_dec(rec.end_balance))})
         return {"success": True, "message": "تم اعتماد التسوية"}
-    finally:
-        db.close()

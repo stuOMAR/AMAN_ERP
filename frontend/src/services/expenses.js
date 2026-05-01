@@ -8,6 +8,7 @@ export const expensesAPI = {
     create: (data) => api.post('/expenses/', data),
     update: (id, data) => api.put(`/expenses/${id}`, data),
     approve: (id, data) => api.post(`/expenses/${id}/approve`, data),
+    reverse: (id, data) => api.post(`/expenses/${id}/reverse`, data),
     delete: (id) => api.delete(`/expenses/${id}`),
     getReportByType: (params) => api.get('/expenses/reports/by-type', { params: cleanParams(params) }),
     getReportByCostCenter: (params) => api.get('/expenses/reports/by-cost-center', { params: cleanParams(params) }),

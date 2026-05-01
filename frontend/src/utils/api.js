@@ -77,6 +77,18 @@ export { servicesAPI } from '../services/services'
 // External Integrations
 export { externalAPI } from '../services/external'
 
+// Integration Keys Vault & Circuit Breakers (T5.3)
+export { integrationKeysAPI } from '../services/integrationKeys'
+
+// Smart Alerts (T4.3)
+export { smartAlertsAPI } from '../services/smartAlerts'
+
+// Email Templates (T4.11)
+export { emailTemplatesAPI } from '../services/emailTemplates'
+
+// Integration Retry Queues & DLQ (T5.4)
+export { integrationQueuesAPI } from '../services/integrationQueues'
+
 // System Completion (Backup, Print Templates, Password Reset, etc.)
 export { backupAPI, printTemplatesAPI, duplicateDetectionAPI, passwordResetAPI, manufacturingCostingAPI } from '../services/systemCompletion'
 

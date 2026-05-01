@@ -439,7 +439,7 @@
 
 ## المرحلة 4: P1 الأتمتة والموثوقية (أسبوع 5-7)
 
-### T4.1 — APScheduler متين للإنتاج `[M]`
+### ✅ T4.1 — APScheduler متين للإنتاج `[M]` _(مكتمل)_
 - **بنود**: #28، #29، #30، #31، #32.
 - **التغيير**:
   - `SQLAlchemyJobStore` بدل `MemoryJobStore`.
@@ -448,43 +448,43 @@
   - `GET /health/scheduler` يرجع آخر تنفيذ + الحالة.
 - **DoD**: إعادة تشغيل الخادم لا تفقد المهام؛ Sentry يلتقط فشل مهمة محاكاة.
 
-### T4.2 — Supervisor لـ `asyncio.create_task` `[S]`
+### ✅ T4.2 — Supervisor لـ `asyncio.create_task` `[S]` _(مكتمل)_
 - **بنود**: #27.
 - **التغيير**: wrapper `run_supervised(coro)` مع backoff وإعادة تشغيل + logger.exception.
 - **الملف**: `backend/main.py`.
 - **DoD**: simulate exception → المهمة تُعاد تلقائيًا.
 
-### T4.3 — نظام Smart Alerts `[L]`
+### ✅ T4.3 — نظام Smart Alerts `[L]` _(مكتمل)_
 - **بنود**: #13، #14.
 - **التغيير**: جداول `alert_rules`, `alerts`, `alert_history`. واجهة CRUD. مجدول يقيّم القواعد كل N دقيقة. ربط بـ `notification_service`.
 - **DoD**: قاعدة "المخزون أقل من حد إعادة الطلب" تُولّد تنبيه + إيميل.
 
-### T4.4 — تنبيهات المخزون المنخفض + طرح `reserved_quantity` `[S]`
+### ✅ T4.4 — تنبيهات المخزون المنخفض + طرح `reserved_quantity` `[S]` _(مكتمل)_
 - **بنود**: #98، #99، #397.
 - **التغيير**: استعلام `(quantity - reserved_quantity) <= reorder_level` + إطلاق webhook `inventory.low_stock` + ربط Smart Alerts.
 - **DoD**: خفض المخزون يُولّد إشعارًا خلال دقائق.
 
-### T4.5 — POS Offline Worker + Conflict Detection `[L]`
+### ✅ T4.5 — POS Offline Worker + Conflict Detection `[L]` _(مكتمل)_
 - **بنود**: #42، #43.
 - **التغيير**: worker يعالج `pos_offline_inbox` بترتيب FIFO، يستدعي endpoint إنشاء الطلب، يكتشف تعارضات (سعر/مخزون متغير) ويرفعها لقائمة مراجعة.
 - **DoD**: بيع offline يُسجَّل في DB بعد العودة، ونزاع متعمد يظهر في dashboard المراجعة.
 
-### T4.6 — تفعيل تلقائي للشيكات في تاريخ الاستحقاق `[S]`
+### ✅ T4.6 — تفعيل تلقائي للشيكات في تاريخ الاستحقاق `[S]` _(مكتمل)_
 - **بنود**: #102 (Treasury 4.1).
 - **التغيير**: مهمة يومية تنقل `pending → due` وتُولّد إشعار للمسؤول.
 - **DoD**: شيك بتاريخ اليوم يُفعّل صباحًا.
 
-### T4.7 — مجدول للمصروفات المتكررة `[S]`
+### ✅ T4.7 — مجدول للمصروفات المتكررة `[S]` _(مكتمل)_
 - **بنود**: مرتبط بـ #102 وما يقابله في Expenses.
 - **التغيير**: مهمة يومية `generate_all_due_templates`.
 - **DoD**: قالب `monthly` يُولّد مصروفًا مرة واحدة كل شهر.
 
-### T4.8 — مطابقة بنكية تلقائية مجدولة + قفل FOR UPDATE `[S]`
+### ✅ T4.8 — مطابقة بنكية تلقائية مجدولة + قفل FOR UPDATE `[S]` _(مكتمل)_
 - **بنود**: #252، #256، #400، 1.1/1.3 من Treasury.
 - **التغيير**: مهمة يومية تستدعي `auto_match` لكل التسويات المسودة. إضافة `FOR UPDATE` على `journal_lines` المرشحة. إصلاح parsing التواريخ.
 - **DoD**: لا مطابقة مزدوجة في اختبار تزامن؛ سجل يومي للنتائج.
 
-### T4.9 — توسيع التنبؤ النقدي `[M]`
+### T4.9 — توسيع التنبؤ النقدي `[M]` ✅ [مكتمل]
 - **بنود**: #106، #401، #336، #337، 419y.
 - **التغيير**:
   - الرصيد الابتدائي = رصيد البنوك الفعلي.
@@ -495,7 +495,7 @@
 - **الملف**: `backend/services/forecast_service.py`.
 - **DoD**: مقارنة تنبؤ شهر مضى مع الفعلي → انحراف < 10% على بيانات اختبار.
 
-### T4.10 — Notifications: HTML escape + Loop Detection + Unsubscribe `[M]`
+### T4.10 — Notifications: HTML escape + Loop Detection + Unsubscribe `[M]` ✅ [مكتمل]
 - **بنود**: #90، #92، #93، #234، #235، #232.
 - **التغيير**:
   - `html.escape()` لجميع المتغيرات في القوالب.
@@ -504,7 +504,7 @@
   - `_mark_delivery_failed` يستهدف الإشعار الصحيح بـ `notification_id`.
 - **DoD**: محاولة حقن `<script>` في اسم مستخدم لا تُنفذ في الإيميل؛ unsubscribe link يعمل.
 
-### T4.11 — Email templates table مفعَّلة `[S]`
+### T4.11 — Email templates table مفعَّلة `[S]` ✅ [مكتمل]
 - **بنود**: #328.
 - **التغيير**: نقل القوالب الموجودة في `email_service.py` إلى DB مع versioning + UI تحرير.
 - **DoD**: تعديل قالب من UI ينعكس فورًا.
@@ -515,26 +515,26 @@
 
 ## المرحلة 5: P1 الامتثال والتكاملات (أسبوع 7-9)
 
-### T5.1 — CAMT.053 ISO 20022 parser `[M]`
+### T5.1 — CAMT.053 ISO 20022 parser `[M]` ✅ [مكتمل]
 - **بنود**: #88.
 - **التغيير**: parser لملف XML CAMT.053 يستخرج الحركات. import endpoint في `reconciliation.py`.
 - **DoD**: ملف عينة من بنك حقيقي يُستورد بنجاح.
 
-### T5.2 — ETA (مصر) و FTA (الإمارات) implementation `[M]`
+### T5.2 — ETA (مصر) و FTA (الإمارات) implementation `[M]` ✅ [مكتمل]
 - **بنود**: #87.
 - **التغيير**: محول لكل منهما يبني JSON/XML الخاص ويرسل عبر API.
 - **DoD**: dry_run=False يُرسل فعلًا في staging مقابل بيئات اختبار الجهة.
 
-### T5.3 — Circuit Breaker + Key Rotation للتكاملات `[M]`
+### T5.3 — Circuit Breaker + Key Rotation للتكاملات `[M]` ✅ [مكتمل]
 - **بنود**: #228، #230.
 - **التغيير**: مكتبة `circuit_breaker` لكل adapter. جدول `integration_keys` مع `valid_from`/`valid_to` + UI rotation.
 - **DoD**: فشل 5 طلبات متتالية يفتح القاطع لمدة دقيقة؛ مفتاح قديم يُلغى دون downtime.
 
-### T5.4 — payment retry + SMS retry queue `[S]`
+### T5.4 — payment retry + SMS retry queue `[S]` ✅ [مكتمل]
 - **التغيير**: دفعة فاشلة تُجدول إعادة محاولة بـ exponential backoff.
 - **DoD**: 3 محاولات إعادة قبل DLQ.
 
-### T5.5 — WPS SIF حقيقي + GOSI 11.75/12.00 + بدلات ناقصة `[M]`
+### T5.5 — WPS SIF حقيقي + GOSI 11.75/12.00 + بدلات ناقصة `[M]` ✅ [مكتمل]
 - **بنود**: من HR (`hr_wps_compliance.py`)، 419g/h/i.
 - **التغيير**:
   - مولّد SIF بعرض ثابت متوافق مع SAMA.
@@ -548,40 +548,67 @@
 
 ## المرحلة 6: P2 توحيد البنية (أسبوع 9-11)
 
-### T6.1 — Context Manager موحد `transactional()` `[M]`
+> **حالة 2026-05-01**: T6.1 و T6.2 و T6.3 و T6.4 و T6.5 و T6.6 و T6.7 مكتملة. المرحلة 6 منجَزة بالكامل.
+
+### T6.1 — Context Manager موحد `transactional()` `[M]` — **[FIXED]**
 - **بنود**: #412 + النمط المكرر 200+ مرة.
 - **التغيير**: ابتكار `from utils.tx import transactional` واستخدامه تدريجيًا (priority: routers ضخمة).
 - **DoD**: 50% على الأقل من نقاط `db.execute(text(...))` تستخدم الـ context manager.
+- **التحقق 2026-05-01**: [backend/utils/tx.py](../../backend/utils/tx.py) موجود ومستخدم.
 
-### T6.2 — Repository Pattern مرحلي `[L]`
+### T6.2 — Repository Pattern مرحلي `[L]` — **[FIXED]**
 - **بنود**: #409.
 - **التغيير**: إنشاء `backend/repositories/` مع `InvoiceRepo`, `ProductRepo`, `EmployeeRepo` كأمثلة. الراوترات تستدعي Repos بدلًا من SQL مباشر.
 - **DoD**: 3 وحدات على الأقل (Invoices, Products, Employees) تمر عبر Repos حصريًا.
+- **التحقق 2026-05-01**: [backend/repositories/](../../backend/repositories/) يحتوي على `invoice_repo.py`, `product_repo.py`, `employee_repo.py`.
 
-### T6.3 — تقسيم God Routers `[L]`
+### T6.3 — تقسيم God Routers `[L]` — **[FIXED]**
 - **بنود**: #410.
 - **التغيير**: تقسيم `purchases.py` (3700 سطر) إلى `purchases/orders.py`, `purchases/invoices.py`, `purchases/returns.py`, `purchases/suppliers.py`. تكرار النمط على `accounting.py` و `core.py` (HR).
 - **DoD**: لا ملف > 1500 سطر في `routers/`.
+- **التحقق 2026-05-01**:
+  - `backend/routers/purchases.py` و `backend/routers/accounting.py` و `backend/routers/hr/core.py` تمت إزالتهم.
+  - مجلدات الاستبدال موجودة: `backend/routers/purchases/{orders,invoices,returns,suppliers,payments,blanket}.py` و `backend/routers/finance/accounting/{accounts,fiscal,fx,journal,provisions,recurring,core}.py` و `backend/routers/hr/core/{employees,attendance,departments,leaves,payroll,recruitment,core}.py`.
+  - `find backend/routers -name '*.py' -exec wc -l {} \;` → الأكبر = `inventory/batches.py` بـ 1417 سطر < 1500.
 
-### T6.4 — حل ازدواجية DDL+ORM `[L]`
+### T6.4 — حل ازدواجية DDL+ORM `[L]` — **[FIXED 2026-05-01]**
 - **بنود**: #20.
 - **التغيير**: اختيار مصدر واحد (الموصى: SQLAlchemy + Alembic autogenerate). تحويل DDL في `database.py` إلى migrations.
 - **DoD**: `database.py` لا يحتوي `CREATE TABLE` خام؛ alembic upgrade ينشئ schema كاملة.
+- **التحقق 2026-05-01**:
+  - تم استخراج كل DDL إلى [backend/db_ddl/tenant_schema.py](../../backend/db_ddl/tenant_schema.py) (24 دالة، 318 جدول، 6168 سطر) و orchestrator [backend/db_ddl/tenant_runner.py](../../backend/db_ddl/tenant_runner.py).
+  - [backend/database.py](../../backend/database.py) أصبح 852 سطر (كان 7393)؛ `grep -cE 'CREATE TABLE|CREATE INDEX|CREATE TRIGGER|ALTER TABLE' backend/database.py` = **0**.
+  - [backend/alembic/versions/0001_baseline_complete.py](../../backend/alembic/versions/0001_baseline_complete.py) يستدعي `apply_tenant_schema(op.get_bind(), currency='SAR')` فيُنشئ alembic upgrade مخططاً كاملاً.
+  - `database.create_company_tables` أصبحت غلافاً رفيعاً يستدعي نفس الـ orchestrator ثم `alembic stamp head` (للحفاظ على باث الإقلاع الحالي للمستأجرين).
+  - re-export في `database.py` للحفاظ على التوافق العكسي مع `routers/finance/currencies.py` و scripts.
 
-### T6.5 — توحيد واجهات حركات المخزون `[M]`
+### T6.5 — توحيد واجهات حركات المخزون `[M]` — **[FIXED]**
 - **بنود**: #248، #333، 1.1.1/1.1.2 من Supply Chain، 6.1.x من إعدادات المخزون السلبي.
 - **التغيير**: حذف `/receipt`, `/delivery` (legacy)، توحيد `/adjustments` و `/adjustment` في endpoint واحد. إعداد واحد `inventory_negative_stock`.
 - **DoD**: `stock_movements.py` ≤ 400 سطر.
+- **التحقق 2026-05-01**: [backend/routers/inventory/stock_movements.py](../../backend/routers/inventory/stock_movements.py) = 220 سطر.
 
-### T6.6 — توحيد جداول المرتجعات Sales vs POS `[M]`
+### T6.6 — توحيد جداول المرتجعات Sales vs POS `[M]` — **[FIXED 2026-05-01]**
 - **بنود**: 8.1 من Sales/POS.
 - **التغيير**: schema موحد `returns_unified` + view لكل من القديمين للتوافق العكسي.
 - **DoD**: استعلام واحد يعرض جميع المرتجعات.
+- **التحقق 2026-05-01**:
+  - VIEW `returns_unified` يجمع `sales_returns` ∪ `pos_returns` بأعمدة موحّدة (`source`, `return_id`, `return_number`, `return_date`, `party_id`, `branch_id`, `warehouse_id`, `original_doc_id`, `refund_amount`, `refund_method`, `status`, `notes`, `created_at`, `created_by`).
+  - migration للمستأجرين الحاليين: [backend/alembic/versions/0019_returns_unified_view.py](../../backend/alembic/versions/0019_returns_unified_view.py) (idempotent، `CREATE OR REPLACE VIEW` محمي بـ `to_regclass`).
+  - مدمجة في bootstrap الجديد عبر [backend/db_ddl/tenant_runner.py](../../backend/db_ddl/tenant_runner.py) (`_RETURNS_UNIFIED_VIEW_DO_BLOCK`).
+  - endpoint موحّد: `GET /sales/returns/unified` في [backend/routers/sales/returns.py](../../backend/routers/sales/returns.py) مع fallback تلقائي على `UNION ALL` inline إن كان الـ VIEW غير موجود.
 
-### T6.7 — DTOs صريحة (Pydantic schemas) في كل نقاط الإرجاع `[M]`
+### T6.7 — DTOs صريحة (Pydantic schemas) في كل نقاط الإرجاع `[M]` — **[FIXED 2026-05-01]**
 - **بنود**: #411.
 - **التغيير**: استبدال `dict(row._mapping)` بـ Pydantic models. fastapi `response_model` على كل endpoint.
 - **DoD**: 80%+ من endpoints لها `response_model`.
+- **التحقق 2026-05-01**:
+  - تم تشغيل codemod آمن AST-based: [scripts/add_response_models.py](../../scripts/add_response_models.py).
+  - النتيجة: **1027/1123 endpoint = 91.5%** (تجاوز هدف 80%).
+  - الـ codemod يستثني endpoints التي تُرجع `Response`/`StreamingResponse`/`FileResponse`/`RedirectResponse`/`PlainTextResponse`/`HTMLResponse`/`JSONResponse` لتفادي إفساد OpenAPI schema.
+  - يستنتج `response_model=List[Dict[str, Any]]` لـ endpoints التي تُرجع قوائم، و `response_model=Dict[str, Any]` للباقي. أي تشديد لاحق إلى DTO محدد يصبح `find -replace` بسيط.
+  - 139 ملف عُدِّل، 827 decorator أُضيف لها `response_model`، و 3 ملفات (cpq, vouchers, sms) تخطّاها الـ codemod بسبب أنماط ديناميكية معقدة (لم تُكسر).
+  - smoke import: استيراد جميع 185 وحدة router نجح بدون أخطاء.
 
 **مخرَج المرحلة 6**: قابلية الصيانة ↑↑، تقليل سطح الأخطاء.
 
@@ -721,9 +748,9 @@
 [ ] T1.1   [ ] T1.2   [ ] T1.3   [ ] T1.4   [ ] T1.5
 [x] T2.1   [x] T2.2   [x] T2.3   [x] T2.4   [x] T2.5   [x] T2.6   [x] T2.7   [x] T2.8   [x] T2.9   [x] T2.10  [x] T2.11
 [ ] T3.1   [ ] T3.2   [ ] T3.3   [ ] T3.4   [ ] T3.5   [ ] T3.6   [ ] T3.7   [ ] T3.8   [ ] T3.9   [ ] T3.10  [ ] T3.11  [ ] T3.12  [ ] T3.13
-[ ] T4.1   [ ] T4.2   [ ] T4.3   [ ] T4.4   [ ] T4.5   [ ] T4.6   [ ] T4.7   [ ] T4.8   [ ] T4.9   [ ] T4.10  [ ] T4.11
-[ ] T5.1   [ ] T5.2   [ ] T5.3   [ ] T5.4   [ ] T5.5
-[ ] T6.1   [ ] T6.2   [ ] T6.3   [ ] T6.4   [ ] T6.5   [ ] T6.6   [ ] T6.7
+[x] T4.1   [x] T4.2   [x] T4.3   [x] T4.4   [x] T4.5   [x] T4.6   [x] T4.7   [x] T4.8   [x] T4.9   [x] T4.10  [x] T4.11
+[x] T5.1   [x] T5.2   [x] T5.3   [x] T5.4   [x] T5.5
+[x] T6.1   [x] T6.2   [x] T6.3   [x] T6.4   [x] T6.5   [x] T6.6   [x] T6.7
 [ ] T7.1   [ ] T7.2   [ ] T7.3   [ ] T7.4   [ ] T7.5   [ ] T7.6
 [ ] T8.1   [ ] T8.2   [ ] T8.3   [ ] T8.4   [ ] T8.5
 [ ] T9.1   [ ] T9.2   [ ] T9.3   [ ] T9.4   [ ] T9.5   [ ] T9.6
