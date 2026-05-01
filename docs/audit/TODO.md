@@ -301,10 +301,16 @@
   - اختبار جديد [backend/tests/test_54_fiscal_lock_unified.py](../../backend/tests/test_54_fiscal_lock_unified.py): 5 حالات (فترة مفتوحة، قفل إداري، إغلاق نهاية سنة، `raise_error=False`، regression لمنع عودة الـ import المكسور).
 - **بوابات الجودة**: py_compile · sql lint (305) · pytest 21/21.
 
-### T3.4 — توحيد دالتي `validate_je_lines` `[S]`
+### T3.4 — توحيد دالتي `validate_je_lines` `[S]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #19.
 - **التغيير**: حذف النسخة في `utils/accounting.py` واستخدام `gl_service` فقط (أو العكس)، مع توحيد منطق سطر-واحد-مسموح/ممنوع.
 - **DoD**: import واحد فقط في كل المشروع.
+- **التنفيذ**:
+  - المصدر الوحيد لقواعد التوازن/الإشارات/منع debit+credit في نفس السطر هو [services/gl_service.py::validate_je_lines](../../backend/services/gl_service.py) (دالة نقية، تعيد `(total_debit, total_credit)`).
+  - [utils/accounting.py](../../backend/utils/accounting.py): النسخة المكررة استُبدلت بـ `prepare_je_lines(je_lines, source)` — wrapper طبقة الراوتر يضيف فقط: رفض `account_id=None`، تجاهل الأسطر الصفرية، اشتراط ≥ سطرين، ثم يفوّض كل قواعد الحساب لـ `gl_service.validate_je_lines`. اسم `validate_je_lines` احتُفظ به كـ alias مؤقت + توثيق.
+  - جميع الراوترات (credit_notes, vouchers, returns, pos) هاجرت إلى `prepare_je_lines` — لم يعد أي ملف خارج `services/gl_service.py` يعرّف `def validate_je_lines`.
+  - اختبار جديد [tests/test_55_validate_je_lines_unified.py](../../backend/tests/test_55_validate_je_lines_unified.py) (7 حالات) مع regression تفحص نظام الملفات للتأكد من وجود تعريف واحد فقط.
+- **بوابات الجودة**: py_compile · sql lint (305) · pytest 35/35.
 
 ### T3.5 — اتجاه FC balance للخصوم في إعادة التقييم `[S]`
 - **بنود**: #16.

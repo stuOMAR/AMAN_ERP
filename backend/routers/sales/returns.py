@@ -432,8 +432,8 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             je_lines.append({"account_id": acc_cogs, "debit": 0, "credit": total_cost_reversal, "description": f"COGS Reduction - {header.return_number}"})
 
         # Insert Journal Entry (TASK-015: centralized)
-        from utils.accounting import validate_je_lines
-        valid_lines = validate_je_lines(je_lines, source=f"RET-{header.return_number}")
+        from utils.accounting import prepare_je_lines
+        valid_lines = prepare_je_lines(je_lines, source=f"RET-{header.return_number}")
 
         # Enrich with amount_currency/currency for gl_service
         for line in valid_lines:

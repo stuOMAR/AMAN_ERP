@@ -17,16 +17,28 @@ def _to_decimal(v) -> Decimal:
     return Decimal(str(v))
 
 
-def validate_je_lines(je_lines: List[Dict], source: str = "auto") -> List[Dict]:
+def prepare_je_lines(je_lines: List[Dict], source: str = "auto") -> List[Dict]:
     """
-    Validate journal entry lines before insertion.
-    1. Reject lines with None account_id (instead of silently dropping them)
-    2. Verify total debits == total credits
-    3. Reject negative amounts
-    Returns only valid, non-zero lines.
-    Raises HTTPException if validation fails.
+    Routing-layer JE preparation + validation.
+
+    T3.4 (audit #19): single source of truth for JE balance/sign checks
+    lives in `services.gl_service.validate_je_lines` (pure). This wrapper
+    adds the higher-level concerns the routers need:
+
+      1. Reject None account_id (caller must resolve mappings before this).
+      2. Drop zero lines (helpers sometimes append a placeholder line).
+      3. Require at least 2 non-zero lines for a valid double-entry.
+      4. Delegate balance / sign / non-negative invariants to gl_service.
+
+    Returns the filtered list of valid lines. Raises HTTPException on
+    violation (Arabic message).
+
+    NOTE: legacy callers may still import this as ``validate_je_lines``
+    via the compatibility alias below. New code must use
+    ``prepare_je_lines`` (or call ``gl_service.validate_je_lines`` directly
+    when only the pure totals are needed).
     """
-    # Check for None account IDs
+    # 1. None-account guard
     missing = [l.get("description", "unknown") for l in je_lines if l.get("account_id") is None]
     if missing:
         logger.error(f"JE validation ({source}): Missing account mappings for: {missing}")
@@ -35,30 +47,30 @@ def validate_je_lines(je_lines: List[Dict], source: str = "auto") -> List[Dict]:
             f"لا يمكن ترحيل القيد - حسابات غير معرفة: {', '.join(missing)}"
         )
 
-    # Filter out zero lines
+    # 2. Filter zero lines
     valid = [l for l in je_lines if l.get("debit", 0) > 0 or l.get("credit", 0) > 0]
 
+    # 3. At least 2 non-zero lines
     if len(valid) < 2:
         raise HTTPException(400, "القيد المحاسبي يحتاج سطرين على الأقل")
 
-    # Check for negatives
-    for l in valid:
-        if l.get("debit", 0) < 0 or l.get("credit", 0) < 0:
-            raise HTTPException(400, f"لا يمكن وجود قيم سالبة في القيد: {l.get('description')}")
-
-    # Balance check
-    total_debit = sum(l.get("debit", 0) for l in valid)
-    total_credit = sum(l.get("credit", 0) for l in valid)
-    diff = abs(total_debit - total_credit)
-
-    if diff > 0.01:
-        logger.error(f"JE validation ({source}): Unbalanced D={total_debit:.2f} C={total_credit:.2f} diff={diff:.2f}")
-        raise HTTPException(
-            400,
-            f"القيد غير متوازن: مدين={total_debit:.2f} دائن={total_credit:.2f} فرق={diff:.2f}"
-        )
+    # 4. Delegate balance / sign / non-negative checks
+    from services.gl_service import validate_je_lines as _validate
+    try:
+        _validate(valid)
+    except HTTPException as exc:
+        # Augment error context with the source tag for log triage.
+        logger.error(f"JE validation ({source}): {exc.detail}")
+        raise
 
     return valid
+
+
+# Backward-compatibility alias — kept so existing imports keep working
+# until callers migrate. New code should import `prepare_je_lines`
+# instead. There is now only one balance-checking implementation
+# (services.gl_service.validate_je_lines).
+validate_je_lines = prepare_je_lines
 
 
 def generate_sequential_number(db, prefix: str, table: str, column: str) -> str:

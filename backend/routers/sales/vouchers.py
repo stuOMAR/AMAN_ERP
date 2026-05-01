@@ -332,7 +332,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             """), {"amt": data.amount, "cid": data.customer_id})
 
         # 3. Create GL Entry (TASK-015: centralized)
-        from utils.accounting import get_mapped_account_id, validate_je_lines
+        from utils.accounting import get_mapped_account_id, prepare_je_lines
         acc_ar = get_mapped_account_id(db, "acc_map_ar")
         acc_cash = get_mapped_account_id(db, "acc_map_cash")
         acc_bank = get_mapped_account_id(db, "acc_map_bank") or get_mapped_account_id(db, "acc_map_cash")
@@ -355,7 +355,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
                              "amount_currency": data.amount, "currency": currency})
 
         # Validate before insert
-        valid_lines = validate_je_lines(je_lines, source=f"REFUND-{voucher_num}")
+        valid_lines = prepare_je_lines(je_lines, source=f"REFUND-{voucher_num}")
 
         je_id, je_num = create_journal_entry(
             db=db,

@@ -705,9 +705,9 @@ def create_order(
         # Create Journal Entry if accounts are mapped
         if je_lines:
             # Validate JE lines (balance, None accounts, negatives)
-            from utils.accounting import validate_je_lines
+            from utils.accounting import prepare_je_lines
             try:
-                je_lines = validate_je_lines(je_lines, source=f"POS-{order_number}")
+                je_lines = prepare_je_lines(je_lines, source=f"POS-{order_number}")
             except Exception as e:
                 logger.error(f"POS JE validation failed for {order_number}: {e}")
                 raise

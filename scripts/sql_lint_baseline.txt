@@ -301,7 +301,7 @@ backend/services/sales_service.py:85
 backend/services/scheduler.py:194
 backend/services/sso_service.py:499
 backend/services/sso_service.py:299
-backend/utils/accounting.py:89
+backend/utils/accounting.py:101
 backend/utils/duplicate_detection.py:154
 backend/utils/exports.py:418
 backend/utils/optimistic_lock.py:44

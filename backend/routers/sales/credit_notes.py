@@ -22,7 +22,7 @@ from utils.accounting import (
     get_mapped_account_id,
     generate_sequential_number,
     get_base_currency,
-    validate_je_lines,
+    prepare_je_lines,
 )
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 import logging
@@ -307,7 +307,7 @@ def create_sales_credit_note(
 
         je_num = f"JE-SCN-{inv_num}"
         # Validate JE lines
-        valid_lines = validate_je_lines(je_lines, source=f"SCN-{inv_num}")
+        valid_lines = prepare_je_lines(je_lines, source=f"SCN-{inv_num}")
 
         # TASK-015: centralized GL posting
         je_id, _je_number = create_journal_entry(
@@ -631,7 +631,7 @@ def create_sales_debit_note(
 
         je_num = f"JE-SDN-{inv_num}"
         # Validate JE lines
-        valid_dn_lines = validate_je_lines(je_lines, source=f"SDN-{inv_num}")
+        valid_dn_lines = prepare_je_lines(je_lines, source=f"SDN-{inv_num}")
 
         # TASK-015: centralized GL posting
         je_id, _je_number = create_journal_entry(
