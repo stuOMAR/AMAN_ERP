@@ -194,7 +194,7 @@ def create_sales_credit_note(
         # Calculate totals
         inv_date = data.get("invoice_date", str(date.today()))
         # SLS-010: Prevent posting to closed fiscal periods
-        from utils.accounting import check_fiscal_period_open
+        from utils.fiscal_lock import check_fiscal_period_open
         check_fiscal_period_open(db, inv_date)
 
         base_currency = get_base_currency(db)
@@ -523,7 +523,7 @@ def create_sales_debit_note(
 
         inv_date = data.get("invoice_date", str(date.today()))
         # SLS-010: Prevent posting to closed fiscal periods
-        from utils.accounting import check_fiscal_period_open
+        from utils.fiscal_lock import check_fiscal_period_open
         check_fiscal_period_open(db, inv_date)
 
         base_currency = get_base_currency(db)

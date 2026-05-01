@@ -288,11 +288,18 @@
   - اختبار جديد [backend/tests/test_53_sales_markup_je.py](../../backend/tests/test_53_sales_markup_je.py) يحاكي حساب القيد لأربع حالات (بدون markup، markup فقط، خصم سطر+markup، خصم رأسي) ويؤكد توازن المدين والدائن.
 - **بوابات الجودة**: py_compile · check_sql_parameterization (305) · pytest 16/16 (12 phase9 + 4 جديدة).
 
-### T3.3 — توحيد آليتي القفل المالي `[M]`
+### T3.3 — توحيد آليتي القفل المالي `[M]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #17.
 - **التغيير**: إلغاء أحدهما (المُوصى به: استبقاء `fiscal_period_locks`)، وجميع نقاط الكتابة تستدعي `check_fiscal_period_open` موحدة.
 - **الملفات**: `backend/services/fiscal_lock.py`، `backend/services/gl_service.py`، `backend/routers/invoices.py` + باقي راوترات الكتابة.
 - **DoD**: قفل فترة يمنع جميع الفواتير/المرتجعات/الإشعارات/POS.
+- **التنفيذ**:
+  - [backend/utils/fiscal_lock.py](../../backend/utils/fiscal_lock.py) أصبح المصدر الوحيد للحقيقة: يفحص `fiscal_period_locks` (قفل إداري) **و** `fiscal_periods.is_closed` (إقفال نهاية السنة) معًا.
+  - [backend/services/gl_service.py](../../backend/services/gl_service.py): أُزيل الاستعلام المباشر على `fiscal_periods` واستُبدل باستدعاء `check_fiscal_period_open` كـ backstop دفاعي بعد الراوترات.
+  - استيرادات مكسورة `from utils.accounting import check_fiscal_period_open` (لا توجد دالة بهذا الاسم في `utils/accounting.py`) صُحّحت في [credit_notes.py](../../backend/routers/sales/credit_notes.py) و [vouchers.py](../../backend/routers/sales/vouchers.py) لتشير إلى `utils.fiscal_lock`.
+  - تغطية مؤكدة عبر grep: invoices/returns/credit_notes/vouchers/pos/expenses/checks/notes/treasury/taxes/transfers/adjustments/projects/manufacturing/hr — جميعها تستدعي الحارس الموحد.
+  - اختبار جديد [backend/tests/test_54_fiscal_lock_unified.py](../../backend/tests/test_54_fiscal_lock_unified.py): 5 حالات (فترة مفتوحة، قفل إداري، إغلاق نهاية سنة، `raise_error=False`، regression لمنع عودة الـ import المكسور).
+- **بوابات الجودة**: py_compile · sql lint (305) · pytest 21/21.
 
 ### T3.4 — توحيد دالتي `validate_je_lines` `[S]`
 - **بنود**: #19.

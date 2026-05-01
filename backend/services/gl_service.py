@@ -120,15 +120,13 @@ def create_journal_entry(
             return dup[0], dup[1]
 
     # 1c. Closed Period Check
+    # T3.3 (audit #17): single source of truth via utils.fiscal_lock —
+    # honours both fiscal_period_locks (admin lock) and fiscal_periods
+    # (year-end close). Defense-in-depth: every router already calls
+    # this guard, but gl_service enforces it again here as a backstop.
     if date and status == "posted":
-        closed_period = db.execute(text("""
-            SELECT 1 FROM fiscal_periods 
-            WHERE :entry_date BETWEEN start_date AND end_date 
-            AND is_closed = TRUE
-            LIMIT 1
-        """), {"entry_date": date}).fetchone()
-        if closed_period:
-            raise HTTPException(status_code=400, detail="لا يمكن ترحيل قيود في فترة محاسبية مغلقة")
+        from utils.fiscal_lock import check_fiscal_period_open
+        check_fiscal_period_open(db, date)
 
     # 2. Header
     entry_number = generate_sequential_number(db, "JE", "journal_entries", "entry_number")

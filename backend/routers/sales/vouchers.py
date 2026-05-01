@@ -34,7 +34,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         voucher_num = generate_sequential_number(db, f"RCV-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
         # SLS-011: Prevent posting receipts to closed fiscal periods
-        from utils.accounting import check_fiscal_period_open
+        from utils.fiscal_lock import check_fiscal_period_open
         check_fiscal_period_open(db, data.voucher_date)
 
         # Currency & Exchange Rate
@@ -232,7 +232,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
         voucher_num = generate_sequential_number(db, f"PAY-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
         # SLS-011: Prevent posting payments to closed fiscal periods
-        from utils.accounting import check_fiscal_period_open
+        from utils.fiscal_lock import check_fiscal_period_open
         check_fiscal_period_open(db, data.voucher_date)
 
         # Currency & Exchange Rate

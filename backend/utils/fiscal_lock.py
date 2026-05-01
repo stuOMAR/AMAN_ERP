@@ -16,6 +16,12 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
     Check if a fiscal period is open for the given date.
     Used as a utility function called from endpoints that create journal entries.
 
+    T3.3 (audit #17): unified single source of truth. The function honours
+    BOTH legacy guard tables — `fiscal_period_locks` (admin lock list with
+    locked_at/locked_by audit trail) and `fiscal_periods.is_closed` (year-
+    end close lifecycle). A date is open only when neither table marks it
+    as locked / closed.
+
     Returns True if open, False if locked.
     Raises HTTPException(400) if locked and raise_error=True.
     """
@@ -23,7 +29,7 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
         entry_date = datetime.strptime(entry_date[:10], "%Y-%m-%d").date()
 
     try:
-        # Check for fiscal period locks
+        # 1. Admin lock table — fiscal_period_locks
         locked = db.execute(text("""
             SELECT id, period_name, locked_at, locked_by
             FROM fiscal_period_locks
@@ -40,6 +46,33 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
                     f"الفترة المحاسبية مقفلة: {locked.period_name}. "
                     f"تم القفل بتاريخ {locked.locked_at}. "
                     "يرجى التواصل مع المدير لفتح الفترة."
+                )
+            return False
+
+        # 2. Year-end closed period — fiscal_periods.is_closed
+        # Wrapped in its own try/except so a missing legacy table doesn't
+        # break tenants that only use fiscal_period_locks.
+        try:
+            closed = db.execute(text("""
+                SELECT id, name
+                FROM fiscal_periods
+                WHERE :entry_date BETWEEN start_date AND end_date
+                AND is_closed = TRUE
+                LIMIT 1
+            """), {"entry_date": entry_date}).fetchone()
+        except Exception as e2:
+            err2 = str(e2).lower()
+            if "does not exist" in err2 or "undefinedtable" in err2:
+                closed = None
+            else:
+                raise
+
+        if closed:
+            if raise_error:
+                raise HTTPException(
+                    400,
+                    f"الفترة المحاسبية مغلقة: {closed.name}. "
+                    "لا يمكن ترحيل قيود في فترة مغلقة."
                 )
             return False
 
