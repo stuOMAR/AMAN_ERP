@@ -838,6 +838,25 @@ def cancel_invoice(
             SELECT product_id, quantity FROM invoice_lines WHERE invoice_id = :id
         """), {"id": invoice_id}).fetchall()
 
+        # T3.8: if the invoice has product lines, the original posting must
+        # have produced inventory_transactions. Fail loudly if those rows are
+        # missing so the cancel does not silently skip the stock reversal.
+        product_lines = [ln for ln in inv_lines if ln.product_id]
+        if product_lines:
+            inv_tx_count = db.execute(text("""
+                SELECT COUNT(*) FROM inventory_transactions
+                WHERE reference_type = 'invoice' AND reference_id = :inv_id
+            """), {"inv_id": invoice_id}).scalar() or 0
+            if inv_tx_count == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail=(
+                        "لا توجد حركات مخزون مرتبطة بهذه الفاتورة — "
+                        "لا يمكن إلغاء الفاتورة لأن عكس المخزون غير ممكن. "
+                        "تواصل مع المسؤول لمراجعة سلامة البيانات."
+                    ),
+                )
+
         for line in inv_lines:
             if line.product_id:
                 db.execute(text("""
@@ -850,9 +869,16 @@ def cancel_invoice(
                 """), {"qty": line.quantity, "pid": line.product_id, "inv_id": invoice_id})
 
         # 4. Reverse GL entries
+        # T3.8: locate the originating JE by (source, source_id) instead of the
+        # mutable `reference` column. The posting helper writes
+        # source='Sales-Invoice', source_id=<invoice id>.
         je = db.execute(text("""
-            SELECT id FROM journal_entries WHERE reference = :ref AND status = 'posted' LIMIT 1
-        """), {"ref": inv.invoice_number}).fetchone()
+            SELECT id FROM journal_entries
+            WHERE source = 'Sales-Invoice' AND source_id = :inv_id
+              AND status = 'posted'
+            ORDER BY id DESC
+            LIMIT 1
+        """), {"inv_id": invoice_id}).fetchone()
 
         if je:
             je_lines = db.execute(text("""

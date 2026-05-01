@@ -354,11 +354,17 @@
   - اختبار جديد [tests/test_58_audit_chain_immutability.py](../../backend/tests/test_58_audit_chain_immutability.py) (9 حالات): ثبات الهاش على البيانات الثابتة، تغيير أي حقل يغيّر الهاش، envelope `{old, new}`، `log_activity` يبني السلسلة، `UPDATE/DELETE` ترفض، علامة الأرشفة لا تسمح بتعديل حقول السلسلة، regression لمنع عودة الـ INSERT المباشر في `permissions.py`.
 - **بوابات الجودة**: py_compile · sql lint (305) · pytest 48/48 · CLI verify على 905 صف = OK.
 
-### T3.8 — عكس مخزون/قيد عند إلغاء الفاتورة بدقة `[S]`
+### T3.8 — عكس مخزون/قيد عند إلغاء الفاتورة بدقة `[S]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #294 (P2 لكن منطقي مع المرحلة)، 1.3.2/1.3.3 من Sales/POS.
 - **التغيير**: البحث بـ `source + source_id` بدل `reference`. التحقق من وجود سجل المخزون قبل العكس.
 - **الملف**: `backend/routers/invoices.py`.
 - **DoD**: إلغاء فاتورة بدون inventory_transactions يرجع خطأ واضح.
+- **التنفيذ**:
+  - [backend/routers/sales/invoices.py](../../backend/routers/sales/invoices.py): `cancel_invoice` يحدد القيد المحاسبي الأصلي عبر `WHERE source = 'Sales-Invoice' AND source_id = :inv_id` بدلاً من `reference = :ref` (العمود `reference` قابل للتعديل/التكرار، أما زوج `(source, source_id)` فهو ثابت يكتبه `post_journal_entry` عند الإصدار).
+  - قبل عكس المخزون، إذا كانت أي سطر من `invoice_lines` يحمل `product_id`، يفحص الكود `COUNT(*) FROM inventory_transactions WHERE reference_type='invoice' AND reference_id=:inv_id`، وإذا كان صفرًا يرفع HTTP 400 برسالة عربية واضحة بدلاً من تخطي العكس بصمت.
+  - فواتير الخدمات (بدون `product_id` في أي سطر) تمر دون فحص المخزون لأن العكس غير مطلوب أصلاً.
+  - اختبار جديد [tests/test_59_invoice_cancel_reversal.py](../../backend/tests/test_59_invoice_cancel_reversal.py) (3 حالات): pin على البحث بالمصدر، وجود فحص حركات المخزون مع الرسالة العربية، وتأمين الشرط المشروط على `product_lines` فقط.
+- **بوابات الجودة**: py_compile · sql lint نظيف · pytest 12/12 (T3.7+T3.8).
 
 ### T3.9 — ربط FIFO/LIFO صحيح في مرتجعات الشراء + الشحنات `[M]`
 - **بنود**: #101، #245، 419aa.
