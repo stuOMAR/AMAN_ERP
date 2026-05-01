@@ -169,8 +169,8 @@ backend/routers/mobile.py:615
 backend/routers/mobile.py:548
 backend/routers/mobile.py:558
 backend/routers/pos.py:220
-backend/routers/pos.py:1651
-backend/routers/pos.py:1551
+backend/routers/pos.py:1744
+backend/routers/pos.py:1644
 backend/routers/projects.py:2315
 backend/routers/projects.py:2969
 backend/routers/projects.py:3382

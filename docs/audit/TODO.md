@@ -386,10 +386,20 @@
     - regressions على ملفات `purchases.py` و `inventory/shipments.py` للتأكد من بقاء الربط صحيحاً.
 - **بوابات الجودة**: py_compile · sql lint نظيف (305 + إزاحة الأسطر) · pytest 56/56 (T3.1–T3.9).
 
-### T3.10 — POS: خصم قبل الضريبة + تطبيق الكوبونات backend `[M]`
+### T3.10 — POS: خصم قبل الضريبة + تطبيق الكوبونات backend `[M]` ✅ [FIXED 2026-05-01]
 - **بنود**: #291، 419w.
 - **التغيير**: `pos.py` يطبق `compute_invoice_totals` بنفس منطق `invoices.py`. `coupon_code`/`promotion_id` تُحسب backend-side.
 - **DoD**: نتائج POS = نتائج فاتورة المبيعات لنفس الإدخالات.
+- **التنفيذ**:
+  - `backend/schemas/pos.py`: أضيف `coupon_code: Optional[str]` و `promotion_id: Optional[int]` إلى `OrderCreate`.
+  - `backend/routers/pos.py` `create_order`:
+    - تحويل `OrderLineCreate.discount_amount` (قيمة مطلقة) إلى نسبة مئوية قبل تمريرها لـ `compute_line_amounts`، فأصبحت دلالات الخصم السطري متطابقة مع `routers/sales/invoices`.
+    - استرجاع backend-side للعرض الترويجي عبر `coupon_code` أو `promotion_id` من `pos_promotions` مع تحقّق `is_active` ونافذة `start_date/end_date` و `min_order_amount`.
+    - تحويل العرض/الخصم اليدوي إلى `header_discount_pct` ثم تمريره إلى `compute_invoice_totals`، مما يخفّض الضريبة تناسبياً (ZATCA).
+    - حذف الخصم بعد الضريبة `(subtotal + tax_total - order_in.discount_amount)` واعتماد `_totals["grand_total"]`.
+    - قيد GL يستخدم `effective_discount_amount` المُحتسَب لا قيمة الإدخال الخام.
+  - `backend/tests/test_61_pos_invoice_parity.py` (5 حالات): تكافؤ POS/فاتورة المبيعات لخصم رأسي مطلق، لكوبون نسبي، ولخصم سطري؛ ومُثبِّتات شفرة على lookup العرض من `pos_promotions` ومرور `header_discount_pct` للحاسبة الموحّدة.
+  - `scripts/sql_lint_baseline.txt`: تحديث 2 إدخالين في `routers/pos.py` (1551→1644، 1651→1744) لمواكبة إضافة منطق الكوبون.
 
 ### T3.11 — توحيد مساري المصروفات `[M]`
 - **بنود**: 419ad، 2.1/2.2 من Treasury.

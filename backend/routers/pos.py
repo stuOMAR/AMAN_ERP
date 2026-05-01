@@ -410,25 +410,111 @@ def create_order(
     for item in order_in.items:
         validate_quantity_for_product(db, item.product_id, item.quantity)
 
-    # TASK-027: unified VAT via compute_invoice_totals
+    # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
+    # produces the same numbers as routers/sales/invoices for the same
+    # inputs. Per-line OrderLineCreate.discount_amount is an *absolute*
+    # currency amount, while compute_line_amounts expects a percentage —
+    # convert per line so the unified helper sees consistent semantics.
     from utils.accounting import compute_invoice_totals, compute_line_amounts
-    _totals = compute_invoice_totals([
+
+    def _line_discount_pct(qty, unit_price, disc_amt) -> Decimal:
+        gross = (_dec(qty) * _dec(unit_price)).quantize(_D2, ROUND_HALF_UP)
+        if gross <= 0:
+            return Decimal("0")
+        amt = _dec(disc_amt)
+        if amt <= 0:
+            return Decimal("0")
+        if amt > gross:
+            amt = gross
+        return (amt * Decimal("100") / gross).quantize(Decimal("0.000001"), ROUND_HALF_UP)
+
+    line_dicts = [
         {
             "quantity": item.quantity,
             "unit_price": item.unit_price,
             "tax_rate": item.tax_rate,
-            "discount": item.discount_amount,
+            "discount": _line_discount_pct(item.quantity, item.unit_price, item.discount_amount),
         }
         for item in order_in.items
-    ])
-    subtotal = _totals["subtotal"] - _totals["total_discount"]  # net taxable base, matches prior semantics
+    ]
+
+    # T3.10: resolve backend-side promotion/coupon. Either coupon_code or
+    # promotion_id may be provided; server validates and converts the
+    # promotion into a header discount percentage so the unified ZATCA
+    # rule (proportional tax reduction) applies — exactly like
+    # routers/sales/invoices uses header_discount_pct.
+    promotion_row = None
+    if order_in.promotion_id:
+        promotion_row = db.execute(text("""
+            SELECT id, promotion_type, value, coupon_code, min_order_amount
+            FROM pos_promotions
+            WHERE id = :id AND is_active = TRUE
+              AND (start_date IS NULL OR start_date <= NOW())
+              AND (end_date   IS NULL OR end_date   >  NOW())
+        """), {"id": order_in.promotion_id}).fetchone()
+        if promotion_row is None:
+            raise HTTPException(status_code=400, detail="العرض الترويجي غير صالح أو منتهي الصلاحية")
+    elif order_in.coupon_code:
+        promotion_row = db.execute(text("""
+            SELECT id, promotion_type, value, coupon_code, min_order_amount
+            FROM pos_promotions
+            WHERE coupon_code = :code AND is_active = TRUE
+              AND (start_date IS NULL OR start_date <= NOW())
+              AND (end_date   IS NULL OR end_date   >  NOW())
+        """), {"code": order_in.coupon_code.strip()}).fetchone()
+        if promotion_row is None:
+            raise HTTPException(status_code=400, detail="كود الكوبون غير صالح أو منتهي الصلاحية")
+
+    # Pre-compute the gross subtotal (qty*price summed) to translate any
+    # absolute header discount into a percentage and to enforce
+    # min_order_amount on promotions.
+    gross_subtotal = sum(
+        (_dec(it.quantity) * _dec(it.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        for it in order_in.items
+    )
+
+    header_discount_pct = Decimal("0")
+    if promotion_row is not None:
+        min_oa = _dec(promotion_row.min_order_amount or 0)
+        if min_oa > 0 and gross_subtotal < min_oa:
+            raise HTTPException(
+                status_code=400,
+                detail=f"الحد الأدنى لتطبيق العرض هو {min_oa:.2f}",
+            )
+        ptype = (promotion_row.promotion_type or "percentage").lower()
+        pvalue = _dec(promotion_row.value or 0)
+        if ptype == "percentage":
+            header_discount_pct = pvalue
+        elif ptype in ("amount", "fixed", "fixed_amount"):
+            if gross_subtotal > 0:
+                header_discount_pct = (pvalue * Decimal("100") / gross_subtotal)
+        # Other promo shapes (BOGO etc.) are not supported here yet.
+    elif _dec(order_in.discount_amount) > 0 and gross_subtotal > 0:
+        # Manual header discount: treat the absolute amount as the
+        # equivalent percentage so tax is reduced proportionally
+        # (ZATCA), matching routers/sales/invoices.
+        header_discount_pct = (
+            _dec(order_in.discount_amount) * Decimal("100") / gross_subtotal
+        )
+
+    if header_discount_pct < 0:
+        header_discount_pct = Decimal("0")
+    if header_discount_pct > Decimal("100"):
+        header_discount_pct = Decimal("100")
+
+    _totals = compute_invoice_totals(line_dicts, header_discount_pct=header_discount_pct)
+    subtotal = _totals["subtotal"] - _totals["total_discount"]  # net taxable base after all discounts
     tax_total = _totals["total_tax"]
+    total = _totals["grand_total"]
+    effective_discount_amount = _totals["total_discount"].quantize(_D2, ROUND_HALF_UP)
 
     # FISCAL-LOCK: Reject if accounting period is closed
     check_fiscal_period_open(db, datetime.now().date())
     
-    # Apply global discount if any (POS-specific: reduces grand total post-tax)
-    total = (subtotal + tax_total - _dec(order_in.discount_amount)).quantize(_D2, ROUND_HALF_UP)
+    # T3.10: total already includes the header discount via
+    # compute_invoice_totals(header_discount_pct=...) — do NOT subtract
+    # order_in.discount_amount again here, that would double-count it
+    # and break the POS == sales-invoice equivalence.
     
     # Validate branch and warehouse access
     if order_in.branch_id:
@@ -479,7 +565,7 @@ def create_order(
         "status": order_in.status,
         "subtotal": subtotal,
         "tax": tax_total,
-        "disc": _dec(order_in.discount_amount).quantize(_D2, ROUND_HALF_UP),
+        "disc": effective_discount_amount,
         "total": total,
         "paid": _dec(order_in.paid_amount).quantize(_D2, ROUND_HALF_UP),
         "note": order_in.note,
@@ -494,7 +580,11 @@ def create_order(
         prod_info = db.execute(text("SELECT product_name, product_code, barcode FROM products WHERE id = :id"), {"id": item.product_id}).fetchone()
         
         item_subtotal = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
-        _la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, item.discount_amount)
+        # T3.10: pass per-line discount as a *percentage* (already
+        # converted from item.discount_amount) so the helper applies
+        # discount before tax — matching routers/sales/invoices.
+        _line_disc_pct = _line_discount_pct(item.quantity, item.unit_price, item.discount_amount)
+        _la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, _line_disc_pct)
         tax_amount = _la["tax_amount"]
         item_total = _la["line_total"]
 
@@ -650,7 +740,10 @@ def create_order(
                 })
 
         # B. Credit: Sales Revenue (Gross Subtotal) & Debit: Sales Discount (if any)
-        discount_dec = _dec(order_in.discount_amount).quantize(_D2, ROUND_HALF_UP)
+        # T3.10: GL must reflect the *effective* discount (computed by
+        # compute_invoice_totals incl. coupon/promotion), not the raw
+        # request body field.
+        discount_dec = effective_discount_amount
         if acc_sales and subtotal > 0:
             je_lines.append({
                 "account_id": acc_sales,

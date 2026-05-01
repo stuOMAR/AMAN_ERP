@@ -132,6 +132,11 @@ class OrderCreate(BaseModel):
     payments: List[OrderPaymentCreate] = []
     status: str = "paid"
     note: Optional[str] = None
+    # T3.10: backend-resolved promotion / coupon. Either may be supplied;
+    # the server validates and applies the discount before computing totals
+    # so POS results match a sales invoice for identical inputs.
+    coupon_code: Optional[str] = None
+    promotion_id: Optional[int] = None
 
     @field_validator("discount_amount", "paid_amount")
     @classmethod
