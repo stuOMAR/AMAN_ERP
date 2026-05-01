@@ -60,6 +60,20 @@ class MemoryCache:
         self._cache.clear()
         self._expiry.clear()
 
+    def set_nx(self, key: str, value: Any, expire: int = 30) -> bool:
+        """T7.4: stampede-lock primitive (set if absent). Returns True if
+        the key was set (caller acquired the lock)."""
+        if key in self._cache:
+            # Honour TTL
+            if key in self._expiry and self._time.time() > self._expiry[key]:
+                del self._cache[key]
+                del self._expiry[key]
+            else:
+                return False
+        self._cache[key] = value
+        self._expiry[key] = self._time.time() + expire
+        return True
+
 
 class RedisCache:
     def __init__(self, url: str):
@@ -112,6 +126,20 @@ class RedisCache:
         except Exception:
             pass
 
+    def set_nx(self, key: str, value: Any, expire: int = 30) -> bool:
+        """T7.4: distributed stampede-lock primitive (Redis SET NX EX).
+        Returns True if the lock was acquired (key did not exist).
+        Falls back to in-memory MemoryCache when Redis is disabled."""
+        if not self.enabled:
+            return self.memory.set_nx(key, value, expire)
+        try:
+            payload = json.dumps(value, default=_json_default)
+            # nx=True ensures we only set if absent; ex sets TTL atomically.
+            return bool(self.redis.set(key, payload, nx=True, ex=expire))
+        except Exception as e:
+            logger.error(f"Redis set_nx error: {e}")
+            return False
+
 # Initialize cache
 if settings.REDIS_URL:
     cache = RedisCache(settings.REDIS_URL)
@@ -151,6 +179,13 @@ def cached(prefix: str, expire: int = 300, company_specific: bool = True):
         prefix: Cache key prefix (e.g., "dashboard", "reports")
         expire: Cache TTL in seconds (default: 5 minutes)
         company_specific: If True, includes company_id in cache key
+
+    T7.4 features:
+        * Honours ``?no_cache=1`` query parameter (Request kwarg) — bypasses
+          read but still refreshes the entry.
+        * Single-flight stampede protection: on cache miss, only one worker
+          computes; siblings briefly poll for the freshly-cached result.
+        * Records hit/miss counters exposed via :func:`cache_stats`.
     """
     def decorator(func: Callable):
         @wraps(func)
@@ -180,30 +215,65 @@ def cached(prefix: str, expire: int = 300, company_specific: bool = True):
 
             cache_key = ":".join(key_parts)
 
+            # T7.4: ?no_cache=1 → skip read, still refresh.
+            no_cache = _request_wants_fresh(kwargs.get('request'))
+
             # Try cache
-            cached_result = cache.get(cache_key)
-            if cached_result is not None:
-                logger.debug(f"Cache HIT: {cache_key}")
-                # Inject cache metadata for report transparency
-                if isinstance(cached_result, dict) and "_cache_meta" not in cached_result:
-                    cached_result["_cache_meta"] = {
-                        "cached": True,
-                        "ttl_seconds": expire,
-                        "recompute_param": "?no_cache=1",
-                    }
-                return cached_result
+            if not no_cache:
+                cached_result = cache.get(cache_key)
+                if cached_result is not None:
+                    _record_hit()
+                    logger.debug(f"Cache HIT: {cache_key}")
+                    if isinstance(cached_result, dict) and "_cache_meta" not in cached_result:
+                        cached_result["_cache_meta"] = {
+                            "cached": True,
+                            "ttl_seconds": expire,
+                            "recompute_param": "?no_cache=1",
+                        }
+                    return cached_result
+                _record_miss()
 
-            # Execute function
-            result = func(*args, **kwargs)
+            # T7.4: stampede / thundering-herd protection. Only one worker
+            # acquires the compute lock; siblings poll briefly for the
+            # newly-set value before falling through to compute themselves.
+            lock_key = f"lock:{cache_key}"
+            acquired = cache.set_nx(lock_key, "1", expire=_LOCK_TTL_SECONDS) if not no_cache else True
+            if not acquired:
+                import time
+                deadline = time.time() + _LOCK_WAIT_SECONDS
+                while time.time() < deadline:
+                    waited = cache.get(cache_key)
+                    if waited is not None:
+                        _record_hit()
+                        if isinstance(waited, dict) and "_cache_meta" not in waited:
+                            waited["_cache_meta"] = {
+                                "cached": True,
+                                "ttl_seconds": expire,
+                                "recompute_param": "?no_cache=1",
+                                "via": "stampede_wait",
+                            }
+                        return waited
+                    time.sleep(0.05)
+                # Lock holder slow / crashed — fall through and compute.
 
-            # Store in cache
             try:
-                cache.set(cache_key, result, expire)
-                logger.debug(f"Cache SET: {cache_key} (TTL={expire}s)")
-            except Exception as e:
-                logger.warning(f"Cache set failed: {e}")
+                # Execute function
+                result = func(*args, **kwargs)
 
-            return result
+                # Store in cache
+                try:
+                    cache.set(cache_key, result, expire)
+                    logger.debug(f"Cache SET: {cache_key} (TTL={expire}s)")
+                except Exception as e:
+                    logger.warning(f"Cache set failed: {e}")
+
+                return result
+            finally:
+                if acquired:
+                    try:
+                        cache.delete(lock_key)
+                    except Exception:
+                        pass
 
         return wrapper
     return decorator
@@ -218,3 +288,63 @@ def invalidate_company_cache(company_id: str, module: str = ""):
     """Invalidate all cache for a specific company and optional module"""
     pattern = f"{module}:{company_id}" if module else str(company_id)
     cache.delete_pattern(pattern)
+
+
+# ---------------------------------------------------------------------------
+# T7.4 — stampede lock + hit/miss stats + ?no_cache=1 plumbing
+# ---------------------------------------------------------------------------
+
+# How long a compute lock lives (must exceed worst-case computation).
+_LOCK_TTL_SECONDS = 30
+# How long a sibling will wait for a peer's freshly-cached result before
+# falling through and computing itself.
+_LOCK_WAIT_SECONDS = 5
+
+_stats = {"hits": 0, "misses": 0}
+
+
+def _record_hit() -> None:
+    _stats["hits"] += 1
+
+
+def _record_miss() -> None:
+    _stats["misses"] += 1
+
+
+def cache_stats() -> dict:
+    """T7.4: hit-rate metrics for ops dashboards. DoD: hit-rate > 60%."""
+    h = _stats["hits"]
+    m = _stats["misses"]
+    total = h + m
+    return {
+        "hits": h,
+        "misses": m,
+        "total": total,
+        "hit_rate": (h / total) if total else 0.0,
+    }
+
+
+def reset_cache_stats() -> None:
+    _stats["hits"] = 0
+    _stats["misses"] = 0
+
+
+def _request_wants_fresh(request: Any) -> bool:
+    """Return True if the incoming Request asked for ``?no_cache=1``.
+
+    Accepts a FastAPI/Starlette Request, a plain mapping, or None.
+    """
+    if request is None:
+        return False
+    try:
+        qp = getattr(request, "query_params", None)
+        if qp is None and isinstance(request, dict):
+            qp = request.get("query_params")
+        if qp is None:
+            return False
+        val = qp.get("no_cache") if hasattr(qp, "get") else None
+        if val is None:
+            return False
+        return str(val).strip().lower() in {"1", "true", "yes", "on"}
+    except Exception:
+        return False

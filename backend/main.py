@@ -65,6 +65,7 @@ from routers import sso, matching, mobile
 from routers import sms as sms_router  # SMS gateways
 from routers import shipping as shipping_router  # carriers
 from routers import governance as governance_router
+from routers import search as search_router  # T7.2 unified search
 
 # OPS-001: Structured logging — JSON in production, human-readable in dev
 from utils.logging_config import setup_logging, RequestIDMiddleware
@@ -607,6 +608,9 @@ app.include_router(reports.router, prefix="/api")
 app.include_router(scheduled_reports.router, prefix="/api")
 app.include_router(dashboard.router, prefix="/api")
 
+# T7.2: unified search endpoint (parties / products / invoices / SOs / POs).
+app.include_router(search_router.router, prefix="/api")
+
 # ── Commerce & External ──────────────────────────────────────────
 app.include_router(pos.router, prefix="/api")
 app.include_router(contracts.router, prefix="/api")
@@ -709,6 +713,14 @@ def health_check():
 def health_check_root():
     """Alias for /api/health — used by Docker/load balancer health probes"""
     return health_check()
+
+
+# T7.4 — cache hit-rate metrics for ops dashboards.
+@app.get("/api/health/cache", tags=["Health"], summary="Cache Stats", include_in_schema=True)
+def cache_health_endpoint():
+    """\u0639\u062f\u0651\u0627\u062f hit/miss \u0644\u0644\u0643\u0627\u0634 \u0627\u0644\u0645\u0648\u062d\u062f \u0648\u0646\u0633\u0628\u0629 \u0627\u0644\u0625\u0635\u0627\u0628\u0629 (DoD: hit-rate > 60%)."""
+    from utils.cache import cache_stats
+    return cache_stats()
 
 
 # T4.1 — Scheduler health endpoint

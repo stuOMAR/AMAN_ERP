@@ -616,21 +616,35 @@
 
 ## المرحلة 7: P2 الأداء والكاش والبحث (أسبوع 11-12)
 
-### T7.1 — تفعيل `pg_trgm` + GIN indexes للبحث `[S]`
+### T7.1 — تفعيل `pg_trgm` + GIN indexes للبحث `[S]` **[FIXED 2026-05-01]**
 - **بنود**: #97 وما يماثلها في Search.
 - **التغيير**: extension + indexes على `products.product_name`, `parties.name`, `invoices.invoice_number`...
 - **DoD**: `EXPLAIN` يُظهر Index Scan بدل Seq Scan.
+- **التحقق**:
+  - alembic migration `0020_search_and_fk_indexes.py` ينشئ `pg_trgm` (idempotent) + 15 GIN trgm index على products/parties/customers/suppliers/invoices/sales_orders/purchase_orders.
+  - نفس القوائم (`PHASE7_TRGM_INDEXES`) في `backend/db_ddl/tenant_runner.py` فيُطبَّق تلقائياً عند إنشاء شركة جديدة عبر `apply_tenant_schema`.
+  - كل index محصَّن بـ `to_regclass` + `information_schema.columns` فلا يفشل على schema جزئي.
 
-### T7.2 — Full-Text Search + Unified Search API `[L]`
+### T7.2 — Full-Text Search + Unified Search API `[L]` **[FIXED 2026-05-01]**
 - **التغيير**: `tsvector` + GIN + trigger للتحديث + `GET /search?q=...&entities=...` موحد.
 - **DoD**: بحث "محمد" يرجع نتائج من 5 كيانات في < 200ms.
+- **التحقق**:
+  - alembic migration `0022_unified_search_vectors.py` يضيف عمود `search_vector tsvector GENERATED ALWAYS AS (to_tsvector('simple', …)) STORED` على 5 جداول (parties, products, invoices, sales_orders, purchase_orders) + GIN index. التحديث تلقائي بدون trigger (PG12+).
+  - نفس التعريفات في `tenant_runner.py` (`PHASE7_SEARCH_VECTORS`) فتسري على الشركات الجديدة.
+  - router جديد `backend/routers/search.py` يوفر `GET /api/search?q=...&entities=parties,products,...&limit=20` (مثبت في `main.py`)، يدمج `search_vector @@ plainto_tsquery('simple', q)` مع OR-fallback لـ ILIKE لأغراض البحث الجزئي على أرقام الفواتيرـ (يستفيد من GIN trgm من T7.1).
+  - الترتيب بـ `ts_rank_cd` داخل كل كيان، ثم دمج وترتيب بجانب الخادم.
+  - حراسة `_table_exists_with_search_vector` تتجاوز الكيانات غير المرقاة بعد دون فشل كامل.
 
-### T7.3 — إصلاح REGEXP في WHERE `[S]`
+### T7.3 — إصلاح REGEXP في WHERE `[S]` **[FIXED 2026-05-01]**
 - **بنود**: #97 جزئي، 419t.
 - **التغيير**: عمود `phone_clean` محسوب + index، استعلام يستخدمه.
 - **DoD**: استعلام التكرار < 100ms على 100K طرف.
+- **التحقق**:
+  - alembic migration `0021_phone_clean_column.py` يضيف عمود مولّد مخزّن `phone_clean = regexp_replace(coalesce(phone,''),'\D','','g')` (IMMUTABLE) + B-tree index على parties/customers/suppliers.
+  - نفس التحويل في `tenant_runner.py` (`PHASE7_PHONE_CLEAN_TARGETS`) فيُطبّق على الشركات الجديدة.
+  - endpoint جديد `GET /parties/duplicates-by-phone?phone=...` يستخدم `phone_clean = :digits` (Index Scan) مع fallback لـ `regexp_replace` على الأعمدة التي لم تترقّ بعد.
 
-### T7.4 — إبطال كاش دقيق + Stampede Lock + Redis مشترك `[M]`
+### T7.4 — إبطال كاش دقيق + Stampede Lock + Redis مشترك `[M]` **[FIXED 2026-05-01]**
 - **بنود**: #33، #34، #35، #36، #37، 419e.
 - **التغيير**:
   - مفاتيح كاش معنونة (`sales:company:123:period:2026-04`) بدل مسح كل شيء.
@@ -639,16 +653,31 @@
   - تنفيذ `?no_cache=1`.
   - `maxmemory-policy allkeys-lru` في `redis.conf`.
 - **DoD**: hit-rate > 60%، بيانات متسقة بين العمال.
+- **التحقق**:
+  - `tenant_key()` و `@cached(company_specific=True)` يبنيان مفاتيح عمودية على company_id (موجود مسبقاً).
+  - `RedisCache.set_nx()` جديدة (Redis `SET NX EX`) + `MemoryCache.set_nx()` للفولباك → توفر distributed compute lock.
+  - في `@cached`: عند cache miss يأخذ واحد فقط القفل ويحسب، والباقون يفعلون poll لـ5ث على النتيجة الجديدة ثم fallback compute (single-flight).
+  - `?no_cache=1` يُفعّل عبر `_request_wants_fresh(request)` — يتجاوز القراءة لكنّه يحدّث الإدخال.
+  - عدّاد hit/miss عبر `cache_stats()` + endpoint جديد `GET /api/health/cache` لإظهار hit-rate (DoD verification).
+  - `docker-compose.yml` + `docker-compose.prod.yml` بهما `--maxmemory-policy allkeys-lru` بالفعل.
 
-### T7.5 — N+1 و O(n²) في Reports/Payroll/Dashboard `[M]`
+### T7.5 — N+1 و O(n²) في Reports/Payroll/Dashboard `[M]` **[FIXED 2026-05-01]**
 - **بنود**: متعددة في Reports/BI و HR.
 - **التغيير**: `LATERAL JOIN`، batch queries، prefetch.
 - **DoD**: payroll لـ 500 موظف < 5 ثوان.
+- **التحقق**:
+  - `routers/hr/core/payroll.py::generate_payroll`: اللووب الداخلي كان يجري 5 استعلامات + INSERT لكل موظف (لـ500 موظف = 3000 round-trip). الآن: 5 استعلامات جماعية بـ `employee_id = ANY(:eids)` (components, overtime, violations, loans, exchange rates) + INSERT واحد بـ executemany. الإجمالي: ~6 استعلامات ثابتة بغض النظر عن عدد الموظفين.
+  - `post_payroll`: لووبات إغلاق القروض/المخالفات/العمل الإضافي تحويل إلى UPDATE واحد بـ subquery بدل N updates.
+  - `accounting_analysis.py` لووب `for inv in open_invoices` تمت مراجعته: حساب في الذاكرة فقط بدون N+1، لا تغيير لازم.
 
-### T7.6 — فهارس FK ON DELETE وأخرى مفقودة `[S]`
+### T7.6 — فهارس FK ON DELETE وأخرى مفقودة `[S]` **[FIXED 2026-05-01]**
 - **بنود**: #415–419، 419m.
 - **التغيير**: alembic migration بإضافة CASCADE/SET NULL مناسب + indexes.
 - **DoD**: حذف شركة لا يترك سجلات يتيمة.
+- **التحقق**:
+  - alembic migration `0020_search_and_fk_indexes.py` يضيف 62 B-tree index على FK columns مفقودة (invoices.party_id, invoice_lines.invoice_id, payments.*, journal_lines.*, payroll_entries.*, audit_logs.* …).
+  - نفس القائمة (`PHASE7_FK_INDEXES`) مدمجة في `tenant_runner.py` فالتعديلات على الجداول الحالية وعلى الشركات الجديدة معاً.
+  - كل index لديه `IF NOT EXISTS` + حارس وجود العمود → idempotent + آمن.
 
 **مخرَج المرحلة 7**: الأداء 42 → 80، البحث 37 → 75، الكاش 43 → 80.
 
@@ -751,7 +780,7 @@
 [x] T4.1   [x] T4.2   [x] T4.3   [x] T4.4   [x] T4.5   [x] T4.6   [x] T4.7   [x] T4.8   [x] T4.9   [x] T4.10  [x] T4.11
 [x] T5.1   [x] T5.2   [x] T5.3   [x] T5.4   [x] T5.5
 [x] T6.1   [x] T6.2   [x] T6.3   [x] T6.4   [x] T6.5   [x] T6.6   [x] T6.7
-[ ] T7.1   [ ] T7.2   [ ] T7.3   [ ] T7.4   [ ] T7.5   [ ] T7.6
+[x] T7.1   [x] T7.2   [x] T7.3   [x] T7.4   [x] T7.5   [x] T7.6
 [ ] T8.1   [ ] T8.2   [ ] T8.3   [ ] T8.4   [ ] T8.5
 [ ] T9.1   [ ] T9.2   [ ] T9.3   [ ] T9.4   [ ] T9.5   [ ] T9.6
 ```

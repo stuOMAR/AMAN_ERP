@@ -315,6 +315,87 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
 
         base_currency = get_base_currency(conn)
 
+        # T7.5: batch-prefetch all per-employee data to avoid 5×N queries
+        # inside the loop. For 500 employees this drops 2500+ round-trips
+        # to ~6 queries total.
+        emp_ids = [e.id for e in employees]
+        comps_by_emp: Dict[int, list] = {}
+        ot_by_emp: Dict[int, Decimal] = {}
+        viol_by_emp: Dict[int, Decimal] = {}
+        loan_by_emp: Dict[int, Any] = {}
+        rate_by_currency: Dict[str, Decimal] = {}
+
+        if emp_ids:
+            try:
+                rows = conn.execute(text("""
+                    SELECT esc.employee_id,
+                           esc.amount, sc.component_type, sc.calculation_type,
+                           sc.percentage_of, sc.percentage_value
+                    FROM employee_salary_components esc
+                    JOIN salary_components sc ON esc.component_id = sc.id
+                    WHERE esc.is_active = TRUE AND sc.is_active = TRUE
+                      AND esc.employee_id = ANY(:eids)
+                """), {"eids": emp_ids}).fetchall()
+                for r in rows:
+                    comps_by_emp.setdefault(r.employee_id, []).append(r)
+            except Exception:
+                pass  # employee_salary_components may not exist on older DBs
+
+            try:
+                rows = conn.execute(text("""
+                    SELECT employee_id, COALESCE(SUM(calculated_amount), 0) AS total
+                    FROM overtime_requests
+                    WHERE status = 'approved' AND employee_id = ANY(:eids)
+                    GROUP BY employee_id
+                """), {"eids": emp_ids}).fetchall()
+                for r in rows:
+                    ot_by_emp[r.employee_id] = _dec(r.total)
+            except Exception:
+                pass
+
+            try:
+                rows = conn.execute(text("""
+                    SELECT employee_id, COALESCE(SUM(penalty_amount), 0) AS total
+                    FROM employee_violations
+                    WHERE deduct_from_salary = TRUE AND status = 'open'
+                      AND payroll_period_id IS NULL
+                      AND employee_id = ANY(:eids)
+                    GROUP BY employee_id
+                """), {"eids": emp_ids}).fetchall()
+                for r in rows:
+                    viol_by_emp[r.employee_id] = _dec(r.total)
+            except Exception:
+                pass
+
+            try:
+                rows = conn.execute(text("""
+                    SELECT * FROM employee_loans
+                    WHERE status = 'active' AND paid_amount < amount
+                      AND employee_id = ANY(:eids)
+                """), {"eids": emp_ids}).fetchall()
+                for r in rows:
+                    # First active loan per employee (mirrors prior fetchone)
+                    loan_by_emp.setdefault(r.employee_id, r)
+            except Exception:
+                pass
+
+            currencies = sorted({
+                (getattr(e, 'currency', None) or getattr(e, 'branch_currency', None) or base_currency)
+                for e in employees
+            })
+            non_base = [c for c in currencies if c and c != base_currency]
+            if non_base:
+                try:
+                    rows = conn.execute(text("""
+                        SELECT code, current_rate FROM currencies
+                        WHERE is_active = TRUE AND code = ANY(:codes)
+                    """), {"codes": non_base}).fetchall()
+                    for r in rows:
+                        rate_by_currency[r.code] = _dec(r.current_rate) if r.current_rate else Decimal('1')
+                except Exception:
+                    pass
+
+        insert_rows: List[Dict[str, Any]] = []
         count = 0
         for emp in employees:
             basic: Decimal = _dec(emp.salary)
@@ -325,39 +406,19 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
             # === 1. Salary Components (earnings & deductions) ===
             comp_earning = Decimal('0')
             comp_deduction = Decimal('0')
-            try:
-                components = conn.execute(text("""
-                    SELECT esc.amount, sc.component_type, sc.calculation_type, sc.percentage_of, sc.percentage_value
-                    FROM employee_salary_components esc
-                    JOIN salary_components sc ON esc.component_id = sc.id
-                    WHERE esc.employee_id = :eid AND esc.is_active = TRUE AND sc.is_active = TRUE
-                """), {"eid": emp.id}).fetchall()
-
-                for comp in components:
-                    if comp.calculation_type == 'percentage':
-                        base_val = basic if (comp.percentage_of or 'basic') == 'basic' else (basic + housing)  # pyre-ignore
-                        amt = (_dec(comp.percentage_value) / Decimal('100') * base_val).quantize(_D2, ROUND_HALF_UP)
-                    else:
-                        amt = _dec(comp.amount)
-                    
-                    if comp.component_type == 'earning':
-                        comp_earning += amt  # pyre-ignore
-                    else:
-                        comp_deduction += amt  # pyre-ignore
-            except Exception:
-                pass  # Table may not exist in older DBs
+            for comp in comps_by_emp.get(emp.id, []):
+                if comp.calculation_type == 'percentage':
+                    base_val = basic if (comp.percentage_of or 'basic') == 'basic' else (basic + housing)
+                    amt = (_dec(comp.percentage_value) / Decimal('100') * base_val).quantize(_D2, ROUND_HALF_UP)
+                else:
+                    amt = _dec(comp.amount)
+                if comp.component_type == 'earning':
+                    comp_earning += amt
+                else:
+                    comp_deduction += amt
 
             # === 2. Approved Overtime (not yet processed) ===
-            overtime_amount = Decimal('0')
-            try:
-                ot_rows = conn.execute(text("""
-                    SELECT COALESCE(SUM(calculated_amount), 0) as total
-                    FROM overtime_requests
-                    WHERE employee_id = :eid AND status = 'approved'
-                """), {"eid": emp.id}).fetchone()
-                overtime_amount = _dec(ot_rows.total) if ot_rows else Decimal('0')
-            except Exception:
-                pass
+            overtime_amount = ot_by_emp.get(emp.id, Decimal('0'))
 
             # === 3. GOSI Deductions ===
             contributable = min(basic + housing, gosi_max_sal)
@@ -365,20 +426,10 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
             gosi_empr_share = (contributable * gosi_empr_pct / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
 
             # === 4. Violation Deductions (open, deduct_from_salary, not yet deducted) ===
-            violation_deduction = Decimal('0')
-            try:
-                viol = conn.execute(text("""
-                    SELECT COALESCE(SUM(penalty_amount), 0) as total
-                    FROM employee_violations
-                    WHERE employee_id = :eid AND deduct_from_salary = TRUE
-                    AND status = 'open' AND (payroll_period_id IS NULL)
-                """), {"eid": emp.id}).fetchone()
-                violation_deduction = _dec(viol.total) if viol else Decimal('0')
-            except Exception:
-                pass
+            violation_deduction = viol_by_emp.get(emp.id, Decimal('0'))
 
             # === 5. Loan Deductions ===
-            active_loan = conn.execute(text("SELECT * FROM employee_loans WHERE employee_id=:eid AND status='active' AND paid_amount < amount"), {"eid": emp.id}).fetchone()
+            active_loan = loan_by_emp.get(emp.id)
             loan_deduction = Decimal('0')
             if active_loan:
                 loan_deduction = min(_dec(active_loan.monthly_installment), _dec(active_loan.amount) - _dec(active_loan.paid_amount))
@@ -387,23 +438,32 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
             total_earnings = basic + housing + transport + other + comp_earning + overtime_amount
             total_deductions = comp_deduction + gosi_emp_share + violation_deduction + loan_deduction
             net = (total_earnings - total_deductions).quantize(_D2, ROUND_HALF_UP)
-            
+
             # === Currency & Exchange Rate ===
             emp_currency = getattr(emp, 'currency', None) or getattr(emp, 'branch_currency', None) or base_currency
-            # Get exchange rate for this currency
             if emp_currency and emp_currency != base_currency:
-                rate_row = conn.execute(text("""
-                    SELECT current_rate FROM currencies WHERE code = :code AND is_active = TRUE
-                """), {"code": emp_currency}).fetchone()
-                exchange_rate = _dec(rate_row.current_rate) if rate_row and rate_row.current_rate else Decimal('1')
+                exchange_rate = rate_by_currency.get(emp_currency, Decimal('1'))
             else:
                 exchange_rate = Decimal('1')
 
             net_base = (net * exchange_rate).quantize(_D2, ROUND_HALF_UP)
-            
+
+            insert_rows.append({
+                "pid": period_id, "eid": emp.id,
+                "basic": str(basic), "housing": str(housing), "transport": str(transport), "other": str(other),
+                "comp_earn": str(comp_earning), "comp_ded": str(comp_deduction),
+                "overtime": str(overtime_amount), "gosi_emp": str(gosi_emp_share), "gosi_empr": str(gosi_empr_share),
+                "viol_ded": str(violation_deduction), "loan_ded": str(loan_deduction),
+                "total_ded": str(total_deductions), "net": str(net),
+                "currency": emp_currency, "exchange_rate": str(exchange_rate), "net_base": str(net_base),
+            })
+            count += 1
+
+        if insert_rows:
+            # T7.5: single executemany call instead of N separate INSERTs.
             conn.execute(text("""
                 INSERT INTO payroll_entries (
-                    period_id, employee_id, basic_salary, housing_allowance, transport_allowance, 
+                    period_id, employee_id, basic_salary, housing_allowance, transport_allowance,
                     other_allowances, salary_components_earning, salary_components_deduction,
                     overtime_amount, gosi_employee_share, gosi_employer_share,
                     violation_deduction, loan_deduction, deductions, net_salary,
@@ -412,16 +472,7 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
                 VALUES (:pid, :eid, :basic, :housing, :transport, :other, :comp_earn, :comp_ded,
                         :overtime, :gosi_emp, :gosi_empr, :viol_ded, :loan_ded, :total_ded, :net,
                         :currency, :exchange_rate, :net_base)
-            """), {
-                "pid": period_id, "eid": emp.id,
-                "basic": str(basic), "housing": str(housing), "transport": str(transport), "other": str(other),
-                "comp_earn": str(comp_earning), "comp_ded": str(comp_deduction),
-                "overtime": str(overtime_amount), "gosi_emp": str(gosi_emp_share), "gosi_empr": str(gosi_empr_share),
-                "viol_ded": str(violation_deduction), "loan_ded": str(loan_deduction),
-                "total_ded": str(total_deductions), "net": str(net),
-                "currency": emp_currency, "exchange_rate": str(exchange_rate), "net_base": str(net_base)
-            })
-            count += 1
+            """), insert_rows)
             
         trans.commit()
         user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
@@ -490,34 +541,66 @@ def post_payroll(period_id: int, current_user: UserResponse = Depends(get_curren
         # 3. Handle Loan Deductions & Balances
         if total_loans > 0:
             entries_with_loans = conn.execute(text("SELECT employee_id, loan_deduction FROM payroll_entries WHERE period_id = :id AND loan_deduction > 0"), {"id": period_id}).fetchall()
+            # T7.5: batch-fetch all active loans in one query.
+            loan_eids = [e.employee_id for e in entries_with_loans]
+            loans_map: Dict[int, Any] = {}
+            if loan_eids:
+                loan_rows = conn.execute(
+                    text(
+                        "SELECT * FROM employee_loans "
+                        "WHERE employee_id = ANY(:eids) "
+                        "  AND status='active' AND paid_amount < amount"
+                    ),
+                    {"eids": loan_eids},
+                ).fetchall()
+                for r in loan_rows:
+                    loans_map.setdefault(r.employee_id, r)
+            loan_updates: List[Dict[str, Any]] = []
             for entry in entries_with_loans:
-                loan = conn.execute(text("SELECT * FROM employee_loans WHERE employee_id=:eid AND status='active' AND paid_amount < amount"), {"eid": entry.employee_id}).fetchone()
+                loan = loans_map.get(entry.employee_id)
                 if loan:
                     new_paid = _dec(loan.paid_amount) + _dec(entry.loan_deduction)
                     new_status = 'completed' if new_paid >= _dec(loan.amount) else 'active'
-                    conn.execute(text("UPDATE employee_loans SET paid_amount = :paid, status = :status WHERE id=:id"),
-                                 {"paid": str(new_paid.quantize(_D2, ROUND_HALF_UP)), "status": new_status, "id": loan.id})
+                    loan_updates.append({
+                        "paid": str(new_paid.quantize(_D2, ROUND_HALF_UP)),
+                        "status": new_status,
+                        "id": loan.id,
+                    })
+            if loan_updates:
+                conn.execute(
+                    text("UPDATE employee_loans SET paid_amount = :paid, status = :status WHERE id=:id"),
+                    loan_updates,
+                )
 
         # 4. Mark processed overtime requests (so they're not counted again)
         try:
-            entries_with_overtime = conn.execute(text("SELECT employee_id FROM payroll_entries WHERE period_id = :id AND overtime_amount > 0"), {"id": period_id}).fetchall()
-            for entry in entries_with_overtime:
-                conn.execute(text("""
-                    UPDATE overtime_requests SET status = 'processed'
-                    WHERE employee_id = :eid AND status = 'approved'
-                """), {"eid": entry.employee_id})
+            # T7.5: single UPDATE instead of one per employee.
+            conn.execute(
+                text(
+                    "UPDATE overtime_requests SET status = 'processed' "
+                    "WHERE status = 'approved' AND employee_id IN ("
+                    "  SELECT employee_id FROM payroll_entries "
+                    "  WHERE period_id = :pid AND overtime_amount > 0)"
+                ),
+                {"pid": period_id},
+            )
         except Exception:
             pass  # 'processed' status may not exist, safe to skip
 
         # 5. Mark violations as deducted (link to payroll period)
         try:
-            entries_with_violations = conn.execute(text("SELECT employee_id FROM payroll_entries WHERE period_id = :id AND violation_deduction > 0"), {"id": period_id}).fetchall()
-            for entry in entries_with_violations:
-                conn.execute(text("""
-                    UPDATE employee_violations SET payroll_period_id = :pid, status = 'resolved'
-                    WHERE employee_id = :eid AND deduct_from_salary = TRUE 
-                    AND status = 'open' AND payroll_period_id IS NULL
-                """), {"pid": period_id, "eid": entry.employee_id})
+            # T7.5: single UPDATE instead of one per employee.
+            conn.execute(
+                text(
+                    "UPDATE employee_violations SET payroll_period_id = :pid, status = 'resolved' "
+                    "WHERE deduct_from_salary = TRUE AND status = 'open' "
+                    "  AND payroll_period_id IS NULL "
+                    "  AND employee_id IN ("
+                    "    SELECT employee_id FROM payroll_entries "
+                    "    WHERE period_id = :pid AND violation_deduction > 0)"
+                ),
+                {"pid": period_id},
+            )
         except Exception:
             pass
 

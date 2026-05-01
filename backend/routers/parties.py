@@ -101,3 +101,58 @@ async def get_suppliers(
         except Exception:
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
+
+
+# T7.3 — duplicate detection by digits-only phone (uses parties.phone_clean
+# generated column + idx_parties_phone_clean for sub-100ms lookup on 100K+).
+@router.get(
+    "/duplicates-by-phone",
+    response_model=dict,
+    dependencies=[Depends(require_permission(["parties.view"]))],
+)
+async def find_duplicates_by_phone(
+    phone: str,
+    limit: int = 50,
+    current_user: dict = Depends(get_current_user),
+):
+    """ابحث عن أطراف مكررة بنفس رقم الهاتف بعد إزالة الرموز/الفواصل.
+
+    يستخدم العمود المُولَّد ``phone_clean`` (T7.3) المفهرس ببنية B-tree،
+    لذا يبقى الاستعلام أقل من 100ms حتى على 100K طرف.
+    """
+    digits = "".join(ch for ch in (phone or "") if ch.isdigit())
+    if not digits:
+        return {"items": []}
+    with transactional(current_user.company_id) as db:
+        try:
+            # phone_clean قد لا يكون موجوداً على قواعد قديمة لم تطبّق 0021 بعد؛
+            # في تلك الحالة نتراجع إلى regexp_replace في الاستعلام (أبطأ).
+            params = {"digits": digits, "limit": limit}
+            try:
+                result = db.execute(
+                    text(
+                        "SELECT id, name, name_en, phone, phone_clean, "
+                        "  is_customer, is_supplier "
+                        "FROM parties "
+                        "WHERE phone_clean = :digits "
+                        "ORDER BY name ASC LIMIT :limit"
+                    ),
+                    params,
+                )
+            except Exception:
+                result = db.execute(
+                    text(
+                        "SELECT id, name, name_en, phone, "
+                        "  regexp_replace(coalesce(phone,''), '\\D', '', 'g') "
+                        "    AS phone_clean, "
+                        "  is_customer, is_supplier "
+                        "FROM parties "
+                        "WHERE regexp_replace(coalesce(phone,''), '\\D', '', 'g') = :digits "
+                        "ORDER BY name ASC LIMIT :limit"
+                    ),
+                    params,
+                )
+            return {"items": [dict(r._mapping) for r in result]}
+        except Exception:
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))

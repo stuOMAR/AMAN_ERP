@@ -446,6 +446,268 @@ END $$;
 """
 
 
+# ---------------------------------------------------------------------------
+# T7.1 + T7.6 — pg_trgm + GIN search indexes, and FK / lookup indexes.
+# Public so alembic migration 0020_search_and_fk_indexes can re-use them.
+# ---------------------------------------------------------------------------
+
+_PG_TRGM_EXTENSION_SQL = """
+DO $$
+BEGIN
+    BEGIN
+        EXECUTE 'CREATE EXTENSION IF NOT EXISTS pg_trgm';
+    EXCEPTION WHEN insufficient_privilege THEN
+        RAISE NOTICE 'pg_trgm: insufficient privilege; ask DBA to install';
+    WHEN others THEN
+        RAISE NOTICE 'pg_trgm install skipped: %', SQLERRM;
+    END;
+END $$;
+"""
+
+
+# (table, column, index_name)
+PHASE7_TRGM_INDEXES: list[tuple[str, str, str]] = [
+    ("products", "product_name", "idx_products_name_trgm"),
+    ("products", "product_code", "idx_products_code_trgm"),
+    ("products", "barcode", "idx_products_barcode_trgm"),
+    ("parties", "name", "idx_parties_name_trgm"),
+    ("parties", "name_en", "idx_parties_name_en_trgm"),
+    ("parties", "tax_number", "idx_parties_tax_trgm"),
+    ("parties", "phone", "idx_parties_phone_trgm"),
+    ("parties", "email", "idx_parties_email_trgm"),
+    ("customers", "customer_name", "idx_customers_name_trgm"),
+    ("customers", "customer_code", "idx_customers_code_trgm"),
+    ("suppliers", "supplier_name", "idx_suppliers_name_trgm"),
+    ("suppliers", "supplier_code", "idx_suppliers_code_trgm"),
+    ("invoices", "invoice_number", "idx_invoices_number_trgm"),
+    ("sales_orders", "so_number", "idx_sales_orders_number_trgm"),
+    ("purchase_orders", "po_number", "idx_purchase_orders_number_trgm"),
+]
+
+
+PHASE7_FK_INDEXES: list[tuple[str, str, str]] = [
+    # invoices
+    ("invoices", "party_id", "idx_invoices_party"),
+    ("invoices", "customer_id", "idx_invoices_customer"),
+    ("invoices", "branch_id", "idx_invoices_branch"),
+    ("invoices", "warehouse_id", "idx_invoices_warehouse"),
+    ("invoices", "created_by", "idx_invoices_created_by"),
+    ("invoice_lines", "invoice_id", "idx_invoice_lines_invoice"),
+    ("invoice_lines", "product_id", "idx_invoice_lines_product"),
+    # sales / purchase docs
+    ("sales_orders", "party_id", "idx_sales_orders_party"),
+    ("sales_orders", "customer_id", "idx_sales_orders_customer"),
+    ("sales_orders", "branch_id", "idx_sales_orders_branch"),
+    ("sales_order_lines", "order_id", "idx_sales_order_lines_order"),
+    ("sales_order_lines", "product_id", "idx_sales_order_lines_product"),
+    ("purchase_orders", "party_id", "idx_purchase_orders_party"),
+    ("purchase_orders", "supplier_id", "idx_purchase_orders_supplier"),
+    ("purchase_orders", "branch_id", "idx_purchase_orders_branch"),
+    ("purchase_order_lines", "order_id", "idx_purchase_order_lines_order"),
+    ("purchase_order_lines", "product_id", "idx_purchase_order_lines_product"),
+    # returns
+    ("sales_returns", "party_id", "idx_sales_returns_party"),
+    ("sales_returns", "invoice_id", "idx_sales_returns_invoice"),
+    ("sales_returns", "branch_id", "idx_sales_returns_branch"),
+    ("sales_return_lines", "return_id", "idx_sales_return_lines_return"),
+    ("sales_return_lines", "product_id", "idx_sales_return_lines_product"),
+    # parties / customers / suppliers
+    ("parties", "party_group_id", "idx_parties_group"),
+    ("parties", "price_list_id", "idx_parties_price_list"),
+    ("customers", "group_id", "idx_customers_group"),
+    ("customers", "price_list_id", "idx_customers_price_list"),
+    ("suppliers", "group_id", "idx_suppliers_group"),
+    # inventory
+    ("inventory", "product_id", "idx_inventory_product"),
+    ("inventory", "warehouse_id", "idx_inventory_warehouse"),
+    ("inventory_transactions", "product_id", "idx_inv_tx_product"),
+    ("inventory_transactions", "warehouse_id", "idx_inv_tx_warehouse"),
+    ("inventory_transactions", "reference_id", "idx_inv_tx_reference"),
+    ("stock_adjustments", "warehouse_id", "idx_stock_adj_warehouse"),
+    ("stock_adjustments", "branch_id", "idx_stock_adj_branch"),
+    # treasury / payments
+    ("treasury_transactions", "treasury_account_id", "idx_treas_tx_account"),
+    ("treasury_transactions", "branch_id", "idx_treas_tx_branch"),
+    ("payments", "party_id", "idx_payments_party"),
+    ("payments", "treasury_account_id", "idx_payments_treasury"),
+    ("payments", "invoice_id", "idx_payments_invoice"),
+    ("payments", "branch_id", "idx_payments_branch"),
+    ("receipts", "party_id", "idx_receipts_party"),
+    ("receipts", "treasury_account_id", "idx_receipts_treasury"),
+    ("receipts", "invoice_id", "idx_receipts_invoice"),
+    ("receipts", "branch_id", "idx_receipts_branch"),
+    ("payment_vouchers", "party_id", "idx_pv_party"),
+    ("payment_vouchers", "branch_id", "idx_pv_branch"),
+    ("payment_allocations", "voucher_id", "idx_pa_voucher"),
+    ("payment_allocations", "invoice_id", "idx_pa_invoice"),
+    # journal
+    ("journal_lines", "entry_id", "idx_jl_entry"),
+    ("journal_lines", "account_id", "idx_jl_account"),
+    ("journal_lines", "cost_center_id", "idx_jl_cost_center"),
+    ("journal_entries", "branch_id", "idx_je_branch"),
+    ("journal_entries", "fiscal_period_id", "idx_je_fiscal_period"),
+    # HR
+    ("employees", "department_id", "idx_employees_department"),
+    ("employees", "branch_id", "idx_employees_branch"),
+    ("employees", "position_id", "idx_employees_position"),
+    ("attendance", "employee_id", "idx_attendance_employee"),
+    ("payroll_entries", "employee_id", "idx_payroll_entries_employee"),
+    ("payroll_entries", "period_id", "idx_payroll_entries_period"),
+    ("leave_requests", "employee_id", "idx_leave_requests_employee"),
+    # audit
+    ("audit_logs", "user_id", "idx_audit_logs_user"),
+    ("audit_logs", "branch_id", "idx_audit_logs_branch"),
+]
+
+
+def _trgm_index_sql(table: str, column: str, idx_name: str) -> str:
+    """Idempotent + column-existence-guarded GIN trigram index."""
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{table}') IS NOT NULL
+           AND EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name   = '{table}'
+                 AND column_name  = '{column}'
+           ) THEN
+            BEGIN
+                EXECUTE 'CREATE INDEX IF NOT EXISTS {idx_name} ON {table} '
+                        'USING gin ({column} gin_trgm_ops)';
+            EXCEPTION WHEN others THEN
+                RAISE NOTICE '{idx_name} skipped: %', SQLERRM;
+            END;
+        END IF;
+    END $$;
+    """
+
+
+def _fk_index_sql(table: str, column: str, idx_name: str) -> str:
+    """Idempotent + column-existence-guarded B-tree index on a FK column."""
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{table}') IS NOT NULL
+           AND EXISTS (
+               SELECT 1 FROM information_schema.columns
+               WHERE table_schema = 'public'
+                 AND table_name   = '{table}'
+                 AND column_name  = '{column}'
+           ) THEN
+            BEGIN
+                EXECUTE 'CREATE INDEX IF NOT EXISTS {idx_name} ON {table}({column})';
+            EXCEPTION WHEN others THEN
+                RAISE NOTICE '{idx_name} skipped: %', SQLERRM;
+            END;
+        END IF;
+    END $$;
+    """
+
+
+# T7.3 — phone_clean generated columns. (table, src_col, gen_col, idx_name)
+PHASE7_PHONE_CLEAN_TARGETS: list[tuple[str, str, str, str]] = [
+    ("parties", "phone", "phone_clean", "idx_parties_phone_clean"),
+    ("customers", "phone", "phone_clean", "idx_customers_phone_clean"),
+    ("suppliers", "phone", "phone_clean", "idx_suppliers_phone_clean"),
+]
+
+
+def _phone_clean_sql(table: str, src: str, gen: str, idx: str) -> str:
+    """Adds a STORED generated column stripping non-digits + B-tree index."""
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{table}') IS NULL THEN
+            RETURN;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='{table}' AND column_name='{src}'
+        ) THEN
+            RETURN;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='{table}' AND column_name='{gen}'
+        ) THEN
+            BEGIN
+                EXECUTE 'ALTER TABLE {table} ADD COLUMN {gen} text '
+                        'GENERATED ALWAYS AS '
+                        '(regexp_replace(coalesce({src},''''), ''\\D'', '''', ''g'')) STORED';
+            EXCEPTION WHEN others THEN
+                RAISE NOTICE '{table}.{gen} add-column skipped: %', SQLERRM;
+                RETURN;
+            END;
+        END IF;
+        BEGIN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS {idx} ON {table}({gen})';
+        EXCEPTION WHEN others THEN
+            RAISE NOTICE '{idx} skipped: %', SQLERRM;
+        END;
+    END $$;
+    """
+
+
+# T7.2 — search_vector tsvector columns + GIN indexes for unified search.
+# (table, [source_columns], gen_col, idx_name)
+PHASE7_SEARCH_VECTORS: list[tuple[str, list[str], str, str]] = [
+    ("parties", ["name", "name_en", "tax_number", "phone", "email"],
+     "search_vector", "idx_parties_search_vec"),
+    ("products", ["product_name", "product_code", "barcode"],
+     "search_vector", "idx_products_search_vec"),
+    ("invoices", ["invoice_number", "notes"],
+     "search_vector", "idx_invoices_search_vec"),
+    ("sales_orders", ["so_number", "notes"],
+     "search_vector", "idx_sales_orders_search_vec"),
+    ("purchase_orders", ["po_number", "notes"],
+     "search_vector", "idx_purchase_orders_search_vec"),
+]
+
+
+def _search_vector_sql(table: str, cols: list[str], gen: str, idx: str) -> str:
+    """STORED tsvector generated column + GIN index for unified search.
+
+    Uses the ``simple`` text-search configuration (case-fold + tokenise
+    without stemming), which works well for Arabic source text.
+    """
+    parts = " || '' '' || ".join(f"coalesce({c},'''')" for c in cols)
+    expr = f"to_tsvector(''simple'', {parts})"
+    cols_check = " AND ".join(
+        f"EXISTS (SELECT 1 FROM information_schema.columns "
+        f"WHERE table_schema='public' AND table_name='{table}' AND column_name='{c}')"
+        for c in cols
+    )
+    return f"""
+    DO $$
+    BEGIN
+        IF to_regclass('public.{table}') IS NULL THEN
+            RETURN;
+        END IF;
+        IF NOT ({cols_check}) THEN
+            RETURN;
+        END IF;
+        IF NOT EXISTS (
+            SELECT 1 FROM information_schema.columns
+            WHERE table_schema='public' AND table_name='{table}' AND column_name='{gen}'
+        ) THEN
+            BEGIN
+                EXECUTE 'ALTER TABLE {table} ADD COLUMN {gen} tsvector '
+                        'GENERATED ALWAYS AS ({expr}) STORED';
+            EXCEPTION WHEN others THEN
+                RAISE NOTICE '{table}.{gen} skipped: %', SQLERRM;
+                RETURN;
+            END;
+        END IF;
+        BEGIN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS {idx} ON {table} USING gin({gen})';
+        EXCEPTION WHEN others THEN
+            RAISE NOTICE '{idx} skipped: %', SQLERRM;
+        END;
+    END $$;
+    """
+
+
 def apply_tenant_schema(conn: Any, currency: str = "SAR") -> None:
     """Apply the full tenant DDL to ``conn`` (a SQLAlchemy connection).
 
@@ -565,3 +827,37 @@ def apply_tenant_schema(conn: Any, currency: str = "SAR") -> None:
         conn.execute(text(_RETURNS_UNIFIED_VIEW_DO_BLOCK))
     except Exception as e:
         logger.warning(f"returns_unified view skipped: {e}")
+
+    # T7.1 + T7.6: pg_trgm extension, GIN trigram search indexes, and missing
+    # FK/lookup indexes. The same lists are imported by alembic migration
+    # 0020 so existing tenants get them via ``alembic upgrade head``.
+    try:
+        conn.execute(text(_PG_TRGM_EXTENSION_SQL))
+    except Exception as e:
+        logger.warning(f"pg_trgm extension skipped: {e}")
+    for table, column, idx in PHASE7_TRGM_INDEXES:
+        try:
+            conn.execute(text(_trgm_index_sql(table, column, idx)))
+        except Exception as e:
+            logger.warning(f"trgm index {idx} skipped: {e}")
+    for table, column, idx in PHASE7_FK_INDEXES:
+        try:
+            conn.execute(text(_fk_index_sql(table, column, idx)))
+        except Exception as e:
+            logger.warning(f"fk index {idx} skipped: {e}")
+
+    # T7.3: phone_clean generated column + B-tree index for fast duplicate
+    # detection. Same definitions used by alembic migration 0021.
+    for table, src, gen, idx in PHASE7_PHONE_CLEAN_TARGETS:
+        try:
+            conn.execute(text(_phone_clean_sql(table, src, gen, idx)))
+        except Exception as e:
+            logger.warning(f"{table}.{gen} skipped: {e}")
+
+    # T7.2: search_vector tsvector columns + GIN indexes for unified search.
+    # Same definitions used by alembic migration 0022.
+    for table, cols, gen, idx in PHASE7_SEARCH_VECTORS:
+        try:
+            conn.execute(text(_search_vector_sql(table, cols, gen, idx)))
+        except Exception as e:
+            logger.warning(f"{table}.{gen} (tsvector) skipped: {e}")
