@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { salesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
+import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
 import { formatNumber, getStep } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
@@ -557,14 +558,20 @@ function InvoiceForm() {
                                 <select
                                     className="form-input form-input-sm"
                                     value={formData.currency}
-                                    onChange={e => {
+                                    onChange={async e => {
                                         const code = e.target.value;
                                         const curr = currencies.find(c => c.code === code);
-                                        setFormData({
-                                            ...formData,
+                                        // T8.4: prefer the live rate from /accounting/currencies/current.
+                                        // Falls back to the legacy `current_rate` field, then 1.0.
+                                        let rate = curr?.current_rate || 1.0;
+                                        try {
+                                            rate = await fetchCurrentRate(code);
+                                        } catch { /* keep fallback */ }
+                                        setFormData(prev => ({
+                                            ...prev,
                                             currency: code,
-                                            exchange_rate: curr?.current_rate || 1.0
-                                        });
+                                            exchange_rate: rate || 1.0
+                                        }));
                                     }}
                                 >
                                     {currencies.map(c => (

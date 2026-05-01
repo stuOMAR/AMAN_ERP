@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { purchasesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
+import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
@@ -541,14 +542,17 @@ function PurchaseInvoiceForm() {
                                 <select
                                     className="form-input form-input-sm"
                                     value={formData.currency}
-                                    onChange={e => {
+                                    onChange={async e => {
                                         const code = e.target.value;
                                         const curr = currencies.find(c => c.code === code);
-                                        setFormData({
-                                            ...formData,
+                                        // T8.4: live rate from /accounting/currencies/current.
+                                        let rate = curr?.current_rate || 1.0;
+                                        try { rate = await fetchCurrentRate(code); } catch { /* keep fallback */ }
+                                        setFormData(prev => ({
+                                            ...prev,
                                             currency: code,
-                                            exchange_rate: curr?.current_rate || 1.0
-                                        });
+                                            exchange_rate: rate || 1.0
+                                        }));
                                     }}
                                 >
                                     {currencies.map(c => (

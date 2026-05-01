@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
-import { integrationKeysAPI } from '../../utils/api'
-import { toastEmitter } from '../../utils/toastEmitter'
+import { integrationKeysAPI } from '../../../utils/api'
+import { toastEmitter } from '../../../utils/toastEmitter'
 import { useTranslation } from 'react-i18next'
 import { Key, RefreshCcw, ShieldOff, Plus, Activity, X } from 'lucide-react'
 

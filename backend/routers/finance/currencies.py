@@ -317,13 +317,86 @@ def get_rate_history(
     db = get_db_connection(current_user.company_id)
     try:
         query = text("""
-            SELECT * FROM exchange_rates 
-            WHERE currency_id = :id 
-            ORDER BY rate_date DESC 
+            SELECT * FROM exchange_rates
+            WHERE currency_id = :id
+            ORDER BY rate_date DESC
             LIMIT :limit
         """)
         result = db.execute(query, {"id": currency_id, "limit": limit})
         return result.mappings().all()
+    finally:
+        db.close()
+
+
+# T8.4 — single source of truth for "what's today's rate for currency X vs base"
+# used by every frontend form (sales/buying invoices, journal entries, treasury
+# transfers, recurring templates) so the rate isn't hard-coded to 1.0.
+@router.get("/current", response_model=Dict[str, Any])
+@limiter.limit("300/minute")
+def get_current_rate(
+    request: Request,
+    code: str,
+    current_user = Depends(get_current_user),
+):
+    """Return today's effective rate for ``code`` vs the company base currency.
+
+    Lookup order: latest exchange_rates row whose ``rate_date`` ≤ today.
+    Falls back to the currency's own ``exchange_rate`` column (legacy field)
+    and finally to 1.0 when ``code`` is the base currency itself.
+    """
+    code = (code or "").strip().upper()
+    if not code:
+        raise HTTPException(status_code=400, detail=http_error("currency_code_required"))
+
+    from database import get_db_connection
+    db = get_db_connection(current_user.company_id)
+    try:
+        cur = db.execute(
+            text(
+                "SELECT id, code, name, name_ar, symbol, is_base, "
+                "       coalesce(exchange_rate, 1.0) AS legacy_rate "
+                "FROM currencies WHERE upper(code) = :c LIMIT 1"
+            ),
+            {"c": code},
+        ).mappings().first()
+        if not cur:
+            raise HTTPException(status_code=404, detail=http_error("currency_not_found"))
+
+        if cur["is_base"]:
+            return {
+                "code": cur["code"],
+                "rate": 1.0,
+                "is_base": True,
+                "rate_date": None,
+                "source": "base",
+            }
+
+        # Latest exchange_rates row for that currency, dated on/before today.
+        latest = db.execute(
+            text(
+                "SELECT rate, rate_date FROM exchange_rates "
+                "WHERE currency_id = :id AND rate_date <= CURRENT_DATE "
+                "ORDER BY rate_date DESC LIMIT 1"
+            ),
+            {"id": cur["id"]},
+        ).mappings().first()
+
+        if latest and latest["rate"]:
+            return {
+                "code": cur["code"],
+                "rate": float(latest["rate"]),
+                "is_base": False,
+                "rate_date": latest["rate_date"].isoformat() if latest["rate_date"] else None,
+                "source": "exchange_rates",
+            }
+
+        return {
+            "code": cur["code"],
+            "rate": float(cur["legacy_rate"] or 1.0),
+            "is_base": False,
+            "rate_date": None,
+            "source": "currencies.exchange_rate",
+        }
     finally:
         db.close()
 

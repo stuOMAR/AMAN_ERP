@@ -89,7 +89,15 @@ function Layout({ children }) {
                     stays pinned to the FAR LEFT regardless of app language.
                     The inner <main> gets the real dir from i18n. */}
                 <div className="page-scroll-area">
-                    <main className="content-area" dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}>
+                    {/* T8.2 a11y: id="main-content" is the skip-link target;
+                        role="main" + tabIndex make it focusable when activated. */}
+                    <main
+                        id="main-content"
+                        role="main"
+                        tabIndex="-1"
+                        className="content-area"
+                        dir={i18n.language === 'ar' ? 'rtl' : 'ltr'}
+                    >
                         {children}
                     </main>
                 </div>

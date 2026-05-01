@@ -107,7 +107,12 @@ function Sidebar({ isOpen, isMobile, onClose, onToggle }) {
     }
 
     return (
-        <aside className={`sidebar${isOpen ? ' sidebar-open' : ''}`} dir="rtl">
+        <aside
+            className={`sidebar${isOpen ? ' sidebar-open' : ''}`}
+            dir="rtl"
+            role="navigation"
+            aria-label={t('a11y.primary_nav', 'القائمة الرئيسية')}
+        >
             <div className="sidebar-brand">
                 <button
                     className="sidebar-toggle"

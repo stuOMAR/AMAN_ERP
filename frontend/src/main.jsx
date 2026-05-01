@@ -6,6 +6,11 @@ import { ToastProvider } from './context/ToastContext.jsx'
 import { BranchProvider } from './context/BranchContext.jsx'
 import { ThemeProvider } from './context/ThemeContext.jsx'
 import './index.css'
+// T8.3 — extracted from index.css to keep the global CSS source modular.
+//   • cards.css   shared card styles (used across most pages).
+//   • print.css   only matched by @media print, no render cost on screen.
+import './styles/cards.css'
+import './styles/print.css'
 import './i18n'
 
 ReactDOM.createRoot(document.getElementById('root')).render(

@@ -195,6 +195,45 @@ def assign_salary_component(data: EmployeeSalaryComponentCreate, request: Reques
 # العمل الإضافي - Overtime
 # =============================================
 
+# T8.4: expose configurable overtime multipliers from `overtime_rates_config`
+# (seeded by tenant_runner) so the frontend OvertimeRequests form no longer
+# hard-codes 1.5/2.0 in its <select> dropdown.
+@router.get("/overtime/rates", response_model=Dict[str, Any], dependencies=[Depends(require_permission("hr.view"))])
+def get_overtime_rates(
+    current_user: UserResponse = Depends(get_current_user),
+    company_id: str = Depends(get_current_user_company),
+):
+    """Return active overtime rate multipliers configured for this tenant.
+
+    Falls back to the default seed values (1.5x weekday, 2.0x weekend, 1.25x
+    night) if the `overtime_rates_config` table doesn't exist yet (older
+    tenants pre-2026 baseline).
+    """
+    defaults = [
+        {"rate_key": "weekday_ot", "description": "Weekday overtime multiplier", "multiplier": 1.5},
+        {"rate_key": "weekend_ot", "description": "Weekend / public holiday overtime", "multiplier": 2.0},
+        {"rate_key": "night_shift", "description": "Night-shift premium", "multiplier": 1.25},
+    ]
+    with transactional(company_id) as conn:
+        try:
+            rows = conn.execute(
+                text(
+                    "SELECT rate_key, description, multiplier "
+                    "FROM overtime_rates_config "
+                    "WHERE coalesce(is_active, true) = true "
+                    "ORDER BY id"
+                )
+            ).fetchall()
+            items = [
+                {"rate_key": r[0], "description": r[1], "multiplier": float(r[2])}
+                for r in rows
+            ]
+            return {"items": items or defaults, "source": "overtime_rates_config" if items else "defaults"}
+        except Exception as e:
+            logger.warning(f"overtime/rates fallback to defaults: {e}")
+            return {"items": defaults, "source": "defaults"}
+
+
 @router.get("/overtime", response_model=List[OvertimeRequestResponse], dependencies=[Depends(require_permission("hr.view"))])
 def list_overtime_requests(employee_id: Optional[int] = None, status: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     with transactional(company_id) as conn:

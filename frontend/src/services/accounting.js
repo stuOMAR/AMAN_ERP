@@ -113,7 +113,14 @@ export const currenciesAPI = {
     delete: (id) => api.delete(`/accounting/currencies/${id}`),
     addRate: (data) => api.post('/accounting/currencies/rates', data),
     getHistory: (id, limit = 30) => api.get(`/accounting/currencies/${id}/rates`, { params: { limit } }),
-    revaluate: (data) => api.post('/accounting/currencies/revaluate', data)
+    revaluate: (data) => api.post('/accounting/currencies/revaluate', data),
+    // T8.4: dynamic rate lookup — replaces hard-coded `exchange_rate: 1.0`
+    // in journal/invoice/transfer/recurring forms. Backend resolves to the
+    // latest exchange_rates row dated on/before today, with graceful fallback.
+    getCurrentRate: (code) => api.get('/accounting/currencies/current', {
+        params: { code },
+        skipGlobalToast: true,
+    }),
 }
 
 // Zakat Calculator

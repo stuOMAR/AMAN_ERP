@@ -57,6 +57,8 @@ export const hrAdvancedAPI = {
     listOvertime: (params) => api.get('/hr-advanced/overtime', { params }),
     createOvertime: (data) => api.post('/hr-advanced/overtime', data),
     approveOvertime: (id, data) => api.put(`/hr-advanced/overtime/${id}/approve`, data),
+    // T8.4: configurable rate multipliers from backend (overtime_rates_config).
+    getOvertimeRates: () => api.get('/hr-advanced/overtime/rates', { skipGlobalToast: true }),
 
     // GOSI
     getGOSISettings: () => api.get('/hr-advanced/gosi-settings'),

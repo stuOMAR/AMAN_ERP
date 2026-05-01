@@ -129,7 +129,7 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
     };
 
     return (
-        <header className="topbar" dir="rtl">
+        <header className="topbar" dir="rtl" role="banner">
             <button
                 className="topbar-sidebar-toggle"
                 onClick={onToggleSidebar}

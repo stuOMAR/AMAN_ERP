@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { currenciesAPI } from '../../utils/api'
+import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { useTranslation } from 'react-i18next'
 import { Spinner } from './LoadingStates'
 
@@ -31,10 +32,18 @@ export default function CurrencySelector({ value, onChange, className = '', labe
         fetchCurrencies()
     }, [])
 
-    const handleChange = (e) => {
+    // T8.4: replace static `currencies.exchange_rate` with the live rate from
+    // /accounting/currencies/current. Falls back gracefully on any error.
+    const handleChange = async (e) => {
         const code = e.target.value
         const selected = currencies.find(c => c.code === code)
-        onChange(code, selected?.exchange_rate || 1.0)
+        const fallback = selected?.exchange_rate || 1.0
+        // Push the fallback immediately for snappy UI, then refine.
+        onChange(code, fallback)
+        try {
+            const live = await fetchCurrentRate(code)
+            if (live && live !== fallback) onChange(code, live)
+        } catch { /* keep fallback */ }
     }
 
     if (loading && currencies.length === 0) {

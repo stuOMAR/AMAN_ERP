@@ -13,6 +13,7 @@ const OvertimeRequests = () => {
     const isRTL = i18n.language === 'ar';
     const [items, setItems] = useState([]);
     const [employees, setEmployees] = useState([]);
+    const [overtimeRates, setOvertimeRates] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [form, setForm] = useState({ employee_id: '', date: '', hours: '', rate_multiplier: 1.5, reason: '' });
@@ -20,12 +21,21 @@ const OvertimeRequests = () => {
     const fetchData = async () => {
         setLoading(true);
         try {
-            const [res, empRes] = await Promise.all([
+            // T8.4: also fetch configurable overtime multipliers from
+            // /hr-advanced/overtime/rates (backed by overtime_rates_config).
+            const [res, empRes, ratesRes] = await Promise.all([
                 hrAdvancedAPI.listOvertime(),
-                hrAPI.listEmployees({ limit: 200 })
+                hrAPI.listEmployees({ limit: 200 }),
+                hrAdvancedAPI.getOvertimeRates().catch(() => ({ data: { items: [] } })),
             ]);
             setItems(res.data || []);
             setEmployees(empRes.data?.items || empRes.data || []);
+            const rates = ratesRes?.data?.items || [];
+            setOvertimeRates(rates);
+            // Seed the form with the first multiplier (defaults to weekday 1.5).
+            if (rates.length && Number(form.rate_multiplier) === 1.5) {
+                setForm(prev => ({ ...prev, rate_multiplier: rates[0].multiplier }));
+            }
         } catch (e) { toastEmitter.emit(t('common.error'), 'error'); }
         setLoading(false);
     };
@@ -137,8 +147,19 @@ const OvertimeRequests = () => {
                         <div className="form-group">
                             <label>{t('hr.overtime.rate_multiplier')}</label>
                             <select className="form-input" value={form.rate_multiplier} onChange={e => setForm({ ...form, rate_multiplier: e.target.value })}>
-                                <option value="1.5">1.5× ({t('hr.overtime.regular')})</option>
-                                <option value="2">2× ({t('hr.overtime.holiday')})</option>
+                                {overtimeRates.length > 0 ? (
+                                    // T8.4: backend-driven multipliers
+                                    overtimeRates.map(r => (
+                                        <option key={r.rate_key} value={r.multiplier}>
+                                            {r.multiplier}× ({r.description || r.rate_key})
+                                        </option>
+                                    ))
+                                ) : (
+                                    <>
+                                        <option value="1.5">1.5× ({t('hr.overtime.regular')})</option>
+                                        <option value="2">2× ({t('hr.overtime.holiday')})</option>
+                                    </>
+                                )}
                             </select>
                         </div>
                         <div className="form-group">

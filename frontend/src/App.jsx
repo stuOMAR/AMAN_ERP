@@ -516,6 +516,11 @@ function App() {
 
     return (
         <Suspense fallback={<PageLoader />}>
+            {/* T8.2 a11y: Skip-link must be the very first interactive element so
+                keyboard / screen-reader users can bypass the navbar/sidebar. */}
+            <a href="#main-content" className="skip-link">
+                {t('a11y.skip_to_main', 'تخطّي إلى المحتوى الرئيسي')}
+            </a>
             {showFloatingThemeToggle && <FloatingThemeToggle />}
             <Routes>
                 <Route path="/login" element={isAuthenticated() ? <Navigate to="/dashboard" /> : <Login />} />

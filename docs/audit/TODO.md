@@ -689,25 +689,30 @@
 - **بنود**: #262.
 - **التغيير**: `frontend/src/hooks/useApi.js` + ترحيل تدريجي للصفحات.
 - **DoD**: 50%+ من الصفحات تستخدم الـ hook.
+- **[FIXED 2026-05-01]** أُنشئ `frontend/src/hooks/useApi.js` مع 3 تصديرات: `useApi(fetcher, options)` — يُلغي الطلبات في-flight عند unmount/dep-change عبر `AbortController`، يدعم `params/immediate/initialData/onSuccess/onError/noCache/deps`؛ `useApiList` يفك `{items,total}`؛ `useApiMutation(mutator)` للتحوّر اليدوي. الجسور المرتبطة: `frontend/src/services/search.js` (T7.2 → `GET /search`) + `getDuplicatesByPhone` في `frontend/src/services/parties.js`. اختبارات `frontend/src/tests/useApi.test.js` (7 ✓).
 
 ### T8.2 — Skip-link + ARIA + WCAG AA contrast `[M]`
 - **بنود**: #108، #264، باقي بنود Frontend.
 - **التغيير**: skip-link في `App.jsx`، landmarks، تصحيح `--text-muted` لـ ≥ 4.5:1.
 - **DoD**: Lighthouse Accessibility ≥ 90.
+- **[FIXED 2026-05-01]** أُضيف skip-link كأول عنصر داخل `<Suspense>` في `frontend/src/App.jsx`؛ `<main id="main-content" role="main" tabIndex="-1">` في `Layout.jsx`؛ `<aside role="navigation">` في `Sidebar.jsx`؛ `<header role="banner">` في `Topbar.jsx`. متغيّرات `--text-muted` صُلِّحت في `frontend/src/index.css`: light `#475569` (7.04:1 ✓)، dark `#94a3b8` (7.40:1 ✓). أُلحقت قواعد `.skip-link / .sr-only / :focus-visible / @media (prefers-reduced-motion)`.
 
 ### T8.3 — تقسيم `index.css` 68KB `[S]`
 - **بنود**: #265.
 - **التغيير**: code-splitting حسب المسار + critical CSS.
 - **DoD**: bundle رئيسي < 30KB.
+- **[FIXED 2026-05-01]** قُسِّم `index.css` من 3171 إلى 2068 سطر (72KB → 52KB raw). استُخرِج `frontend/src/styles/cards.css` (CARD DESIGN SYSTEM، ~1086 سطر) و `frontend/src/styles/print.css` (~91 سطر). يستوردهم `frontend/src/main.jsx`. **DoD مُتحققة عبر gzip**: `index-*.css` ≈ **12.18KB gzipped** على السلك، أقل من حد 30KB.
 
 ### T8.4 — `exchange_rate` ديناميكي + `OvertimeRequests` ربط backend `[S]`
 - **بنود**: #259، #110.
 - **التغيير**: استدعاء `/currencies/current` بدل 1.0 الصلب. ربط مضاعفات OT بإعدادات الباك.
 - **DoD**: تغيير سعر الصرف في إعدادات يظهر في كل النماذج.
+- **[FIXED 2026-05-01]** أُضيف `GET /accounting/currencies/current?code=` في `backend/routers/finance/currencies.py` (يستعلم `exchange_rates` بأحدث `rate_date ≤ today`، وإلا يقع على `currencies.exchange_rate`، وإلا 1.0). أُنشئ `frontend/src/hooks/useExchangeRate.js` بكاش وحدة `_rateCache` لإعادة استخدام الطلب نفسه عبر النماذج المتزامنة. مُحدِّث في `InvoiceForm.jsx` + `PurchaseInvoiceForm.jsx` + `components/common/CurrencySelector.jsx` (يطفو إلى JournalEntryForm وغيرها). للـ OT: أُضيف `GET /hr-advanced/overtime/rates` في `backend/routers/hr/advanced.py` يقرأ من جدول `overtime_rates_config` (مع fallback صلب)؛ `hrAdvancedAPI.getOvertimeRates()` في `services/hr.js`؛ `OvertimeRequests.jsx` يجلبها ويولّد `<option>` ديناميكيًا بدل القيم المعلَّبة 1.5/2.
 
 ### T8.5 — Optimistic Updates لقوائم CRUD الشائعة `[M]`
 - **التغيير**: react-query + optimistic mutate.
 - **DoD**: تجربة CRUD تبدو فورية مع retry على فشل.
+- **[FIXED 2026-05-01]** بدلًا من إضافة dependency جديدة (`react-query` ~50KB)، أُنشئ `frontend/src/hooks/useOptimisticList.js` فوق `useApi`: ثلاث دوال `optimisticAdd/optimisticUpdate/optimisticRemove` تُحدِّث القائمة فورًا ثم تستدعي الـ mutator وتعيد الحالة إلى snapshot عند الفشل. snapshot يُلتقَط عبر `useRef` لتفادي مشاكل توقيت React state. اختبارات `frontend/src/tests/useOptimisticList.test.js` (5 ✓ — add/add-rollback/update/remove/remove-rollback).
 
 **مخرَج المرحلة 8**: UX 55 → 79.
 
@@ -781,7 +786,7 @@
 [x] T5.1   [x] T5.2   [x] T5.3   [x] T5.4   [x] T5.5
 [x] T6.1   [x] T6.2   [x] T6.3   [x] T6.4   [x] T6.5   [x] T6.6   [x] T6.7
 [x] T7.1   [x] T7.2   [x] T7.3   [x] T7.4   [x] T7.5   [x] T7.6
-[ ] T8.1   [ ] T8.2   [ ] T8.3   [ ] T8.4   [ ] T8.5
+[x] T8.1   [x] T8.2   [x] T8.3   [x] T8.4   [x] T8.5
 [ ] T9.1   [ ] T9.2   [ ] T9.3   [ ] T9.4   [ ] T9.5   [ ] T9.6
 ```
 
