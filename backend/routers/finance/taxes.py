@@ -1035,6 +1035,16 @@ def create_tax_settlement(
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
         """), params).scalar() or 0
 
+        # T3.6 (audit #18): output VAT must be NET of sales returns; otherwise
+        # we settle more than the company actually owes the tax authority.
+        output_returns = db.execute(text(  # noqa: sql-lint
+            f"""
+            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'sales_return' AND i.status NOT IN ('draft','cancelled')
+            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+        """), params).scalar() or 0
+
         input_v = db.execute(text(  # noqa: sql-lint
             f"""
             SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
@@ -1043,8 +1053,17 @@ def create_tax_settlement(
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
         """), params).scalar() or 0
 
-        output_dec = _dec(output).quantize(_D2, ROUND_HALF_UP)
-        input_dec = _dec(input_v).quantize(_D2, ROUND_HALF_UP)
+        # T3.6 (audit #18): input VAT must be NET of purchase returns.
+        input_returns = db.execute(text(  # noqa: sql-lint
+            f"""
+            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft','cancelled')
+            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+        """), params).scalar() or 0
+
+        output_dec = (_dec(output) - _dec(output_returns)).quantize(_D2, ROUND_HALF_UP)
+        input_dec = (_dec(input_v) - _dec(input_returns)).quantize(_D2, ROUND_HALF_UP)
         net = (output_dec - input_dec).quantize(_D2, ROUND_HALF_UP)
 
         vat_out_id = get_mapped_account_id(db, "acc_map_vat_out")

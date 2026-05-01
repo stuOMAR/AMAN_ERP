@@ -324,11 +324,16 @@
   - اختبار جديد [test_56_fx_revaluation_signs.py](../../backend/tests/test_56_fx_revaluation_signs.py) (9 حالات): asset rate↑/↓، **AP liability rate↑ ⇒ خسارة** (سيناريو DoD)، liability rate↓ ⇒ ربح، revenue، AP مسدد جزئيًا، صفر-فرق، account_type غير معروف.
 - **بوابات الجودة**: py_compile · sql lint (305) · pytest 36/36.
 
-### T3.6 — التسوية الضريبية تشمل المرتجعات `[S]`
+### T3.6 — التسوية الضريبية تشمل المرتجعات `[S]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #18.
 - **التغيير**: `create_tax_settlement` يجمع `sales + sales_return + purchase + purchase_return`.
 - **الملف**: `backend/routers/taxes.py`.
 - **DoD**: اختبار سيناريو: فاتورة + مرتجع جزئي → التسوية تطرح الـ VAT المرتجع.
+- **التنفيذ**:
+  - [routers/finance/taxes.py::create_tax_settlement](../../backend/routers/finance/taxes.py): أضيفت استعلامات `sales_return` و `purchase_return` بنفس فلتر الفترة/الفرع. الآن: `output_dec = sales − sales_return`، `input_dec = purchase − purchase_return`، والقيد يُسوّي `min(output_net, input_net)` فقط بعد الصافي. سلوك تقرير VAT (line 770) كان بالفعل يطرح المرتجعات؛ الفرق كان محصورًا في endpoint التسوية.
+  - يطابق الآن منطق `create_tax_return` (الإقرار) — مصدر واحد للحقيقة عبر استعلامي إجمالي وخصم لكل اتجاه.
+  - اختبار جديد [test_57_tax_settlement_returns.py](../../backend/tests/test_57_tax_settlement_returns.py) (3 حالات): مرتجع مبيعات يخصم من المخرجات، مرتجع مشتريات يخصم من المدخلات، مرتجعات > مبيعات ⇒ refundable بدون قيد.
+- **بوابات الجودة**: py_compile · sql lint (305) · pytest 3/3.
 
 ### T3.7 — مصدر سجل التدقيق + Hash Chain + DB triggers `[L]`
 - **بنود**: #21، #22، #23، #25، #26، #137.
