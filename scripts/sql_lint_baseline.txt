@@ -1,14 +1,14 @@
 # Auto-regenerated baseline (T2.2 - Phase 2 P1 security; refreshed by T3.1).
 # Each line is a pre-existing dynamic SQL site already vetted.
 # CI guard: scripts/check_sql_parameterization.py
-backend/database.py:3711
+backend/database.py:3719
 backend/database.py:175
 backend/database.py:176
 backend/database.py:177
 backend/database.py:178
-backend/database.py:3914
-backend/database.py:3766
-backend/database.py:3790
+backend/database.py:3922
+backend/database.py:3774
+backend/database.py:3798
 backend/routers/approvals.py:67
 backend/routers/approvals.py:351
 backend/routers/approvals.py:407
@@ -82,13 +82,13 @@ backend/routers/finance/checks.py:89
 backend/routers/finance/checks.py:599
 backend/routers/finance/checks.py:1173
 backend/routers/finance/checks.py:1207
-backend/routers/finance/expenses.py:299
-backend/routers/finance/expenses.py:665
-backend/routers/finance/expenses.py:154
-backend/routers/finance/expenses.py:209
-backend/routers/finance/expenses.py:904
-backend/routers/finance/expenses.py:950
-backend/routers/finance/expenses.py:990
+backend/routers/finance/expenses.py:307
+backend/routers/finance/expenses.py:683
+backend/routers/finance/expenses.py:162
+backend/routers/finance/expenses.py:217
+backend/routers/finance/expenses.py:1075
+backend/routers/finance/expenses.py:1121
+backend/routers/finance/expenses.py:1161
 backend/routers/finance/notes.py:137
 backend/routers/finance/notes.py:138
 backend/routers/finance/notes.py:139
@@ -125,12 +125,12 @@ backend/routers/finance/tax_compliance.py:613
 backend/routers/finance/tax_compliance.py:642
 backend/routers/finance/tax_compliance.py:909
 backend/routers/finance/tax_compliance.py:918
-backend/routers/finance/treasury.py:757
-backend/routers/finance/treasury.py:831
-backend/routers/finance/treasury.py:895
-backend/routers/finance/treasury.py:909
-backend/routers/finance/treasury.py:923
-backend/routers/finance/treasury.py:937
+backend/routers/finance/treasury.py:680
+backend/routers/finance/treasury.py:754
+backend/routers/finance/treasury.py:818
+backend/routers/finance/treasury.py:832
+backend/routers/finance/treasury.py:846
+backend/routers/finance/treasury.py:860
 backend/routers/hr/advanced.py:88
 backend/routers/hr/advanced.py:174
 backend/routers/hr/advanced.py:596

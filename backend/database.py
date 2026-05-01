@@ -2712,13 +2712,21 @@ def get_treasury_dependent_tables_sql() -> str:
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
-        updated_by INTEGER REFERENCES company_users(id)
+        updated_by INTEGER REFERENCES company_users(id),
+        -- T3.13: reversal bookkeeping (alembic 0018)
+        reversal_journal_entry_id INTEGER REFERENCES journal_entries(id),
+        reversed_at TIMESTAMPTZ,
+        reversed_by INTEGER REFERENCES company_users(id),
+        reversal_reason TEXT
     );
 
     CREATE INDEX IF NOT EXISTS idx_expenses_expense_date ON expenses(expense_date);
     CREATE INDEX IF NOT EXISTS idx_expenses_approval_status ON expenses(approval_status);
     CREATE INDEX IF NOT EXISTS idx_expenses_branch_id ON expenses(branch_id);
     CREATE INDEX IF NOT EXISTS idx_expenses_created_by ON expenses(created_by);
+    CREATE INDEX IF NOT EXISTS idx_expenses_reversal_je
+        ON expenses(reversal_journal_entry_id)
+        WHERE reversal_journal_entry_id IS NOT NULL;
     """
 
 

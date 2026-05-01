@@ -449,137 +449,60 @@ def delete_treasury_account(
         db.close()
 
 @router.post("/transactions/expense", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))])
-def create_expense(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
-    """تسجيل مصروف جديد"""
+async def create_expense(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
+    """تسجيل مصروف جديد عبر الخزينة.
+
+    T3.11: this endpoint is now a thin compatibility shim that
+    delegates to the unified expenses flow in
+    ``routers.finance.expenses.create_expense``. It exists only so the
+    legacy frontend ``treasury.js → createExpense`` and pre-existing
+    integration tests keep working — the canonical path for new code
+    is ``POST /expenses``.
+
+    The shim auto-approves the expense (treasury managers already have
+    the right to post immediately, matching the legacy behaviour) so
+    the JE goes straight to ``posted`` and the treasury balance is
+    updated atomically through the same code path as the unified
+    module.
+    """
     if data.transaction_type != 'expense':
         raise HTTPException(status_code=400, detail="Invalid transaction type")
-    
-    # Validate amount
     if data.amount is None or data.amount <= 0:
         raise HTTPException(**http_error(400, "amount_must_be_positive"))
-        
-    db = get_db_connection(current_user.company_id)
-    try:
-        # Validate expense account type
-        if data.target_account_id:
-            exp_acct = db.execute(text("SELECT account_type FROM accounts WHERE id = :id"), {"id": data.target_account_id}).fetchone()
-            if not exp_acct:
-                raise HTTPException(status_code=404, detail="حساب المصروفات غير موجود")
-            if exp_acct.account_type not in ('expense', 'asset', 'liability'):
-                raise HTTPException(status_code=400, detail=f"الحساب المحدد ليس حساب مصروفات (نوعه: {exp_acct.account_type})")
-        else:
-            raise HTTPException(status_code=400, detail="يجب تحديد حساب المصروفات")
+    if not data.target_account_id:
+        raise HTTPException(status_code=400, detail="يجب تحديد حساب المصروفات")
 
-        # Generate Transaction Number
-        import uuid
-        trans_num = f"EXP-{str(uuid.uuid4())[:8].upper()}"
-        
-        # 1. Get Treasury Account GL ID & Branch & Currency — SELECT FOR UPDATE to prevent concurrent balance drift
-        treasury = db.execute(text("""
-            SELECT gl_account_id, current_balance, branch_id, currency, account_type, allow_overdraft
-            FROM treasury_accounts WHERE id = :id FOR UPDATE
-        """), {"id": data.treasury_id}).fetchone()
-        if not treasury:
-            raise HTTPException(status_code=404, detail="الخزينة غير موجودة")
-            
-        treasury_gl_id = treasury.gl_account_id
-        treasury_branch_id = treasury.branch_id
-        treasury_currency = treasury.currency
-        exchange_rate = _dec(data.exchange_rate or 1)
-        amount_base = (_dec(data.amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
-        
-        # Determine the branch for this transaction (Allocation Branch)
-        final_branch_id = data.branch_id if data.branch_id is not None else treasury_branch_id
+    from schemas.expenses import ExpenseCreate
+    from routers.finance.expenses import create_expense as unified_create_expense
 
-        # Overdraft validation: reject on cash unless allow_overdraft is set
-        new_balance = _dec(treasury.current_balance) - _dec(data.amount)
-        if new_balance < 0:
-            is_bank = treasury.account_type == 'bank'
-            allow_od = treasury.allow_overdraft
-            if not is_bank and not allow_od:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"الرصيد غير كافٍ. الرصيد الحالي: {float(treasury.current_balance):,.2f}"
-                )
+    expense_payload = ExpenseCreate(
+        expense_date=data.transaction_date,
+        expense_type="other",
+        amount=data.amount,
+        description=data.description or "",
+        category="general",
+        payment_method="cash",
+        treasury_id=data.treasury_id,
+        expense_account_id=data.target_account_id,
+        cost_center_id=None,
+        project_id=None,
+        branch_id=data.branch_id,
+        receipt_number=data.reference_number,
+        vendor_name=None,
+        requires_approval=False,
+    )
 
-        # 2. Create Journal Entry — GL-first before updating balance
-        check_fiscal_period_open(db, data.transaction_date)
-        
-        je_lines = [
-            {"account_id": data.target_account_id, "debit": float(data.amount), "credit": 0},
-            {"account_id": treasury_gl_id, "debit": 0, "credit": float(data.amount)},
-        ]
+    result = await unified_create_expense(
+        request=request, expense=expense_payload, current_user=current_user
+    )
 
-        from services.gl_service import create_journal_entry as gl_create_journal_entry
-        je_id, _ = gl_create_journal_entry(
-            db=db,
-            company_id=current_user.company_id,
-            date=data.transaction_date,
-            description=f"Expense: {data.description} ({treasury_currency})",
-            lines=je_lines,
-            user_id=current_user.id,
-            branch_id=final_branch_id,
-            reference=trans_num,
-            currency=treasury_currency,
-            exchange_rate=float(exchange_rate),
-            source="expense_transaction",
-        )
-
-        # 3. Insert Treasury Transaction — with exchange_rate and currency
-        trans_id = db.execute(text("""
-            INSERT INTO treasury_transactions (
-                transaction_number, transaction_date, transaction_type, amount, 
-                treasury_id, target_account_id, description, reference_number,
-                created_by, branch_id, exchange_rate, currency
-            ) VALUES (
-                :num, :date, :type, :amount, :tid, :target, :desc, :ref,
-                :uid, :bid, :exr, :cur
-            ) RETURNING id
-        """), {
-            "num": trans_num,
-            "date": data.transaction_date,
-            "type": 'expense',
-            "amount": data.amount,
-            "tid": data.treasury_id,
-            "target": data.target_account_id,
-            "desc": data.description,
-            "ref": data.reference_number,
-            "uid": current_user.id,
-            "bid": final_branch_id,
-            "exr": float(exchange_rate),
-            "cur": treasury_currency,
-        }).scalar()
-        
-        # 4. Update Treasury Balance — T1.3a idempotent recompute (after GL entry posted)
-        from utils.treasury_balance import recalc_treasury_from_gl
-        recalc_treasury_from_gl(db, data.treasury_id)
-        
-        db.commit()
-
-        # AUDIT LOG
-        log_activity(
-            db,
-            user_id=current_user.id,
-            username=current_user.username,
-            action="treasury.expense.create",
-            resource_type="treasury_transaction",
-            resource_id=str(trans_id),
-            details={"amount": data.amount, "description": data.description, "treasury_id": data.treasury_id},
-            request=request,
-            branch_id=final_branch_id
-        )
-
-        return {"success": True, "message": "تم تسجيل المصروف بنجاح", "transaction_id": trans_id}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Expense Error: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+    return {
+        "success": True,
+        "message": "تم تسجيل المصروف بنجاح",
+        "transaction_id": result.get("id") if isinstance(result, dict) else None,
+        "expense_id": result.get("id") if isinstance(result, dict) else None,
+        "expense_number": result.get("expense_number") if isinstance(result, dict) else None,
+    }
 
 @router.post("/transactions/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))])
 def create_transfer(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):

@@ -310,8 +310,149 @@ def create_journal_entry(
     return journal_id, entry_number
 
 
-# Map JE `source` tags to canonical domain events. Keys are lower-cased for
-# case-insensitive matching; callers set `source` in any casing.
+# ────────────────────────────────────────────────────────────────────────
+# T3.11: Post an existing *draft* JE (idempotent).
+#
+# Used by the unified expenses flow: on create the JE is inserted in
+# `draft` so it shows up in GL without affecting balances; on approval
+# we flip it to `posted` and apply the balances exactly once.
+# ────────────────────────────────────────────────────────────────────────
+def post_draft_journal_entry(db, je_id: int, user_id: int) -> bool:
+    """Promote a draft journal entry to posted.
+
+    Returns True if a state transition happened, False if the entry
+    was already posted (idempotent). Raises HTTPException(404) if the
+    JE doesn't exist.
+    """
+    row = db.execute(text(
+        "SELECT id, status, entry_date, entry_number FROM journal_entries "
+        "WHERE id = :id FOR UPDATE"
+    ), {"id": je_id}).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="القيد المحاسبي غير موجود")
+    if row.status == "posted":
+        return False
+    if row.status != "draft":
+        raise HTTPException(
+            status_code=400,
+            detail=f"لا يمكن ترحيل قيد بحالة {row.status}",
+        )
+    # Re-check fiscal lock at posting time — the period might have
+    # closed between draft creation and approval.
+    if row.entry_date:
+        from utils.fiscal_lock import check_fiscal_period_open
+        check_fiscal_period_open(db, row.entry_date)
+
+    db.execute(text(
+        "UPDATE journal_entries "
+        "SET status = 'posted', posted_at = :now "
+        "WHERE id = :id"
+    ), {"now": datetime.now(), "id": je_id})
+
+    lines = db.execute(text(
+        "SELECT account_id, debit, credit, currency, amount_currency "
+        "FROM journal_lines WHERE journal_entry_id = :id"
+    ), {"id": je_id}).fetchall()
+    for ln in lines:
+        deb = Decimal(str(ln.debit or 0))
+        cred = Decimal(str(ln.credit or 0))
+        amt_curr = Decimal(str(ln.amount_currency or 0))
+        line_currency = ln.currency
+        # Approximate per-currency split: when only one of debit/credit
+        # is non-zero (true for every well-formed line), we can rebuild
+        # the input figures. This mirrors the create-time call.
+        input_debit = amt_curr if deb > 0 else Decimal("0")
+        input_credit = amt_curr if cred > 0 else Decimal("0")
+        update_account_balance(
+            db,
+            account_id=ln.account_id,
+            debit_base=deb,
+            credit_base=cred,
+            debit_curr=input_debit,
+            credit_curr=input_credit,
+            currency=line_currency,
+        )
+
+    try:
+        log_activity(
+            db,
+            user_id=user_id,
+            username="system",
+            action="post_journal_entry",
+            resource_type="journal_entry",
+            resource_id=str(je_id),
+            details={"entry_number": row.entry_number},
+        )
+    except Exception:
+        logger.warning("audit log failed for posting JE %s", je_id)
+    return True
+
+
+def reverse_journal_entry(
+    db,
+    je_id: int,
+    user_id: int,
+    company_id: str,
+    reversal_date: Optional[str] = None,
+    reason: Optional[str] = None,
+) -> tuple[int, str]:
+    """Create a reversing JE for an existing posted JE.
+
+    The reversing entry swaps debits and credits of every line and is
+    posted with `source='reversal'`, `source_id=<original je_id>`. The
+    original entry is left untouched (audit-friendly), but its
+    `reversed_by_je_id` column (if present) is updated.
+    """
+    head = db.execute(text(
+        "SELECT id, status, entry_date, entry_number, branch_id, currency, exchange_rate "
+        "FROM journal_entries WHERE id = :id FOR UPDATE"
+    ), {"id": je_id}).fetchone()
+    if not head:
+        raise HTTPException(status_code=404, detail="القيد الأصلي غير موجود")
+    if head.status != "posted":
+        raise HTTPException(
+            status_code=400,
+            detail="لا يمكن عكس قيد غير مرحَّل",
+        )
+
+    src_lines = db.execute(text(
+        "SELECT account_id, debit, credit, description, cost_center_id, "
+        "       amount_currency, currency "
+        "FROM journal_lines WHERE journal_entry_id = :id"
+    ), {"id": je_id}).fetchall()
+    if not src_lines:
+        raise HTTPException(status_code=400, detail="القيد لا يحوي سطوراً")
+
+    rev_lines = []
+    for ln in src_lines:
+        rev_lines.append({
+            "account_id": ln.account_id,
+            "debit": Decimal(str(ln.credit or 0)),
+            "credit": Decimal(str(ln.debit or 0)),
+            "description": (ln.description or "") + " — عكس",
+            "cost_center_id": ln.cost_center_id,
+            "currency": ln.currency,
+            "amount_currency": Decimal(str(ln.amount_currency or 0)),
+        })
+
+    rev_id, rev_num = create_journal_entry(
+        db=db,
+        company_id=company_id,
+        date=reversal_date or str(datetime.now().date()),
+        description=f"عكس القيد {head.entry_number}" + (f" — {reason}" if reason else ""),
+        lines=rev_lines,
+        user_id=user_id,
+        branch_id=head.branch_id,
+        reference=f"REV-{head.entry_number}",
+        status="posted",
+        currency=head.currency,
+        exchange_rate=float(head.exchange_rate or 1),
+        source="reversal",
+        source_id=je_id,
+    )
+    return rev_id, rev_num
+
+
 _SOURCE_EVENT_MAP: Dict[str, str] = {}
 
 

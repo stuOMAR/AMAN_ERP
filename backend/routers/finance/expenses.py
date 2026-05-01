@@ -31,7 +31,7 @@ EXPENSE_TYPES = [
     "materials", "labor", "services", "rent", "utilities", "salaries", "other"
 ]
 
-VALID_APPROVAL_STATUSES = ["pending", "approved", "rejected", "submitted"]
+VALID_APPROVAL_STATUSES = ["pending", "approved", "rejected", "submitted", "reversed"]
 
 
 # ═══════════════════════════════════════════════════════════
@@ -65,8 +65,15 @@ def get_expense_account_by_type(db, expense_type: str) -> Optional[int]:
     )).scalar()
 
 
-def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_currency: str):
-    """إنشاء قيد محاسبي للمصروف"""
+def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_currency: str, *, je_status: str = "posted"):
+    """إنشاء قيد محاسبي للمصروف.
+
+    T3.11: ``je_status`` controls whether the JE is posted immediately
+    (legacy / auto-approved path) or created as ``draft`` so it shows
+    up in GL but doesn't move account balances until approval. Both
+    paths share the same line construction so balances reconcile
+    exactly when the draft is later posted.
+    """
     from services.gl_service import create_journal_entry as gl_create_journal_entry
     
     je_number = generate_sequential_number(db, "EXP", "journal_entries", "entry_number")
@@ -96,6 +103,7 @@ def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_curr
         user_id=user_id,
         branch_id=expense_data.get("branch_id"),
         reference=je_number,
+        status=je_status,
         currency=base_currency,
         exchange_rate=1.0,
         source="expense",
@@ -510,27 +518,37 @@ async def create_expense(
             "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id
         }).scalar()
         
-        # If auto-approved, create journal entry immediately
+        # T3.11: ALWAYS create a journal entry. Auto-approved expenses
+        # post immediately; pending expenses get a `draft` JE so the
+        # transaction is visible in GL but doesn't move balances until
+        # approval flips it to `posted`. This eliminates the previous
+        # split between "create now" and "create on approval" paths.
+        je_status = "posted" if approval_status == "approved" else "draft"
+        expense_data = {
+            "expense_date": expense.expense_date,
+            "expense_type": expense.expense_type,
+            "amount": str(expense.amount),
+            "description": expense.description,
+            "expense_account_id": expense_account_id,
+            "cash_account_id": cash_account_id,
+            "cost_center_id": expense.cost_center_id,
+            "branch_id": expense.branch_id,
+            "company_id": current_user.company_id,
+            "expense_id": expense_id
+        }
+        je_id, je_number = create_expense_journal_entry(
+            db, expense_data, current_user.id, base_currency, je_status=je_status
+        )
+
+        # Update expense with journal entry reference (always — even
+        # for drafts so approval can post the existing JE rather than
+        # creating a second one).
+        db.execute(text("""
+            UPDATE expenses SET journal_entry_id = :jid WHERE id = :id
+        """), {"jid": je_id, "id": expense_id})
+
+        # Treasury / project side-effects only fire for posted JEs.
         if approval_status == "approved":
-            expense_data = {
-                "expense_date": expense.expense_date,
-                "expense_type": expense.expense_type,
-                "amount": str(expense.amount),
-                "description": expense.description,
-                "expense_account_id": expense_account_id,
-                "cash_account_id": cash_account_id,
-                "cost_center_id": expense.cost_center_id,
-                "branch_id": expense.branch_id,
-                "company_id": current_user.company_id,
-                "expense_id": expense_id
-            }
-            je_id, je_number = create_expense_journal_entry(db, expense_data, current_user.id, base_currency)
-            
-            # Update expense with journal entry reference
-            db.execute(text("""
-                UPDATE expenses SET journal_entry_id = :jid WHERE id = :id
-            """), {"jid": je_id, "id": expense_id})
-            
             # Update treasury balance (with sufficiency check)
             if expense.treasury_id:
                 treasury_balance = db.execute(text(
@@ -697,6 +715,15 @@ async def approve_expense(
     db = get_db_connection(current_user.company_id)
     
     try:
+        # T3.12: lock the expense row for the duration of the approval
+        # so two concurrent approvers can't both post the JE. The lock
+        # is taken first thing — before any JE work — so the second
+        # caller waits until the first one's transaction completes and
+        # then sees the updated approval_status.
+        db.execute(text(
+            "SELECT id FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
+        ), {"id": expense_id})
+
         # Get expense details
         expense_row = db.execute(text("""
             SELECT e.*, a.id as expense_account_id, ta.gl_account_id as cash_account_id
@@ -736,37 +763,49 @@ async def approve_expense(
             "id": expense_id
         })
         
-        # If approved, create journal entry
+        # If approved, transition the existing draft JE to posted.
+        # T3.11: ``create_expense`` now always inserts the JE on
+        # creation (draft when pending) so approval is a pure status
+        # flip plus side-effect application — no second JE is ever
+        # created.
         if approval.approval_status == "approved":
             base_currency = get_base_currency(db)
-            
+
             # Determine cash account
             cash_account_id = expense["cash_account_id"]
             if not cash_account_id:
                 cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
-            
+
             if not cash_account_id:
                 raise HTTPException(status_code=400, detail="حساب النقدية غير محدد")
-            
-            expense_data = {
-                "expense_date": expense["expense_date"],
-                "expense_type": expense["expense_type"],
-                "amount": str(expense["amount"]),
-                "description": expense["description"],
-                "expense_account_id": expense["expense_account_id"],
-                "cash_account_id": cash_account_id,
-                "cost_center_id": expense["cost_center_id"],
-                "branch_id": expense["branch_id"],
-                "company_id": current_user.company_id,
-                "expense_id": expense_id
-            }
-            je_id, je_number = create_expense_journal_entry(db, expense_data, current_user.id, base_currency)
-            
-            # Link journal entry to expense
-            db.execute(text("""
-                UPDATE expenses SET journal_entry_id = :jid WHERE id = :id
-            """), {"jid": je_id, "id": expense_id})
-            
+
+            existing_je_id = expense.get("journal_entry_id")
+            if existing_je_id:
+                from services.gl_service import post_draft_journal_entry
+                post_draft_journal_entry(db, existing_je_id, current_user.id)
+            else:
+                # Backwards-compat: legacy expenses created before T3.11
+                # don't have a draft JE attached. Create-and-post one
+                # in a single shot to keep them auditable.
+                expense_data = {
+                    "expense_date": expense["expense_date"],
+                    "expense_type": expense["expense_type"],
+                    "amount": str(expense["amount"]),
+                    "description": expense["description"],
+                    "expense_account_id": expense["expense_account_id"],
+                    "cash_account_id": cash_account_id,
+                    "cost_center_id": expense["cost_center_id"],
+                    "branch_id": expense["branch_id"],
+                    "company_id": current_user.company_id,
+                    "expense_id": expense_id
+                }
+                je_id, je_number = create_expense_journal_entry(
+                    db, expense_data, current_user.id, base_currency, je_status="posted"
+                )
+                db.execute(text(
+                    "UPDATE expenses SET journal_entry_id = :jid WHERE id = :id"
+                ), {"jid": je_id, "id": expense_id})
+
             # Update treasury balance (with sufficiency check)
             if expense["treasury_id"]:
                 treasury_balance = db.execute(text(
@@ -826,6 +865,138 @@ async def approve_expense(
     except Exception as e:
         db.rollback()
         logger.error(f"Error approving expense: {e}")
+        logger.exception("Internal error")
+        raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
+# ═══════════════════════════════════════════════════════════
+# T3.13 — Reverse an approved expense
+# ═══════════════════════════════════════════════════════════
+
+@router.post("/{expense_id}/reverse", dependencies=[Depends(require_permission("expenses.approve"))])
+async def reverse_expense(
+    request: Request,
+    expense_id: int,
+    payload: dict = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """عكس مصروف معتمد بإنشاء قيد عكسي وتغيير الحالة إلى ``reversed``.
+
+    DoD (T3.13): إجمالي AP/Cash لا يتأثر بعد الإلغاء — أي أن مجموع
+    المدين والدائن لكل حساب طرف في القيدين الأصلي والعكسي يتساوى،
+    فيُعاد الرصيد لقيمته قبل المصروف.
+    """
+    db = get_db_connection(current_user.company_id)
+    payload = payload or {}
+    reason = (payload.get("reason") or "").strip() or None
+    reversal_date = payload.get("reversal_date")
+
+    try:
+        # Lock the row before any work — T3.12 pattern.
+        db.execute(text(
+            "SELECT id FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
+        ), {"id": expense_id})
+
+        row = db.execute(text("""
+            SELECT id, expense_number, amount, treasury_id, project_id,
+                   approval_status, journal_entry_id, branch_id
+            FROM expenses
+            WHERE id = :id AND is_deleted = false
+        """), {"id": expense_id}).fetchone()
+        if not row:
+            raise HTTPException(**http_error(404, "expense_not_found"))
+
+        expense = dict(row._mapping)
+        if expense["approval_status"] != "approved":
+            raise HTTPException(
+                status_code=400,
+                detail="لا يمكن عكس مصروف غير معتمد",
+            )
+        if not expense["journal_entry_id"]:
+            raise HTTPException(
+                status_code=400,
+                detail="القيد الأصلي للمصروف غير موجود — لا يمكن العكس",
+            )
+
+        # Fiscal lock check on the reversal date (defaults to today).
+        from datetime import date as _date
+        eff_date = reversal_date or str(_date.today())
+        check_fiscal_period_open(db, eff_date, raise_error=True)
+
+        from services.gl_service import reverse_journal_entry
+        rev_id, rev_num = reverse_journal_entry(
+            db,
+            je_id=expense["journal_entry_id"],
+            user_id=current_user.id,
+            company_id=current_user.company_id,
+            reversal_date=eff_date,
+            reason=reason,
+        )
+
+        amount = Decimal(str(expense["amount"]))
+
+        # Reverse treasury balance.
+        if expense["treasury_id"]:
+            db.execute(text("""
+                UPDATE treasury_accounts
+                SET current_balance = current_balance + :amt
+                WHERE id = :id
+            """), {"amt": str(amount), "id": expense["treasury_id"]})
+
+        # Reverse project actual_cost.
+        if expense["project_id"]:
+            db.execute(text("""
+                UPDATE projects
+                SET actual_cost = GREATEST(actual_cost - :amt, 0)
+                WHERE id = :id
+            """), {"amt": str(amount), "id": expense["project_id"]})
+
+        # Mark the expense reversed.
+        db.execute(text("""
+            UPDATE expenses
+            SET approval_status = 'reversed',
+                reversal_journal_entry_id = :rid,
+                reversed_at = NOW(),
+                reversed_by = :uid,
+                reversal_reason = :reason
+            WHERE id = :id
+        """), {"rid": rev_id, "uid": current_user.id, "reason": reason, "id": expense_id})
+
+        db.commit()
+
+        log_activity(
+            db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="expense.reverse",
+            resource_type="expense",
+            resource_id=str(expense_id),
+            details={
+                "expense_number": expense["expense_number"],
+                "amount": str(amount),
+                "original_je_id": expense["journal_entry_id"],
+                "reversal_je_id": rev_id,
+                "reversal_je_number": rev_num,
+                "reason": reason,
+            },
+            request=request,
+            branch_id=expense.get("branch_id"),
+        )
+
+        return {
+            "success": True,
+            "message": "تم عكس المصروف بنجاح",
+            "expense_id": expense_id,
+            "reversal_journal_entry_id": rev_id,
+            "reversal_journal_entry_number": rev_num,
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error reversing expense: {e}")
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:

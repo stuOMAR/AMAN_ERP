@@ -401,20 +401,37 @@
   - `backend/tests/test_61_pos_invoice_parity.py` (5 حالات): تكافؤ POS/فاتورة المبيعات لخصم رأسي مطلق، لكوبون نسبي، ولخصم سطري؛ ومُثبِّتات شفرة على lookup العرض من `pos_promotions` ومرور `header_discount_pct` للحاسبة الموحّدة.
   - `scripts/sql_lint_baseline.txt`: تحديث 2 إدخالين في `routers/pos.py` (1551→1644، 1651→1744) لمواكبة إضافة منطق الكوبون.
 
-### T3.11 — توحيد مساري المصروفات `[M]`
+### T3.11 — توحيد مساري المصروفات `[M]` ✅ [FIXED 2026-05-01]
 - **بنود**: 419ad، 2.1/2.2 من Treasury.
 - **التغيير**: مسار واحد `expenses.py` ينشئ القيد دائمًا بحالة `draft`/`pending` ويُحوّل لـ `posted` عند الاعتماد. حذف المسار المكرر في `treasury.py`.
 - **DoD**: لا يوجد ازدواج؛ مصروف جديد بدون اعتماد له قيد `draft` مرئي في GL.
+- **التنفيذ**:
+  - `backend/routers/finance/expenses.py::create_expense_journal_entry` يقبل وسيطة `je_status` ويمررها إلى `gl_create_journal_entry`.
+  - `create_expense` ينشئ القيد دائمًا (`status="posted"` إذا تم تمرير `approval_status="approved"`، وإلا `status="draft"`)، ويربط `expenses.journal_entry_id` فورًا. تأثيرات الخزينة/المشروع تظل مشروطة بـ `approved`.
+  - `backend/routers/finance/treasury.py::create_expense` صار قشرة (~50 سطرًا) تستدعي `unified_create_expense` بنفس البيانات (يحذف الـ 130 سطرًا المكررة لإنشاء قيد متوازٍ).
+  - اختبار: `tests/test_62_expenses_unified_lock_reverse.py::test_t3_11_*` (3 ضمانات بنيوية).
 
-### T3.12 — قفل اعتماد المصروف على سجل المصروف نفسه `[S]`
+### T3.12 — قفل اعتماد المصروف على سجل المصروف نفسه `[S]` ✅ [FIXED 2026-05-01]
 - **بنود**: 419ae.
 - **التغيير**: `SELECT ... FROM expenses WHERE id=:id FOR UPDATE` في بداية الاعتماد.
 - **DoD**: اختبار تزامن لا ينتج اعتمادًا مزدوجًا.
+- **التنفيذ**:
+  - `approve_expense` يأخذ قفل صف `FOR UPDATE` على سجل المصروف فور الدخول، قبل أي قراءة لحالة الاعتماد.
+  - عند وجود `journal_entry_id` مرتبط (المسار الموحد) يستدعي `post_draft_journal_entry` لتحويل الـ draft إلى posted داخل نفس المعاملة (مع قفل صف JE نفسه).
+  - اختبار: `tests/test_62_expenses_unified_lock_reverse.py::test_t3_12_approve_expense_takes_for_update_lock`.
 
-### T3.13 — إنشاء API قيد عكسي للمصروف المعتمد `[S]`
+### T3.13 — إنشاء API قيد عكسي للمصروف المعتمد `[S]` ✅ [FIXED 2026-05-01]
 - **بنود**: 419af + 2.5 من Treasury.
 - **التغيير**: `POST /expenses/{id}/reverse` ينشئ قيدًا عكسيًا ويُغير الحالة لـ `reversed`.
 - **DoD**: إجمالي AP/Cash لا يتأثر بعد الإلغاء.
+- **التنفيذ**:
+  - `backend/services/gl_service.py`: helpers جديدة:
+    - `post_draft_journal_entry(db, je_id, user_id)` — يقفل JE `FOR UPDATE`، يرفض غير الـ draft، يعيد التحقق من قفل الفترة المالية، يحدّث الحالة إلى `posted` ويطبّق `update_account_balance` للأسطر، idempotent.
+    - `reverse_journal_entry(db, je_id, user_id, company_id, reversal_date, reason)` — يقفل JE الأصلي، يرفض غير الـ posted، يعكس debit/credit لكل سطر وينشئ JE جديدًا `posted` بـ `source='reversal'` وربط بـ `source_id` الأصلي.
+  - `backend/alembic/versions/0018_expense_reversal_columns.py` (+ DDL canonical في `database.py`): إضافة `reversal_journal_entry_id`, `reversed_at`, `reversed_by`, `reversal_reason` + partial index.
+  - Endpoint جديد `POST /expenses/{id}/reverse` (يتطلب `expenses.approve`): يقفل الصف، يتحقق من `approved` ووجود JE، يفحص قفل الفترة على تاريخ العكس، يستدعي `reverse_journal_entry`، يفك تأثيرات الخزينة (`current_balance + amt`) والمشروع (`GREATEST(actual_cost - amt, 0)`)، ويحدّث `approval_status='reversed'`.
+  - الإثبات: اختبار e2e `test_post_draft_then_reverse_yields_net_zero` يبدأ من رصيد محايد، ينشئ draft (لا تتأثر الأرصدة)، يستدعي post (تتغيّر بـ ±250)، ثم reverse، ويؤكد أن أرصدة كل من المصروف والكاش تعود إلى نفس القيمة الابتدائية.
+  - اختبارات: `tests/test_62_expenses_unified_lock_reverse.py` (7 اختبارات، كلها خضراء).
 
 **مخرَج المرحلة 3**: درجة المحاسبة 65 → 88، التدقيق 32 → 84.
 
