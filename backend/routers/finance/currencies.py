@@ -17,6 +17,65 @@ router = APIRouter(
     tags=["accounting"]
 )
 
+
+def compute_fx_revaluation_diff(
+    fc_balance: float,
+    bc_balance: float,
+    new_rate: float,
+    *,
+    account_type: str = "asset",
+) -> dict:
+    """T3.5 (audit #16): pure helper for FX-revaluation diff math.
+
+    Both ``fc_balance`` and ``bc_balance`` MUST be expressed in the
+    asset-positive convention (i.e. ``SUM(debit - credit)`` of the
+    relevant amount column). For a liability/equity/revenue account
+    this means a natural credit balance is represented as a negative
+    number — that is exactly what makes the rest of the math work
+    uniformly across all account types.
+
+    Returns a dict with keys:
+      * ``target_bc``   — fc_balance × new_rate
+      * ``diff``        — target_bc − bc_balance (asset-positive)
+      * ``side``        — ``'gain'`` if natural balance grew in BC,
+                          ``'loss'`` if it shrank, ``None`` if no JE
+      * ``natural_old`` / ``natural_new`` — magnitudes after applying
+                          the account's normal-balance sign (positive
+                          = credit balance for liabilities). Returned
+                          for logging/test diagnostics only.
+    """
+    diff = round(float(fc_balance) * float(new_rate) - float(bc_balance), 4)
+    target_bc = round(float(fc_balance) * float(new_rate), 4)
+
+    credit_normal = (account_type or "asset").lower() in {
+        "liability",
+        "equity",
+        "revenue",
+        "income",
+    }
+    natural_old = -bc_balance if credit_normal else bc_balance
+    natural_new = -target_bc if credit_normal else target_bc
+
+    if abs(diff) < 0.01:
+        side = None
+    elif credit_normal:
+        # Liability/equity/revenue: bc_balance is negative for a
+        # natural credit balance. ``diff < 0`` means the balance
+        # became MORE negative (we owe more BC) ⇒ loss.
+        side = "loss" if diff < 0 else "gain"
+    else:
+        # Asset/expense: ``diff > 0`` means the asset grew in BC ⇒ gain.
+        side = "gain" if diff > 0 else "loss"
+
+    return {
+        "target_bc": target_bc,
+        "diff": diff,
+        "side": side,
+        "natural_old": natural_old,
+        "natural_new": natural_new,
+    }
+
+
 @router.get("/", response_model=List[CurrencyResponse])
 @limiter.limit("200/minute")
 def list_currencies(
@@ -355,19 +414,40 @@ def create_revaluation(
         journal_entry_lines = []
 
         for acc in accounts:
-            # Get account type to determine balance direction
-            acc_type_row = db.execute(text("SELECT account_type FROM accounts WHERE id = :aid"), {"aid": acc.id}).fetchone()
-            acc_type = acc_type_row.account_type if acc_type_row else 'asset'
-            
-            # Calculate Foreign Currency Balance from Journal Lines
-            # FC amount_currency is always positive, so use debit/credit to determine direction
+            # T3.5 (audit #16): the FC balance must use the SAME sign
+            # convention as the BC balance so the comparison
+            # `target_bc_value vs bc_balance` is apples-to-apples for
+            # both debit-normal accounts (assets, expenses) and
+            # credit-normal accounts (liabilities, equity, revenue).
+            #
+            # Both queries below use the asset-positive convention
+            # (debit − credit). For a liability account that means
+            # both fc_balance and bc_balance come out NEGATIVE for a
+            # natural credit balance, so `diff = target_bc − bc` keeps
+            # the correct sign and the gain/loss arms below produce
+            # the right JE direction:
+            #   * liability + rate ↑ ⇒ owe more in BC ⇒ Cr liability,
+            #     Dr Loss (diff < 0).
+            #   * asset     + rate ↑ ⇒ worth more in BC ⇒ Dr asset,
+            #     Cr Gain   (diff > 0).
+            # The `account_type` is captured for traceability/logging
+            # but the math does not need to branch on it.
+            acc_type_row = db.execute(
+                text("SELECT account_type FROM accounts WHERE id = :aid"),
+                {"aid": acc.id},
+            ).fetchone()
+            acc_type = (acc_type_row.account_type if acc_type_row else 'asset') or 'asset'
+
+            # Calculate Foreign Currency Balance from Journal Lines.
+            # `amount_currency` is stored as a non-negative magnitude;
+            # the debit/credit columns carry the direction.
             fc_balance_row = db.execute(text("""
                 SELECT COALESCE(SUM(
-                    CASE WHEN debit > 0 THEN COALESCE(amount_currency, 0)
+                    CASE WHEN debit  > 0 THEN  COALESCE(amount_currency, 0)
                          WHEN credit > 0 THEN -COALESCE(amount_currency, 0)
                          ELSE 0 END
-                ), 0) as fc_balance 
-                FROM journal_lines 
+                ), 0) as fc_balance
+                FROM journal_lines
                 WHERE account_id = :aid
             """), {"aid": acc.id}).fetchone()
             fc_balance = float(fc_balance_row.fc_balance)
@@ -383,20 +463,42 @@ def create_revaluation(
             """), {"aid": acc.id}).fetchone()
             
             bc_balance = float(bc_balance_row.balance)
-            target_bc_value = fc_balance * req.new_rate
-            diff = target_bc_value - bc_balance
-            diff = round(diff, 4)
-            
-            if abs(diff) < 0.01:
+            reval = compute_fx_revaluation_diff(
+                fc_balance=fc_balance,
+                bc_balance=bc_balance,
+                new_rate=float(req.new_rate),
+                account_type=acc_type,
+            )
+            diff = reval["diff"]
+
+            if reval["side"] is None:
                 continue
 
-            if diff > 0:
+            if reval["side"] == "gain" and not (
+                (acc_type or "asset").lower() in {"liability", "equity", "revenue", "income"}
+            ):
+                # Asset / expense gained value in BC.
                 journal_entry_lines.append({"account_id": acc.id, "debit": diff, "credit": 0, "desc": f"Revaluation {code} @ {req.new_rate}"})
                 journal_entry_lines.append({"account_id": gain_id, "debit": 0, "credit": diff, "desc": f"Unrealized Gain - {acc.name}"})
-            else:
+            elif reval["side"] == "loss" and not (
+                (acc_type or "asset").lower() in {"liability", "equity", "revenue", "income"}
+            ):
+                # Asset / expense lost value in BC.
                 abs_diff = abs(diff)
                 journal_entry_lines.append({"account_id": acc.id, "debit": 0, "credit": abs_diff, "desc": f"Revaluation {code} @ {req.new_rate}"})
                 journal_entry_lines.append({"account_id": loss_id, "debit": abs_diff, "credit": 0, "desc": f"Unrealized Loss - {acc.name}"})
+            elif reval["side"] == "loss":
+                # Liability/equity/revenue: rate hike means we owe MORE in BC.
+                # Increase the credit-normal account (credit) and book a Loss (debit).
+                abs_diff = abs(diff)
+                journal_entry_lines.append({"account_id": acc.id, "debit": 0, "credit": abs_diff, "desc": f"Revaluation {code} @ {req.new_rate}"})
+                journal_entry_lines.append({"account_id": loss_id, "debit": abs_diff, "credit": 0, "desc": f"Unrealized Loss - {acc.name}"})
+            else:
+                # Liability/equity/revenue gain: rate fell, we owe less ⇒ debit
+                # the liability (reduce it) and credit Gain.
+                abs_diff = abs(diff)
+                journal_entry_lines.append({"account_id": acc.id, "debit": abs_diff, "credit": 0, "desc": f"Revaluation {code} @ {req.new_rate}"})
+                journal_entry_lines.append({"account_id": gain_id, "debit": 0, "credit": abs_diff, "desc": f"Unrealized Gain - {acc.name}"})
 
         if not journal_entry_lines:
             return {"message": "No revaluation needed", "entries_created": 0}

@@ -312,11 +312,17 @@
   - اختبار جديد [tests/test_55_validate_je_lines_unified.py](../../backend/tests/test_55_validate_je_lines_unified.py) (7 حالات) مع regression تفحص نظام الملفات للتأكد من وجود تعريف واحد فقط.
 - **بوابات الجودة**: py_compile · sql lint (305) · pytest 35/35.
 
-### T3.5 — اتجاه FC balance للخصوم في إعادة التقييم `[S]`
+### T3.5 — اتجاه FC balance للخصوم في إعادة التقييم `[S]` ✅ **[FIXED 2026-05-01]**
 - **بنود**: #16.
 - **التغيير**: استخدام `account.normal_balance` أو `account_type` لتحديد الإشارة.
 - **الملف**: `backend/routers/currencies.py`.
 - **DoD**: اختبار يعيد تقييم حساب موردين بعملة أجنبية ويتحقق من إشارة الربح/الخسارة.
+- **التنفيذ**:
+  - استُخرج منطق الفرق الصرفي إلى دالة نقية [compute_fx_revaluation_diff](../../backend/routers/finance/currencies.py) تأخذ `fc_balance`، `bc_balance` (كلاهما باتفاقية مدين-دائن)، `new_rate`، و `account_type`.
+  - الدالة تتعامل صراحة مع credit-normal (liability/equity/revenue/income): الزيادة في الرصيد الطبيعي بعملة الأساس ⇒ خسارة، النقصان ⇒ ربح. بقية الحسابات (asset/expense) تتبع المنطق المعاكس.
+  - المسار الإنتاجي في `create_revaluation` يستدعي الدالة ويُمرّر `account_type` المُسترجع من جدول الحسابات؛ توليد سطور القيد يتفرع وفق `side` (`gain`/`loss`) و convention الحساب.
+  - اختبار جديد [test_56_fx_revaluation_signs.py](../../backend/tests/test_56_fx_revaluation_signs.py) (9 حالات): asset rate↑/↓، **AP liability rate↑ ⇒ خسارة** (سيناريو DoD)، liability rate↓ ⇒ ربح، revenue، AP مسدد جزئيًا، صفر-فرق، account_type غير معروف.
+- **بوابات الجودة**: py_compile · sql lint (305) · pytest 36/36.
 
 ### T3.6 — التسوية الضريبية تشمل المرتجعات `[S]`
 - **بنود**: #18.
