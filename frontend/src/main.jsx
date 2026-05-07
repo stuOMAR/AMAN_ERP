@@ -11,6 +11,7 @@ import './index.css'
 //   • print.css   only matched by @media print, no render cost on screen.
 import './styles/cards.css'
 import './styles/print.css'
+import './styles/navigation.css'
 import './i18n'
 
 ReactDOM.createRoot(document.getElementById('root')).render(

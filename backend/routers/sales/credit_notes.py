@@ -16,7 +16,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import (
     get_mapped_account_id,
@@ -25,6 +25,8 @@ from utils.accounting import (
     prepare_je_lines,
 )
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
+from services.tax_engine import resolve_line_tax
+from utils.party_balance import update_party_site_balance
 import logging
 
 logger = logging.getLogger(__name__)
@@ -54,7 +56,7 @@ def list_sales_credit_notes(
     current_user: dict = Depends(get_current_user),
 ):
     """قائمة إشعارات دائنة (مبيعات)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         conditions = ["i.invoice_type = 'sales_credit_note'"]
@@ -75,9 +77,9 @@ def list_sales_credit_notes(
         if search:
             conditions.append("(i.invoice_number ILIKE :search OR i.notes ILIKE :search)")
             params["search"] = f"%{search}%"
-        if branch_id:
-            conditions.append("i.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, prefix="").strip()
+        if branch_condition:
+            conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
         total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()
@@ -212,18 +214,23 @@ def create_sales_credit_note(
         for line in lines:
             qty = _dec(line.get("quantity", 1))
             price = _dec(line.get("unit_price", 0))
-            tax_rate = _dec(line.get("tax_rate", 0))
             disc = _dec(line.get("discount", 0))
+            product_id = line.get("product_id")
+            if product_id and branch_id:
+                tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
+                tax_rate = tax_info["tax_rate"]
+            else:
+                tax_rate = _dec(line.get("tax_rate", 0))
             line_gross = qty * price
             line_net = line_gross - disc
-            line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D4, ROUND_HALF_UP)
-            line_total = (line_net + line_tax).quantize(_D4, ROUND_HALF_UP)
+            line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+            line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
 
             subtotal += line_net
             tax_total += line_tax
             discount_total += disc
             computed_lines.append({
-                "product_id": line.get("product_id"),
+                "product_id": product_id,
                 "description": line.get("description", ""),
                 "quantity": qty,
                 "unit_price": price,
@@ -232,7 +239,7 @@ def create_sales_credit_note(
                 "total": line_total,
             })
 
-        total = (subtotal + tax_total).quantize(_D4, ROUND_HALF_UP)
+        total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
 
         # Generate number & insert
         inv_num = generate_sequential_number(db, "SCN", "invoices", "invoice_number")
@@ -241,20 +248,21 @@ def create_sales_credit_note(
                 invoice_number, invoice_type, party_id, invoice_date, 
                 subtotal, tax_amount, discount, total, paid_amount, status,
                 notes, branch_id, related_invoice_id,
-                currency, exchange_rate, created_by
+                currency, exchange_rate, created_by, party_site_id
             ) VALUES (
                 :num, 'sales_credit_note', :party, :date,
                 :sub, :tax, :disc, :total, 0, 'posted',
                 :notes, :branch, :rel,
-                :curr, :rate, :user
+                :curr, :rate, :user, :party_site_id
             ) RETURNING id
         """), {
             "num": inv_num, "party": party_id, "date": inv_date,
             "sub": subtotal, "tax": tax_total, "disc": discount_total,
             "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id or (current_user.allowed_branches[0] if current_user.allowed_branches else None),
+            "branch": branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None),
             "rel": related_invoice_id, "curr": currency,
             "rate": exchange_rate, "user": current_user.id,
+            "party_site_id": data.get("party_site_id"),
         })
         note_id = result.fetchone()[0]
 
@@ -324,7 +332,7 @@ def create_sales_credit_note(
             reference=inv_num,
             status="posted",
             currency=currency,
-            exchange_rate=exchange_rate,
+            exchange_rate=1.0,  # amounts already in base currency
             source="SalesCreditNote",
             source_id=related_invoice_id,
             username=getattr(current_user, "username", None),
@@ -343,12 +351,11 @@ def create_sales_credit_note(
                 WHERE id = :id
             """), {"amt": total, "id": related_invoice_id})
 
-        # Update customer balance (credit note REDUCES what customer owes)
+        # Update customer balance via party_site_balances (credit note REDUCES what customer owes)
         gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
-        db.execute(text("""
-            UPDATE parties SET current_balance = current_balance - :amt
-            WHERE id = :pid
-        """), {"amt": gl_total_base, "pid": party_id})
+        effective_branch = branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None)
+        update_party_site_balance(db, party_id=party_id, branch_id=effective_branch,
+                                  currency=currency, amount=-float(gl_total_base))
 
         db.commit()
 
@@ -391,7 +398,7 @@ def list_sales_debit_notes(
     current_user: dict = Depends(get_current_user),
 ):
     """قائمة إشعارات مدينة (مبيعات)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         conditions = ["i.invoice_type = 'sales_debit_note'"]
@@ -412,9 +419,9 @@ def list_sales_debit_notes(
         if search:
             conditions.append("(i.invoice_number ILIKE :search OR i.notes ILIKE :search)")
             params["search"] = f"%{search}%"
-        if branch_id:
-            conditions.append("i.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, prefix="").strip()
+        if branch_condition:
+            conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
         total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()
@@ -541,8 +548,13 @@ def create_sales_debit_note(
         for line in lines:
             qty = _dec(line.get("quantity", 1))
             price = _dec(line.get("unit_price", 0))
-            tax_rate = _dec(line.get("tax_rate", 0))
             disc = _dec(line.get("discount", 0))
+            product_id = line.get("product_id")
+            if product_id and branch_id:
+                tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
+                tax_rate = tax_info["tax_rate"]
+            else:
+                tax_rate = _dec(line.get("tax_rate", 0))
             line_gross = qty * price
             line_net = line_gross - disc
             line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D4, ROUND_HALF_UP)
@@ -552,7 +564,7 @@ def create_sales_debit_note(
             tax_total += line_tax
             discount_total += disc
             computed_lines.append({
-                "product_id": line.get("product_id"),
+                "product_id": product_id,
                 "description": line.get("description", ""),
                 "quantity": qty, "unit_price": price,
                 "tax_rate": tax_rate, "discount": disc,
@@ -567,20 +579,21 @@ def create_sales_debit_note(
                 invoice_number, invoice_type, party_id, invoice_date,
                 subtotal, tax_amount, discount, total, paid_amount, status,
                 notes, branch_id, related_invoice_id,
-                currency, exchange_rate, created_by
+                currency, exchange_rate, created_by, party_site_id
             ) VALUES (
                 :num, 'sales_debit_note', :party, :date,
                 :sub, :tax, :disc, :total, 0, 'unpaid',
                 :notes, :branch, :rel,
-                :curr, :rate, :user
+                :curr, :rate, :user, :party_site_id
             ) RETURNING id
         """), {
             "num": inv_num, "party": party_id, "date": inv_date,
             "sub": subtotal, "tax": tax_total, "disc": discount_total,
             "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id or (current_user.allowed_branches[0] if current_user.allowed_branches else None),
+            "branch": branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None),
             "rel": related_invoice_id, "curr": currency,
             "rate": exchange_rate, "user": current_user.id,
+            "party_site_id": data.get("party_site_id"),
         })
         note_id = result.fetchone()[0]
 
@@ -645,19 +658,18 @@ def create_sales_debit_note(
             reference=inv_num,
             status="posted",
             currency=currency,
-            exchange_rate=exchange_rate,
+            exchange_rate=1.0,  # amounts already in base currency
             source="SalesDebitNote",
             source_id=note_id,
             username=getattr(current_user, "username", None),
             idempotency_key=f"sdn-{inv_num}",
         )
 
-        # Update customer balance (debit note INCREASES what customer owes)
+        # Update customer balance via party_site_balances (debit note INCREASES what customer owes)
         gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
-        db.execute(text("""
-            UPDATE parties SET current_balance = current_balance + :amt
-            WHERE id = :pid
-        """), {"amt": gl_total_base, "pid": party_id})
+        effective_branch = branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None)
+        update_party_site_balance(db, party_id=party_id, branch_id=effective_branch,
+                                  currency=currency, amount=float(gl_total_base))
 
         db.commit()
 

@@ -11,7 +11,7 @@ from utils.i18n import http_error
 from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from database import get_db_connection
 from utils.tx import transactional
 from utils.accounting import get_base_currency
@@ -35,6 +35,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 from .core import ActualCostUpdate, QCCheckCreate, calculate_production_cost, check_inventory_sufficiency
+
+
+def _validate_order_warehouse_access(conn, current_user: UserResponse, *warehouse_ids: Optional[int]) -> None:
+    from utils.permissions import validate_branch_access
+
+    for warehouse_id in warehouse_ids:
+        if not warehouse_id:
+            continue
+        warehouse = conn.execute(
+            text("SELECT branch_id FROM warehouses WHERE id = :wid"),
+            {"wid": warehouse_id},
+        ).fetchone()
+        if not warehouse:
+            raise HTTPException(status_code=404, detail="Warehouse not found")
+        if warehouse.branch_id:
+            validate_branch_access(current_user, warehouse.branch_id)
 
 @router.get("/orders/cost-estimate", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def estimate_production_cost(
@@ -77,8 +93,7 @@ def list_production_orders(
     current_user: UserResponse = Depends(get_current_user)
 ):
     """List Production Orders."""
-    from utils.permissions import validate_branch_access
-    validated_branch = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     conn = get_db_connection(current_user.company_id)
     try:
         query = """
@@ -89,9 +104,9 @@ def list_production_orders(
             LEFT JOIN bill_of_materials b ON po.bom_id = b.id
         """
         params = {"limit": limit, "offset": offset}
-        if validated_branch:
-            query += " WHERE po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params, prefix="WHERE")
+        if branch_filter:
+            query += f" {branch_filter}"
         query += " ORDER BY po.id DESC LIMIT :limit OFFSET :offset"
         orders_db = conn.execute(text(query), params).fetchall()
 
@@ -192,8 +207,7 @@ def list_all_operations(
     """List All Operations."""
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT poo.*, mo.description as operation_description, wc.name as work_center_name,
@@ -207,9 +221,7 @@ def list_all_operations(
         """
         params = {}
         
-        if validated_branch:
-            query += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        query += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         
         if work_center_id:
             query += " AND poo.work_center_id = :wcid"
@@ -239,21 +251,13 @@ def list_all_operations(
 @router.post("/orders", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
 def create_production_order(order: ProductionOrderCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
     """Create Production Order."""
-    from utils.permissions import validate_branch_access
-    if order.warehouse_id:
-        conn_pre = get_db_connection(current_user.company_id)
-        try:
-            wh = conn_pre.execute(text("SELECT branch_id FROM warehouses WHERE id = :wid"), {"wid": order.warehouse_id}).fetchone()
-            if wh and wh.branch_id:
-                validate_branch_access(current_user, wh.branch_id)
-        finally:
-            conn_pre.close()
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
+        _validate_order_warehouse_access(conn, current_user, order.warehouse_id, order.destination_warehouse_id)
         # Generate Order Number if not provided
         if not order.order_number:
-            order.order_number = f"PO-{datetime.now().strftime('%y%m%d%H%M%S')}"
+            order.order_number = f"MFG-{datetime.now().strftime('%y%m%d%H%M%S')}"
 
         # Auto-detect default routing if route_id not provided
         route_id = order.route_id
@@ -360,12 +364,15 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
-        # Check current status
+        # Check current status \u2014 T10.2 #199: lock the row to prevent
+        # two concurrent ``/start`` calls from both passing the status
+        # check and double-consuming inventory.
         order = conn.execute(text("""
             SELECT po.*, p.cost_price as product_cost 
             FROM production_orders po
             LEFT JOIN products p ON po.product_id = p.id
             WHERE po.id=:id
+            FOR UPDATE OF po
         """), {"id": order_id}).fetchone()
         
         if not order:
@@ -381,7 +388,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         # Check inventory sufficiency before starting
         if order.bom_id:
             is_sufficient, shortages = check_inventory_sufficiency(
-                conn, order.bom_id, order.quantity, order.warehouse_id
+                conn, order.bom_id, order.quantity, order.warehouse_id, lock_rows=True
             )
             if not is_sufficient:
                 shortage_details = "; ".join(
@@ -404,6 +411,10 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         
         # 1. Consume Raw Materials
         # Get BOM components
+        # T10.2 #206 \u2014 initialise outside the ``if order.bom_id`` block
+        # so the audit log on line ~487 doesn't raise NameError when the
+        # production order has no BOM attached.
+        total_material_cost = Decimal("0")
         if order.bom_id:
             components = conn.execute(text("""
                 SELECT bc.*, p.cost_price, p.product_name, p.id as product_id
@@ -693,8 +704,9 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             # WAC: (existing_qty × old_cost + new_qty × new_cost) / (existing_qty + new_qty)
             existing = conn.execute(text("""
                 SELECT COALESCE(SUM(quantity), 0) as qty FROM inventory 
-                WHERE product_id = :pid
-            """), {"pid": order.product_id}).fetchone()
+                                WHERE product_id = :pid
+                                    AND (:warehouse_id IS NULL OR warehouse_id = :warehouse_id)
+                        """), {"pid": order.product_id, "warehouse_id": order.destination_warehouse_id}).fetchone()
             existing_qty = Decimal(str(existing.qty)) - Decimal(str(order.quantity))  # subtract newly added qty
             old_cost_row = conn.execute(text(
                 "SELECT cost_price FROM products WHERE id = :pid"
@@ -846,6 +858,8 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
             validate_branch_access(current_user, existing.branch_id)
         if existing.status != 'draft':
             raise HTTPException(status_code=400, detail="Only draft orders can be updated")
+
+        _validate_order_warehouse_access(conn, current_user, order.warehouse_id, order.destination_warehouse_id)
         
         updated = conn.execute(text("""
             UPDATE production_orders 

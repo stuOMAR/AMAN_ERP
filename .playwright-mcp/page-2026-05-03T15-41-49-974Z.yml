@@ -1,0 +1,139 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🔔" [ref=e110] [cursor=pointer]
+          - generic [ref=e112] [cursor=pointer]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: aaaa
+              - generic [ref=e115]: "ID: e24bcd11"
+            - generic [ref=e116]: O
+      - main [ref=e118]:
+        - generic [ref=e362]:
+          - generic [ref=e363]:
+            - button "العودة" [ref=e364] [cursor=pointer]:
+              - img [ref=e365]
+            - generic [ref=e367]:
+              - generic [ref=e368]:
+                - heading "إعدادات تسجيل الدخول الموحد" [level=1] [ref=e369]
+                - paragraph [ref=e370]: إدارة تكاملات SSO و LDAP
+              - generic [ref=e371]:
+                - button "بين الشركات" [ref=e372] [cursor=pointer]
+                - button "+ إضافة مزود" [ref=e373] [cursor=pointer]
+          - generic [ref=e374]:
+            - generic [ref=e375]:
+              - img
+              - textbox "بحث في إعدادات SSO…" [ref=e376]
+            - combobox [ref=e377]:
+              - option "الحالة" [selected]
+              - option "نشط"
+              - option "غير نشط"
+          - table [ref=e379]:
+            - rowgroup [ref=e380]:
+              - row "نوع المزود اسم العرض المضيف / الرابط الحالة الإجراءات" [ref=e381]:
+                - columnheader "نوع المزود" [ref=e382]
+                - columnheader "اسم العرض" [ref=e383]
+                - columnheader "المضيف / الرابط" [ref=e384]
+                - columnheader "الحالة" [ref=e385]
+                - columnheader "الإجراءات" [ref=e386]
+            - rowgroup [ref=e387]:
+              - row "📋 لا توجد إعدادات SSO أضف مزود SAML أو LDAP لتفعيل تسجيل الدخول الموحد إضافة مزود" [ref=e388]:
+                - cell "📋 لا توجد إعدادات SSO أضف مزود SAML أو LDAP لتفعيل تسجيل الدخول الموحد إضافة مزود" [ref=e389]:
+                  - generic [ref=e390]:
+                    - generic [ref=e391]: 📋
+                    - heading "لا توجد إعدادات SSO" [level=3] [ref=e392]
+                    - paragraph [ref=e393]: أضف مزود SAML أو LDAP لتفعيل تسجيل الدخول الموحد
+                    - button "إضافة مزود" [ref=e394] [cursor=pointer]

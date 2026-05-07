@@ -378,6 +378,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
                 SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS total
                 FROM journal_lines jl
                 JOIN accounts a ON jl.account_id = a.id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
                 WHERE a.account_type = 'revenue'
             """)).mappings().first()
             sales = float(rev_row["total"]) if rev_row else 0.0
@@ -386,6 +387,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
                 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS total
                 FROM journal_lines jl
                 JOIN accounts a ON jl.account_id = a.id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
                 WHERE a.account_type = 'expense'
             """)).mappings().first()
             expenses = float(exp_row["total"]) if exp_row else 0.0

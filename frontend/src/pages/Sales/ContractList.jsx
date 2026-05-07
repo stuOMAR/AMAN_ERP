@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { contractsAPI } from '../../utils/api'
+import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useBranch } from '../../context/BranchContext'
@@ -13,6 +14,7 @@ function ContractList() {
     const { t } = useTranslation()
     const navigate = useNavigate()
     const { currentBranch } = useBranch()
+    const currency = getCurrency()
     const [contracts, setContracts] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState(null)
@@ -86,7 +88,7 @@ function ContractList() {
             key: 'total_amount',
             label: t('sales.contracts.table.total'),
             style: { fontWeight: 'bold' },
-            render: (val) => formatNumber(val),
+            render: (val, row) => formatNumber(val) + ' ' + (row.currency || currency),
         },
         {
             key: 'status',

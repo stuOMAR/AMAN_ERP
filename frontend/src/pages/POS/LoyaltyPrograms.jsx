@@ -28,7 +28,7 @@ const LoyaltyPrograms = () => {
     const handleCreate = async (e) => {
         e.preventDefault();
         try {
-            await posAPI.createLoyaltyProgram({ ...form, points_per_unit: String(form.points_per_unit), min_points_redeem: parseInt(form.min_points_redeem), point_value: String(form.point_value) });
+            await posAPI.createLoyaltyProgram({ ...form, points_per_unit: String(form.points_per_unit), min_points_redeem: parseInt(form.min_points_redeem), currency_per_point: String(form.point_value) });
             showToast(t('pos.program_created'), 'success');
             setShowModal(false); fetchPrograms();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }

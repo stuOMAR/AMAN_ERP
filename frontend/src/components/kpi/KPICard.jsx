@@ -46,7 +46,8 @@ const KPICard = ({ kpi, currency = '', compact = false }) => {
     const colors = palette[status] || palette.neutral;
     const label = isRTL ? (kpi.label_ar || kpi.label) : (kpi.label || kpi.label_ar);
     const displayValue = kpi.formatted || formatNumber(kpi.value ?? 0);
-    const unit = kpi.unit === 'currency' ? currency : (kpi.unit || '');
+    // Use the unit from KPI if it's a currency code (like SAR, EGP), otherwise use passed currency
+    const unit = kpi.unit === 'currency' ? currency : (kpi.unit && kpi.unit.length === 3 ? kpi.unit : (kpi.unit || ''));
 
     const TrendIcon = kpi.trend === 'up' ? ArrowUpRight
         : kpi.trend === 'down' ? ArrowDownRight

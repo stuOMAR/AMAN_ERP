@@ -140,7 +140,8 @@ const ReportCenter = () => {
             module: 'stock',
             reports: [
                 { name: t('reports_center.reports.stock_balance'), path: '/stock/reports', desc: t('reports_center.reports.stock_balance_desc') },
-                { name: t('reports_center.reports.stock_movements'), path: '/stock/reports/movements', desc: t('reports_center.reports.stock_movements_desc') }
+                { name: t('reports_center.reports.stock_movements'), path: '/stock/reports/movements', desc: t('reports_center.reports.stock_movements_desc') },
+                { name: t('reports_center.reports.profitability', 'تقرير الربحية'), path: '/stock/reports/profitability', desc: t('reports_center.reports.profitability_desc', 'تحليل الربح الإجمالي لكل منتج') }
             ]
         },
         {
@@ -247,6 +248,18 @@ const ReportCenter = () => {
             module: 'reports',
             reports: [
                 { name: t('analytics.title'), path: '/analytics', desc: t('reports_center.reports.bi_analytics_desc', 'Interactive BI dashboards and KPI exploration') }
+            ]
+        },
+        {
+            title: t('reports_center.groups.operations', 'العمليات والصيانة'),
+            icon: '⚙️',
+            color: '#F59E0B',
+            permission: 'reports.view',
+            module: 'reports',
+            reports: [
+                { name: t('kpi_admin.title', 'إدارة مؤشرات الأداء'), path: '/reports/kpi-admin', desc: t('kpi_admin.subtitle', 'إنشاء ومراقبة مؤشرات الأداء الرئيسية') },
+                { name: t('scheduler.title', 'جدولة العمليات'), path: '/admin/ops/scheduler', desc: t('scheduler.subtitle', 'مراقبة وإدارة المهام المجدولة') },
+                { name: t('health.title', 'صحة النظام'), path: '/health/detailed', desc: t('health.subtitle', 'حالة جميع مكونات النظام') },
             ]
         },
         // ── Industry-specific reports — dynamic ──

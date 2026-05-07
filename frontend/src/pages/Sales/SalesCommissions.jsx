@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { salesAPI } from '../../utils/api';
+import { useBranch } from '../../context/BranchContext';
 import { useToast } from '../../context/ToastContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
@@ -12,6 +13,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 const SalesCommissions = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
+    const { currentBranch } = useBranch();
     const currency = getCurrency();
     const [commissions, setCommissions] = useState([]);
     const [rules, setRules] = useState([]);
@@ -21,15 +23,15 @@ const SalesCommissions = () => {
     const [showRuleModal, setShowRuleModal] = useState(false);
     const [ruleForm, setRuleForm] = useState({ salesperson_id: '', rate: '', min_amount: '' });
 
-    useEffect(() => { fetchAll(); }, []);
+    useEffect(() => { fetchAll(); }, [currentBranch]);
 
     const fetchAll = async () => {
         try {
             setLoading(true);
             const [commRes, rulesRes, summRes] = await Promise.all([
-                salesAPI.listCommissions().catch(() => ({ data: [] })),
-                salesAPI.listCommissionRules().catch(() => ({ data: [] })),
-                salesAPI.getCommissionSummary().catch(() => ({ data: null })),
+                salesAPI.listCommissions({ branch_id: currentBranch?.id }).catch(() => ({ data: [] })),
+                salesAPI.listCommissionRules({ branch_id: currentBranch?.id }).catch(() => ({ data: [] })),
+                salesAPI.getCommissionSummary({ branch_id: currentBranch?.id }).catch(() => ({ data: null })),
             ]);
             setCommissions(commRes.data || []);
             setRules(rulesRes.data || []);
@@ -40,7 +42,7 @@ const SalesCommissions = () => {
     const handleCreateRule = async (e) => {
         e.preventDefault();
         try {
-            await salesAPI.createCommissionRule({ salesperson_id: parseInt(ruleForm.salesperson_id), rate: Number(ruleForm.rate), min_amount: Number(ruleForm.min_amount) || 0 });
+            await salesAPI.createCommissionRule({ salesperson_id: parseInt(ruleForm.salesperson_id), rate: Number(ruleForm.rate), min_amount: Number(ruleForm.min_amount) || 0, branch_id: currentBranch?.id });
             showToast(t('sales.rule_created'), 'success');
             setShowRuleModal(false); fetchAll();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }
@@ -48,7 +50,7 @@ const SalesCommissions = () => {
 
     const handleCalculate = async () => {
         try {
-            const res = await salesAPI.calculateCommissions({});
+            const res = await salesAPI.calculateCommissions({ branch_id: currentBranch?.id });
             showToast(t('sales.calculated_commissions') + ` (${res.data?.count || 0})`, 'success');
             fetchAll();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }

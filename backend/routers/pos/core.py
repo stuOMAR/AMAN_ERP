@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -23,6 +23,7 @@ logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
+
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
@@ -30,14 +31,6 @@ def get_db(current_user: UserResponse = Depends(get_current_user)):
     yield from get_company_db(current_user.company_id)
 
 router = APIRouter()
-
-def _dec(v) -> Decimal:
-    return Decimal(str(v)) if v is not None else Decimal('0')
-
-def get_db(current_user: UserResponse = Depends(get_current_user)):
-    yield from get_company_db(current_user.company_id)
-
-router = APIRouter(prefix="/pos", tags=["Point of Sale"], dependencies=[Depends(require_module("pos"))])
 
 # --- Endpoints ---
 
@@ -116,11 +109,13 @@ def _get_populated_session(db: Session, session_id: int, current_user_id: int):
 
 @router.get("/warehouses", dependencies=[Depends(require_permission("pos.view"))], response_model=List[Dict[str, Any]])
 def get_pos_warehouses(
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get warehouses for POS - no special permissions needed"""
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         stmt = """
             SELECT w.id, w.warehouse_name as name, w.warehouse_code as code,
                    w.branch_id, COALESCE(b.branch_name, '') as branch_name
@@ -129,11 +124,7 @@ def get_pos_warehouses(
             WHERE w.is_active = TRUE
         """
         params = {}
-        
-        # Filter by allowed branches if not admin
-        if current_user.role != 'admin' and current_user.allowed_branches:
-            stmt += " AND w.branch_id = ANY(:branches)"
-            params["branches"] = current_user.allowed_branches
+        stmt += branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
             
         stmt += " ORDER BY w.id"
         
@@ -147,26 +138,38 @@ def get_pos_warehouses(
 
 def get_pos_products(
     warehouse_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
     category_id: Optional[int] = None,
     search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get POS Products."""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+
     # 1. Validate warehouse if provided
     if warehouse_id:
         wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()
         if wh_branch:
             validate_branch_access(current_user, wh_branch)
+        if branch_scope["branch_id"] is not None and wh_branch != branch_scope["branch_id"]:
+            return []
+        if branch_scope["branch_ids"] is not None and wh_branch not in branch_scope["branch_ids"]:
+            return []
             
     params = {}
     where_clauses = ["p.is_active = TRUE"]
     
-    # 2. If no warehouse provided, filter products by allowed branches if restricted
+    # 2. If no warehouse provided, filter products by selected/allowed branch scope
     branch_filter = ""
-    if not warehouse_id and current_user.role != 'admin' and current_user.allowed_branches:
-        branch_filter = " AND i.warehouse_id IN (SELECT id FROM warehouses WHERE branch_id = ANY(:branches))"
-        params["branches"] = current_user.allowed_branches
+    if not warehouse_id:
+        warehouse_branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
+        if warehouse_branch_filter:
+            branch_filter = f""" AND i.warehouse_id IN (
+                SELECT w.id FROM warehouses w
+                WHERE w.is_active = TRUE
+                {warehouse_branch_filter}
+            )"""
 
     query = f"""
         SELECT 

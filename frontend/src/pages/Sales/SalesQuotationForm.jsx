@@ -2,13 +2,14 @@ import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { salesAPI, inventoryAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
+import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
-import { useToast } from '../../context/ToastContext'
-import { formatNumber } from '../../utils/format'
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function SalesQuotationForm() {
     const { t } = useTranslation()
@@ -23,6 +24,7 @@ function SalesQuotationForm() {
 
     const [formData, setFormData] = useState({
         customer_id: '',
+        party_site_id: '',
         quotation_date: new Date().toISOString().split('T')[0],
         expiry_date: '',
         notes: '',
@@ -43,7 +45,9 @@ function SalesQuotationForm() {
                 setCustomers(custRes.data)
                 setProducts(prodRes.data)
             } catch (err) {
-                showToast(t('common.error'), 'error')
+                const detail = err.response?.data?.detail || t('common.error')
+                setError(detail)
+                showToast(detail, 'error')
             }
         }
         fetchData()
@@ -66,7 +70,7 @@ function SalesQuotationForm() {
                     if (product) {
                         updatedItem.description = product.product_name || product.item_name || ''
                         updatedItem.unit_price = product.selling_price || 0
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        updatedItem.tax_rate = null // Resolved by backend engine
                     }
                 }
 
@@ -103,7 +107,20 @@ function SalesQuotationForm() {
         setItems(newItems)
     }
 
+    // Backend-powered calculations
+    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+
     const calculateTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return {
+                subtotal: backendTotals.subtotal,
+                discount: backendTotals.totalDiscount,
+                tax: backendTotals.totalTax,
+                total: backendTotals.grandTotal,
+            }
+        }
+        // Fallback to local calculation
         return items.reduce((acc, item) => {
             const qty = Number(item.quantity) || 0
             const price = Number(item.unit_price) || 0
@@ -120,6 +137,21 @@ function SalesQuotationForm() {
         }, { subtotal: 0, discount: 0, tax: 0, total: 0 })
     }
 
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: Number(i.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
+
     const handleSubmit = async (e) => {
         e.preventDefault()
 
@@ -131,12 +163,21 @@ function SalesQuotationForm() {
             setError(t('sales.quotations.form.errors.product_required'))
             return
         }
+        if (items.some(item => Number(item.quantity) <= 0)) {
+            setError(t('sales.quotations.form.errors.quantity_required', 'يجب أن تكون كمية كل صنف أكبر من صفر'))
+            return
+        }
+        if (items.some(item => Number(item.unit_price) < 0)) {
+            setError(t('sales.quotations.form.errors.price_required', 'سعر الوحدة لا يمكن أن يكون سالباً'))
+            return
+        }
 
         setLoading(true)
         setError(null)
         try {
             const payload = {
                 customer_id: parseInt(formData.customer_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 quotation_date: formData.quotation_date,
                 expiry_date: formData.expiry_date || null,
                 notes: formData.notes,
@@ -182,6 +223,11 @@ function SalesQuotationForm() {
             </div>
 
             {error && <div className="alert alert-error mb-4">{error}</div>}
+            {!error && products.length === 0 && (
+                <div className="alert alert-warning mb-4">
+                    لا توجد أصناف متاحة للاختيار. يجب تعريف الصنف ITM-001 أو أي صنف نشط في المخزون قبل إصدار عرض السعر.
+                </div>
+            )}
 
             <form onSubmit={handleSubmit} className="card">
                 <div className="form-row">
@@ -243,10 +289,13 @@ function SalesQuotationForm() {
                                             value={item.product_id}
                                             onChange={e => handleItemChange(index, 'product_id', e.target.value)}
                                             required
+                                            disabled={products.length === 0}
                                         >
                                             <option value="">{t('sales.quotations.form.product_placeholder')}</option>
                                             {products.map(p => (
-                                                <option key={p.id} value={p.id}>{p.product_name || p.item_name}</option>
+                                                <option key={p.id} value={p.id}>
+                                                    {p.item_code || p.product_code ? `${p.item_code || p.product_code} - ` : ''}{p.product_name || p.item_name} ({formatNumber(p.selling_price || 0)} {currency})
+                                                </option>
                                             ))}
                                         </select>
                                         <input
@@ -367,7 +416,7 @@ function SalesQuotationForm() {
                                 type="submit"
                                 className="btn btn-primary"
                                 style={{ width: '100%', padding: '12px' }}
-                                disabled={loading}
+                                disabled={loading || products.length === 0}
                             >
                                 {loading ? t('sales.quotations.form.saving') : t('sales.quotations.form.save_btn')}
                             </button>

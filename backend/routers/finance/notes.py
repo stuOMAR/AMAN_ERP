@@ -10,11 +10,12 @@ from pydantic import BaseModel
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, validate_treasury_account_access, require_module
 from utils.accounting import get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from utils.treasury_gl import ensure_treasury_gl_accounts
+from services.gl_service import create_journal_entry as gl_create_journal_entry
 import logging
 logger = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class NoteReceivableCreate(BaseModel):
     due_date: str
     maturity_date: Optional[str] = None
     party_id: Optional[int] = None
+    party_site_id: Optional[int] = None
     treasury_account_id: Optional[int] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
@@ -56,6 +58,7 @@ class NotePayableCreate(BaseModel):
     due_date: str
     maturity_date: Optional[str] = None
     party_id: Optional[int] = None
+    party_site_id: Optional[int] = None
     treasury_account_id: Optional[int] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
@@ -97,9 +100,6 @@ def list_notes_receivable(
     current_user: dict = Depends(get_current_user)
 ):
     """List Notes Receivable."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as db:
         query = """
             SELECT n.*, p.name as party_name, t.name as treasury_name
@@ -112,9 +112,7 @@ def list_notes_receivable(
         if status_filter:
             query += " AND n.status = :st"
             params["st"] = status_filter
-        if branch_id:
-            query += " AND n.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "n.branch_id", params, branch_param="bid")
         query += " ORDER BY n.due_date ASC, n.id DESC"
         rows = db.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -123,15 +121,10 @@ def list_notes_receivable(
 @router.get("/receivable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def receivable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """Receivable Stats."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as db:
         base = "FROM notes_receivable WHERE 1=1"
         params = {}
-        if branch_id:
-            base += " AND branch_id = :bid"
-            params["bid"] = branch_id
+        base += " " + branch_scope_filter(current_user, branch_id, "branch_id", params, branch_param="bid")
         
         pending = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='pending'"), params).fetchone()
         collected = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='collected'"), params).fetchone()
@@ -170,11 +163,12 @@ def get_note_receivable(note_id: int, current_user: dict = Depends(get_current_u
 @router.post("/receivable", status_code=201, dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
 def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء ورقة قبض + قيد: مدين 1210 / دائن حساب العميل"""
-    # Validate branch access
-    validate_branch_access(current_user, data.branch_id)
-    
     with transactional(current_user.company_id) as db:
         try:
+            branch_id = validate_branch_access(current_user, data.branch_id)
+            if data.treasury_account_id:
+                validate_treasury_account_access(db, current_user, data.treasury_account_id, branch_id)
+
             ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
             
             nr_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1210'")).fetchone()
@@ -196,7 +190,6 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
                 {"account_id": ar_account.id, "debit": 0, "credit": amt, "description": f"ورقة قبض {data.note_number}", "currency": data.currency},
             ]
             
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -204,7 +197,7 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
                 description=f"ورقة قبض - {data.note_number} - {data.drawer_name or ''}",
                 lines=je_lines,
                 user_id=current_user.id,
-                branch_id=data.branch_id,
+                branch_id=branch_id,
                 source="note_receivable"
             )
     
@@ -212,26 +205,27 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
                 INSERT INTO notes_receivable (
                     note_number, drawer_name, bank_name, amount, currency,
                     issue_date, due_date, maturity_date, party_id, treasury_account_id,
-                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate
+                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate, party_site_id
                 ) VALUES (
                     :num, :drawer, :bank, :amt, :cur,
                     :issue, :due, :mat, :pid, :tid,
-                    :je, 'pending', :notes, :bid, :uid, :exchange_rate
+                    :je, 'pending', :notes, :bid, :uid, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "num": data.note_number, "drawer": data.drawer_name, "bank": data.bank_name,
                 "amt": amt, "cur": data.currency,
                 "issue": data.issue_date, "due": data.due_date, "mat": data.maturity_date or data.due_date,
                 "pid": data.party_id, "tid": data.treasury_account_id,
-                "je": je_id, "notes": data.notes, "bid": data.branch_id, "uid": current_user.id,
+                "je": je_id, "notes": data.notes, "bid": branch_id, "uid": current_user.id,
                 "exchange_rate": float(_dec(data.exchange_rate or 1)),
+                "party_site_id": data.party_site_id,
             }).scalar()
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="notes.receivable.create",
                          resource_type="note_receivable", resource_id=str(note_id),
                          details={"note_number": data.note_number, "amount": amt},
-                         branch_id=data.branch_id)
+                         branch_id=branch_id)
             return {"id": note_id, "journal_entry_id": je_id, "message": "تم إنشاء ورقة القبض بنجاح"}
         except HTTPException:
             raise
@@ -257,8 +251,7 @@ def collect_note_receivable(note_id: int, data: dict = None,
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, note.branch_id)
+            branch_id = validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'pending':
                 raise HTTPException(status_code=400, detail="لا يمكن تحصيل ورقة غير معلقة")
@@ -267,9 +260,7 @@ def collect_note_receivable(note_id: int, data: dict = None,
             if not tid:
                 raise HTTPException(**http_error(400, "treasury_or_bank_required"))
     
-            treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": tid}).fetchone()
-            if not treasury:
-                raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            treasury = validate_treasury_account_access(db, current_user, tid, branch_id)
     
             nr_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1210'")).fetchone()
             coll_date = collection_date or date.today().isoformat()
@@ -279,11 +270,10 @@ def collect_note_receivable(note_id: int, data: dict = None,
             # Build and validate journal lines
             amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
             je_lines = [
-                {"account_id": treasury.gl_account_id, "debit": amt, "credit": 0, "description": f"تحصيل ورقة {note.note_number}", "currency": note.currency},
+                {"account_id": treasury["gl_account_id"], "debit": amt, "credit": 0, "description": f"تحصيل ورقة {note.note_number}", "currency": note.currency},
                 {"account_id": nr_account.id, "debit": 0, "credit": amt, "description": f"تحصيل ورقة {note.note_number}", "currency": note.currency},
             ]
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -358,7 +348,6 @@ def protest_note_receivable(note_id: int, data: dict = None,
                 {"account_id": nr_account.id, "debit": 0, "credit": amt, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
             ]
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -403,9 +392,6 @@ def list_notes_payable(
     current_user: dict = Depends(get_current_user)
 ):
     """List Notes Payable."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as db:
         query = """
             SELECT n.*, p.name as party_name, t.name as treasury_name
@@ -418,9 +404,7 @@ def list_notes_payable(
         if status_filter:
             query += " AND n.status = :st"
             params["st"] = status_filter
-        if branch_id:
-            query += " AND n.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "n.branch_id", params, branch_param="bid")
         query += " ORDER BY n.due_date ASC, n.id DESC"
         rows = db.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -429,15 +413,10 @@ def list_notes_payable(
 @router.get("/payable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def payable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """Payable Stats."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as db:
         base = "FROM notes_payable WHERE 1=1"
         params = {}
-        if branch_id:
-            base += " AND branch_id = :bid"
-            params["bid"] = branch_id
+        base += " " + branch_scope_filter(current_user, branch_id, "branch_id", params, branch_param="bid")
 
         issued = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='issued'"), params).fetchone()
         paid = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='paid'"), params).fetchone()
@@ -476,11 +455,12 @@ def get_note_payable(note_id: int, current_user: dict = Depends(get_current_user
 @router.post("/payable", status_code=201, dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
 def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء ورقة دفع + قيد: مدين حساب المورد / دائن 2110"""
-    # Validate branch access
-    validate_branch_access(current_user, data.branch_id)
-    
     with transactional(current_user.company_id) as db:
         try:
+            branch_id = validate_branch_access(current_user, data.branch_id)
+            if data.treasury_account_id:
+                validate_treasury_account_access(db, current_user, data.treasury_account_id, branch_id)
+
             ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
     
             np_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2110'")).fetchone()
@@ -501,7 +481,6 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
                 {"account_id": np_account.id, "debit": 0, "credit": amt, "description": f"ورقة دفع {data.note_number}", "currency": data.currency},
             ]
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -509,7 +488,7 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
                 description=f"ورقة دفع - {data.note_number} - {data.beneficiary_name or ''}",
                 lines=je_lines,
                 user_id=current_user.id,
-                branch_id=data.branch_id,
+                branch_id=branch_id,
                 source="note_payable"
             )
     
@@ -517,26 +496,27 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
                 INSERT INTO notes_payable (
                     note_number, beneficiary_name, bank_name, amount, currency,
                     issue_date, due_date, maturity_date, party_id, treasury_account_id,
-                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate
+                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate, party_site_id
                 ) VALUES (
                     :num, :bene, :bank, :amt, :cur,
                     :issue, :due, :mat, :pid, :tid,
-                    :je, 'issued', :notes, :bid, :uid, :exchange_rate
+                    :je, 'issued', :notes, :bid, :uid, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "num": data.note_number, "bene": data.beneficiary_name, "bank": data.bank_name,
                 "amt": amt, "cur": data.currency,
                 "issue": data.issue_date, "due": data.due_date, "mat": data.maturity_date or data.due_date,
                 "pid": data.party_id, "tid": data.treasury_account_id,
-                "je": je_id, "notes": data.notes, "bid": data.branch_id, "uid": current_user.id,
+                "je": je_id, "notes": data.notes, "bid": branch_id, "uid": current_user.id,
                 "exchange_rate": float(_dec(data.exchange_rate or 1)),
+                "party_site_id": data.party_site_id,
             }).scalar()
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="notes.payable.create",
                          resource_type="note_payable", resource_id=str(note_id),
                          details={"note_number": data.note_number, "amount": amt},
-                         branch_id=data.branch_id)
+                         branch_id=branch_id)
             return {"id": note_id, "journal_entry_id": je_id, "message": "تم إنشاء ورقة الدفع بنجاح"}
         except HTTPException:
             raise
@@ -562,8 +542,7 @@ def pay_note_payable(note_id: int, data: dict = None,
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, note.branch_id)
+            branch_id = validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'issued':
                 raise HTTPException(status_code=400, detail="لا يمكن سداد ورقة غير صادرة")
@@ -572,9 +551,7 @@ def pay_note_payable(note_id: int, data: dict = None,
             if not tid:
                 raise HTTPException(**http_error(400, "treasury_or_bank_required"))
     
-            treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": tid}).fetchone()
-            if not treasury:
-                raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            treasury = validate_treasury_account_access(db, current_user, tid, branch_id)
     
             np_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2110'")).fetchone()
             pay_date = payment_date or date.today().isoformat()
@@ -585,10 +562,9 @@ def pay_note_payable(note_id: int, data: dict = None,
             amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
             je_lines = [
                 {"account_id": np_account.id, "debit": amt, "credit": 0, "description": f"سداد ورقة {note.note_number}", "currency": note.currency},
-                {"account_id": treasury.gl_account_id, "debit": 0, "credit": amt, "description": f"سداد ورقة {note.note_number}", "currency": note.currency},
+                {"account_id": treasury["gl_account_id"], "debit": 0, "credit": amt, "description": f"سداد ورقة {note.note_number}", "currency": note.currency},
             ]
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -663,7 +639,6 @@ def protest_note_payable(note_id: int, data: dict = None,
                 {"account_id": ap_account.id, "debit": 0, "credit": amt, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
             ]
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -700,20 +675,14 @@ def protest_note_payable(note_id: int, data: dict = None,
 # ─── Due Alerts (for both types) ───
 
 @router.get("/due-alerts", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
-def notes_due_alerts(days_ahead: int = 7, current_user: dict = Depends(get_current_user)):
+def notes_due_alerts(days_ahead: int = 7, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """إشعارات الاستحقاق القادم"""
     with transactional(current_user.company_id) as db:
         cutoff = (date.today() + timedelta(days=days_ahead)).isoformat()
         today = date.today().isoformat()
 
-        # Branch filtering
-        branch_filter = ""
         params = {"cutoff": cutoff}
-        user_role = current_user.role if hasattr(current_user, 'role') else current_user.get("role")
-        user_branches = current_user.allowed_branches if hasattr(current_user, 'allowed_branches') else current_user.get("allowed_branches")
-        if user_role != "admin" and user_branches:
-             branch_filter = " AND n.branch_id = ANY(:branches)"
-             params["branches"] = user_branches
+        branch_filter = branch_scope_filter(current_user, branch_id, "n.branch_id", params, branch_param="bid")
 
         receivable_due = db.execute(text(f"""
             SELECT n.id, n.note_number, n.drawer_name as name, n.amount, n.currency, n.due_date,

@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -30,7 +30,7 @@ def get_purchases_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """ملخص المشتريات"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -42,9 +42,7 @@ def get_purchases_summary(
             
         params = {"start": start_date, "end": end_date}
         
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
         summary = db.execute(text(f"""
             SELECT 
@@ -78,15 +76,13 @@ def get_purchases_trend(
     current_user: dict = Depends(get_current_user)
 ):
     """اتجاه المشتريات اليومي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         start_date = date.today() - timedelta(days=days)
         params = {"start": start_date}
         
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         result = db.execute(text(f"""
             SELECT 
@@ -113,13 +109,11 @@ def get_purchases_by_supplier(
     current_user: dict = Depends(get_current_user)
 ):
     """أكبر الموردين"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {"limit": limit}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
         result = db.execute(text(f"""
             SELECT 
@@ -147,13 +141,11 @@ def get_purchases_aging_report(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير أعمار الذمم الدائنة (مستحقات الموردين)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
         results = db.execute(text(f"""
             SELECT 
@@ -214,7 +206,7 @@ def get_supplier_statement(
     current_user: dict = Depends(get_current_user)
 ):
     """كشف حساب مورد تفصيلي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -223,9 +215,7 @@ def get_supplier_statement(
             end_date = date.today()
             
         params = {"sid": supplier_id, "start": start_date}
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         # 1. Get Opening Balance (Before start_date)
         # For suppliers: Invoices (credit/increase) - Payments (debit/decrease)

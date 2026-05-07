@@ -122,14 +122,14 @@ function CashFlowReport() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {data.inflows.map((item, idx) => (
+                                        {(data.inflows || []).map((item, idx) => (
                                             <tr key={idx}>
                                                 <td>{item.category}</td>
                                                 <td><span className="badge badge-success">{item.account_type}</span></td>
                                                 <td className="text-end">{formatNumber(item.amount)}</td>
                                             </tr>
                                         ))}
-                                        {data.inflows.length === 0 && (
+                                        {(!data.inflows || data.inflows.length === 0) && (
                                             <tr>
                                                 <td colSpan="3" className="text-center p-4 text-muted">
                                                     {t('common.no_data')}
@@ -162,14 +162,14 @@ function CashFlowReport() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {data.outflows.map((item, idx) => (
+                                        {(data.outflows || []).map((item, idx) => (
                                             <tr key={idx}>
                                                 <td>{item.category}</td>
                                                 <td><span className="badge badge-danger">{item.account_type}</span></td>
                                                 <td className="text-end">{formatNumber(item.amount)}</td>
                                             </tr>
                                         ))}
-                                        {data.outflows.length === 0 && (
+                                        {(!data.outflows || data.outflows.length === 0) && (
                                             <tr>
                                                 <td colSpan="3" className="text-center p-4 text-muted">
                                                     {t('common.no_data')}

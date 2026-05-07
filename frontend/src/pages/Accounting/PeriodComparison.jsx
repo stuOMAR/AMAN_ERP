@@ -2,6 +2,8 @@ import React, { useState, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { reportsAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
+import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 
 import DateInput from '../../components/common/DateInput';
@@ -72,6 +74,8 @@ function getPresetPeriods(preset) {
 export default function PeriodComparison() {
     const { t, i18n } = useTranslation()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
+    const currency = getCurrency()
 
     const [reportType, setReportType] = useState('profit-loss')
     const [preset, setPreset] = useState('yoy')
@@ -114,13 +118,16 @@ export default function PeriodComparison() {
                 periodsStr = customPeriods.map(p => `${p.start}:${p.end}`).join(',')
             }
 
+            const params = { periods: periodsStr }
+            if (currentBranch?.id) params.branch_id = currentBranch.id
+
             let res
             if (reportType === 'profit-loss') {
-                res = await reportsAPI.compareProfitLoss({ periods: periodsStr })
+                res = await reportsAPI.compareProfitLoss(params)
             } else if (reportType === 'balance-sheet') {
-                res = await reportsAPI.compareBalanceSheet({ periods: periodsStr })
+                res = await reportsAPI.compareBalanceSheet(params)
             } else {
-                res = await reportsAPI.compareTrialBalance({ periods: periodsStr })
+                res = await reportsAPI.compareTrialBalance(params)
             }
             setResult(res.data)
         } catch (err) {
@@ -128,7 +135,7 @@ export default function PeriodComparison() {
         } finally {
             setLoading(false)
         }
-    }, [reportType, customPeriods])
+    }, [reportType, customPeriods, currentBranch])
 
     const formatNum = (n) => {
         if (n === 0 || n === undefined) return '-'
@@ -243,16 +250,16 @@ export default function PeriodComparison() {
                                             <div className="row text-center">
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.revenue')}</div>
-                                                    <div className="fw-bold text-success">{formatNum(s.total_revenue)}</div>
+                                                    <div className="fw-bold text-success">{formatNum(s.total_revenue)} <small>{currency}</small></div>
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.expenses')}</div>
-                                                    <div className="fw-bold text-danger">{formatNum(s.total_expense)}</div>
+                                                    <div className="fw-bold text-danger">{formatNum(s.total_expense)} <small>{currency}</small></div>
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.net_income')}</div>
                                                     <div className={`fw-bold ${s.net_income >= 0 ? 'text-success' : 'text-danger'}`}>
-                                                        {formatNum(s.net_income)}
+                                                        {formatNum(s.net_income)} <small>{currency}</small>
                                                     </div>
                                                 </div>
                                             </div>
@@ -261,15 +268,15 @@ export default function PeriodComparison() {
                                             <div className="row text-center">
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.assets')}</div>
-                                                    <div className="fw-bold">{formatNum(s.total_assets)}</div>
+                                                    <div className="fw-bold">{formatNum(s.total_assets)} <small>{currency}</small></div>
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.liabilities')}</div>
-                                                    <div className="fw-bold">{formatNum(s.total_liabilities)}</div>
+                                                    <div className="fw-bold">{formatNum(s.total_liabilities)} <small>{currency}</small></div>
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.equity')}</div>
-                                                    <div className="fw-bold">{formatNum(s.total_equity)}</div>
+                                                    <div className="fw-bold">{formatNum(s.total_equity)} <small>{currency}</small></div>
                                                 </div>
                                             </div>
                                         )}
@@ -277,11 +284,11 @@ export default function PeriodComparison() {
                                             <div className="row text-center">
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.debit')}</div>
-                                                    <div className="fw-bold">{formatNum(s.total_debit)}</div>
+                                                    <div className="fw-bold">{formatNum(s.total_debit)} <small>{currency}</small></div>
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.credit')}</div>
-                                                    <div className="fw-bold">{formatNum(s.total_credit)}</div>
+                                                    <div className="fw-bold">{formatNum(s.total_credit)} <small>{currency}</small></div>
                                                 </div>
                                             </div>
                                         )}

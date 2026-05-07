@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -30,7 +30,7 @@ def get_sales_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """ملخص المبيعات (إجمالي، عدد الفواتير، الأرباح التقريبية)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         # Default to last 30 days if no dates provided
@@ -44,15 +44,14 @@ def get_sales_summary(
             db,
             start_date=start_date,
             end_date=end_date,
-            branch_id=branch_id,
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
         )
 
         # Approximate tax extracted from gross totals (assumes embedded tax
         # at the line-level rate; falls back to 15 % when no lines exist).
         params = {"start": start_date, "end": end_date}
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         tax_row = db.execute(text(f"""
             WITH all_sales AS (
@@ -87,9 +86,9 @@ def get_sales_summary(
                         COALESCE((SELECT AVG(tax_rate) FROM pos_order_lines WHERE order_id = all_sales.id), 0)
                     END
                 ) / (100 + CASE WHEN source = 'invoice' THEN
-                        COALESCE((SELECT AVG(tax_rate) FROM invoice_lines WHERE invoice_id = all_sales.id), 15)
+                        COALESCE((SELECT AVG(tax_rate) FROM invoice_lines WHERE invoice_id = all_sales.id), 0)
                     ELSE
-                        COALESCE((SELECT AVG(tax_rate) FROM pos_order_lines WHERE order_id = all_sales.id), 15)
+                        COALESCE((SELECT AVG(tax_rate) FROM pos_order_lines WHERE order_id = all_sales.id), 0)
                     END)) ), 0) as total_tax
             FROM all_sales
             WHERE sale_date BETWEEN :start AND :end
@@ -101,7 +100,8 @@ def get_sales_summary(
             db,
             start_date=start_date,
             end_date=end_date,
-            branch_id=branch_id,
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
         )
         revenue = gl["net_revenue"]
         cogs = gl["cogs"]
@@ -135,15 +135,12 @@ def get_sales_trend(
     current_user: dict = Depends(get_current_user)
 ):
     """اتجاه المبيعات اليومي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         start_date = date.today() - timedelta(days=days)
         params = {"start": start_date}
-        
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
         result = db.execute(text(f"""
             WITH all_sales AS (
@@ -169,7 +166,7 @@ def get_sales_trend(
                 COALESCE(SUM(total_bc), 0) as total
             FROM all_sales 
             WHERE sale_date >= :start
-            {branch_filter.replace('branch_id', 'branch_id')}
+            {branch_filter}
             GROUP BY sale_date
             ORDER BY sale_date
         """), params).fetchall()
@@ -185,13 +182,11 @@ def get_sales_by_customer(
     current_user: dict = Depends(get_current_user)
 ):
     """أفضل العملاء"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {"limit": limit}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "s.branch_id", params)
 
         result = db.execute(text(f"""
             WITH all_sales AS (
@@ -218,7 +213,7 @@ def get_sales_by_customer(
             FROM all_sales s
             JOIN parties p ON s.party_id = p.id
             WHERE 1=1
-            {branch_filter.replace('i.branch_id', 's.branch_id')}
+            {branch_filter}
             GROUP BY p.id, p.name
             ORDER BY total_sales DESC
             LIMIT :limit
@@ -235,13 +230,11 @@ def get_sales_by_product(
     current_user: dict = Depends(get_current_user)
 ):
     """المنتجات الأكثر مبيعاً"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {"limit": limit}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "cl.branch_id", params)
 
         result = db.execute(text(f"""
             WITH combined_lines AS (
@@ -272,7 +265,7 @@ def get_sales_by_product(
             FROM combined_lines cl
             JOIN products p ON cl.product_id = p.id
             WHERE 1=1
-            {branch_filter.replace('i.branch_id', 'cl.branch_id')}
+            {branch_filter}
             GROUP BY p.id, p.product_name
             ORDER BY total_sales DESC
             LIMIT :limit
@@ -291,7 +284,7 @@ def get_customer_statement(
     current_user: dict = Depends(get_current_user)
 ):
     """كشف حساب عميل تفصيلي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -300,9 +293,7 @@ def get_customer_statement(
             end_date = date.today()
 
         params = {"cid": customer_id, "start": start_date}
-        branch_filter = "AND branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         # 1. Get Opening Balance (Combined: invoices + POS + payment vouchers)
         opening_balance = db.execute(text(f"""
@@ -341,7 +332,7 @@ def get_customer_statement(
             SELECT (COALESCE(SUM(debit), 0) - COALESCE(SUM(credit), 0)) as balance
             FROM all_movements
             WHERE party_id = :cid AND sale_date < :start
-            {branch_filter.replace('branch_id', 'branch_id')}
+            {branch_filter}
         """), params).scalar() or 0
 
         # Also consider manual transactions or deprecated table structure if needed,
@@ -389,7 +380,7 @@ def get_customer_statement(
             )
             SELECT * FROM all_movements
             WHERE party_id = :cid AND date BETWEEN :start AND :end
-            {branch_filter.replace('branch_id', 'branch_id')}
+            {branch_filter}
             ORDER BY date
         """), params).fetchall()
 
@@ -430,13 +421,12 @@ def get_aging_report(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير أعمار الديون"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
+        pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         # Get all unpaid invoices + POS credit orders with days overdue
         # Get base currency for POS
         from utils.accounting import get_base_currency
@@ -457,7 +447,7 @@ def get_aging_report(
             WHERE i.invoice_type = 'sales' 
             AND i.status NOT IN ('draft', 'cancelled', 'paid')
             AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
-            {branch_filter}
+            {invoice_branch_filter}
 
             UNION ALL
 
@@ -474,7 +464,7 @@ def get_aging_report(
             LEFT JOIN parties p2 ON po.customer_id = p2.id
             WHERE po.status NOT IN ('cancelled', 'refunded')
             AND (po.total_amount - COALESCE(po.paid_amount, 0)) > 0.01
-            {branch_filter}
+            {pos_branch_filter}
 
             ORDER BY days_old DESC
         """), {**params, "base_currency": base_currency}).fetchall()
@@ -507,9 +497,9 @@ def get_aging_report(
 # --- Purchases Reports ---
 
 @router.get("/sales/aging/export", dependencies=[Depends(require_permission(["sales.reports", "reports.view"]))], response_model=Dict[str, Any])
-def export_aging(format: str = "pdf", current_user: dict = Depends(get_current_user)):
+def export_aging(format: str = "pdf", branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """تصدير تقرير أعمار الديون"""
-    data = get_aging_report(current_user=current_user)
+    data = get_aging_report(branch_id=branch_id, current_user=current_user)
     flat = data if isinstance(data, list) else data.get("data", [])
     cols = list(flat[0].keys()) if flat else ["customer", "0-30", "31-60", "61-90", "90+", "total"]
     fname = "aging_report"
@@ -529,19 +519,28 @@ def export_aging(format: str = "pdf", current_user: dict = Depends(get_current_u
 def sales_by_cashier(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير المبيعات حسب البائع/الكاشير"""
     db = get_db_connection(current_user.company_id)
     s = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(month=1, day=1)
     e = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    params = {"start": s, "end": e}
+    invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+    pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
     try:
-        rows = db.execute(text("""
+        rows = db.execute(text(f"""
             WITH all_sales AS (
-                SELECT created_by, total AS sale_total, paid_amount, invoice_date::date AS sale_date
+                SELECT created_by, 
+                       total * COALESCE(exchange_rate, 1) AS sale_total, 
+                       paid_amount * COALESCE(exchange_rate, 1) AS paid_amount, 
+                       invoice_date::date AS sale_date
                 FROM invoices
                 WHERE invoice_type = 'sales' AND status != 'cancelled'
                   AND invoice_date BETWEEN :start AND :end
+                  {invoice_branch_filter}
 
                 UNION ALL
 
@@ -549,6 +548,7 @@ def sales_by_cashier(
                 FROM pos_orders
                 WHERE status != 'cancelled'
                   AND order_date::date BETWEEN :start AND :end
+                  {pos_branch_filter}
             )
             SELECT u.id, u.full_name,
                    COUNT(*) as invoice_count,
@@ -559,7 +559,7 @@ def sales_by_cashier(
             JOIN company_users u ON s.created_by = u.id
             GROUP BY u.id, u.full_name
             ORDER BY total_sales DESC
-        """), {"start": s, "end": e}).fetchall()
+        """), params).fetchall()
 
         return {
             "report_name": "المبيعات حسب البائع",
@@ -579,11 +579,13 @@ def sales_by_cashier(
 @router.get("/sales/target-vs-actual", dependencies=[Depends(require_permission(["sales.reports", "reports.view"]))], response_model=Dict[str, Any])
 def sales_target_vs_actual(
     year: int = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير المبيعات المستهدفة vs الفعلية (شهري)"""
     db = get_db_connection(current_user.company_id)
     yr = year or date.today().year
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     try:
         # Get monthly targets if exist
         targets = {}
@@ -597,14 +599,20 @@ def sales_target_vs_actual(
             pass  # Table may not exist
 
         # Actual monthly sales (invoices + POS)
-        actuals = db.execute(text("""
+        params = {"y": yr}
+        invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+        pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+
+        actuals = db.execute(text(f"""
             SELECT EXTRACT(MONTH FROM sale_date)::int as month,
                    COALESCE(SUM(total_amount), 0) as actual
             FROM (
-                SELECT invoice_date::date AS sale_date, total AS total_amount
+                SELECT invoice_date::date AS sale_date, 
+                       total * COALESCE(exchange_rate, 1) AS total_amount
                 FROM invoices
                 WHERE invoice_type = 'sales' AND status != 'cancelled'
                   AND EXTRACT(YEAR FROM invoice_date) = :y
+                  {invoice_branch_filter}
 
                 UNION ALL
 
@@ -612,10 +620,11 @@ def sales_target_vs_actual(
                 FROM pos_orders
                 WHERE status != 'cancelled'
                   AND EXTRACT(YEAR FROM order_date) = :y
+                  {pos_branch_filter}
             ) t
             GROUP BY month
             ORDER BY month
-        """), {"y": yr}).fetchall()
+        """), params).fetchall()
 
         actual_map = {r.month: Decimal(str(r.actual)) for r in actuals}
 
@@ -644,6 +653,7 @@ def sales_commission_report(
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     salesperson_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
     status_filter: Optional[str] = None,  # pending, paid, all
     format: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
@@ -656,6 +666,7 @@ def sales_commission_report(
     try:
         s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
         e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT sc.*, 
@@ -665,6 +676,7 @@ def sales_commission_report(
             WHERE sc.invoice_date BETWEEN :start AND :end
         """
         params = {"start": s_date, "end": e_date}
+        query += f"\n{branch_scope_filter_from_scope(branch_scope, 'sc.branch_id', params)}"
 
         if salesperson_id:
             query += " AND sc.salesperson_id = :sp_id"

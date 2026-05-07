@@ -17,6 +17,7 @@ class PurchaseLineItem(BaseModel):
 
 class PurchaseCreate(BaseModel):
     supplier_id: int
+    party_site_id: Optional[int] = None  # موقع المورد (اختياري)
     invoice_date: date
     due_date: Optional[date] = None
     items: List[PurchaseLineItem]
@@ -52,6 +53,7 @@ class SupplierGroupCreate(BaseModel):
 
 class POCreate(BaseModel):
     supplier_id: int
+    party_site_id: Optional[int] = None
     order_date: date
     expected_date: Optional[date] = None
     items: List[PurchaseLineItem]
@@ -95,6 +97,7 @@ class PaymentAllocationSchema(BaseModel):
 
 class SupplierPaymentCreate(BaseModel):
     supplier_id: int
+    party_site_id: Optional[int] = None
     voucher_date: date
     amount: Decimal
     payment_method: str

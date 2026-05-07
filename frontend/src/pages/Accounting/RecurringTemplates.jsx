@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 
@@ -13,6 +14,8 @@ import { PageLoading } from '../../components/common/LoadingStates'
 export default function RecurringTemplates() {
     const { t, i18n } = useTranslation()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
+    const currency = getCurrency()
 
     const [templates, setTemplates] = useState([])
     const [loading, setLoading] = useState(true)
@@ -40,6 +43,7 @@ export default function RecurringTemplates() {
         try {
             const params = {}
             if (filterActive !== '') params.is_active = filterActive === 'true'
+            if (currentBranch?.id) params.branch_id = currentBranch.id
             const res = await accountingAPI.listRecurringTemplates(params)
             setTemplates(res.data)
         } catch {
@@ -47,11 +51,11 @@ export default function RecurringTemplates() {
         } finally {
             setLoading(false)
         }
-    }, [filterActive])
+    }, [filterActive, currentBranch])
 
     const fetchAccounts = async () => {
         try {
-            const res = await accountingAPI.list()
+            const res = await accountingAPI.list({}, { skipBranchScope: true })
             setAccounts(Array.isArray(res.data) ? res.data : res.data?.data || [])
         } catch { /* ignore */ }
     }
@@ -89,7 +93,9 @@ export default function RecurringTemplates() {
                 currency: d.currency || getCurrency(), exchange_rate: d.exchange_rate || 1,
                 max_runs: d.max_runs || '',
                 lines: d.lines.length ? d.lines.map(l => ({
-                    account_id: l.account_id, debit: l.debit || '', credit: l.credit || '',
+                    account_id: l.account_id,
+                    debit: l.debit !== '' && l.debit != null ? parseFloat(l.debit) : '',
+                    credit: l.credit !== '' && l.credit != null ? parseFloat(l.credit) : '',
                     description: l.description || '', cost_center_id: l.cost_center_id || ''
                 })) : [
                     { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' },
@@ -117,6 +123,7 @@ export default function RecurringTemplates() {
         e.preventDefault()
         const payload = {
             ...form,
+            branch_id: currentBranch?.id || null,
             max_runs: form.max_runs ? parseInt(form.max_runs) : null,
             end_date: form.end_date || null,
             next_run_date: form.next_run_date || form.start_date,
@@ -213,12 +220,14 @@ export default function RecurringTemplates() {
     const freqLabel = (f) => t(`recurring.freq_${f}`) || f
 
     return (
-        <div className="module-container" dir={i18n.dir()}>
-            <div className="module-header">
+        <div className="workspace fade-in" dir={i18n.dir()}>
+            <div className="workspace-header">
                 <div className="d-flex justify-content-between align-items-center flex-wrap gap-2">
                     <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
                         <BackButton />
-                        <h2>🔄 {t('recurring.title')}</h2>
+                        <div>
+                            <h1 className="workspace-title">🔄 {t('recurring.title')}</h1>
+                        </div>
                     </div>
                     <div className="d-flex gap-2">
                         <select className="form-input" style={{ width: 'auto' }}
@@ -260,37 +269,37 @@ export default function RecurringTemplates() {
                             </tr>
                         </thead>
                         <tbody>
-                            {templates.map((t, idx) => (
-                                <tr key={t.id}>
+                            {templates.map((tmpl, idx) => (
+                                <tr key={tmpl.id}>
                                     <td>{idx + 1}</td>
                                     <td>
-                                        <a href="#" onClick={(e) => { e.preventDefault(); openDetail(t.id) }}
+                                        <a href="#" onClick={(e) => { e.preventDefault(); openDetail(tmpl.id) }}
                                             className="text-primary text-decoration-none fw-bold">
-                                            {t.name}
+                                            {tmpl.name}
                                         </a>
-                                        {t.reference && <div className="text-muted small">{t.reference}</div>}
+                                        {tmpl.reference && <div className="text-muted small">{tmpl.reference}</div>}
                                     </td>
-                                    <td><span className="badge bg-info">{freqLabel(t.frequency)}</span></td>
-                                    <td>{t.next_run_date || '-'}</td>
-                                    <td>{t.last_run_date || '-'}</td>
+                                    <td><span className="badge bg-info">{freqLabel(tmpl.frequency)}</span></td>
+                                    <td>{tmpl.next_run_date || '-'}</td>
+                                    <td>{tmpl.last_run_date || '-'}</td>
                                     <td>
-                                        {t.run_count || 0}
-                                        {t.max_runs && <span className="text-muted">/{t.max_runs}</span>}
+                                        {tmpl.run_count || 0}
+                                        {tmpl.max_runs && <span className="text-muted">/{tmpl.max_runs}</span>}
                                     </td>
-                                    <td>{t.auto_post ? '✅' : '❌'}</td>
+                                    <td>{tmpl.auto_post ? '✅' : '❌'}</td>
                                     <td>
-                                        <span className={`badge ${t.is_active ? 'bg-success' : 'bg-secondary'}`}>
-                                            {t.is_active ? (t('recurring.filter_active')) : (t('recurring.filter_inactive'))}
+                                        <span className={`badge ${tmpl.is_active ? 'bg-success' : 'bg-secondary'}`}>
+                                            {tmpl.is_active ? t('recurring.filter_active') : t('recurring.filter_inactive')}
                                         </span>
                                     </td>
                                     <td>
                                         <div className="btn-group btn-group-sm">
                                             <button className="btn btn-outline-success" title={t('recurring.generate_now')}
-                                                disabled={generating === t.id} onClick={() => handleGenerate(t.id)}>
-                                                {generating === t.id ? '⏳' : '⚡'}
+                                                disabled={generating === tmpl.id} onClick={() => handleGenerate(tmpl.id)}>
+                                                {generating === tmpl.id ? '⏳' : '⚡'}
                                             </button>
-                                            <button className="btn btn-outline-primary" onClick={() => openEdit(t.id)}>✏️</button>
-                                            <button className="btn btn-outline-danger" onClick={() => handleDelete(t.id, t.name)}>🗑</button>
+                                            <button className="btn btn-outline-primary" onClick={() => openEdit(tmpl.id)}>✏️</button>
+                                            <button className="btn btn-outline-danger" onClick={() => handleDelete(tmpl.id, tmpl.name)}>🗑</button>
                                         </div>
                                     </td>
                                 </tr>
@@ -302,16 +311,18 @@ export default function RecurringTemplates() {
 
             {/* Create / Edit Modal */}
             {showModal && (
-                <div className="modal d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => setShowModal(false)}>
-                    <div className="modal-dialog modal-xl" onClick={e => e.stopPropagation()}>
-                        <form className="modal-content" onSubmit={handleSubmit}>
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ maxWidth: '900px' }}>
+                        <form onSubmit={handleSubmit}>
                             <div className="modal-header">
-                                <h5 className="modal-title">
+                                <h2 className="modal-title">
                                     {editId
                                         ? (t('recurring.edit_template'))
                                         : (t('recurring.new_template_title'))}
-                                </h5>
-                                <button type="button" className="btn-close" onClick={() => setShowModal(false)} />
+                                </h2>
+                                <button type="button" className="btn-icon" style={{ background: 'transparent' }} onClick={() => setShowModal(false)}>
+                                    ✕
+                                </button>
                             </div>
                             <div className="modal-body">
                                 <div className="row g-3 mb-3">
@@ -461,7 +472,7 @@ export default function RecurringTemplates() {
                                 )}
                             </div>
                             <div className="modal-footer">
-                                <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>
+                                <button type="button" className="btn" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowModal(false)}>
                                     {t('recurring.cancel')}
                                 </button>
                                 <button type="submit" className="btn btn-primary" disabled={!isBalanced || totalDebit === 0}>
@@ -475,13 +486,14 @@ export default function RecurringTemplates() {
 
             {/* Detail Modal */}
             {showDetailModal && detailData && (
-                <div className="modal d-block" style={{ backgroundColor: 'rgba(0,0,0,0.5)' }} onClick={() => setShowDetailModal(false)}>
-                    <div className="modal-dialog modal-lg" onClick={e => e.stopPropagation()}>
-                        <div className="modal-content">
-                            <div className="modal-header">
-                                <h5 className="modal-title">🔄 {detailData.name}</h5>
-                                <button type="button" className="btn-close" onClick={() => setShowDetailModal(false)} />
-                            </div>
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ maxWidth: '700px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">🔄 {detailData.name}</h2>
+                            <button type="button" className="btn-icon" style={{ background: 'transparent' }} onClick={() => setShowDetailModal(false)}>
+                                ✕
+                            </button>
+                        </div>
                             <div className="modal-body">
                                 <div className="row mb-3">
                                     <div className="col-md-4">
@@ -555,11 +567,10 @@ export default function RecurringTemplates() {
                                 <button className="btn btn-outline-primary btn-sm" onClick={() => { setShowDetailModal(false); openEdit(detailData.id) }}>
                                     ✏️ {t('recurring.edit')}
                                 </button>
-                                <button className="btn btn-secondary btn-sm" onClick={() => setShowDetailModal(false)}>
+                                <button className="btn btn-sm" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowDetailModal(false)}>
                                     {t('recurring.close')}
                                 </button>
                             </div>
-                        </div>
                     </div>
                 </div>
             )}

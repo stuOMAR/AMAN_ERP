@@ -2,12 +2,14 @@ import React, { useEffect, useState, Suspense } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useToast } from './context/ToastContext'
+import { useBranch } from './context/BranchContext'
 import { isAuthenticated, hasPermission, getUser, bootstrapAuth } from './utils/auth'
 import { hasIndustryTypeSet } from './hooks/useIndustryType'
 import { requestManager } from './utils/requestManager'
 import { PageLoading } from './components/common/LoadingStates'
 import Layout from './components/Layout'
 import FloatingThemeToggle from './components/common/FloatingThemeToggle'
+import ErrorBoundary from './components/ErrorBoundary'
 
 // Suspense fallback uses unified PageLoading (auto-translated)
 const PageLoader = () => <PageLoading />
@@ -86,7 +88,6 @@ const OpeningBalances = React.lazy(() => import('./pages/Accounting/OpeningBalan
 const ClosingEntries = React.lazy(() => import('./pages/Accounting/ClosingEntries'))
 const CostCenterList = React.lazy(() => import('./pages/Accounting/CostCenters/CostCenterList'))
 const Budgets = React.lazy(() => import('./pages/Accounting/Budgets'))
-const BudgetAdvanced = React.lazy(() => import('./pages/Accounting/BudgetAdvanced'))
 const BudgetItems = React.lazy(() => import('./pages/Accounting/BudgetItems'))
 const BudgetReport = React.lazy(() => import('./pages/Accounting/BudgetReport'))
 const VATReport = React.lazy(() => import('./pages/Accounting/VATReport'))
@@ -190,11 +191,12 @@ const IncomingShipments = React.lazy(() => import('./pages/Stock/IncomingShipmen
 const ShipmentDetails = React.lazy(() => import('./pages/Stock/ShipmentDetails'))
 const PriceLists = React.lazy(() => import('./pages/Stock/PriceLists'))
 const PriceListItems = React.lazy(() => import('./pages/Stock/PriceListItems'))
-const StockReports = React.lazy(() => import('./pages/Stock/StockReports'))
-const StockMovements = React.lazy(() => import('./pages/Stock/StockMovements'))
-const StockAdjustments = React.lazy(() => import('./pages/Stock/StockAdjustments'))
-const StockAdjustmentForm = React.lazy(() => import('./pages/Stock/StockAdjustmentForm'))
-const BatchList = React.lazy(() => import('./pages/Stock/BatchList'))
+ const StockReports = React.lazy(() => import('./pages/Stock/StockReports'))
+ const StockMovements = React.lazy(() => import('./pages/Stock/StockMovements'))
+ const ProfitabilityReport = React.lazy(() => import('./pages/Stock/ProfitabilityReport'))
+ const StockAdjustments = React.lazy(() => import('./pages/Stock/StockAdjustments'))
+ const StockAdjustmentForm = React.lazy(() => import('./pages/Stock/StockAdjustmentForm'))
+ const BatchList = React.lazy(() => import('./pages/Stock/BatchList'))
 const SerialList = React.lazy(() => import('./pages/Stock/SerialList'))
 const QualityInspections = React.lazy(() => import('./pages/Stock/QualityInspections'))
 const CycleCounts = React.lazy(() => import('./pages/Stock/CycleCounts'))
@@ -396,6 +398,11 @@ const IndustryReport = React.lazy(() => import('./pages/Reports/IndustryReport')
 // Consolidation Reports
 const ConsolidationReports = React.lazy(() => import('./pages/Reports/ConsolidationReports'))
 const KPIDashboard = React.lazy(() => import('./pages/Reports/KPIDashboard'))
+const KpiAdmin = React.lazy(() => import('./pages/Reports/KpiAdmin'))
+
+// Ops
+const OpsScheduler = React.lazy(() => import('./pages/Ops/Scheduler'))
+const HealthDetailed = React.lazy(() => import('./pages/Ops/HealthDetailed'))
 
 // BI Analytics Dashboards (US9)
 const AnalyticsDashboardList = React.lazy(() => import('./pages/Analytics/DashboardList'))
@@ -476,8 +483,10 @@ function PermissionDeniedRedirect() {
 }
 
 function App() {
-    const { i18n } = useTranslation();
+    const { t, i18n } = useTranslation();
     const location = useLocation();
+    const { currentBranch } = useBranch();
+    const branchRouteKey = currentBranch?.id ? `branch-${currentBranch.id}` : 'branch-all';
     // SEC-T2.8: on first render the in-memory access token is empty after a full
     // page reload. We silently refresh against the HttpOnly cookie before rendering
     // any route so authenticated users don't bounce through /login.
@@ -485,7 +494,10 @@ function App() {
     useEffect(() => {
         let cancelled = false;
         bootstrapAuth().finally(() => {
-            if (!cancelled) setAuthReady(true);
+            if (!cancelled) {
+                setAuthReady(true);
+                window.dispatchEvent(new CustomEvent('auth:ready'));
+            }
         });
         return () => { cancelled = true; };
     }, []);
@@ -522,7 +534,8 @@ function App() {
                 {t('a11y.skip_to_main', 'تخطّي إلى المحتوى الرئيسي')}
             </a>
             {showFloatingThemeToggle && <FloatingThemeToggle />}
-            <Routes>
+            <ErrorBoundary>
+            <Routes key={branchRouteKey}>
                 <Route path="/login" element={isAuthenticated() ? <Navigate to="/dashboard" /> : <Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />
@@ -544,7 +557,6 @@ function App() {
                 <Route path="/accounting/opening-balances" element={<PrivateRoute permission="accounting.manage"><OpeningBalances /></PrivateRoute>} />
                 <Route path="/accounting/closing-entries" element={<PrivateRoute permission="accounting.manage"><ClosingEntries /></PrivateRoute>} />
                 <Route path="/accounting/budgets" element={<PrivateRoute permission="accounting.view"><Budgets /></PrivateRoute>} />
-                <Route path="/accounting/budgets/advanced" element={<PrivateRoute permission="accounting.view"><BudgetAdvanced /></PrivateRoute>} />
                 <Route path="/accounting/budgets/:id/items" element={<PrivateRoute permission="accounting.view"><BudgetItems /></PrivateRoute>} />
                 <Route path="/accounting/budgets/:id/report" element={<PrivateRoute permission="accounting.view"><BudgetReport /></PrivateRoute>} />
                 <Route path="/accounting/vat-report" element={<PrivateRoute permission="accounting.view"><VATReport /></PrivateRoute>} />
@@ -581,6 +593,8 @@ function App() {
                 <Route path="/admin/roles" element={<PrivateRoute permission="admin.roles"><RoleManagement /></PrivateRoute>} />
                 <Route path="/admin/backups" element={<PrivateRoute role="system_admin"><BackupManagement /></PrivateRoute>} />
                 <Route path="/admin/security-events" element={<PrivateRoute permission="admin.security"><SecurityEvents /></PrivateRoute>} />
+                <Route path="/admin/ops/scheduler" element={<PrivateRoute role="system_admin"><OpsScheduler /></PrivateRoute>} />
+                <Route path="/health/detailed" element={<PrivateRoute><HealthDetailed /></PrivateRoute>} />
 
                 {/* Approvals */}
                 <Route path="/approvals" element={<PrivateRoute permission="approvals.view"><ApprovalsPage /></PrivateRoute>} />
@@ -693,11 +707,12 @@ function App() {
                 <Route path="/stock/shipments/incoming" element={<PrivateRoute permission="stock.view"><IncomingShipments /></PrivateRoute>} />
                 <Route path="/stock/shipments/:id" element={<PrivateRoute permission="stock.view"><ShipmentDetails /></PrivateRoute>} />
 
-                <Route path="/stock/price-lists" element={<PrivateRoute permission="stock.view"><PriceLists /></PrivateRoute>} />
-                <Route path="/stock/price-lists/:id" element={<PrivateRoute permission="stock.view"><PriceListItems /></PrivateRoute>} />
-                <Route path="/stock/reports/balance" element={<PrivateRoute permission="stock.reports"><StockReports /></PrivateRoute>} />
-                <Route path="/stock/reports/movements" element={<PrivateRoute permission="stock.reports"><StockMovements /></PrivateRoute>} />
-                <Route path="/stock/reports/*" element={<PrivateRoute permission="stock.reports"><StockReports /></PrivateRoute>} />
+                 <Route path="/stock/price-lists" element={<PrivateRoute permission="stock.view"><PriceLists /></PrivateRoute>} />
+                 <Route path="/stock/price-lists/:id" element={<PrivateRoute permission="stock.view"><PriceListItems /></PrivateRoute>} />
+                 <Route path="/stock/reports/balance" element={<PrivateRoute permission="stock.reports"><StockReports /></PrivateRoute>} />
+                 <Route path="/stock/reports/movements" element={<PrivateRoute permission="stock.reports"><StockMovements /></PrivateRoute>} />
+                 <Route path="/stock/reports/profitability" element={<PrivateRoute permission="stock.reports"><ProfitabilityReport /></PrivateRoute>} />
+                 <Route path="/stock/reports/*" element={<PrivateRoute permission="stock.reports"><StockReports /></PrivateRoute>} />
 
                 {/* Advanced Inventory */}
                 <Route path="/stock/batches" element={<PrivateRoute permission="stock.view"><BatchList /></PrivateRoute>} />
@@ -799,6 +814,7 @@ function App() {
                 <Route path="/reports/shared" element={<PrivateRoute permission="reports.view"><SharedReports /></PrivateRoute>} />
                 <Route path="/reports/consolidation" element={<PrivateRoute permission="reports.view"><ConsolidationReports /></PrivateRoute>} />
                 <Route path="/reports/kpi" element={<PrivateRoute permission="reports.view"><KPIDashboard /></PrivateRoute>} />
+                <Route path="/reports/kpi-admin" element={<PrivateRoute permission="admin.roles"><KpiAdmin /></PrivateRoute>} />
                 <Route path="/reports/fx-gain-loss" element={<PrivateRoute permission="reports.view"><FXGainLossReport /></PrivateRoute>} />
                 <Route path="/reports/cashflow-ias7" element={<PrivateRoute permission="accounting.view"><CashFlowIAS7 /></PrivateRoute>} />
                 <Route path="/reports/industry/:reportType" element={<PrivateRoute permission="reports.view"><IndustryReport /></PrivateRoute>} />
@@ -948,6 +964,7 @@ function App() {
                 <Route path="/" element={isAuthenticated() ? <Navigate to="/dashboard" replace /> : <Navigate to="/login" replace />} />
                 <Route path="*" element={isAuthenticated() ? <PrivateRoute><NotFound /></PrivateRoute> : <Navigate to="/login" replace />} />
             </Routes>
+            </ErrorBoundary>
         </Suspense>
     )
 }

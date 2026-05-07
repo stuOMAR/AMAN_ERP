@@ -4,6 +4,7 @@ export const inventoryAPI = {
     listProducts: (params) => api.get('/inventory/products', { params }),
     getProduct: (id) => api.get(`/inventory/products/${id}`),
     getProductStock: (id, warehouseId) => api.get(`/inventory/products/${id}/stock`, { params: { warehouse_id: warehouseId } }),
+    getBranchPrices: (branchId) => api.get('/inventory/products/branch-prices', { params: { branch_id: branchId } }),
     createProduct: (data) => api.post('/inventory/products', data),
     updateProduct: (id, data) => api.put(`/inventory/products/${id}`, data),
     deleteProduct: (id) => api.delete(`/inventory/products/${id}`),
@@ -33,7 +34,7 @@ export const inventoryAPI = {
     getSummary: (params) => api.get('/inventory/summary', { params }),
 
     // Price Lists
-    listPriceLists: () => api.get('/inventory/price-lists'),
+    listPriceLists: (params) => api.get('/inventory/price-lists', { params }),
     createPriceList: (data) => api.post('/inventory/price-lists', data),
     updatePriceList: (id, data) => api.put(`/inventory/price-lists/${id}`, data),
     deletePriceList: (id) => api.delete(`/inventory/price-lists/${id}`),
@@ -94,6 +95,11 @@ export const costingPolicyAPI = {
     getCurrent: () => api.get('/costing-policies/current'),
     getHistory: () => api.get('/costing-policies/history'),
     setPolicy: (data) => api.post('/costing-policies/set', data)
+}
+
+export const profitabilityAPI = {
+    getReport: (params) => api.get('/reports/inventory/profitability', { params }),
+    getSummary: (params) => api.get('/reports/inventory/profitability/summary', { params }),
 }
 
 export const demandForecastAPI = {

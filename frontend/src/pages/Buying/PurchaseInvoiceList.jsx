@@ -6,6 +6,7 @@ import { formatShortDate } from '../../utils/dateUtils'
 import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
 import { formatNumber } from '../../utils/format'
+import { getCurrency } from '../../utils/auth'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
 import BackButton from '../../components/common/BackButton'
@@ -14,6 +15,7 @@ function PurchaseInvoiceList() {
     const { t } = useTranslation()
     const navigate = useNavigate()
     const { currentBranch } = useBranch()
+    const fallbackBaseCurrency = getCurrency()
     const { showToast } = useToast()
     const [invoices, setInvoices] = useState([])
     const [loading, setLoading] = useState(true)
@@ -71,7 +73,23 @@ function PurchaseInvoiceList() {
             key: 'total',
             label: t('buying.purchase_invoices.table.total'),
             style: { fontWeight: 'bold' },
-            render: (val) => formatNumber(val),
+            render: (val, row) => {
+                const invoiceCurrency = row.currency || row.base_currency || fallbackBaseCurrency
+                const baseCurrency = row.base_currency || fallbackBaseCurrency
+                const baseValue = Number(row.total_base ?? (Number(val || 0) * Number(row.exchange_rate || 1)))
+                const isSameCurrency = invoiceCurrency === baseCurrency
+
+                return (
+                    <div>
+                        <div>{formatNumber(val)} <small>{invoiceCurrency}</small></div>
+                        {!isSameCurrency && (
+                            <div className="text-muted" style={{ fontSize: '12px', fontWeight: 500 }}>
+                                {formatNumber(baseValue)} <small>{baseCurrency}</small>
+                            </div>
+                        )}
+                    </div>
+                )
+            },
         },
         {
             key: 'status',

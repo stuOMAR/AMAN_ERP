@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -34,9 +34,16 @@ router = APIRouter()
 from .core import _D2, _D4, _dec, get_db
 
 @router.get("/loyalty/programs", dependencies=[Depends(require_permission("pos.view"))], response_model=List[Dict[str, Any]])
-def list_loyalty_programs(current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+def list_loyalty_programs(
+    branch_id: Optional[int] = None,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """List Loyalty Programs."""
-    rows = db.execute(text("SELECT * FROM pos_loyalty_programs WHERE is_active = true ORDER BY id")).fetchall()
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    params = {}
+    branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+    rows = db.execute(text(f"SELECT * FROM pos_loyalty_programs WHERE is_active = true {branch_filter} ORDER BY id"), params).fetchall()
     return [dict(r._mapping) for r in rows]
 
 
@@ -44,6 +51,9 @@ def list_loyalty_programs(current_user: UserResponse = Depends(get_current_user)
 def create_loyalty_program(data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
     """Create Loyalty Program."""
     import json
+    branch_id = data.get("branch_id")
+    if branch_id:
+        validate_branch_access(current_user, branch_id)
     result = db.execute(text("""
         INSERT INTO pos_loyalty_programs (name, points_per_unit, currency_per_point, min_points_redeem, tier_rules, is_active, branch_id)
         VALUES (:name, :ppu, :cpp, :min, :tiers::jsonb, :active, :branch)
@@ -55,7 +65,7 @@ def create_loyalty_program(data: dict, current_user: UserResponse = Depends(get_
         "min": data.get("min_points_redeem", 100),
         "tiers": json.dumps(data.get("tier_rules", [])),
         "active": data.get("is_active", True),
-        "branch": data.get("branch_id"),
+        "branch": branch_id,
     })
     db.commit()
     return dict(result.fetchone()._mapping)

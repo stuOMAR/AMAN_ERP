@@ -7,6 +7,7 @@ import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 import '../../components/ModuleStyles.css'
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 import DateInput from '../../components/common/DateInput';
 import BackButton from '../../components/common/BackButton';
@@ -33,7 +34,8 @@ function SalesCreditNotes() {
     const [salesInvoices, setSalesInvoices] = useState([])
     const [form, setForm] = useState({
         party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
-        notes: '', lines: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 15, discount: 0 }]
+        notes: '', branch_id: currentBranch?.id, party_site_id: '',
+        lines: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: null, discount: 0 }]
     })
     const [saving, setSaving] = useState(false)
 
@@ -81,7 +83,8 @@ function SalesCreditNotes() {
     const openCreate = () => {
         setForm({
             party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
-            notes: '', lines: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0 }]
+            notes: '', branch_id: currentBranch?.id, party_site_id: '',
+            lines: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0 }]
         })
         loadCreateData()
         setShowCreate(true)
@@ -101,7 +104,7 @@ function SalesCreditNotes() {
                 if (prod) {
                     lines[i].description = prod.item_name || prod.name || ''
                     lines[i].unit_price = prod.selling_price || prod.last_selling_price || prod.last_buying_price || prod.buying_price || 0
-                    lines[i].tax_rate = prod.tax_rate ?? 15
+                    lines[i].tax_rate = null // Resolved by backend engine
                 }
             }
             return { ...f, lines }
@@ -121,6 +124,22 @@ function SalesCreditNotes() {
     }, 0)
     const calcTotal = () => calcSubtotal() + calcTax()
 
+    // Backend-powered calculations (for accurate totals)
+    const { totals: backendTotals, previewDebounced } = useInvoiceCalc()
+    useEffect(() => {
+        if (form.lines?.length > 0 && form.lines.some(l => l.quantity > 0 && l.unit_price > 0)) {
+            previewDebounced({
+                lines: form.lines.map(l => ({
+                    quantity: Number(l.quantity) || 0,
+                    unit_price: Number(l.unit_price) || 0,
+                    tax_rate: Number(l.tax_rate) || 0,
+                    discount: Number(l.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [form.lines])
+
     const handleCreate = async () => {
         if (!form.party_id) return showToast(t('sales.credit_notes.customer_required', 'warning'))
         if (!form.lines.length || form.lines.every(l => l.unit_price === 0)) return showToast(t('sales.credit_notes.at_least_one_item', 'info'))
@@ -129,6 +148,8 @@ function SalesCreditNotes() {
             await salesAPI.createCreditNote({
                 ...form,
                 party_id: parseInt(form.party_id),
+                branch_id: currentBranch?.id,
+                party_site_id: form.party_site_id ? parseInt(form.party_site_id) : null,
                 related_invoice_id: form.related_invoice_id ? parseInt(form.related_invoice_id) : null,
             })
             setShowCreate(false)

@@ -25,6 +25,7 @@ function ReceiptForm() {
     const [outstandingInvoices, setOutstandingInvoices] = useState([]);
     const [formData, setFormData] = useState({
         customer_id: '',
+        party_site_id: '',
         voucher_date: new Date().toISOString().split('T')[0],
         amount: 0,
         voucher_type: 'receipt', // 'receipt' or 'refund'
@@ -245,6 +246,7 @@ function ReceiptForm() {
                 amount: actualAmount,
                 customer_id: parseInt(formData.customer_id),
                 branch_id: currentBranch?.id,
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 bank_account_id: formData.bank_account_id ? parseInt(formData.bank_account_id) : null,
                 check_date: formData.check_date || null,
                 check_number: formData.check_number || null,

@@ -1,0 +1,149 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 الفرع الرئيسي - الرياض SAR ▼" [ref=e110] [cursor=pointer]:
+            - generic [ref=e111]:
+              - text: 🏢
+              - generic [ref=e112]: الفرع الرئيسي - الرياض
+            - generic [ref=e113]: SAR
+            - generic [ref=e114]: ▼
+          - button "🔔" [ref=e116] [cursor=pointer]
+          - generic [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]:
+              - generic [ref=e120]: omar
+              - generic [ref=e121]: "ID: 1a134155"
+            - generic [ref=e122]: O
+      - main [ref=e124]:
+        - generic [ref=e125]:
+          - generic [ref=e126]:
+            - button "العودة" [ref=e127] [cursor=pointer]:
+              - img [ref=e128]
+            - generic [ref=e130]:
+              - heading "🔒 قفل الفترات المحاسبية" [level=1] [ref=e131]
+              - paragraph [ref=e132]: إدارة قفل وفتح الفترات المحاسبية
+            - button "+ إنشاء فترة" [active] [ref=e134] [cursor=pointer]
+          - generic [ref=e147]:
+            - generic [ref=e148]:
+              - generic [ref=e149]:
+                - generic [ref=e150]: الاسم
+                - 'textbox "مثال: يناير 2024" [ref=e151]'
+              - generic [ref=e152]:
+                - generic [ref=e153]: تاريخ البدء
+                - generic [ref=e154]:
+                  - generic:
+                    - img
+                  - textbox "YYYY/MM/DD" [ref=e157]
+              - generic [ref=e158]:
+                - generic [ref=e159]: تاريخ الانتهاء
+                - generic [ref=e160]:
+                  - generic:
+                    - img
+                  - textbox "YYYY/MM/DD" [ref=e163]
+            - generic [ref=e164]:
+              - button "حفظ" [ref=e165] [cursor=pointer]
+              - button "إلغاء" [ref=e166] [cursor=pointer]
+          - table [ref=e136]:
+            - rowgroup [ref=e137]:
+              - row "الاسم تاريخ البدء تاريخ الانتهاء الحالة الإجراءات" [ref=e138]:
+                - columnheader "الاسم" [ref=e139]
+                - columnheader "تاريخ البدء" [ref=e140]
+                - columnheader "تاريخ الانتهاء" [ref=e141]
+                - columnheader "الحالة" [ref=e142]
+                - columnheader "الإجراءات" [ref=e143]
+            - rowgroup [ref=e144]:
+              - row "لا توجد فترات محاسبية" [ref=e145]:
+                - cell "لا توجد فترات محاسبية" [ref=e146]

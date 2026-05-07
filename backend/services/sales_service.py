@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Sequence
 
 from sqlalchemy import text
 
@@ -22,6 +22,7 @@ def get_sales_total(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    branch_ids: Optional[Sequence[int]] = None,
     include_pos: bool = True,
 ) -> Dict[str, Any]:
     """Return unified sales totals (base currency) for the given period.
@@ -31,6 +32,7 @@ def get_sales_total(
         start_date: Inclusive lower bound (None = open).
         end_date: Inclusive upper bound (None = open).
         branch_id: Restrict to a single branch.
+        branch_ids: Restrict to a set of allowed branches.
         include_pos: When False, only sales invoices are summed.
 
     Returns:
@@ -56,6 +58,15 @@ def get_sales_total(
         params["branch_id"] = branch_id
         inv_filters.append("branch_id = :branch_id")
         pos_filters.append("branch_id = :branch_id")
+    elif branch_ids is not None:
+        branch_ids = list(branch_ids)
+        if branch_ids:
+            params["branch_ids"] = branch_ids
+            inv_filters.append("branch_id = ANY(:branch_ids)")
+            pos_filters.append("branch_id = ANY(:branch_ids)")
+        else:
+            inv_filters.append("1=0")
+            pos_filters.append("1=0")
 
     inv_where = " AND ".join(inv_filters)
     inv_row = db.execute(
@@ -118,6 +129,7 @@ def get_gl_profit_breakdown(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    branch_ids: Optional[Sequence[int]] = None,
 ) -> Dict[str, Decimal]:
     """Return revenue / COGS / opex / gross & net profit from posted GL.
 
@@ -135,6 +147,13 @@ def get_gl_profit_breakdown(
     if branch_id is not None:
         params["branch_id"] = branch_id
         where.append("je.branch_id = :branch_id")
+    elif branch_ids is not None:
+        branch_ids = list(branch_ids)
+        if branch_ids:
+            params["branch_ids"] = branch_ids
+            where.append("je.branch_id = ANY(:branch_ids)")
+        else:
+            where.append("1=0")
 
     row = db.execute(
         text(

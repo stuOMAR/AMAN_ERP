@@ -1,0 +1,55 @@
+openapi: 3.1.0
+info:
+  title: Reports Cache (R7)
+  version: "1.0.0"
+paths:
+  /reports/cache/refresh:
+    post:
+      summary: On-demand refresh of report MVs and warm-up keys
+      description: Refreshes mv_daily_financial_chart and mv_period_stats CONCURRENTLY, then re-warms reports.warmup_keys. Audited.
+      security:
+        - sensitive_permission: ["reports.cache.refresh"]
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                scope:
+                  type: string
+                  enum: [all, mv_only, warmup_only]
+                  default: all
+                report_codes:
+                  type: array
+                  items: { type: string }
+      responses:
+        "200":
+          description: Refresh summary
+          headers:
+            X-Cache-Hit: { schema: { type: boolean } }
+            X-Cache-TTL: { schema: { type: integer } }
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [refreshed_mvs, refreshed_keys, duration_ms]
+                properties:
+                  refreshed_mvs: { type: array, items: { type: string } }
+                  refreshed_keys: { type: array, items: { type: string } }
+                  failures: { type: array, items: { type: object, properties: { key: { type: string }, error: { type: string } } } }
+                  duration_ms: { type: integer }
+        "503":
+          description: Cache backend unavailable
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: object, properties: { code: { type: string, example: cache.unavailable }, message: { type: string } } }
+components:
+  securitySchemes:
+    sensitive_permission:
+      type: apiKey
+      in: header
+      name: Authorization

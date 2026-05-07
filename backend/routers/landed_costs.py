@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
@@ -67,14 +67,13 @@ class LandedCostCreate(BaseModel):
 @router.get("", dependencies=[Depends(require_permission("purchases.view"))], response_model=List[Dict[str, Any]])
 def list_landed_costs(
     status_filter: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """List Landed Costs."""
     company_id = _u(current_user, "company_id")
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
-        # Branch access enforcement
-        allowed = _u(current_user, "allowed_branches") or []
-
         query = """
             SELECT lc.*, po.po_number,
                    cu.full_name as created_by_name
@@ -87,9 +86,7 @@ def list_landed_costs(
         if status_filter:
             query += " AND lc.status = :st"
             params["st"] = status_filter
-        if allowed:
-            query += " AND (lc.branch_id = ANY(:branches) OR lc.branch_id IS NULL)"
-            params["branches"] = allowed
+        query += branch_scope_filter_from_scope(branch_scope, "lc.branch_id", params)
 
         query += " ORDER BY lc.id DESC"
         rows = db.execute(text(query), params).fetchall()

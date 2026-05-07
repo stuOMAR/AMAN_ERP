@@ -10,6 +10,10 @@ export const taxesAPI = {
     createRate: (data) => api.post('/taxes/rates', data),
     updateRate: (id, data) => api.put(`/taxes/rates/${id}`, data),
     deleteRate: (id) => api.delete(`/taxes/rates/${id}`),
+    // Branch Tax (auto-resolve)
+    getBranchTax: (branchId) => api.get(`/taxes/rates/branch/${branchId}`),
+    // Tax History (audit trail)
+    getTaxHistory: (taxId) => api.get(`/taxes/rates/${taxId}/history`),
     // Tax Groups
     listGroups: () => api.get('/taxes/groups'),
     createGroup: (data) => api.post('/taxes/groups', data),

@@ -75,11 +75,11 @@ function AccountMappings() {
     }, [mappings, entities, search])
 
     const columns = [
-        { key: '_index', header: '#', render: (_, i) => i + 1 },
-        { key: 'source_entity_id', header: t('intercompany.source_entity'), render: (row) => entityName(row.source_entity_id) },
-        { key: 'target_entity_id', header: t('intercompany.target_entity'), render: (row) => entityName(row.target_entity_id) },
-        { key: 'source_account_id', header: t('intercompany.source_account') },
-        { key: 'target_account_id', header: t('intercompany.target_account') },
+        { key: 'id', label: '#' },
+        { key: 'source_entity_id', label: t('intercompany.source_entity'), render: (value) => entityName(value) },
+        { key: 'target_entity_id', label: t('intercompany.target_entity'), render: (value) => entityName(value) },
+        { key: 'source_account_id', label: t('intercompany.source_account') },
+        { key: 'target_account_id', label: t('intercompany.target_account') },
     ]
 
     return (

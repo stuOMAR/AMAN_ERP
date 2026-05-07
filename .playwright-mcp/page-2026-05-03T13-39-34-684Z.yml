@@ -1,0 +1,278 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [active] [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e32] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e34]: 🏪
+          - generic [ref=e35]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e36] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e38]: 🛒
+          - generic [ref=e39]: المشتريات
+        - link "📦 المخزون" [ref=e40] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e42]: 📦
+          - generic [ref=e43]: المخزون
+        - link "🏭 التصنيع" [ref=e44] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e46]: 🏭
+          - generic [ref=e47]: التصنيع
+        - link "📐 المشاريع" [ref=e48] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e50]: 📐
+          - generic [ref=e51]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e52] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e54]: 🤝
+          - generic [ref=e55]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e56] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e58]: 🔧
+          - generic [ref=e59]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e60] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e62]: 💸
+          - generic [ref=e63]: المصروفات
+        - link "🧾 الضرائب" [ref=e64] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e66]: 🧾
+          - generic [ref=e67]: الضرائب
+        - link "✅ الاعتمادات" [ref=e68] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e70]: ✅
+          - generic [ref=e71]: الاعتمادات
+        - link "📈 التقارير" [ref=e72] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e74]: 📈
+          - generic [ref=e75]: التقارير
+        - link "👥 الموارد البشرية" [ref=e76] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e78]: 👥
+          - generic [ref=e79]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e80] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e82]: ⚙️
+          - generic [ref=e83]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e84] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e86]: 🎯
+          - generic [ref=e87]: إدارة المؤشرات
+    - generic [ref=e88]:
+      - banner [ref=e89]:
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]:
+            - img [ref=e93]
+            - text: بحث...
+          - generic [ref=e96]: Ctrl+K
+        - generic [ref=e97]:
+          - button "EN" [ref=e98] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+          - button "🏢 كل الفروع ▼" [ref=e107] [cursor=pointer]:
+            - generic [ref=e108]:
+              - text: 🏢
+              - generic [ref=e109]: كل الفروع
+            - generic [ref=e110]: ▼
+          - button "🔔" [ref=e112] [cursor=pointer]
+          - generic [ref=e114] [cursor=pointer]:
+            - generic [ref=e115]:
+              - generic [ref=e116]: aaaa
+              - generic [ref=e117]: "ID: e24bcd11"
+            - generic [ref=e118]: O
+      - main [ref=e120]:
+        - generic [ref=e983]:
+          - generic [ref=e985]:
+            - heading "المحاسبة" [level=1] [ref=e986]
+            - paragraph [ref=e987]: إدارة الحسابات والقيود والتقارير المالية
+          - generic [ref=e988]:
+            - generic [ref=e989]:
+              - generic [ref=e990]: إجمالي الإيرادات
+              - generic [ref=e991]: 0.00 SAR
+            - generic [ref=e992]:
+              - generic [ref=e993]: إجمالي المصروفات
+              - generic [ref=e994]: 0.00 SAR
+            - generic [ref=e995]:
+              - generic [ref=e996]: صافي الربح
+              - generic [ref=e997]: 0.00 SAR
+            - generic [ref=e998]:
+              - generic [ref=e999]: النقدية المتوفرة
+              - generic [ref=e1000]: 0.00 SAR
+          - generic [ref=e1001]:
+            - generic [ref=e1002]:
+              - heading "البيانات الرئيسية" [level=3] [ref=e1003]
+              - generic [ref=e1004]:
+                - generic [ref=e1005] [cursor=pointer]:
+                  - generic [ref=e1006]: 🌳
+                  - generic [ref=e1007]: شجرة الحسابات
+                  - generic [ref=e1008]: ←
+                - generic [ref=e1009] [cursor=pointer]:
+                  - generic [ref=e1010]: 🎯
+                  - generic [ref=e1011]: مراكز التكلفة
+                  - generic [ref=e1012]: ←
+                - generic [ref=e1013] [cursor=pointer]:
+                  - generic [ref=e1014]: 💱
+                  - generic [ref=e1015]: العملات
+                  - generic [ref=e1016]: ←
+            - generic [ref=e1017]:
+              - heading "الموازنات والتخطيط" [level=3] [ref=e1018]
+              - generic [ref=e1019]:
+                - generic [ref=e1020] [cursor=pointer]:
+                  - generic [ref=e1021]: 📊
+                  - generic [ref=e1022]: الميزانيات التقديرية
+                  - generic [ref=e1023]: ←
+                - generic [ref=e1024] [cursor=pointer]:
+                  - generic [ref=e1025]: 📈
+                  - generic [ref=e1026]: الموازنات المتقدمة
+                  - generic [ref=e1027]: ←
+            - generic [ref=e1028]:
+              - heading "الإغلاق والسنوات المالية" [level=3] [ref=e1029]
+              - generic [ref=e1030]:
+                - generic [ref=e1031] [cursor=pointer]:
+                  - generic [ref=e1032]: 📅
+                  - generic [ref=e1033]: السنوات المالية
+                  - generic [ref=e1034]: ←
+                - generic [ref=e1035] [cursor=pointer]:
+                  - generic [ref=e1036]: 🔄
+                  - generic [ref=e1037]: القيود المتكررة
+                  - generic [ref=e1038]: ←
+                - generic [ref=e1039] [cursor=pointer]:
+                  - generic [ref=e1040]: 📋
+                  - generic [ref=e1041]: الأرصدة الافتتاحية
+                  - generic [ref=e1042]: ←
+                - generic [ref=e1043] [cursor=pointer]:
+                  - generic [ref=e1044]: 🔒
+                  - generic [ref=e1045]: قيود الإقفال
+                  - generic [ref=e1046]: ←
+            - generic [ref=e1047]:
+              - heading "العمليات" [level=3] [ref=e1048]
+              - generic [ref=e1049]:
+                - generic [ref=e1050] [cursor=pointer]:
+                  - generic [ref=e1051]: 📝
+                  - generic [ref=e1052]: قيد يومية
+                  - generic [ref=e1053]: ←
+                - generic [ref=e1054] [cursor=pointer]:
+                  - generic [ref=e1055]: 💰
+                  - generic [ref=e1056]: فواتير المبيعات
+                  - generic [ref=e1057]: ←
+                - generic [ref=e1058] [cursor=pointer]:
+                  - generic [ref=e1059]: 🛒
+                  - generic [ref=e1060]: فواتير المشتريات
+                  - generic [ref=e1061]: ←
+                - generic [ref=e1062] [cursor=pointer]:
+                  - generic [ref=e1063]: 🎫
+                  - generic [ref=e1064]: السندات
+                  - generic [ref=e1065]: ←
+            - generic [ref=e1066]:
+              - heading "المحاسبة المتقدمة" [level=3] [ref=e1067]
+              - generic [ref=e1068]:
+                - generic [ref=e1069] [cursor=pointer]:
+                  - generic [ref=e1070]: 🏢
+                  - generic [ref=e1071]: بين الشركات
+                  - generic [ref=e1072]: ←
+                - generic [ref=e1073] [cursor=pointer]:
+                  - generic [ref=e1074]: 📊
+                  - generic [ref=e1075]: الاعتراف بالإيراد
+                  - generic [ref=e1076]: ←
+                - generic [ref=e1077] [cursor=pointer]:
+                  - generic [ref=e1078]: 🕌
+                  - generic [ref=e1079]: حاسبة الزكاة
+                  - generic [ref=e1080]: ←
+            - generic [ref=e1081]:
+              - heading "التقارير الأساسية" [level=3] [ref=e1082]
+              - generic [ref=e1083]:
+                - generic [ref=e1084] [cursor=pointer]:
+                  - generic [ref=e1085]: 📚
+                  - generic [ref=e1086]: دفتر الأستاذ العام
+                  - generic [ref=e1087]: ←
+                - generic [ref=e1088] [cursor=pointer]:
+                  - generic [ref=e1089]: ⚖️
+                  - generic [ref=e1090]: ميزان المراجعة
+                  - generic [ref=e1091]: ←
+                - generic [ref=e1092] [cursor=pointer]:
+                  - generic [ref=e1093]: 📈
+                  - generic [ref=e1094]: قائمة الدخل
+                  - generic [ref=e1095]: ←
+                - generic [ref=e1096] [cursor=pointer]:
+                  - generic [ref=e1097]: 🏦
+                  - generic [ref=e1098]: الميزانية العمومية
+                  - generic [ref=e1099]: ←
+                - generic [ref=e1100] [cursor=pointer]:
+                  - generic [ref=e1101]: 🌊
+                  - generic [ref=e1102]: قائمة التدفقات النقدية
+                  - generic [ref=e1103]: ←
+            - generic [ref=e1104]:
+              - heading "الإلتزام الضريبي" [level=3] [ref=e1105]
+              - generic [ref=e1106]:
+                - generic [ref=e1107] [cursor=pointer]:
+                  - generic [ref=e1108]: 🧾
+                  - generic [ref=e1109]: إقرار ضريبة القيمة المضافة
+                  - generic [ref=e1110]: ←
+                - generic [ref=e1111] [cursor=pointer]:
+                  - generic [ref=e1112]: 🔍
+                  - generic [ref=e1113]: تقرير التدقيق الضريبي
+                  - generic [ref=e1114]: ←
+                - generic [ref=e1115] [cursor=pointer]:
+                  - generic [ref=e1116]: 🕌
+                  - generic [ref=e1117]: حاسبة الزكاة
+                  - generic [ref=e1118]: ←
+            - generic [ref=e1119]:
+              - heading "تحليل الأداء" [level=3] [ref=e1120]
+              - generic [ref=e1121]:
+                - generic [ref=e1122] [cursor=pointer]:
+                  - generic [ref=e1123]: 📈
+                  - generic [ref=e1124]: مؤشرات الأداء المالي
+                  - generic [ref=e1125]: ←
+                - generic [ref=e1126] [cursor=pointer]:
+                  - generic [ref=e1127]: 📦
+                  - generic [ref=e1128]: تقرير تقييم المخزون
+                  - generic [ref=e1129]: ←
+                - generic [ref=e1130] [cursor=pointer]:
+                  - generic [ref=e1131]: 📊
+                  - generic [ref=e1132]: مقارنة الفترات
+                  - generic [ref=e1133]: ←
+                - generic [ref=e1134] [cursor=pointer]:
+                  - generic [ref=e1135]: 📋
+                  - generic [ref=e1136]: أرباح وخسائر تفصيلي
+                  - generic [ref=e1137]: ←
+            - generic [ref=e1138]:
+              - heading "التقارير المتقدمة والتوحيد" [level=3] [ref=e1139]
+              - generic [ref=e1140]:
+                - generic [ref=e1141] [cursor=pointer]:
+                  - generic [ref=e1142]: 💧
+                  - generic [ref=e1143]: قائمة التدفقات النقدية (IAS 7)
+                  - generic [ref=e1144]: ←
+                - generic [ref=e1145] [cursor=pointer]:
+                  - generic [ref=e1146]: 💱
+                  - generic [ref=e1147]: تقرير أرباح وخسائر العملات الأجنبية
+                  - generic [ref=e1148]: ←
+                - generic [ref=e1149] [cursor=pointer]:
+                  - generic [ref=e1150]: 🏢
+                  - generic [ref=e1151]: التقارير الموحدة
+                  - generic [ref=e1152]: ←

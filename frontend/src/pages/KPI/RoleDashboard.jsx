@@ -53,7 +53,7 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
     const { t, i18n } = useTranslation();
     const { currentBranch } = useBranch();
     const isRTL = i18n.dir() === 'rtl';
-    const currency = getCurrency() || 'SAR';
+    const fallbackCurrency = getCurrency() || 'SAR';
     const isEmbedded = !!fixedRoleKey;
 
     const key = fixedRoleKey || roleKey || 'auto';
@@ -109,6 +109,7 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
     const kpis = data?.kpis || data?.role_kpis || [];
     const charts = data?.charts || data?.role_charts || [];
     const alerts = data?.alerts || data?.role_alerts || [];
+    const currency = data?.display_currency || fallbackCurrency;
 
     // Group KPIs by category
     const grouped = {};

@@ -11,7 +11,7 @@ from utils.i18n import http_error
 from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from database import get_db_connection
 from utils.tx import transactional
 from utils.accounting import get_base_currency
@@ -73,12 +73,17 @@ def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(
 
             on_hand = Decimal(str(comp.on_hand or 0))
 
-            # Check pending POs for this product
+            # T10.1 P1 #73 — read open purchase ORDERS, not invoices.
+            # ``purchase_invoice_items`` represents what was already
+            # received and billed; the audit complained that this is
+            # double-counting. Switch to ``purchase_order_lines`` joined
+            # to ``purchase_orders`` (the upstream supply commitment).
             on_order = conn.execute(text("""
-                SELECT COALESCE(SUM(pi.quantity - COALESCE(pi.received_quantity, 0)), 0)
-                FROM purchase_invoice_items pi
-                JOIN purchase_invoices p ON pi.invoice_id = p.id
-                WHERE pi.product_id = :pid AND p.status IN ('draft', 'approved', 'sent', 'partially_received')
+                SELECT COALESCE(SUM(pol.quantity - COALESCE(pol.received_quantity, 0)), 0)
+                FROM purchase_order_lines pol
+                JOIN purchase_orders po ON pol.po_id = po.id
+                WHERE pol.product_id = :pid
+                  AND po.status IN ('draft', 'approved', 'sent', 'partially_received')
             """), {"pid": comp.component_product_id}).scalar() or 0
             on_order = Decimal(str(on_order))
 
@@ -152,8 +157,7 @@ def list_mrp_plans(
     """List MRP Plans."""
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT mp.*, po.order_number 
@@ -162,9 +166,7 @@ def list_mrp_plans(
             WHERE 1=1
         """
         params = {}
-        if validated_branch:
-            query += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        query += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         query += " ORDER BY mp.calculated_at DESC LIMIT :limit OFFSET :offset"
         params["limit"] = limit
         params["offset"] = offset

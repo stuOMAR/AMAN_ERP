@@ -21,12 +21,12 @@ to users from the GL truth.
 
 Approach
 --------
-This helper recomputes `current_balance` **idempotently** from posted
-journal lines on the linked `gl_account_id`, respecting the treasury's
-denominated currency:
-
-  * SAR / null currency → use base-currency net (`SUM(debit) - SUM(credit)`).
-  * Foreign currency    → use `amount_currency` with debit/credit sign.
+This helper recomputes `current_balance` **idempotently** from the linked
+GL account balance. Some tenants carry opening balances in `accounts.balance`
+without a matching opening-balance journal entry, so replaying only
+`journal_lines` would drop opening cash. For foreign-currency treasuries the
+denominated amount comes from `accounts.balance_currency`, falling back to a
+conversion from the base balance when the currency column has not been kept.
 
 Call sites replace ad-hoc ± UPDATEs with::
 
@@ -42,6 +42,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import text
+from utils.accounting import get_base_currency
 
 
 def recalc_treasury_from_gl(db, treasury_id: int) -> Optional[Decimal]:
@@ -56,9 +57,15 @@ def recalc_treasury_from_gl(db, treasury_id: int) -> Optional[Decimal]:
     info = db.execute(
         text(
             """
-            SELECT gl_account_id, currency
-            FROM treasury_accounts
-            WHERE id = :id
+            SELECT
+                ta.gl_account_id,
+                ta.currency,
+                a.balance,
+                a.balance_currency,
+                a.currency AS account_currency
+            FROM treasury_accounts ta
+            JOIN accounts a ON a.id = ta.gl_account_id
+            WHERE ta.id = :id
             """
         ),
         {"id": treasury_id},
@@ -66,44 +73,33 @@ def recalc_treasury_from_gl(db, treasury_id: int) -> Optional[Decimal]:
     if not info or not info.gl_account_id:
         return None
 
-    # Foreign-currency treasury: balance is denominated in the treasury's
-    # currency, which matches `journal_lines.amount_currency` whenever the
-    # line was posted under that currency.
-    use_fc = bool(info.currency) and info.currency.upper() != "SAR"
+    base_currency = get_base_currency(db)
+    use_fc = bool(info.currency) and info.currency.upper() != base_currency.upper()
 
     if use_fc:
-        row = db.execute(
-            text(
-                """
-                SELECT COALESCE(SUM(
-                    CASE WHEN jl.debit  > 0 THEN COALESCE(jl.amount_currency, jl.debit)
-                         WHEN jl.credit > 0 THEN -COALESCE(jl.amount_currency, jl.credit)
-                         ELSE 0 END
-                ), 0) AS bal
-                FROM journal_lines jl
-                JOIN journal_entries je ON je.id = jl.journal_entry_id
-                WHERE jl.account_id = :acc
-                  AND je.status = 'posted'
-                  AND (jl.currency IS NULL OR jl.currency = :curr)
-                """
-            ),
-            {"acc": info.gl_account_id, "curr": info.currency},
-        ).fetchone()
+        balance_currency = Decimal(str(info.balance_currency or 0))
+        if info.account_currency and info.account_currency.upper() == info.currency.upper() and balance_currency != 0:
+            new_balance = balance_currency
+        else:
+            row = db.execute(
+                text(
+                    """
+                    SELECT er.rate
+                    FROM exchange_rates er
+                    JOIN currencies c ON c.id = er.currency_id
+                    WHERE c.code = :curr
+                    ORDER BY er.rate_date DESC
+                    LIMIT 1
+                    """
+                ),
+                {"curr": info.currency},
+            ).fetchone()
+            rate = Decimal(str(row.rate if row and row.rate else 1))
+            new_balance = Decimal(str(info.balance or 0)) / rate
     else:
-        row = db.execute(
-            text(
-                """
-                SELECT COALESCE(SUM(jl.debit) - SUM(jl.credit), 0) AS bal
-                FROM journal_lines jl
-                JOIN journal_entries je ON je.id = jl.journal_entry_id
-                WHERE jl.account_id = :acc
-                  AND je.status = 'posted'
-                """
-            ),
-            {"acc": info.gl_account_id},
-        ).fetchone()
-
-    new_balance = Decimal(str(row.bal or 0))
+        new_balance = Decimal(str(info.balance or 0))
+    # Set GL context GUC so the treasury balance trigger allows this sanctioned path
+    db.execute(text("SELECT set_config('aman.gl_context', 'on', true)"))
     db.execute(
         text(
             "UPDATE treasury_accounts SET current_balance = :bal, updated_at = NOW() WHERE id = :id"

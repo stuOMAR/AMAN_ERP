@@ -32,6 +32,9 @@ __all__ = [
     "get_performance_indexes_sql",
     "get_gl_integrity_guards_sql",
     "get_phase5_integration_tables_sql",
+    "get_audit_security_finance_tables_sql",
+    "get_feature023_tables_sql",
+    "get_feature024_tables_sql",
 ]
 
 
@@ -103,7 +106,7 @@ def get_foundation_tables_sql() -> str:
         name VARCHAR(255) NOT NULL,
         name_en VARCHAR(255),
         account_type VARCHAR(50) NOT NULL CHECK (account_type IN ('asset', 'liability', 'equity', 'revenue', 'expense')),
-        parent_id INTEGER REFERENCES accounts(id),
+        parent_id INTEGER REFERENCES accounts(id) ON DELETE RESTRICT,
         is_header BOOLEAN DEFAULT FALSE,
         balance DECIMAL(18, 4) DEFAULT 0,
         balance_currency DECIMAL(18, 4) DEFAULT 0,
@@ -125,6 +128,7 @@ def get_foundation_tables_sql() -> str:
         bank_name VARCHAR(255),
         account_number VARCHAR(100),
         iban VARCHAR(100),
+        allow_overdraft BOOLEAN NOT NULL DEFAULT FALSE,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -145,7 +149,7 @@ def get_foundation_tables_sql() -> str:
         source VARCHAR(100),
         source_id INTEGER,
         idempotency_key VARCHAR(255),
-        created_by INTEGER REFERENCES company_users(id),
+        created_by INTEGER REFERENCES company_users(id) ON DELETE RESTRICT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         posted_at TIMESTAMPTZ,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -429,7 +433,10 @@ def get_additional_base_tables_sql() -> str:
         min_price DECIMAL(18, 4) DEFAULT 0,
         max_price DECIMAL(18, 4) DEFAULT 0,
         sku VARCHAR(100) UNIQUE,
-        tax_rate DECIMAL(5, 2) DEFAULT 15,
+        tax_rate DECIMAL(5, 2) DEFAULT NULL,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        tax_group_id INTEGER REFERENCES tax_groups(id) ON DELETE SET NULL,
+        is_exempt BOOLEAN DEFAULT FALSE,
         is_taxable BOOLEAN DEFAULT TRUE,
         is_active BOOLEAN DEFAULT TRUE,
         is_track_inventory BOOLEAN DEFAULT TRUE,
@@ -444,7 +451,7 @@ def get_additional_base_tables_sql() -> str:
     CREATE TABLE IF NOT EXISTS customer_price_list_items (
         id SERIAL PRIMARY KEY,
         price_list_id INTEGER NOT NULL REFERENCES customer_price_lists(id) ON DELETE CASCADE,
-        product_id INTEGER REFERENCES products(id),
+        product_id INTEGER REFERENCES products(id) ON DELETE RESTRICT,
         price DECIMAL(18, 4) NOT NULL DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -793,6 +800,13 @@ def get_core_dependent_tables_sql() -> str:
         cost_center_id INTEGER REFERENCES cost_centers(id) ON DELETE SET NULL,
         amount_currency DECIMAL(18, 4) DEFAULT 0,
         currency VARCHAR(3) DEFAULT NULL,
+        -- txn_currency/txn_amount preserve the *original* transaction
+        -- currency and amount per line. They support tri-currency journals
+        -- (e.g., USD intercompany line booked into an EGP functional ledger)
+        -- where ``currency`` records the booking-side functional currency
+        -- and ``debit``/``credit`` are translated to the company base.
+        txn_currency VARCHAR(10) DEFAULT NULL,
+        txn_amount DECIMAL(18, 4) DEFAULT NULL,
         description TEXT,
         is_reconciled BOOLEAN DEFAULT FALSE,
         reconciliation_id INTEGER REFERENCES bank_reconciliations(id) ON DELETE SET NULL,
@@ -895,6 +909,7 @@ def get_core_dependent_tables_sql() -> str:
 
         -- Balances (Denormalized)
         current_balance DECIMAL(18, 4) DEFAULT 0,
+        balance_currency DECIMAL(18, 4) DEFAULT 0,
 
         status VARCHAR(20) DEFAULT 'active',
         notes TEXT,
@@ -941,6 +956,8 @@ def get_core_dependent_tables_sql() -> str:
         quantity DECIMAL(18, 4) DEFAULT 1,
         unit_price DECIMAL(18, 4) DEFAULT 0,
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         discount DECIMAL(18, 4) DEFAULT 0,
         markup DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) DEFAULT 0,
@@ -949,6 +966,7 @@ def get_core_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_invoice_lines_tax_rate ON invoice_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS supplier_transactions (
         id SERIAL PRIMARY KEY,
@@ -1019,6 +1037,8 @@ def get_additional_dependent_tables_sql() -> str:
         quantity DECIMAL(18, 4) DEFAULT 1,
         unit_price DECIMAL(18, 4) DEFAULT 0,
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         discount DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) DEFAULT 0,
         received_quantity DECIMAL(18, 4) DEFAULT 0,
@@ -1027,6 +1047,7 @@ def get_additional_dependent_tables_sql() -> str:
         created_by INTEGER REFERENCES company_users(id),
         updated_by INTEGER REFERENCES company_users(id)
     );
+    CREATE INDEX IF NOT EXISTS idx_purchase_order_lines_tax_rate ON purchase_order_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS sales_quotations (
         id SERIAL PRIMARY KEY,
@@ -1054,11 +1075,13 @@ def get_additional_dependent_tables_sql() -> str:
     CREATE TABLE IF NOT EXISTS sales_quotation_lines (
         id SERIAL PRIMARY KEY,
         sq_id INTEGER REFERENCES sales_quotations(id) ON DELETE CASCADE,
-        product_id INTEGER REFERENCES products(id),
+        product_id INTEGER NOT NULL REFERENCES products(id),
         description TEXT,
         quantity DECIMAL(18, 4) NOT NULL,
         unit_price DECIMAL(18, 4) NOT NULL,
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         discount DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1066,6 +1089,7 @@ def get_additional_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_sales_quotation_lines_tax_rate ON sales_quotation_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS sales_orders (
         id SERIAL PRIMARY KEY,
@@ -1094,11 +1118,13 @@ def get_additional_dependent_tables_sql() -> str:
     CREATE TABLE IF NOT EXISTS sales_order_lines (
         id SERIAL PRIMARY KEY,
         so_id INTEGER REFERENCES sales_orders(id) ON DELETE CASCADE,
-        product_id INTEGER REFERENCES products(id),
+        product_id INTEGER NOT NULL REFERENCES products(id),
         description TEXT,
         quantity DECIMAL(18, 4) NOT NULL,
         unit_price DECIMAL(18, 4) NOT NULL,
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         discount DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) NOT NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1106,6 +1132,7 @@ def get_additional_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_sales_order_lines_tax_rate ON sales_order_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS sales_returns (
         id SERIAL PRIMARY KEY,
@@ -1142,6 +1169,8 @@ def get_additional_dependent_tables_sql() -> str:
         quantity DECIMAL(18, 4) NOT NULL,
         unit_price DECIMAL(18, 4) NOT NULL,
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         total DECIMAL(18, 4) NOT NULL,
         reason TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1149,6 +1178,7 @@ def get_additional_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_sales_return_lines_tax_rate ON sales_return_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS payment_vouchers (
         id SERIAL PRIMARY KEY,
@@ -1301,6 +1331,7 @@ def get_organization_tables_sql() -> str:
 
     CREATE TABLE IF NOT EXISTS audit_logs (
         id SERIAL PRIMARY KEY,
+        tenant_id VARCHAR(100),
         user_id INTEGER REFERENCES company_users(id) ON DELETE SET NULL,
         username VARCHAR(100),
         action VARCHAR(100),
@@ -1378,6 +1409,27 @@ def get_organization_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'present',
         notes TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- T13 P1 #64/#65 — Work-policy table linking attendance discipline to
+    -- payroll. Without this the payroll engine had no canonical contracted
+    -- hours/working-days source so absence deductions could not be computed.
+    CREATE TABLE IF NOT EXISTS work_policies (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        name_en VARCHAR(120),
+        weekly_hours NUMERIC(5,2) DEFAULT 40,
+        daily_hours  NUMERIC(5,2) DEFAULT 8,
+        -- ISO weekday numbers (1=Mon..7=Sun) of contracted working days.
+        -- Saudi default = Sun..Thu => [7,1,2,3,4]; configurable per policy.
+        work_days JSONB DEFAULT '[7,1,2,3,4]'::jsonb,
+        late_threshold_minutes INTEGER DEFAULT 15,
+        -- 'daily_rate' = (monthly_salary / contracted_days) per absent day,
+        -- 'hourly'     = (monthly_salary / (weekly_hours*4.33)) per missed hour.
+        absence_deduction_method VARCHAR(20) DEFAULT 'daily_rate',
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE TABLE IF NOT EXISTS employee_loans (
@@ -2079,12 +2131,34 @@ def get_financial_tables_sql() -> str:
         rate_type VARCHAR(20) DEFAULT 'percentage',
         rate_value DECIMAL(10, 4) DEFAULT 0,
         country_code VARCHAR(5) DEFAULT NULL,
+        jurisdiction_code VARCHAR(10),
         description TEXT,
         effective_from DATE,
         effective_to DATE,
+        is_default BOOLEAN DEFAULT FALSE,
+        legal_entity_id INTEGER,
         is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS tax_rate_history (
+        id SERIAL PRIMARY KEY,
+        tax_rate_id INTEGER NOT NULL REFERENCES tax_rates(id) ON DELETE CASCADE,
+        changed_by INTEGER NOT NULL REFERENCES company_users(id),
+        old_rate DECIMAL(10, 4),
+        new_rate DECIMAL(10, 4),
+        old_name VARCHAR(255),
+        new_name VARCHAR(255),
+        old_country VARCHAR(5),
+        new_country VARCHAR(5),
+        reason TEXT,
+        changed_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_tax_rate_history_rate ON tax_rate_history(tax_rate_id);
+    CREATE INDEX IF NOT EXISTS idx_tax_rate_history_date ON tax_rate_history(changed_at);
+
+    CREATE INDEX IF NOT EXISTS idx_tax_rates_country_active ON tax_rates(country_code, is_active, is_default);
     
     CREATE TABLE IF NOT EXISTS tax_groups (
         id SERIAL PRIMARY KEY,
@@ -2652,12 +2726,15 @@ def get_contract_tables_sql() -> str:
         description TEXT,
         quantity DECIMAL(18, 4) DEFAULT 1,
         unit_price DECIMAL(18, 4) DEFAULT 0,
-        tax_rate DECIMAL(5, 2) DEFAULT 15,
+        tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         total DECIMAL(18, 4) DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_contract_items_contract ON contract_items(contract_id);
+    CREATE INDEX IF NOT EXISTS idx_contract_items_tax_rate ON contract_items(tax_rate_id);
 
     -- CON-F1: contract milestone-based billing
     CREATE TABLE IF NOT EXISTS contract_milestones (
@@ -3105,6 +3182,47 @@ def get_manufacturing_tables_sql() -> str:
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    -- ===== MANUFACTURING ORDERS (MFG-004b) =====
+    -- Feature-023 style orders: tenant-scoped, state machine, BOM snapshot,
+    -- partial completions, QC gate, approval workflow.
+    CREATE TABLE IF NOT EXISTS manufacturing_orders (
+        id                  BIGSERIAL       PRIMARY KEY,
+        tenant_id           BIGINT          NOT NULL,
+        order_number        VARCHAR(64),
+        product_id          INTEGER         REFERENCES products(id),
+        bom_id              INTEGER         REFERENCES bill_of_materials(id),
+        workstation_id      INTEGER         REFERENCES work_centers(id),
+        original_qty        NUMERIC(18,4)   NOT NULL DEFAULT 0,
+        planned_qty         NUMERIC(18,4)   NOT NULL DEFAULT 0,
+        completed_qty       NUMERIC(18,4)   NOT NULL DEFAULT 0,
+        remaining_qty       NUMERIC(18,4),
+        bom_snapshot_id     BIGINT,
+        state               VARCHAR(32)     NOT NULL DEFAULT 'planned',
+        qc_required         BOOLEAN         NOT NULL DEFAULT FALSE,
+        requires_approval   BOOLEAN         NOT NULL DEFAULT FALSE,
+        approved_by         BIGINT,
+        approved_at         TIMESTAMPTZ,
+        start_date          DATE,
+        due_date            DATE,
+        warehouse_id        INTEGER         REFERENCES warehouses(id),
+        branch_id           INTEGER         REFERENCES branches(id),
+        notes               TEXT,
+        created_by          INTEGER         REFERENCES company_users(id),
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE manufacturing_orders ADD CONSTRAINT chk_mo_state
+            CHECK (state IN ('planned','pending_approval','released','in_progress','qc_pending','completed','cancelled'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS idx_manufacturing_orders_tenant_state
+        ON manufacturing_orders (tenant_id, state);
+    CREATE INDEX IF NOT EXISTS idx_manufacturing_orders_product
+        ON manufacturing_orders (tenant_id, product_id);
+
     CREATE TABLE IF NOT EXISTS production_order_operations (
         id SERIAL PRIMARY KEY,
         production_order_id INTEGER REFERENCES production_orders(id) ON DELETE CASCADE,
@@ -3231,6 +3349,7 @@ def get_manufacturing_tables_sql() -> str:
         assigned_at TIMESTAMPTZ,
         estimated_hours DECIMAL(8, 2),
         actual_hours DECIMAL(8, 2),
+        hourly_rate NUMERIC(15, 4),
         estimated_cost DECIMAL(15, 2) DEFAULT 0,
         actual_cost DECIMAL(15, 2) DEFAULT 0,
         scheduled_date DATE,
@@ -3253,12 +3372,20 @@ def get_manufacturing_tables_sql() -> str:
         description TEXT,
         quantity DECIMAL(10, 4) DEFAULT 1,
         unit_cost DECIMAL(15, 2) DEFAULT 0,
+        markup_pct NUMERIC(8, 4) DEFAULT 0,
         total_cost DECIMAL(15, 2) DEFAULT 0,
         is_deleted BOOLEAN DEFAULT FALSE,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_by INTEGER REFERENCES company_users(id)
     );
+    -- T10.1 P1 #76 / #110j — link parts consumption to actual inventory
+    -- so add_service_cost can decrement on-hand and the close-out JE can
+    -- credit acc_map_inventory instead of a generic clearing account.
+    ALTER TABLE service_request_costs ADD COLUMN IF NOT EXISTS product_id INTEGER REFERENCES products(id);
+    ALTER TABLE service_request_costs ADD COLUMN IF NOT EXISTS warehouse_id INTEGER REFERENCES warehouses(id);
+    ALTER TABLE service_request_costs ADD COLUMN IF NOT EXISTS markup_pct NUMERIC(8, 4) DEFAULT 0;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS hourly_rate NUMERIC(15, 4);
 
     -- ===== SVC-002: DOCUMENT MANAGEMENT =====
     CREATE TABLE IF NOT EXISTS documents (
@@ -3330,13 +3457,14 @@ def get_pos_tables_sql() -> str:
     CREATE TABLE IF NOT EXISTS pos_orders (
         id SERIAL PRIMARY KEY,
         order_number VARCHAR(50) UNIQUE NOT NULL,
-        session_id INTEGER REFERENCES pos_sessions(id),
+        session_id INTEGER REFERENCES pos_sessions(id) ON DELETE CASCADE,
         customer_id INTEGER REFERENCES customers(id),
         walk_in_customer_name VARCHAR(255),
         branch_id INTEGER REFERENCES branches(id),
         warehouse_id INTEGER REFERENCES warehouses(id),
         order_date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         status VARCHAR(20) DEFAULT 'draft', 
+        client_order_id VARCHAR(100),
         
         -- Money Fields
         subtotal DECIMAL(18, 4) DEFAULT 0,
@@ -3362,6 +3490,8 @@ def get_pos_tables_sql() -> str:
         original_price DECIMAL(18, 4) NOT NULL,
         unit_price DECIMAL(18, 4) NOT NULL, 
         tax_rate DECIMAL(5, 2) DEFAULT 0,
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
+        applied_taxes JSONB,
         tax_amount DECIMAL(18, 4) DEFAULT 0,
         discount_percentage DECIMAL(5, 2) DEFAULT 0,
         discount_amount DECIMAL(18, 4) DEFAULT 0,
@@ -3375,6 +3505,7 @@ def get_pos_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_pos_order_lines_tax_rate ON pos_order_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS pos_payments (
         id SERIAL PRIMARY KEY,
@@ -3744,6 +3875,8 @@ def get_security_tables_sql() -> str:
         net_amount DECIMAL(18,2) NOT NULL,
         certificate_number VARCHAR(50),
         status VARCHAR(20) DEFAULT 'pending',
+        journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        period_date DATE,
         created_by INT,
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -3827,6 +3960,8 @@ def get_security_tables_sql() -> str:
         recurrence_months INT DEFAULT 3,
         is_completed BOOLEAN DEFAULT FALSE,
         notes TEXT,
+        recurrence_pattern VARCHAR(20),
+        status VARCHAR(20) DEFAULT 'pending',
         created_by INT,
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -3901,6 +4036,36 @@ def get_security_tables_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_sales_opp_stage ON sales_opportunities(stage);
     CREATE INDEX IF NOT EXISTS idx_sales_opp_customer ON sales_opportunities(customer_id);
+    -- T10.1 P1 #38 — soft-delete column so opportunity history is preserved.
+    ALTER TABLE sales_opportunities ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;
+    ALTER TABLE sales_opportunities ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
+    CREATE INDEX IF NOT EXISTS idx_sales_opp_active ON sales_opportunities(stage) WHERE is_deleted = FALSE;
+
+    -- T10.1 P1 #84 — explicit IAS 7 cash-flow classification override per
+    -- account ('operating' / 'investing' / 'financing'). NULL falls back
+    -- to the heuristic implemented in routers.reports.accounting_analysis.
+    ALTER TABLE accounts ADD COLUMN IF NOT EXISTS cash_flow_classification VARCHAR(20)
+        CHECK (cash_flow_classification IN ('operating', 'investing', 'financing'));
+
+    -- T10.1 P1 #67 — periodic end-of-service provision snapshot. The
+    -- scheduler (services.scheduler.run_eos_provision_snapshot) writes
+    -- one row per active employee per period_end documenting the
+    -- accrued gratuity at that point in time, so finance can post the
+    -- monthly provision JE without recomputing history.
+    CREATE TABLE IF NOT EXISTS eos_provisions (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        period_end DATE NOT NULL,
+        years_of_service DECIMAL(6, 4) NOT NULL,
+        monthly_salary DECIMAL(18, 4) NOT NULL,
+        accrued_gratuity DECIMAL(18, 4) NOT NULL,
+        delta_from_previous DECIMAL(18, 4) NOT NULL DEFAULT 0,
+        je_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE (employee_id, period_end)
+    );
+    CREATE INDEX IF NOT EXISTS idx_eos_provisions_period
+        ON eos_provisions(period_end);
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON support_tickets(status, priority);
     CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON support_tickets(assigned_to);
     CREATE INDEX IF NOT EXISTS idx_campaigns_status ON marketing_campaigns(status);
@@ -4216,6 +4381,11 @@ def get_phase_features_tables_sql() -> str:
         source_currency VARCHAR(10) NOT NULL,
         target_amount NUMERIC(18,4) NOT NULL,
         target_currency VARCHAR(10) NOT NULL,
+        -- transaction_currency/transaction_amount = the actual money moved
+        -- (e.g., USD between SAR and EGP branches). source_*/target_* are
+        -- the booking values in each branch's functional currency.
+        transaction_currency VARCHAR(10),
+        transaction_amount NUMERIC(18,4),
         exchange_rate NUMERIC(18,8) NOT NULL DEFAULT 1,
         source_journal_entry_id INTEGER,
         target_journal_entry_id INTEGER,
@@ -4482,9 +4652,13 @@ def get_system_completion_tables_sql() -> str:
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS iqama_expiry DATE;
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS passport_number VARCHAR(30);
     ALTER TABLE employees ADD COLUMN IF NOT EXISTS sponsor VARCHAR(200);
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_leave_days INTEGER DEFAULT 30;
+    ALTER TABLE employees ADD COLUMN IF NOT EXISTS annual_leave_entitlement NUMERIC(8,2) DEFAULT 30;
     ALTER TABLE payroll_entries ADD COLUMN IF NOT EXISTS currency VARCHAR(3) DEFAULT NULL;
     ALTER TABLE payroll_entries ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1.0;
     ALTER TABLE payroll_entries ADD COLUMN IF NOT EXISTS net_salary_base NUMERIC(18,4) DEFAULT 0;
+    ALTER TABLE pos_orders ADD COLUMN IF NOT EXISTS client_order_id VARCHAR(100);
+    ALTER TABLE opportunity_activities ADD COLUMN IF NOT EXISTS contact_id INTEGER REFERENCES crm_contacts(id) ON DELETE SET NULL;
     ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS actual_material_cost NUMERIC(15,4) DEFAULT 0;
     ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS actual_labor_cost NUMERIC(15,4) DEFAULT 0;
     ALTER TABLE production_orders ADD COLUMN IF NOT EXISTS actual_overhead_cost NUMERIC(15,4) DEFAULT 0;
@@ -4699,6 +4873,7 @@ def get_extended_features_tables_sql() -> str:
         billing_period_end DATE,
         amount DECIMAL(18, 4) DEFAULT 0,
         tax_rate NUMERIC(5,2),
+        tax_rate_id INTEGER REFERENCES tax_rates(id),
         tax_amount NUMERIC(18,4) DEFAULT 0,
         currency VARCHAR(3),
         journal_entry_id INTEGER REFERENCES journal_entries(id),
@@ -5329,6 +5504,7 @@ def get_performance_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_je_date_status ON journal_entries(entry_date, status);
     CREATE INDEX IF NOT EXISTS idx_je_source ON journal_entries(source);
     CREATE INDEX IF NOT EXISTS idx_je_created_by ON journal_entries(created_by);
+    CREATE INDEX IF NOT EXISTS idx_journal_entries_created_at ON journal_entries(created_at DESC);
 
     -- Journal Lines - joins and aggregations
     CREATE INDEX IF NOT EXISTS idx_jl_account ON journal_lines(account_id);
@@ -5343,6 +5519,12 @@ def get_performance_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_products_sku ON products(sku);
     CREATE INDEX IF NOT EXISTS idx_products_code ON products(product_code);
     CREATE INDEX IF NOT EXISTS idx_products_barcode ON products(barcode);
+
+    -- Inventory/POS/CRM hot paths
+    CREATE INDEX IF NOT EXISTS idx_inventory_product_warehouse ON inventory(product_id, warehouse_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_pos_orders_client_order_id
+        ON pos_orders(client_order_id) WHERE client_order_id IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS idx_opportunity_activities_contact_id ON opportunity_activities(contact_id);
 
 
     -- Audit Log - most recent activity
@@ -5395,6 +5577,310 @@ def get_performance_indexes_sql() -> str:
     -- T3.7 (audit #21,#22): hash-chain unique index + immutability trigger.
     CREATE UNIQUE INDEX IF NOT EXISTS ux_audit_logs_chain_seq ON audit_logs(chain_seq);
     CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    -- T10.1 P1 #110i — pg_trgm + GIN trigram indexes so the product
+    -- search box (substring ILIKE on product_name and party search on
+    -- name/phone) can use an index instead of falling back to seq scan.
+    CREATE EXTENSION IF NOT EXISTS pg_trgm;
+    CREATE INDEX IF NOT EXISTS idx_products_name_trgm
+        ON products USING GIN (product_name gin_trgm_ops);
+    CREATE INDEX IF NOT EXISTS idx_products_code_prefix
+        ON products (product_code text_pattern_ops);
+    CREATE INDEX IF NOT EXISTS idx_parties_name_trgm
+        ON parties USING GIN (name gin_trgm_ops);
+    -- T10.1 P1 #97 — phone lookups normalise whitespace/dashes; index
+    -- on the cleaned form so equality lookups can use the index.
+    CREATE INDEX IF NOT EXISTS idx_parties_phone_clean
+        ON parties (REGEXP_REPLACE(COALESCE(phone, ''), '[^0-9+]', '', 'g'));
+    -- T10.1 P1 #94 — broader pg_trgm coverage for high-frequency search
+    -- surfaces so leading-wildcard ILIKE can use an index. Each index
+    -- is wrapped in a DO-block guard because the underlying column may
+    -- be missing on legacy tenants — silently skip rather than abort.
+    DO $do_trgm_extras$
+    BEGIN
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='invoices' AND column_name='invoice_number') THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_invoices_number_trgm
+                       ON invoices USING GIN (invoice_number gin_trgm_ops)';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='expenses' AND column_name='expense_number') THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_expenses_number_trgm
+                       ON expenses USING GIN (expense_number gin_trgm_ops)';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='journal_entries' AND column_name='entry_number') THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_journal_entries_number_trgm
+                       ON journal_entries USING GIN (entry_number gin_trgm_ops)';
+        END IF;
+        IF EXISTS (SELECT 1 FROM information_schema.columns
+                    WHERE table_name='purchase_invoices' AND column_name='invoice_number') THEN
+            EXECUTE 'CREATE INDEX IF NOT EXISTS idx_purchase_invoices_number_trgm
+                       ON purchase_invoices USING GIN (invoice_number gin_trgm_ops)';
+        END IF;
+    END
+    $do_trgm_extras$;
+    -- T10.1 P1 #80 — FSM SLA tracking. Default response window = 4h,
+    -- resolution window = 24h * (priority weight). Lazy ALTERs so we
+    -- don't disturb existing tenants.
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS sla_response_minutes INTEGER DEFAULT 240;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS sla_resolution_minutes INTEGER DEFAULT 1440;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS response_due_at TIMESTAMPTZ;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS resolution_due_at TIMESTAMPTZ;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS first_response_at TIMESTAMPTZ;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS resolved_at TIMESTAMPTZ;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS sla_breach_response BOOLEAN DEFAULT FALSE;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS sla_breach_resolution BOOLEAN DEFAULT FALSE;
+    ALTER TABLE service_requests ADD COLUMN IF NOT EXISTS sla_warned_at TIMESTAMPTZ;
+    -- Auto-populate due timestamps on INSERT when caller didn't supply them.
+    CREATE OR REPLACE FUNCTION service_requests_set_sla_fn()
+    RETURNS trigger AS $sr_sla$
+    BEGIN
+        IF NEW.response_due_at IS NULL THEN
+            NEW.response_due_at := COALESCE(NEW.created_at, NOW())
+                + make_interval(mins => COALESCE(NEW.sla_response_minutes, 240));
+        END IF;
+        IF NEW.resolution_due_at IS NULL THEN
+            NEW.resolution_due_at := COALESCE(NEW.created_at, NOW())
+                + make_interval(mins => COALESCE(NEW.sla_resolution_minutes, 1440));
+        END IF;
+        RETURN NEW;
+    END;
+    $sr_sla$ LANGUAGE plpgsql;
+    DROP TRIGGER IF EXISTS trg_service_requests_set_sla ON service_requests;
+    CREATE TRIGGER trg_service_requests_set_sla
+        BEFORE INSERT ON service_requests
+        FOR EACH ROW EXECUTE FUNCTION service_requests_set_sla_fn();
+    CREATE INDEX IF NOT EXISTS idx_service_requests_sla_due
+        ON service_requests(response_due_at, resolution_due_at)
+        WHERE COALESCE(is_deleted, FALSE) = FALSE;
+
+    -- T10.1 P1 #89 — Payment gateway retry tracking. Outbox-style queue so
+    -- transient gateway failures (Stripe/Tap/PayTabs) can be retried by
+    -- a scheduler job instead of failing the user request once.
+    CREATE TABLE IF NOT EXISTS payment_gateway_retries (
+        id SERIAL PRIMARY KEY,
+        gateway VARCHAR(40) NOT NULL,
+        operation VARCHAR(40) NOT NULL,
+        reference_type VARCHAR(60),
+        reference_id VARCHAR(60),
+        request_payload JSONB NOT NULL,
+        last_error TEXT,
+        attempt_count INTEGER DEFAULT 0,
+        max_attempts INTEGER DEFAULT 5,
+        next_attempt_at TIMESTAMPTZ DEFAULT NOW(),
+        status VARCHAR(20) NOT NULL DEFAULT 'pending'
+            CHECK (status IN ('pending','succeeded','failed','dead')),
+        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS idx_payment_retries_status_due
+        ON payment_gateway_retries(status, next_attempt_at)
+        WHERE status = 'pending';
+    CREATE INDEX IF NOT EXISTS idx_payment_retries_ref
+        ON payment_gateway_retries(reference_type, reference_id);
+
+    -- T11 P1 #50/#56/#66 — widen PII columns so AES-256-GCM ciphertext
+    -- (≈70-80 base64 chars) fits without truncation. Application-layer
+    -- encryption helper lives in ``utils/pii_encryption.py``; backfill
+    -- runs via ``scripts/encrypt_existing_pii.py``. Idempotent: only
+    -- promotes VARCHAR(*) → TEXT, never narrows.
+    DO $do_pii_widen$
+    BEGIN
+        -- treasury_accounts.iban / account_number
+        BEGIN ALTER TABLE treasury_accounts      ALTER COLUMN iban           TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE treasury_accounts      ALTER COLUMN account_number TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE supplier_bank_accounts ALTER COLUMN iban           TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE supplier_bank_accounts ALTER COLUMN account_number TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE customer_bank_accounts ALTER COLUMN iban           TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE customer_bank_accounts ALTER COLUMN account_number TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE parties                ALTER COLUMN iban           TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE parties                ALTER COLUMN tax_number     TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE employees              ALTER COLUMN tax_id         TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+        BEGIN ALTER TABLE employees              ALTER COLUMN social_security TYPE TEXT; EXCEPTION WHEN OTHERS THEN NULL; END;
+    END
+    $do_pii_widen$;
+
+    -- T13 P1 #64/#65 — link employees to a work_policy (nullable, opt-in).
+    DO $do_emp_workpolicy$
+    BEGIN
+        BEGIN
+            ALTER TABLE employees
+                ADD COLUMN IF NOT EXISTS work_policy_id INTEGER REFERENCES work_policies(id);
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+    END
+    $do_emp_workpolicy$;
+    CREATE INDEX IF NOT EXISTS idx_employees_work_policy ON employees(work_policy_id);
+    CREATE INDEX IF NOT EXISTS idx_attendance_emp_date ON attendance(employee_id, date);
+
+    -- T13 P1 #64/#65 — surface absence deduction on payroll entries so the
+    -- payslip can show it as its own line item (instead of being silently
+    -- folded into ``violation_deduction``).
+    DO $do_payroll_absence$
+    BEGIN
+        BEGIN
+            ALTER TABLE payroll_entries
+                ADD COLUMN IF NOT EXISTS absence_deduction NUMERIC(18,4) DEFAULT 0;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+        BEGIN
+            ALTER TABLE payroll_entries
+                ADD COLUMN IF NOT EXISTS absent_days INTEGER DEFAULT 0;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+    END
+    $do_payroll_absence$;
+
+    -- =====================================================================
+    -- T15 P1 #70/#71/#72/#104 — Petty cash funds + salary advances + state
+    -- history for service requests + attachment content text. All idempotent
+    -- so re-running is a no-op on upgraded tenants.
+    -- =====================================================================
+
+    -- Petty cash fund: a small cash float held by a custodian (employee or
+    -- branch manager) for everyday small expenses. Replenished when low,
+    -- reconciled to a treasury account on each top-up.
+    CREATE TABLE IF NOT EXISTS petty_cash_funds (
+        id SERIAL PRIMARY KEY,
+        name VARCHAR(120) NOT NULL,
+        custodian_employee_id INTEGER REFERENCES employees(id),
+        treasury_account_id   INTEGER REFERENCES treasury_accounts(id),
+        gl_account_id         INTEGER REFERENCES accounts(id),
+        branch_id             INTEGER REFERENCES branches(id),
+        currency VARCHAR(3) DEFAULT 'SAR',
+        ceiling_amount  NUMERIC(18,4) DEFAULT 0,    -- max float allowed
+        current_balance NUMERIC(18,4) DEFAULT 0,    -- current cash on hand
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    -- Petty cash transactions: every disbursement/replenishment/return
+    -- against a fund. Application code adjusts ``petty_cash_funds.current_balance``
+    -- atomically when posting one of these rows.
+    CREATE TABLE IF NOT EXISTS petty_cash_transactions (
+        id SERIAL PRIMARY KEY,
+        fund_id INTEGER REFERENCES petty_cash_funds(id) ON DELETE CASCADE,
+        -- replenish: + balance (treasury → fund). disburse: - balance (fund → expense).
+        -- return: + balance (employee returns unspent). adjustment: signed.
+        txn_type VARCHAR(20) NOT NULL DEFAULT 'disburse',
+        amount   NUMERIC(18,4) NOT NULL,
+        txn_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        description TEXT,
+        expense_id  INTEGER REFERENCES expenses(id),
+        je_id       INTEGER REFERENCES journal_entries(id),
+        created_by  INTEGER REFERENCES company_users(id),
+        created_at  TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_petty_cash_txn_fund ON petty_cash_transactions(fund_id, txn_date);
+
+    -- Salary advances: similar to employee_loans but a *single* lump sum
+    -- recovered from one or more upcoming payroll periods. Kept separate
+    -- so reporting can distinguish "loans" (long-term, multi-installment)
+    -- from "advances" (short-term, often single deduction).
+    CREATE TABLE IF NOT EXISTS salary_advances (
+        id SERIAL PRIMARY KEY,
+        employee_id INTEGER REFERENCES employees(id),
+        amount         NUMERIC(18,4) NOT NULL,
+        recovered_amount NUMERIC(18,4) DEFAULT 0,
+        installments   INTEGER DEFAULT 1,    -- spread across N payrolls
+        request_date   DATE DEFAULT CURRENT_DATE,
+        approved_by    INTEGER REFERENCES company_users(id),
+        approved_at    TIMESTAMPTZ,
+        paid_at        TIMESTAMPTZ,         -- when treasury actually paid out
+        treasury_account_id INTEGER REFERENCES treasury_accounts(id),
+        je_id          INTEGER REFERENCES journal_entries(id),
+        status VARCHAR(20) DEFAULT 'pending',  -- pending|approved|paid|recovering|recovered|cancelled
+        reason TEXT,
+        branch_id INTEGER REFERENCES branches(id),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_salary_advances_emp_status ON salary_advances(employee_id, status);
+
+    -- T15 #104 — surface advance recovery as its own line on the payslip
+    -- (parallel to the absence_deduction column added by T13).
+    DO $do_payroll_advance$
+    BEGIN
+        BEGIN
+            ALTER TABLE payroll_entries
+                ADD COLUMN IF NOT EXISTS advance_deduction NUMERIC(18,4) DEFAULT 0;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+    END
+    $do_payroll_advance$;
+
+    -- T18 #77/#78/#79/#81 — service-request state history (audit trail of
+    -- every transition, with actor, timestamp, optional comment). The hot
+    -- path in routers/services.py inserts one row per transition.
+    CREATE TABLE IF NOT EXISTS service_request_state_history (
+        id SERIAL PRIMARY KEY,
+        request_id INTEGER REFERENCES service_requests(id) ON DELETE CASCADE,
+        from_status VARCHAR(30),
+        to_status   VARCHAR(30) NOT NULL,
+        actor_user_id INTEGER REFERENCES company_users(id),
+        actor_username VARCHAR(120),
+        comment TEXT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_sr_state_history_req ON service_request_state_history(request_id, created_at);
+
+    -- T18 #96 — Attachment full-text content. Populated by background
+    -- extractors (PDF / DOCX / XLSX). NULL ⇒ extraction not yet attempted
+    -- or unsupported MIME. We store raw extracted text plus a tsvector for
+    -- fast ILIKE/FTS search; a partial GIN index keeps the hot path quick.
+    DO $do_attach_content$
+    BEGIN
+        BEGIN
+            ALTER TABLE attachments
+                ADD COLUMN IF NOT EXISTS content_text TEXT;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+        BEGIN
+            ALTER TABLE attachments
+                ADD COLUMN IF NOT EXISTS content_extracted_at TIMESTAMPTZ;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+        BEGIN
+            ALTER TABLE attachments
+                ADD COLUMN IF NOT EXISTS content_extraction_error TEXT;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+    END
+    $do_attach_content$;
+    CREATE INDEX IF NOT EXISTS idx_attachments_content_trgm
+        ON attachments USING gin (content_text gin_trgm_ops)
+        WHERE content_text IS NOT NULL;
+
+    -- T17 #88 — POS offline sync conflicts. When a client comes back online
+    -- with stale operations, the server records the conflict here for human
+    -- review (vs. silently dropping or blindly applying).
+    CREATE TABLE IF NOT EXISTS pos_sync_conflicts (
+        id SERIAL PRIMARY KEY,
+        session_id INTEGER REFERENCES pos_sessions(id) ON DELETE CASCADE,
+        client_op_id VARCHAR(80),       -- client-generated UUID for idempotency
+        op_type VARCHAR(30),            -- create_order|void|return|payment
+        client_payload JSONB,
+        conflict_kind VARCHAR(40),      -- duplicate|stale_session|stock_oversold|price_changed
+        server_state JSONB,             -- what the server has now
+        resolution VARCHAR(20) DEFAULT 'pending',  -- pending|accepted|rejected|merged
+        resolved_by INTEGER REFERENCES company_users(id),
+        resolved_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_pos_sync_conflicts_session
+        ON pos_sync_conflicts(session_id, resolution);
+
+    -- T16 #44: invoice header amendment fields.
+    DO $do_inv_amend_cols$
+    BEGIN
+        BEGIN
+            ALTER TABLE invoices ADD COLUMN IF NOT EXISTS customer_reference VARCHAR(100);
+            ALTER TABLE invoices ADD COLUMN IF NOT EXISTS sales_rep_id INTEGER REFERENCES company_users(id) ON DELETE SET NULL;
+        EXCEPTION WHEN OTHERS THEN NULL;
+        END;
+    END $do_inv_amend_cols$;
+
     CREATE OR REPLACE FUNCTION audit_logs_immutable_fn()
     RETURNS trigger AS $audit_immut$
     DECLARE
@@ -5488,7 +5974,16 @@ def get_performance_indexes_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_warehouse_id ON inventory_transactions(warehouse_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_id ON inventory_transactions(product_id);
+    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date ON inventory_transactions(product_id, transaction_date);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_reference_id ON inventory_transactions(reference_id);
+
+    -- T10.1 P1 #110d \u2014 hot path on the shop floor: filter open production
+    -- orders by status & due_date. Without this index it does a full scan.
+    CREATE INDEX IF NOT EXISTS idx_production_orders_status_due ON production_orders(status, due_date);
+    CREATE INDEX IF NOT EXISTS idx_production_orders_product ON production_orders(product_id);
+    -- T10.1 P1 #63 \u2014 same for HR leave queries.
+    CREATE INDEX IF NOT EXISTS idx_leave_requests_status_start ON leave_requests(status, start_date);
+    CREATE INDEX IF NOT EXISTS idx_leave_requests_employee_start ON leave_requests(employee_id, start_date);
 
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_party_id ON purchase_orders(party_id);
     CREATE INDEX IF NOT EXISTS idx_purchase_orders_branch_id ON purchase_orders(branch_id);
@@ -5501,6 +5996,7 @@ def get_performance_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_sales_returns_invoice_id ON sales_returns(invoice_id);
 
     CREATE INDEX IF NOT EXISTS idx_payment_vouchers_party_id ON payment_vouchers(party_id);
+    CREATE INDEX IF NOT EXISTS idx_payment_vouchers_party_type_id ON payment_vouchers(party_type, party_id);
     CREATE INDEX IF NOT EXISTS idx_payment_vouchers_branch_id ON payment_vouchers(branch_id);
 
     CREATE INDEX IF NOT EXISTS idx_employees_position_id ON employees(position_id);
@@ -6207,4 +6703,666 @@ def get_phase5_integration_tables_sql() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_intdlq_unresolved
         ON integration_dlq (queue_type, archived_at) WHERE archived_at IS NULL;
+    """
+
+
+def get_audit_security_finance_tables_sql() -> str:
+    """Feature 022: Audit & Security + Finance Integrity Remediation (R1+R2).
+
+    New tables: audit_outbox, integration_credentials, account_classifications,
+    device_fingerprints, login_geo_events, employee_receipt_settlements.
+    Modified tables: audit_logs (critical flag + index), recurring_journal_templates
+    (review_threshold, auto_approve, expense_category_id), journal_entries /
+    invoices (source normalization — handled in 022g migration).
+    """
+    return """
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Audit outbox (transactional buffer for audit rows)
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS audit_outbox (
+        id            BIGSERIAL    PRIMARY KEY,
+        tenant_id     VARCHAR(100) NOT NULL,
+        actor_id      BIGINT,
+        action        VARCHAR(64)  NOT NULL,
+        entity_type   VARCHAR(64),
+        entity_id     VARCHAR(100),
+        payload       JSONB        NOT NULL DEFAULT '{}',
+        critical      BOOLEAN      NOT NULL DEFAULT false,
+        enqueued_at   TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        flushed_at    TIMESTAMPTZ,
+        attempt_count INT          NOT NULL DEFAULT 0,
+        last_error    TEXT
+    );
+    CREATE INDEX IF NOT EXISTS ix_audit_outbox_pending
+        ON audit_outbox (tenant_id, enqueued_at)
+        WHERE flushed_at IS NULL;
+
+    ALTER TABLE audit_outbox
+        ALTER COLUMN tenant_id TYPE VARCHAR(100) USING tenant_id::text,
+        ALTER COLUMN entity_id TYPE VARCHAR(100) USING entity_id::text;
+
+    ALTER TABLE audit_logs
+        ADD COLUMN IF NOT EXISTS tenant_id VARCHAR(100),
+        ADD COLUMN IF NOT EXISTS critical BOOLEAN NOT NULL DEFAULT false;
+    ALTER TABLE audit_logs
+        ALTER COLUMN tenant_id TYPE VARCHAR(100) USING tenant_id::text;
+    SELECT set_config('audit_logs.allow_admin_op', 'retention', true);
+    UPDATE audit_logs
+       SET tenant_id = COALESCE(NULLIF(tenant_id, ''), regexp_replace(current_database(), '^aman_', ''))
+     WHERE tenant_id IS NULL OR tenant_id = '';
+    CREATE INDEX IF NOT EXISTS ix_audit_logs_tenant_action_created
+        ON audit_logs (tenant_id, action, created_at DESC);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Integration credential vault
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS integration_credentials (
+        id                   BIGSERIAL    PRIMARY KEY,
+        tenant_id            BIGINT       NOT NULL,
+        integration          VARCHAR(32)  NOT NULL,
+        name                 VARCHAR(128) NOT NULL,
+        secret_ciphertext    BYTEA        NOT NULL,
+        key_version          INT          NOT NULL DEFAULT 1,
+        metadata             JSONB        NOT NULL DEFAULT '{}',
+        status               VARCHAR(16)  NOT NULL DEFAULT 'active',
+        consecutive_failures INT          NOT NULL DEFAULT 0,
+        rotated_at           TIMESTAMPTZ,
+        expires_at           TIMESTAMPTZ,
+        created_by           BIGINT,
+        created_at           TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        deleted_at           TIMESTAMPTZ
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_integration_credentials_active
+        ON integration_credentials (tenant_id, integration, name)
+        WHERE status != 'soft_deleted';
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Account classifications (replaces hard-coded ranges)
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS account_classifications (
+        id                 BIGSERIAL    PRIMARY KEY,
+        tenant_id          BIGINT       NOT NULL,
+        account_id         BIGINT       NOT NULL REFERENCES accounts(id),
+        statement_category VARCHAR(32)  NOT NULL,
+        sign               SMALLINT     NOT NULL,
+        aggregation_hint   VARCHAR(64),
+        is_active          BOOLEAN      NOT NULL DEFAULT true,
+        valid_from         DATE         NOT NULL DEFAULT CURRENT_DATE,
+        valid_to           DATE,
+        created_at         TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        updated_at         TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_account_classifications_active
+        ON account_classifications (tenant_id, account_id)
+        WHERE is_active = true;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Device fingerprints + login geo events (seam)
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS device_fingerprints (
+        id               BIGSERIAL    PRIMARY KEY,
+        tenant_id        BIGINT       NOT NULL,
+        user_id          BIGINT       NOT NULL,
+        fingerprint_hash VARCHAR(64)  NOT NULL,
+        first_seen_at    TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        last_seen_at     TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        trust_level      VARCHAR(16)  NOT NULL DEFAULT 'unknown'
+    );
+    CREATE INDEX IF NOT EXISTS ix_device_fingerprints_lookup
+        ON device_fingerprints (tenant_id, user_id, fingerprint_hash);
+
+    CREATE TABLE IF NOT EXISTS login_geo_events (
+        id              BIGSERIAL    PRIMARY KEY,
+        tenant_id       BIGINT       NOT NULL,
+        user_id         BIGINT       NOT NULL,
+        occurred_at     TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        country_code    CHAR(2),
+        region_code     VARCHAR(8),
+        risk_decision   VARCHAR(16)  NOT NULL DEFAULT 'ok',
+        decision_reason VARCHAR(64)
+    );
+    CREATE INDEX IF NOT EXISTS ix_login_geo_events_user
+        ON login_geo_events (tenant_id, user_id, occurred_at DESC);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Employee receipt settlements
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS employee_receipt_settlements (
+        id          BIGSERIAL       PRIMARY KEY,
+        tenant_id   BIGINT          NOT NULL,
+        employee_id BIGINT          NOT NULL,
+        advance_id  BIGINT          NOT NULL,
+        receipt_id  BIGINT          NOT NULL,
+        amount      NUMERIC(18,4)   NOT NULL,
+        status      VARCHAR(16)     NOT NULL DEFAULT 'draft',
+        approved_by BIGINT,
+        je_id       BIGINT,
+        created_at  TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at  TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_employee_receipt_settlements_emp
+        ON employee_receipt_settlements (tenant_id, employee_id, status);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: recurring_journal_templates extensions
+    -- ═══════════════════════════════════════════════════════════════════
+    ALTER TABLE recurring_journal_templates
+        ADD COLUMN IF NOT EXISTS review_threshold  NUMERIC(18,4),
+        ADD COLUMN IF NOT EXISTS auto_approve       BOOLEAN NOT NULL DEFAULT false,
+        ADD COLUMN IF NOT EXISTS expense_category_id BIGINT;
+
+    CREATE TABLE IF NOT EXISTS recurring_je_pending_review (
+        id                  BIGSERIAL     PRIMARY KEY,
+        tenant_id           BIGINT        NOT NULL,
+        template_id         BIGINT        NOT NULL REFERENCES recurring_journal_templates(id) ON DELETE CASCADE,
+        run_date            DATE          NOT NULL,
+        amount              NUMERIC(18,4) NOT NULL,
+        expense_category_id BIGINT,
+        lines               JSONB         NOT NULL DEFAULT '[]',
+        status              VARCHAR(16)   NOT NULL DEFAULT 'pending'
+                            CHECK (status IN ('pending','approved','rejected','posted')),
+        journal_entry_id    BIGINT,
+        approved_by         BIGINT,
+        approved_at         TIMESTAMPTZ,
+        rejected_by         BIGINT,
+        rejected_at         TIMESTAMPTZ,
+        rejection_reason    TEXT,
+        created_at          TIMESTAMPTZ   NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ   NOT NULL DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_recurring_review_tenant_status
+        ON recurring_je_pending_review (tenant_id, status);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 022: Default settings keys (idempotent on re-run)
+    -- ═══════════════════════════════════════════════════════════════════
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES
+        ('audit.outbox.flush_sla_seconds', '60'),
+        ('audit.outbox.batch_size', '200'),
+        ('webhook.ratelimit.window_seconds', '60'),
+        ('webhook.ratelimit.max_requests', '120'),
+        ('bank_feed.failure_alert_threshold', '3'),
+        ('reconciliation.drift_tolerance', '0.01'),
+        ('gl.je_epsilon', '0.005'),
+        ('fiscal.allow_drafts_in_closed_period', 'false'),
+        ('expenses.auto_approve_threshold', '0'),
+        ('expenses.cost_center_policy', 'warn'),
+        ('recurring.review_threshold_default', '0')
+    ON CONFLICT (setting_key) DO NOTHING;
+    """
+
+
+def get_feature023_tables_sql() -> str:
+    """Feature 023: Sales/POS/CRM/ZATCA + Inventory/Costing/Manufacturing tables.
+
+    New tables: zatca_outbox, returns_unified, returns_unified_lines,
+    opportunity_stage_history, pos_offline_batches, item_warehouse_settings,
+    mrp_recommendations, bom_snapshots, production_completions, scrap_movements,
+    inventory_transactions_archive.
+
+    Extensions: invoices (state, idempotency), sales_orders (invoice link),
+    manufacturing_orders (bom_snapshot, remaining_qty, qc, approval),
+    workstations (overhead_rate), acc_map_sales (direction).
+    """
+    return """
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Invoice state + idempotency
+    -- ═══════════════════════════════════════════════════════════════════
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS state VARCHAR(32) NOT NULL DEFAULT 'draft';
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(64);
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS posted_at TIMESTAMPTZ;
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS posted_by BIGINT;
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS state_reason TEXT;
+
+    DO $$ BEGIN
+        ALTER TABLE invoices ADD CONSTRAINT chk_invoice_state
+            CHECK (state IN ('draft','posted','submitted','cleared','reported','reversed','cancelled'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_invoice_idempotency
+        ON invoices (tenant_id, sales_order_id, idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_invoices_state
+        ON invoices (tenant_id, state);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Sales order → invoice link
+    -- ═══════════════════════════════════════════════════════════════════
+    ALTER TABLE sales_orders
+        ADD COLUMN IF NOT EXISTS converted_to_invoice_id BIGINT;
+    ALTER TABLE sales_orders
+        ADD COLUMN IF NOT EXISTS responsible_user_id BIGINT;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_so_converted_invoice
+        ON sales_orders (tenant_id, converted_to_invoice_id)
+        WHERE converted_to_invoice_id IS NOT NULL;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Returns unified
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS returns_unified (
+        id                  BIGSERIAL       PRIMARY KEY,
+        tenant_id           BIGINT          NOT NULL,
+        source              VARCHAR(16)     NOT NULL,
+        original_invoice_id BIGINT,
+        original_pos_sale_id BIGINT,
+        state               VARCHAR(20)     NOT NULL DEFAULT 'draft',
+        restock_warehouse_id BIGINT,
+        je_id               BIGINT,
+        total_amount        NUMERIC(18,4)   NOT NULL DEFAULT 0,
+        reason              TEXT,
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        created_by          BIGINT,
+        updated_by          BIGINT,
+        deleted_at          TIMESTAMPTZ
+    );
+
+    CREATE TABLE IF NOT EXISTS returns_unified_lines (
+        id          BIGSERIAL       PRIMARY KEY,
+        tenant_id   BIGINT          NOT NULL,
+        return_id   BIGINT          NOT NULL,
+        line_no     INT             NOT NULL,
+        item_id     BIGINT          NOT NULL,
+        qty         NUMERIC(18,4)   NOT NULL,
+        unit_price  NUMERIC(18,4)   NOT NULL,
+        tax_id      BIGINT,
+        tax_rate    NUMERIC(8,4),
+        tax_rate_id INTEGER         REFERENCES tax_rates(id),
+        created_at  TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS idx_returns_unified_lines_tax_rate ON returns_unified_lines(tax_rate_id);
+
+    CREATE INDEX IF NOT EXISTS ix_returns_unified_tenant
+        ON returns_unified (tenant_id, state);
+    CREATE INDEX IF NOT EXISTS ix_returns_unified_lines_return
+        ON returns_unified_lines (tenant_id, return_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_return_draft_invoice
+        ON returns_unified (tenant_id, original_invoice_id)
+        WHERE state = 'draft' AND original_invoice_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_return_draft_pos
+        ON returns_unified (tenant_id, original_pos_sale_id)
+        WHERE state = 'draft' AND original_pos_sale_id IS NOT NULL;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: acc_map_sales direction consolidation
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS acc_map_sales (
+        id           BIGSERIAL      PRIMARY KEY,
+        tenant_id    BIGINT,
+        mapping_key  VARCHAR(64)    NOT NULL,
+        account_code VARCHAR(64)    NOT NULL,
+        direction    VARCHAR(16)    NOT NULL DEFAULT 'forward',
+        created_at   TIMESTAMPTZ    NOT NULL DEFAULT clock_timestamp(),
+        updated_at   TIMESTAMPTZ    NOT NULL DEFAULT clock_timestamp()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_acc_map_sales_key_direction
+        ON acc_map_sales (tenant_id, mapping_key, direction);
+
+    ALTER TABLE acc_map_sales
+        ADD COLUMN IF NOT EXISTS direction VARCHAR(16) NOT NULL DEFAULT 'forward';
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: ZATCA outbox
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS zatca_outbox (
+        id                  BIGSERIAL       PRIMARY KEY,
+        tenant_id           BIGINT          NOT NULL,
+        invoice_id          BIGINT          NOT NULL,
+        state               VARCHAR(20)     NOT NULL DEFAULT 'pending',
+        attempts            INT             NOT NULL DEFAULT 0,
+        next_attempt_at     TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        last_error          TEXT,
+        idempotency_key     VARCHAR(64),
+        signed_xml          TEXT,
+        cleared_reference   VARCHAR(64),
+        reported_reference  VARCHAR(64),
+        submitted_at        TIMESTAMPTZ,
+        acknowledged_at     TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE zatca_outbox ADD CONSTRAINT chk_zatca_outbox_state
+            CHECK (state IN ('pending','submitting','submitted','cleared','reported','failed','dead_letter'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_zatca_outbox_invoice
+        ON zatca_outbox (tenant_id, invoice_id);
+    CREATE INDEX IF NOT EXISTS ix_zatca_outbox_worker
+        ON zatca_outbox (tenant_id, state, next_attempt_at)
+        WHERE state IN ('pending', 'failed');
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Opportunity stage history
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS opportunity_stage_history (
+        id              BIGSERIAL       PRIMARY KEY,
+        tenant_id       BIGINT          NOT NULL,
+        opportunity_id  BIGINT          NOT NULL,
+        from_stage      VARCHAR(32),
+        to_stage        VARCHAR(32)     NOT NULL,
+        entered_at      TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        actor_id        BIGINT,
+        reason          TEXT,
+        created_at      TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    CREATE INDEX IF NOT EXISTS ix_opp_stage_history_lookup
+        ON opportunity_stage_history (tenant_id, opportunity_id, entered_at);
+    CREATE INDEX IF NOT EXISTS ix_opp_stage_history_funnel
+        ON opportunity_stage_history (tenant_id, to_stage, entered_at);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: POS offline batches
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS pos_offline_batches (
+        id                  BIGSERIAL       PRIMARY KEY,
+        tenant_id           BIGINT          NOT NULL,
+        device_id           VARCHAR(64)     NOT NULL,
+        client_uuid         UUID            NOT NULL,
+        state               VARCHAR(20)     NOT NULL DEFAULT 'queued',
+        payload             JSONB           NOT NULL DEFAULT '{}',
+        pos_sale_id         BIGINT,
+        failure_reason_code VARCHAR(32),
+        failure_detail      TEXT,
+        queued_at           TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        processed_at        TIMESTAMPTZ,
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE pos_offline_batches ADD CONSTRAINT chk_pos_offline_state
+            CHECK (state IN ('queued','reconciling','committed','manual_review','failed'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uix_pos_offline_device_uuid
+        ON pos_offline_batches (tenant_id, device_id, client_uuid);
+    CREATE INDEX IF NOT EXISTS ix_pos_offline_queued
+        ON pos_offline_batches (tenant_id, state, queued_at)
+        WHERE state = 'queued';
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Item warehouse settings
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS item_warehouse_settings (
+        tenant_id           BIGINT          NOT NULL,
+        item_id             BIGINT          NOT NULL,
+        warehouse_id        BIGINT          NOT NULL,
+        reorder_point       NUMERIC(18,4),
+        reorder_quantity    NUMERIC(18,4),
+        safety_stock        NUMERIC(18,4),
+        lead_time_days      INT,
+        preferred_supplier_id BIGINT,
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        PRIMARY KEY (tenant_id, item_id, warehouse_id)
+    );
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: MRP recommendations
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS mrp_recommendations (
+        id              BIGSERIAL       PRIMARY KEY,
+        tenant_id       BIGINT          NOT NULL,
+        run_id          UUID            NOT NULL,
+        item_id         BIGINT          NOT NULL,
+        warehouse_id    BIGINT          NOT NULL,
+        recommended_qty NUMERIC(18,4),
+        due_date        DATE,
+        supplier_id     BIGINT,
+        state           VARCHAR(20)     NOT NULL DEFAULT 'open',
+        po_id           BIGINT,
+        reason          TEXT,
+        created_at      TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        updated_at      TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE mrp_recommendations ADD CONSTRAINT chk_mrp_rec_state
+            CHECK (state IN ('open','accepted','dismissed','converted_to_po'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS ix_mrp_recommendations_state
+        ON mrp_recommendations (tenant_id, state, run_id);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: BOM snapshots + MO extensions
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS bom_snapshots (
+        id              BIGSERIAL       PRIMARY KEY,
+        tenant_id       BIGINT          NOT NULL,
+        mo_id           BIGINT          NOT NULL UNIQUE,
+        bom_id          BIGINT          NOT NULL,
+        bom_version     INT             NOT NULL,
+        payload         JSONB           NOT NULL DEFAULT '{}',
+        created_at      TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS bom_snapshot_id BIGINT;
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS remaining_qty NUMERIC(18,4);
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS qc_required BOOLEAN DEFAULT FALSE;
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS requires_approval BOOLEAN DEFAULT FALSE;
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS approved_by BIGINT;
+    ALTER TABLE manufacturing_orders
+        ADD COLUMN IF NOT EXISTS approved_at TIMESTAMPTZ;
+
+    DO $$ BEGIN
+        ALTER TABLE manufacturing_orders
+            ADD CONSTRAINT fk_mo_bom_snapshot
+            FOREIGN KEY (bom_snapshot_id) REFERENCES bom_snapshots(id);
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Production completions + scrap
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS production_completions (
+        id                      BIGSERIAL       PRIMARY KEY,
+        tenant_id               BIGINT          NOT NULL,
+        mo_id                   BIGINT          NOT NULL,
+        qty                     NUMERIC(18,4)   NOT NULL,
+        actual_material_cost    NUMERIC(18,4),
+        actual_labor_cost       NUMERIC(18,4),
+        actual_overhead_cost    NUMERIC(18,4),
+        byproduct_allocation_method VARCHAR(20),
+        wip_to_fg_je_id         BIGINT          NOT NULL,
+        qc_state                VARCHAR(20),
+        completed_at            TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        created_at              TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE production_completions ADD CONSTRAINT chk_pc_qc_state
+            CHECK (qc_state IN ('pending','passed','failed','n/a'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS ix_prod_completions_mo
+        ON production_completions (tenant_id, mo_id, completed_at);
+
+    CREATE TABLE IF NOT EXISTS scrap_movements (
+        id                  BIGSERIAL       PRIMARY KEY,
+        tenant_id           BIGINT          NOT NULL,
+        item_id             BIGINT          NOT NULL,
+        warehouse_id        BIGINT          NOT NULL,
+        qty                 NUMERIC(18,4)   NOT NULL,
+        unit_cost_at_scrap  NUMERIC(18,4)   NOT NULL,
+        reason              VARCHAR(64)     NOT NULL,
+        mo_id               BIGINT,
+        je_id               BIGINT          NOT NULL,
+        occurred_at         TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
+        created_at          TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp()
+    );
+
+    DO $$ BEGIN
+        ALTER TABLE scrap_movements ADD CONSTRAINT chk_scrap_reason
+            CHECK (reason IN ('mo_loss','qc_fail','expiry','damage','other'));
+    EXCEPTION WHEN duplicate_object THEN NULL;
+    END $$;
+
+    CREATE INDEX IF NOT EXISTS ix_scrap_movements_item
+        ON scrap_movements (tenant_id, item_id, occurred_at);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Workstation overhead
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS workstations (
+        id             BIGSERIAL      PRIMARY KEY,
+        tenant_id      BIGINT,
+        name           VARCHAR(255),
+        code           VARCHAR(64),
+        overhead_rate  NUMERIC(18,4),
+        effective_from DATE,
+        effective_to   DATE,
+        created_at     TIMESTAMPTZ    NOT NULL DEFAULT clock_timestamp(),
+        updated_at     TIMESTAMPTZ    NOT NULL DEFAULT clock_timestamp()
+    );
+
+    ALTER TABLE workstations
+        ADD COLUMN IF NOT EXISTS overhead_rate NUMERIC(18,4);
+    ALTER TABLE workstations
+        ADD COLUMN IF NOT EXISTS effective_from DATE;
+    ALTER TABLE workstations
+        ADD COLUMN IF NOT EXISTS effective_to DATE;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Inventory transactions archive
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS inventory_transactions_archive (
+        LIKE inventory_transactions INCLUDING DEFAULTS INCLUDING CONSTRAINTS
+    );
+
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_item_wh
+        ON inventory_transactions_archive (tenant_id, item_id, warehouse_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_tenant_date
+        ON inventory_transactions_archive (tenant_id, occurred_at);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 023: Settings keys
+    -- ═══════════════════════════════════════════════════════════════════
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES
+        ('pos.lock_ttl_seconds', '5'),
+        ('pos.offline_batch_max_age_hours', '72'),
+        ('zatca.outbox_max_attempts', '8'),
+        ('zatca.outbox_backoff_base_seconds', '30'),
+        ('zatca.outbox_backoff_cap_seconds', '1800'),
+        ('zatca.profile', 'standard'),
+        ('inventory.retention_days', '365'),
+        ('inventory.low_stock_debounce_hours', '36'),
+        ('inventory.auto_reorder_enabled', 'false'),
+        ('inventory.allow_negative_balance', 'block'),
+        ('manufacturing.large_mo_threshold', '100000.0000'),
+        ('manufacturing.yield_tolerance', '0.05'),
+        ('manufacturing.missing_mapping_policy', 'warn'),
+        ('manufacturing.global_overhead_rate', '0.0000'),
+        ('manufacturing.qc_required_default', 'false'),
+        ('crm.velocity_window_days', '90'),
+        ('crm.funnel_window_days', '90'),
+        ('crm.cashflow_horizon_days', '180'),
+        ('mrp.horizon_days', '60')
+    ON CONFLICT (setting_key) DO NOTHING;
+    """
+
+
+def get_feature024_tables_sql() -> str:
+    """Feature 024: Workforce/Service/Comms integrity settings seed.
+
+    Table DDL is handled by Alembic migrations (024a–024r). This function
+    seeds the 17 new company_settings keys required by Feature 024 and
+    creates the scheduled_job_runs table for scheduler idempotency.
+    """
+    return """
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024: scheduled_job_runs (scheduler idempotency)
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS scheduled_job_runs (
+        id              SERIAL PRIMARY KEY,
+        tenant_id       INTEGER,
+        job_id          VARCHAR(255) NOT NULL,
+        scheduled_for   TIMESTAMP WITH TIME ZONE NOT NULL,
+        attempt         INTEGER NOT NULL DEFAULT 1,
+        status          VARCHAR(50) NOT NULL DEFAULT 'running',
+        started_at      TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        finished_at     TIMESTAMP WITH TIME ZONE,
+        error           TEXT,
+        UNIQUE (job_id, scheduled_for, attempt)
+    );
+    CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
+        ON scheduled_job_runs (status, scheduled_for);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024: Settings keys
+    -- ═══════════════════════════════════════════════════════════════════
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES
+        ('hr.salary_encryption_enabled', 'true'),
+        ('hr.service_years_policy', 'months_precise'),
+        ('company_timezone', 'Asia/Riyadh'),
+        ('payroll.allow_backdated_increment', 'false'),
+        ('fsm.auto_assign_threshold', '0.75'),
+        ('fsm.zero_revenue_approval_required', 'true'),
+        ('dms.tenant_quota_mb', '51200'),
+        ('dms.user_quota_mb', '2048'),
+        ('dms.orphan_retention_days', '30'),
+        ('dms.storage_root', '/var/aman/dms'),
+        ('dms.scan_max_pending_minutes', '30'),
+        ('dms.scan_engine', 'clamav'),
+        ('dms.allowed_mime_groups', '["image/*","application/pdf","application/zip","application/vnd.openxmlformats-officedocument*","text/plain","text/csv"]'),
+        ('notifications.max_attempts', '5'),
+        ('notifications.dedupe_window_seconds', '300'),
+        ('notifications.default_locale', 'en'),
+        ('auth.approval_token_ttl_minutes', '1440')
+    ON CONFLICT (setting_key) DO NOTHING;
+    """
+
+
+def get_feature025_settings_seed_sql() -> str:
+    """Feature 025: Reports/Cache/KPI/Scheduler/Backup/Search settings seed.
+
+    Seeds the company_settings keys required by Feature 025 per data-model.md §F.
+    """
+    return """
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 025: Settings keys (R7 + R8)
+    -- ═══════════════════════════════════════════════════════════════════
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES
+        ('cache.backend', 'redis'),
+        ('cache.circuit_breaker.failures', '5'),
+        ('cache.circuit_breaker.cool_down_seconds', '30'),
+        ('reports.mv.refresh_interval_minutes', '15'),
+        ('reports.warmup_keys', '["coa:summary","kpi:operating_margin","dashboard:home"]'),
+        ('reports.kpi.evaluation_interval_minutes', '15'),
+        ('reports.income_statement.include_headers', 'true'),
+        ('reports.trial_balance.tolerance', '0.01'),
+        ('audit.retention_months', '36'),
+        ('search.autocomplete_debounce_ms', '300'),
+        ('search.query_logs_retention_days', '90'),
+        ('fx.cache_ttl_minutes', '30'),
+        ('fx.stale_tolerance_minutes', '120'),
+        ('backup.local_time', '02:00'),
+        ('backup.retention_days', '30'),
+        ('backup.min_retained', '3'),
+        ('backup.max_consecutive_failures', '3'),
+        ('backup.offsite_provider', 's3')
+    ON CONFLICT (setting_key) DO NOTHING;
     """

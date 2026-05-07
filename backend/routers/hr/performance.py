@@ -12,7 +12,7 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse, get_current_user_company
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access
 from utils.audit import log_activity
 from schemas.performance import (
     ReviewCycleCreate, GoalCreate, SelfAssessmentSubmit, ManagerAssessmentSubmit,
@@ -25,6 +25,11 @@ router = APIRouter(
     tags=["Performance Reviews - تقييم الأداء"],
     dependencies=[Depends(require_module("hr"))],
 )
+
+
+def _branch_condition(current_user, branch_id, column: str, params: Dict[str, Any], branch_param: str = "bid") -> str:
+    clause = branch_scope_filter(current_user, branch_id, column, params, branch_param=branch_param)
+    return clause[4:].strip() if clause.startswith("AND ") else clause.strip()
 
 
 # =============================================
@@ -81,8 +86,6 @@ def list_cycles(
     """List Cycles."""
     conn = get_db_connection(company_id)
     try:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         conditions = ["1=1"]
         params = {}
         if status:
@@ -90,9 +93,9 @@ def list_cycles(
             params["status"] = status
 
         branch_filter = ""
-        if branch_id:
-            branch_filter = "AND pr_inner.employee_id IN (SELECT id FROM employees WHERE branch_id = :bid)"
-            params["bid"] = branch_id
+        branch_condition = _branch_condition(current_user, branch_id, "branch_id", params)
+        if branch_condition:
+            branch_filter = f"AND pr_inner.employee_id IN (SELECT id FROM employees WHERE {branch_condition})"
 
         try:
             rows = conn.execute(text(f"""
@@ -150,9 +153,6 @@ def launch_cycle(
         if existing > 0:
             raise HTTPException(status_code=400, detail="Reviews already exist for this cycle")
 
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
-
         # Fetch active employees with their managers
         emp_query = """
             SELECT e.id as employee_id,
@@ -165,9 +165,9 @@ def launch_cycle(
             WHERE e.status = 'active'
         """
         emp_params = {}
-        if branch_id:
-            emp_query += " AND e.branch_id = :bid"
-            emp_params["bid"] = branch_id
+        branch_condition = _branch_condition(current_user, branch_id, "e.branch_id", emp_params)
+        if branch_condition:
+            emp_query += " AND " + branch_condition
         employees = conn.execute(text(emp_query), emp_params).fetchall()
 
         if not employees:
@@ -234,17 +234,14 @@ def list_my_reviews(
         if not emp:
             return []
 
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
-
         conditions = ["pr.employee_id = :eid"]
         params = {"eid": emp[0]}
         if cycle_id:
             conditions.append("pr.cycle_id = :cid")
             params["cid"] = cycle_id
-        if branch_id:
-            conditions.append("e.branch_id = :bid")
-            params["bid"] = branch_id
+        branch_condition = _branch_condition(current_user, branch_id, "e.branch_id", params)
+        if branch_condition:
+            conditions.append(branch_condition)
 
         rows = conn.execute(text(f"""
             SELECT pr.*,
@@ -364,15 +361,12 @@ def list_team_reviews(
             conditions = ["pr.reviewer_id = :mgr_id"]
             params = {"mgr_id": mgr[0]}
 
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
-
         if cycle_id:
             conditions.append("pr.cycle_id = :cid")
             params["cid"] = cycle_id
-        if branch_id:
-            conditions.append("e.branch_id = :bid")
-            params["bid"] = branch_id
+        branch_condition = _branch_condition(current_user, branch_id, "e.branch_id", params)
+        if branch_condition:
+            conditions.append(branch_condition)
 
         rows = conn.execute(text(f"""
             SELECT pr.*,

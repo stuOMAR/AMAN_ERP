@@ -122,7 +122,7 @@ function SupplierList() {
             ),
         },
         {
-            key: 'current_balance',
+            key: 'balance_display',
             label: t('buying.suppliers.table.balance'),
             width: '15%',
             render: (val, row) => (
@@ -132,7 +132,7 @@ function SupplierList() {
                     direction: 'ltr',
                     textAlign: i18n.language === 'ar' ? 'right' : 'left',
                 }}>
-                    {(val || 0).toLocaleString()} {row.currency || currency}
+                    {(val || 0).toLocaleString()} {row.display_currency || currency}
                 </div>
             ),
         },

@@ -57,9 +57,9 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
             result = db.execute(text("""
                 INSERT INTO blanket_purchase_orders
                     (supplier_id, agreement_number, total_quantity, unit_price, total_amount,
-                     valid_from, valid_to, status, branch_id, currency, notes, created_by)
+                     valid_from, valid_to, status, branch_id, currency, notes, created_by, party_site_id)
                 VALUES (:supplier_id, :agr_num, :total_qty, :unit_price, :total_amount,
-                        :valid_from, :valid_to, 'draft', :branch_id, :currency, :notes, :created_by)
+                        :valid_from, :valid_to, 'draft', :branch_id, :currency, :notes, :created_by, :party_site_id)
                 RETURNING id
             """), {
                 "supplier_id": payload.supplier_id,
@@ -73,6 +73,7 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
                 "currency": payload.currency or "SAR",
                 "notes": payload.notes,
                 "created_by": username,
+                "party_site_id": payload.party_site_id,
             })
             bpo_id = result.fetchone()[0]
     

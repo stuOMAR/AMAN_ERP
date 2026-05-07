@@ -34,7 +34,12 @@ import api from '../services/apiClient'
 import { searchAPI } from '../services/search'
 import { partiesAPI } from '../services/parties'
 import { hrAdvancedAPI } from '../services/hr'
-import { fetchCurrentRate, clearExchangeRateCache } from '../hooks/useExchangeRate'
+import {
+    fetchCurrentRate,
+    fetchCrossExchangeRate,
+    calculateCrossExchangeRate,
+    clearExchangeRateCache,
+} from '../hooks/useExchangeRate'
 import { currenciesAPI } from '../services/accounting'
 
 // ---- Tests ---------------------------------------------------------------
@@ -148,5 +153,20 @@ describe('hooks/useExchangeRate — fetchCurrentRate', () => {
         currenciesAPI.getCurrentRate.mockResolvedValueOnce({ data: { rate: 0 } })
         const r = await fetchCurrentRate('XYZ')
         expect(r).toBe(1.0)
+    })
+
+    it('calculates source-to-target cross rates from base-currency rates', () => {
+        expect(calculateCrossExchangeRate(1.021, 1)).toBe(1.021)
+        expect(calculateCrossExchangeRate(3.75, 1.021)).toBe(3.67286974)
+    })
+
+    it('fetches source and target rates before calculating a cross rate', async () => {
+        currenciesAPI.getCurrentRate
+            .mockResolvedValueOnce({ data: { rate: 1.021 } })
+            .mockResolvedValueOnce({ data: { rate: 1 } })
+
+        const r = await fetchCrossExchangeRate('AED', 'SAR')
+        expect(r).toBe(1.021)
+        expect(currenciesAPI.getCurrentRate).toHaveBeenCalledTimes(2)
     })
 })

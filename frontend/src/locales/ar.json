@@ -1333,7 +1333,8 @@
     "status": "الحالة",
     "select_branch": "اختر الفرع",
     "current_branch": "الفرع الحالي",
-    "all_branches": "كل الفروع"
+    "all_branches": "كل الفروع",
+    "all_my_branches": "كل فروعي"
   },
   "countries": {
     "SA": "المملكة العربية السعودية",
@@ -5039,6 +5040,8 @@
       "unbalanced_error": "يجب أن يكون القيد متوازناً (المدين يساوي الدائن)",
       "zero_amount_error": "لا يمكن أن يكون المبلغ صفراً",
       "account_required": "يجب اختيار الحساب لكل الأسطر",
+      "debit_credit_required": "يجب أن يحتوي القيد على سطر مدين وآخر دائن على الأقل",
+      "both_debit_credit": "لا يمكن أن يحتوي السطر على مبلغ مدين ودائن معاً. استخدم أسطر منفصلة.",
       "desc_placeholder": "وصف القيد العام...",
       "line_desc_placeholder": "وصف السطر...",
       "post": "ترحيل",
@@ -11156,5 +11159,73 @@
     "goods_receipt": "استلام بضائع",
     "purchase_requisition": "طلب احتياج"
   },
-  "system": {}
+  "system": {},
+  "credentials": {
+    "title": "بيانات اعتماد التكامل",
+    "create": "إنشاء بيانات اعتماد",
+    "integration": "التكامل",
+    "name": "الاسم",
+    "secret": "المفتاح السري",
+    "status": "الحالة",
+    "failures": "الإخفاقات",
+    "rotate": "تدوير المفتاح",
+    "delete": "حذف",
+    "restore": "استعادة",
+    "new_secret_prompt": "أدخل المفتاح السري الجديد:",
+    "confirm_delete": "هل أنت متأكد من الحذف المؤقت لبيانات الاعتماد هذه؟"
+  },
+  "account_classifications": {
+    "title": "تصنيفات الحسابات",
+    "edit": "تعديل التصنيف",
+    "account_id": "رقم الحساب",
+    "category": "الفئة",
+    "sign": "الإشارة",
+    "hint": "تلميح التجميع",
+    "active": "نشط",
+    "select_category": "اختر الفئة"
+  },
+  "recurring_review": {
+    "title": "مراجعة القوالب المتكررة",
+    "id": "المعرف",
+    "template": "القالب",
+    "amount": "المبلغ",
+    "run_date": "تاريخ التنفيذ",
+    "created": "تاريخ الإنشاء",
+    "approve": "موافقة",
+    "reject": "رفض",
+    "confirm_approve": "هل توافق على قيد اليومية المتكرر وترسله؟",
+    "reject_title": "رفض قيد اليومية المتكرر",
+    "reject_reason_placeholder": "أدخل سبب الرفض...",
+    "confirm_reject": "تأكيد الرفض",
+    "empty": "لا توجد مراجعات معلقة"
+  },
+  "policy_settings": {
+    "title": "إعدادات السياسات",
+    "group_finance": "المالية",
+    "group_expenses": "المصروفات",
+    "group_integrations": "التكاملات",
+    "group_audit": "التدقيق",
+    "drift_tolerance": "تسامح انحراف التسوية",
+    "je_epsilon": "دقة التقريب (JE)",
+    "allow_drafts_closed": "السماح بالمسودات في الفترة المغلقة",
+    "auto_approve_threshold": "حد الموافقة التلقائية",
+    "cost_center_policy": "سياسة مركز التكلفة",
+    "webhook_rate_limit": "حد معدل Webhook (طلب/دقيقة)",
+    "audit_sla_hours": "اتفاقية مستوى خدمة التدقيق (ساعات)",
+    "recurring_review_threshold": "حد مراجعة القوالب المتكررة",
+    "save_success": "تم حفظ الإعدادات بنجاح"
+  },
+  "reconciliation": {
+    "drift_title": "تم اكتشاف انحراف في التسوية",
+    "gl_total": "إجمالي دفتر الأستاذ",
+    "bank_total": "إجمالي البنك",
+    "difference": "الفرق",
+    "tolerance": "التسامح",
+    "unmatched_lines": "أسطر غير مطابقة",
+    "line_id": "رقم السطر",
+    "description": "الوصف",
+    "amount": "المبلغ",
+    "force_finalize": "إجبار الاعتماد",
+    "close": "إغلاق"
+  }
 }

@@ -5,9 +5,9 @@ export const purchasesAPI = {
     listInvoices: (params) => api.get('/buying/invoices', { params }),
     getInvoice: (id) => api.get(`/buying/invoices/${id}`),
 
-    // Suppliers (via buying prefix)
-    listSuppliers: (params) => api.get('/buying/suppliers', { params }),
-    createSupplier: (data) => api.post('/buying/suppliers', data),
+    // Suppliers are owned by the inventory/parties router and reused by buying flows.
+    listSuppliers: (params) => api.get('/inventory/suppliers', { params }),
+    createSupplier: (data) => api.post('/inventory/suppliers', data),
 
     // Purchase Orders
     listOrders: (params) => api.get('/buying/orders', { params }),

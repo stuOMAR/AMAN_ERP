@@ -16,10 +16,12 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import require_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.party_balance import update_party_site_balance
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
@@ -38,6 +40,73 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _require_account_map(db, key: str, label_ar: str) -> int:
+    """Return required mapped account id or raise a clear 400 if missing."""
+    acc_id = get_mapped_account_id(db, key)
+    if not acc_id:
+        raise HTTPException(
+            status_code=400,
+            detail=f"لم يتم ضبط حساب {label_ar} في إعدادات ربط الحسابات ({key})"
+        )
+    return int(acc_id)
+
+
+def _parties_has_balance_currency(db) -> bool:
+    """Return True when tenant parties table has balance_currency column."""
+    return bool(db.execute(text("""
+        SELECT EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'parties'
+              AND column_name = 'balance_currency'
+        )
+    """)).scalar())
+
+
+@router.post("/invoices/preview", dependencies=[Depends(require_permission("buying.create"))])
+def preview_purchase_invoice_totals(invoice: PurchaseCreate, current_user: dict = Depends(get_current_user)):
+    """حساب إجماليات فاتورة المشتريات بدون حفظ"""
+    from utils.accounting import compute_invoice_totals, compute_line_amounts
+
+    lines_data = [
+        {"quantity": item.quantity, "unit_price": item.unit_price, "tax_rate": item.tax_rate, "discount": item.discount}
+        for item in invoice.items
+    ]
+    totals = compute_invoice_totals(lines_data, invoice.effect_percentage or 0, invoice.markup_amount or 0, discount_is_percent=False)
+
+    line_details = []
+    for item in invoice.items:
+        la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, item.discount, discount_is_percent=False)
+        line_details.append({
+            "product_id": item.product_id,
+            "description": item.description,
+            "quantity": float(item.quantity),
+            "unit_price": float(item.unit_price),
+            "tax_rate": float(item.tax_rate),
+            "discount": float(item.discount),
+            "subtotal": float(la["subtotal"]),
+            "discount_amount": float(la["discount_amount"]),
+            "taxable": float(la["taxable"]),
+            "tax_amount": float(la["tax_amount"]),
+            "line_total": float(la["line_total"]),
+        })
+
+    paid = float(invoice.paid_amount or 0)
+    grand = float(totals["grand_total"])
+
+    return {
+        "lines": line_details,
+        "subtotal": float(totals["subtotal"]),
+        "total_discount": float(totals["total_discount"]),
+        "total_tax": float(totals["total_tax"]),
+        "grand_total": grand,
+        "paid_amount": paid,
+        "remaining_balance": grand - paid,
+        "currency": invoice.currency or "SAR",
+    }
+
+
 @router.get("/invoices", dependencies=[Depends(require_permission("buying.view"))], response_model=List[dict])
 def list_purchase_invoices(
     supplier_id: Optional[int] = None,
@@ -47,16 +116,17 @@ def list_purchase_invoices(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض فواتير المشتريات"""
-    from utils.permissions import validate_branch_access
     from repositories import InvoiceRepository
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    validated_branch = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         repo = InvoiceRepository(db)
+        base_currency = get_base_currency(db)
         rows = repo.list(
             invoice_type="purchase",
             party_id=supplier_id,
-            branch_id=validated_branch,
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
             limit=limit,
             offset=skip,
         )
@@ -67,6 +137,10 @@ def list_purchase_invoices(
                 "supplier_name": r["party_name"],
                 "invoice_date": r["invoice_date"],
                 "total": r["total"],
+                "currency": r.get("currency") or base_currency,
+                "exchange_rate": r.get("exchange_rate") or 1,
+                "base_currency": base_currency,
+                "total_base": float(_dec(r["total"]) * _dec(r.get("exchange_rate") or 1)),
                 "status": r["status"],
             }
             for r in rows
@@ -165,6 +239,13 @@ async def create_purchase_invoice(
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
         try:
+            validated_branch_id = validate_branch_access(current_user, invoice.branch_id)
+            selected_treasury = None
+            if invoice.treasury_id:
+                selected_treasury = validate_treasury_account_access(
+                    db, current_user, invoice.treasury_id, validated_branch_id
+                )
+
             # --- 0. Currency & Exchange Rate Logic ---
             # Get Company Base Currency
             base_currency_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
@@ -246,32 +327,47 @@ async def create_purchase_invoice(
                     # quality_inspections table may not exist on some tenants; skip silently.
                     pass
     
-            # 3. Calculate Totals (TASK-027: unified via compute_invoice_totals)
+            # 3. Calculate Totals (tax resolved via engine)
             from utils.accounting import compute_invoice_totals as _cit, compute_line_amounts as _cla
     
             lines_data = []
+            _branch_id = validated_branch_id or invoice.branch_id
+            _doc_date = invoice.invoice_date if hasattr(invoice, 'invoice_date') and invoice.invoice_date else None
             for item in invoice.items:
-                la = _cla(item.quantity, item.unit_price, item.tax_rate, item.discount)
+                tax_info = resolve_line_tax(_branch_id, item.product_id, db, _doc_date)
+                la = _cla(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
                 lines_data.append({
                     "product_id": item.product_id,
                     "description": item.description,
                     "quantity": item.quantity,
                     "unit_price": item.unit_price,
-                    "tax_rate": item.tax_rate,
+                    "tax_rate": tax_info["tax_rate"],
+                    "tax_rate_id": tax_info["tax_rate_id"],
                     "discount": item.discount,
                     "markup": getattr(item, "markup", 0.0),
                     "total": la["line_total"],
                 })
     
+            header_discount_pct = (
+                _dec(invoice.effect_percentage)
+                if getattr(invoice, "effect_type", "discount") == "discount"
+                else Decimal("0")
+            )
+            markup_amount = (
+                _dec(invoice.markup_amount)
+                if getattr(invoice, "effect_type", "discount") == "markup"
+                else Decimal("0")
+            )
+
             _totals = _cit([
                 {
-                    "quantity": item.quantity,
-                    "unit_price": item.unit_price,
-                    "tax_rate": item.tax_rate,
-                    "discount": item.discount,
+                    "quantity": it["quantity"],
+                    "unit_price": it["unit_price"],
+                    "tax_rate": it["tax_rate"],
+                    "discount": it["discount"],
                 }
-                for item in invoice.items
-            ])
+                for it in lines_data
+            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount)
             subtotal = _totals["subtotal"]
             total_tax = _totals["total_tax"]
             total_discount = _totals["total_discount"]
@@ -316,7 +412,7 @@ async def create_purchase_invoice(
                 "notes": invoice.notes,
                 "dp_method": invoice.down_payment_method,
                 "user": current_user.get("id") if isinstance(current_user, dict) else current_user.id,
-                "branch": invoice.branch_id,
+                "branch": validated_branch_id or invoice.branch_id,
                 "wh": wh_id,
                 "currency": inv_currency,
                 "exchange_rate": exchange_rate,
@@ -326,17 +422,26 @@ async def create_purchase_invoice(
             }).fetchone()
             
             invoice_id = result[0]
+
+            # Update party_site_id if provided
+            if invoice.party_site_id:
+                db.execute(text("UPDATE invoices SET party_site_id = :sid WHERE id = :iid"),
+                          {"sid": invoice.party_site_id, "iid": invoice_id})
             
             # 5. Insert Invoice Lines & Update Stock
             receipt_accrual_reversal_base = Decimal('0')
     
             for line in lines_data:
+                # Calculate cost in base currency
+                new_price_fc = _dec(line["unit_price"])
+                new_price_bc = to_base(new_price_fc)
+                
                 db.execute(text("""
                     INSERT INTO invoice_lines (
                         invoice_id, product_id, description, quantity, unit_price, 
-                        tax_rate, discount, markup, total
+                        tax_rate, tax_rate_id, discount, markup, total, unit_cost
                     ) VALUES (
-                        :inv_id, :pid, :desc, :qty, :price, :tax_rate, :disc, :markup, :total
+                        :inv_id, :pid, :desc, :qty, :price, :tax_rate, :tax_rate_id, :disc, :markup, :total, :unit_cost
                     )
                 """), {
                     "inv_id": invoice_id,
@@ -345,9 +450,11 @@ async def create_purchase_invoice(
                     "qty": line["quantity"],
                     "price": line["unit_price"],
                     "tax_rate": line["tax_rate"],
+                    "tax_rate_id": line.get("tax_rate_id"),
                     "disc": line["discount"],
                     "markup": line.get("markup", 0.0),
-                    "total": line["total"]
+                    "total": line["total"],
+                    "unit_cost": new_price_bc
                 })
                 
                 # Stock Update & WAC Calculation
@@ -438,23 +545,11 @@ async def create_purchase_invoice(
                         "user": current_user.get("id") if isinstance(current_user, dict) else current_user.id
                     })
     
-            # 6. Update Supplier Balance (base + currency)
+            # 6. Update Supplier Balance via party_site_balances
             if remaining_balance > _D2:
                 gl_remaining = to_base(remaining_balance)
-                db.execute(text("""
-                    UPDATE parties 
-                    SET current_balance = current_balance - :amount 
-                    WHERE id = :id
-                """), {"amount": gl_remaining, "id": invoice.supplier_id})
-                
-                # Update balance_currency for FC invoices
-                inv_currency = invoice.currency or base_currency
-                if inv_currency != base_currency:
-                    db.execute(text("""
-                        UPDATE parties
-                        SET balance_currency = COALESCE(balance_currency, 0) - :amount
-                        WHERE id = :id
-                    """), {"amount": remaining_balance, "id": invoice.supplier_id})
+                update_party_site_balance(db, party_id=invoice.supplier_id, branch_id=validated_branch_id or invoice.branch_id,
+                                   currency=inv_currency, amount=-float(remaining_balance))
                 
             # 7. Record Payment Transaction
             if paid_amount and paid_amount > 0:
@@ -502,20 +597,25 @@ async def create_purchase_invoice(
                 })
     
             # 8. GL Entry (Automated using Dynamic Mappings)
-            acc_inventory = get_mapped_account_id(db, "acc_map_prepayment_supplier") if invoice.is_prepayment else get_mapped_account_id(db, "acc_map_inventory")
-            acc_vat_in = get_mapped_account_id(db, "acc_map_vat_in")
-            acc_ap = get_mapped_account_id(db, "acc_map_ap")
-            acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
-            acc_bank = get_mapped_account_id(db, "acc_map_bank")
-            
-            je_lines = []
-            
-            # Calculate Base Currency Amounts for GL
+            if invoice.is_prepayment:
+                acc_inventory = _require_account_map(db, "acc_map_prepayment_supplier", "دفعة مقدمة للمورد")
+            else:
+                acc_inventory = _require_account_map(db, "acc_map_inventory", "المخزون")
+
+            acc_vat_in = _require_account_map(db, "acc_map_vat_in", "ضريبة مدخلات") if _dec(total_tax) > _D2 else None
+
+            # Calculate Base Currency Amounts for GL (must be before acc_ap check)
             gl_total = to_base(grand_total)
             gl_subtotal = to_base(subtotal)
             gl_tax = to_base(total_tax)
             gl_paid = to_base(paid_amount)
             gl_net_purchases = gl_subtotal - to_base(total_discount)
+
+            acc_ap = _require_account_map(db, "acc_map_ap", "الذمم الدائنة") if (gl_total - gl_paid) > _D2 else None
+            acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
+            acc_bank = get_mapped_account_id(db, "acc_map_bank")
+            
+            je_lines = []
     
             # A. Inventory (Debit) - Net of Discount (Base Currency)
             # Handle Accrual Reversal if created from PO
@@ -528,7 +628,9 @@ async def create_purchase_invoice(
             
             if gl_inventory_debit > _D2:
                 je_lines.append({
-                    "account_id": acc_inventory, "debit": gl_inventory_debit, "credit": 0, 
+                    "account_id": acc_inventory,
+                    "debit": fc_inventory_debit if inv_currency != base_currency else gl_inventory_debit,
+                    "credit": 0,
                     "description": f"Purchase Stock - {inv_num}",
                     "amount_currency": fc_inventory_debit if inv_currency != base_currency else gl_inventory_debit,
                     "currency": inv_currency
@@ -538,7 +640,9 @@ async def create_purchase_invoice(
                 acc_unbilled = get_mapped_account_id(db, "acc_map_unbilled_purchases")
                 if acc_unbilled:
                     je_lines.append({
-                        "account_id": acc_unbilled, "debit": receipt_accrual_reversal_base, "credit": 0, 
+                        "account_id": acc_unbilled,
+                        "debit": fc_accrual_reversal if inv_currency != base_currency else receipt_accrual_reversal_base,
+                        "credit": 0,
                         "description": f"Reverse Unbilled Accrual - {inv_num}",
                         "amount_currency": fc_accrual_reversal if inv_currency != base_currency else receipt_accrual_reversal_base,
                         "currency": inv_currency
@@ -547,7 +651,9 @@ async def create_purchase_invoice(
                 else:
                      # Fallback if mapping missing but we have reversal value (should not happen if system setup right)
                      je_lines.append({
-                         "account_id": acc_inventory, "debit": receipt_accrual_reversal_base, "credit": 0, 
+                         "account_id": acc_inventory,
+                         "debit": fc_accrual_reversal if inv_currency != base_currency else receipt_accrual_reversal_base,
+                         "credit": 0,
                          "description": f"Purchase Stock (No Accrual Map) - {inv_num}",
                          "amount_currency": fc_accrual_reversal if inv_currency != base_currency else receipt_accrual_reversal_base,
                          "currency": inv_currency
@@ -556,7 +662,9 @@ async def create_purchase_invoice(
             # B. VAT Input (Debit) (Base Currency)
             if gl_tax > 0:
                 je_lines.append({
-                    "account_id": acc_vat_in, "debit": gl_tax, "credit": 0, 
+                    "account_id": acc_vat_in,
+                    "debit": total_tax if inv_currency != base_currency else gl_tax,
+                    "credit": 0,
                     "description": f"VAT Input - {inv_num}",
                     "amount_currency": total_tax, "currency": inv_currency
                 })
@@ -573,25 +681,36 @@ async def create_purchase_invoice(
                       if actual_pay_method == "check":
                           cash_acc_id = acc_bank # Default for checks
                       
-                      if invoice.treasury_id:
-                           t_acc = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": invoice.treasury_id}).fetchone()
-                           if t_acc:
-                                cash_acc_id = t_acc[0]
+                      if selected_treasury:
+                          cash_acc_id = selected_treasury["gl_account_id"]
+
+                      if not cash_acc_id:
+                          raise HTTPException(
+                              status_code=400,
+                              detail="لم يتم ضبط حساب النقدية/البنك للدفع النقدي"
+                          )
     
                       je_lines.append({
-                          "account_id": cash_acc_id, "debit": 0, "credit": gl_paid, 
+                          "account_id": cash_acc_id,
+                          "debit": 0,
+                          "credit": paid_amount if inv_currency != base_currency else gl_paid,
                           "description": f"Purchase {actual_pay_method.capitalize()} - {inv_num}",
                           "amount_currency": paid_amount, "currency": inv_currency
                       })
                  elif actual_pay_method == "bank":
                       # Use selected treasury account if provided, else fallback to default bank map
                       bank_acc_id = acc_bank
-                      if invoice.treasury_id:
-                           t_acc = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": invoice.treasury_id}).fetchone()
-                           if t_acc:
-                                bank_acc_id = t_acc[0]
+                      if selected_treasury:
+                          bank_acc_id = selected_treasury["gl_account_id"]
+                      if not bank_acc_id:
+                          raise HTTPException(
+                              status_code=400,
+                              detail="لم يتم ضبط حساب البنك للدفع البنكي"
+                          )
                       je_lines.append({
-                          "account_id": bank_acc_id, "debit": 0, "credit": gl_paid, 
+                          "account_id": bank_acc_id,
+                          "debit": 0,
+                          "credit": paid_amount if inv_currency != base_currency else gl_paid,
                           "description": f"Purchase Bank - {inv_num}",
                           "amount_currency": paid_amount, "currency": inv_currency
                       })
@@ -599,7 +718,9 @@ async def create_purchase_invoice(
             remaining_gl = gl_total - gl_paid     
             if remaining_gl > _D2:
                  je_lines.append({
-                     "account_id": acc_ap, "debit": 0, "credit": remaining_gl, 
+                     "account_id": acc_ap,
+                     "debit": 0,
+                     "credit": remaining_balance if inv_currency != base_currency else remaining_gl,
                      "description": f"Purchase Credit - {inv_num}",
                      "amount_currency": remaining_balance, "currency": inv_currency
                  })
@@ -689,8 +810,9 @@ async def create_purchase_invoice(
     
             return {"success": True, "message": "تم إنشاء فاتورة المشتريات بنجاح", "invoice_id": invoice_id, "match_result": match_result}
     
+        except HTTPException:
+            raise
         except Exception as e:
-            pass
             logger.error(f"Error creating purchase invoice: {str(e)}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))

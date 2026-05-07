@@ -25,6 +25,8 @@ class BudgetCreate(BaseModel):
     start_date: date
     end_date: date
     description: Optional[str] = None
+    branch_id: Optional[int] = None
+    cost_center_id: Optional[int] = None
 
 
 class BudgetResponse(BudgetCreate):
@@ -40,4 +42,6 @@ class BudgetReportItem(BaseModel):
     planned: float
     actual: float
     variance: float
+    usage_percentage: float
     variance_percentage: float
+    is_over_budget: bool

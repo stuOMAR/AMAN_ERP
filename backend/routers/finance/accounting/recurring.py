@@ -33,13 +33,14 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _D4, _dec, _create_entry_from_template
 
 @router.get("/recurring-templates", dependencies=[Depends(require_permission("accounting.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_recurring_templates(
     request: Request,
     is_active: Optional[bool] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة قوالب القيود المتكررة"""
@@ -52,9 +53,15 @@ def list_recurring_templates(
             LEFT JOIN company_users u ON t.created_by = u.id
         """
         params = {}
+        conditions = []
         if is_active is not None:
-            query += " WHERE t.is_active = :active"
+            conditions.append("t.is_active = :active")
             params["active"] = is_active
+        if branch_id is not None:
+            conditions.append("t.branch_id = :branch_id")
+            params["branch_id"] = branch_id
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY t.created_at DESC"
         rows = db.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -148,7 +155,6 @@ def create_recurring_template(request: Request, data: dict = Body(...), current_
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.put("/recurring-templates/{template_id}", dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
@@ -226,7 +232,6 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.delete("/recurring-templates/{template_id}", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
@@ -250,7 +255,6 @@ def delete_recurring_template(request: Request, template_id: int, current_user: 
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/recurring-templates/{template_id}/generate", dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
@@ -277,7 +281,6 @@ def generate_from_template(request: Request, template_id: int, current_user: dic
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/recurring-templates/generate-due", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
@@ -319,6 +322,5 @@ def generate_all_due_templates(request: Request, current_user: dict = Depends(ge
                 "errors": errors,
             }
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))

@@ -4,6 +4,8 @@
 // `localStorage` MUST NOT contain a `token` key after login.
 import { getToken as memGetToken, setToken as memSetToken, clearToken as memClearToken } from './tokenStore'
 
+let bootstrapRefreshPromise = null
+
 export function isAuthenticated() {
     const token = memGetToken();
     const user = localStorage.getItem('user');
@@ -39,9 +41,42 @@ export function getCompanyId() {
     return localStorage.getItem('company_id')
 }
 
-export function getCurrency() {
+export const DISPLAY_CURRENCY_KEY = 'display_currency'
+export const DISPLAY_CURRENCY_MODE_KEY = 'display_currency_mode'
+export const DISPLAY_CURRENCY_BASE_KEY = 'display_currency_base'
+export const DISPLAY_CURRENCY_SCOPE_KEY = 'display_currency_scope'
+
+export function getCompanyCurrency() {
     const user = getUser()
     return user?.currency || ''
+}
+
+export function setDisplayCurrency(currency, metadata = {}) {
+    if (currency) localStorage.setItem(DISPLAY_CURRENCY_KEY, currency)
+    else localStorage.removeItem(DISPLAY_CURRENCY_KEY)
+
+    if (metadata.mode) localStorage.setItem(DISPLAY_CURRENCY_MODE_KEY, metadata.mode)
+    else localStorage.removeItem(DISPLAY_CURRENCY_MODE_KEY)
+
+    if (metadata.baseCurrency) localStorage.setItem(DISPLAY_CURRENCY_BASE_KEY, metadata.baseCurrency)
+    else localStorage.removeItem(DISPLAY_CURRENCY_BASE_KEY)
+
+    if (Array.isArray(metadata.currencies)) {
+        localStorage.setItem(DISPLAY_CURRENCY_SCOPE_KEY, JSON.stringify(metadata.currencies))
+    } else {
+        localStorage.removeItem(DISPLAY_CURRENCY_SCOPE_KEY)
+    }
+}
+
+export function clearDisplayCurrency() {
+    localStorage.removeItem(DISPLAY_CURRENCY_KEY)
+    localStorage.removeItem(DISPLAY_CURRENCY_MODE_KEY)
+    localStorage.removeItem(DISPLAY_CURRENCY_BASE_KEY)
+    localStorage.removeItem(DISPLAY_CURRENCY_SCOPE_KEY)
+}
+
+export function getCurrency() {
+    return localStorage.getItem(DISPLAY_CURRENCY_KEY) || getCompanyCurrency()
 }
 
 export function getCountry() {
@@ -73,7 +108,7 @@ const PERMISSION_ALIASES = {
     'projects.resource_manage': ['projects.resource_view'],
     'approvals.manage': ['approvals.view', 'approvals.create', 'approvals.action'],
     'accounting.manage': ['accounting.view', 'accounting.edit', 'accounting.create_journal_entry', 'accounting.post_journal_entry', 'accounting.void_journal_entry'],
-    'treasury.manage': ['treasury.view', 'treasury.create', 'treasury.edit'],
+    'treasury.manage': ['treasury.view', 'treasury.create', 'treasury.edit', 'treasury.delete'],
     'taxes.manage': ['taxes.view'],
     'settings.manage': ['settings.view', 'settings.edit'],
     // === Duplicate-name aliases (kept in sync with backend PERMISSION_ALIASES) ===
@@ -96,7 +131,7 @@ const PERMISSION_ALIASES = {
     'accounting.void_journal_entry': ['accounting.create_journal_entry'],
     'buying.blanket_manage': ['buying.blanket_view'],
     'buying.blanket_release': ['buying.blanket_view'],
-    'expenses.manage': ['expenses.view'],
+    'expenses.manage': ['expenses.view', 'expenses.create', 'expenses.edit', 'expenses.delete', 'expenses.approve'],
     'finance.accounting_post': ['finance.accounting_read', 'finance.accounting_view'],
     'finance.accounting_read': ['finance.accounting_view'],
     'finance.reconciliation_manage': ['finance.reconciliation_view'],
@@ -171,6 +206,7 @@ export function clearAuth() {
     localStorage.removeItem('user')
     localStorage.removeItem('company_id')
     localStorage.removeItem('industry_type')
+    clearDisplayCurrency()
 }
 
 export function logout() {
@@ -190,13 +226,23 @@ export async function bootstrapAuth() {
     // Already have a fresh token in memory (e.g. just logged in) — no work to do.
     if (memGetToken()) return true
 
+    if (bootstrapRefreshPromise) {
+        return bootstrapRefreshPromise
+    }
+
+    const publicAuthPaths = ['/login', '/register', '/forgot-password', '/reset-password']
+    if (typeof window !== 'undefined' && publicAuthPaths.includes(window.location.pathname)) {
+        clearAuth()
+        return false
+    }
+
     const userBlob = localStorage.getItem('user')
     if (!userBlob || userBlob === 'undefined' || userBlob === 'null') {
         // No previous session — nothing to recover.
         return false
     }
 
-    try {
+    bootstrapRefreshPromise = (async () => {
         const baseURL = (typeof import.meta !== 'undefined' && import.meta.env?.VITE_API_URL) || '/api'
         const res = await fetch(`${baseURL}/auth/refresh`, {
             method: 'POST',
@@ -216,8 +262,14 @@ export async function bootstrapAuth() {
         }
         memSetToken(newToken)
         return true
+    })()
+
+    try {
+        return await bootstrapRefreshPromise
     } catch {
         clearAuth()
         return false
+    } finally {
+        bootstrapRefreshPromise = null
     }
 }

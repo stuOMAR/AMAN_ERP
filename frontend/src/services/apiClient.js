@@ -26,6 +26,22 @@ function readCookie(name) {
 
 const MUTATING_METHODS = new Set(['post', 'put', 'patch', 'delete']);
 
+function selectedBranchId() {
+    try {
+        const value = localStorage.getItem('current_branch_id');
+        return value && value !== 'all' ? value : null;
+    } catch {
+        return null;
+    }
+}
+
+function hasBranchParam(config) {
+    if (config.params && Object.prototype.hasOwnProperty.call(config.params, 'branch_id')) {
+        return true;
+    }
+    return typeof config.url === 'string' && /(?:\?|&)branch_id=/.test(config.url);
+}
+
 // --- Token Refresh Mutex ---
 // Prevents multiple concurrent 401s from each trying to refresh (and rotate/blacklist) the token.
 // The first 401 triggers a refresh; subsequent 401s wait for the same promise.
@@ -126,6 +142,13 @@ api.interceptors.request.use(async (config) => {
         }
     }
 
+    if (method === 'get' && !config.skipBranchScope && !hasBranchParam(config)) {
+        const branchId = selectedBranchId();
+        if (branchId) {
+            config.params = { ...(config.params || {}), branch_id: branchId };
+        }
+    }
+
     // T9.4: forward the user's UI language to the backend so that
     // `utils/i18n.http_error()` / `i18n_message()` resolve error messages
     // in the correct locale (uses `backend/locales/errors.{ar,en}.json`).
@@ -189,8 +212,16 @@ api.interceptors.response.use(
             return api(originalRequest);
         }
 
+        const requestUrl = originalRequest?.url || '';
+        const isAuthEndpoint = requestUrl.includes('/auth/login')
+            || requestUrl.includes('/auth/refresh')
+            || requestUrl.includes('/auth/logout')
+            || requestUrl.includes('/auth/2fa/verify-login')
+
         // --- Auto Token Refresh — Fallback (reactive, in case proactive missed) ---
-        if (error.response?.status === 401 && !originalRequest._isRetry) {
+        // Only protected API requests should attempt a refresh. A 401 from
+        // /auth/login means invalid credentials, not an expired access token.
+        if (error.response?.status === 401 && !originalRequest._isRetry && !isAuthEndpoint) {
             originalRequest._isRetry = true;
 
             // If a refresh is already in progress, queue this request to retry after it completes

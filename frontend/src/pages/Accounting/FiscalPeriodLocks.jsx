@@ -17,7 +17,7 @@ function FiscalPeriodLocks() {
 
     const fetchPeriods = async () => {
         try { const r = await fiscalLocksAPI.listPeriods(); setPeriods(r.data) }
-        catch { console.error }
+        catch (err) { console.error(err) }
         finally { setLoading(false) }
     }
 
@@ -68,24 +68,32 @@ function FiscalPeriodLocks() {
             </div>
 
             {showForm && (
-                <div className="card p-4 mb-4">
-                    <div className="form-grid-3">
-                        <div className="form-group">
-                            <label>{t('common.name')}</label>
-                            <input type="text" className="form-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder={t('fiscal_locks.period_name_placeholder')} />
+                <div className="modal-overlay">
+                    <div className="modal-content" style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">🔒 {t('fiscal_locks.create_period')}</h2>
+                            <button type="button" className="btn-icon" style={{ background: 'transparent' }} onClick={() => setShowForm(false)}>
+                                ✕
+                            </button>
                         </div>
-                        <div className="form-group">
-                            <label>{t('common.start_date')}</label>
-                            <DateInput className="form-input" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
+                        <div className="modal-body">
+                            <div className="form-group">
+                                <label className="form-label">{t('common.name')}</label>
+                                <input type="text" className="form-input" value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))} placeholder={t('fiscal_locks.period_name_placeholder')} />
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">{t('common.start_date')}</label>
+                                <DateInput className="form-input" value={form.start_date} onChange={e => setForm(f => ({ ...f, start_date: e.target.value }))} />
+                            </div>
+                            <div className="form-group">
+                                <label className="form-label">{t('common.end_date')}</label>
+                                <DateInput className="form-input" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
+                            </div>
                         </div>
-                        <div className="form-group">
-                            <label>{t('common.end_date')}</label>
-                            <DateInput className="form-input" value={form.end_date} onChange={e => setForm(f => ({ ...f, end_date: e.target.value }))} />
+                        <div className="modal-footer">
+                            <button className="btn" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowForm(false)}>{t('common.cancel')}</button>
+                            <button className="btn btn-primary" onClick={handleCreate}>{t('common.save')}</button>
                         </div>
-                    </div>
-                    <div className="mt-3 flex gap-2">
-                        <button className="btn btn-primary" onClick={handleCreate}>{t('common.save')}</button>
-                        <button className="btn btn-secondary" onClick={() => setShowForm(false)}>{t('common.cancel')}</button>
                     </div>
                 </div>
             )}

@@ -5,7 +5,7 @@ import { roleDashboardAPI } from '../../services/roleDashboard';
 import { KPICard, KPIChart, AlertBanner, PeriodSelector } from './index';
 import Card from '../common/Card';
 import { useBranch } from '../../context/BranchContext';
-import { getUser } from '../../utils/auth';
+import { getCurrency } from '../../utils/auth';
 
 /**
  * ModuleKPISection — embeddable KPI section for any module's analytics page.
@@ -44,9 +44,8 @@ const API_MAP = {
 const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) => {
     const { t, i18n } = useTranslation();
     const { currentBranch } = useBranch();
-    const user = getUser();
     const isRTL = i18n.dir() === 'rtl';
-    const currency = user?.currency || 'SAR';
+    const fallbackCurrency = getCurrency() || 'SAR';
 
     const [open, setOpen] = useState(defaultOpen);
     const [period, setPeriod] = useState(roleKey === 'pos' ? 'today' : 'mtd');
@@ -91,6 +90,7 @@ const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) =>
     const kpis = data?.kpis || data?.role_kpis || [];
     const charts = data?.charts || data?.role_charts || [];
     const alerts = data?.alerts || data?.role_alerts || [];
+    const currency = data?.display_currency || fallbackCurrency;
 
     // Group KPIs by category
     const grouped = {};

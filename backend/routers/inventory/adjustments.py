@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from .schemas import StockAdjustmentCreate
@@ -30,6 +30,7 @@ def list_adjustments(
     """عرض قائمة تسويات الجرد"""
     db = get_db_connection(current_user.company_id)
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         query = """
             SELECT sa.id, sa.adjustment_number, sa.adjustment_type, sa.reason, 
                    sa.created_at, sa.status, sa.difference,
@@ -40,18 +41,7 @@ def list_adjustments(
             WHERE 1=1
         """
         params = {"limit": limit, "skip": skip}
-
-        if branch_id:
-            query += " AND w.branch_id = :branch_id"
-            params["branch_id"] = branch_id
-        else:
-            # INV-004: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND w.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
 
         query += " ORDER BY sa.created_at DESC LIMIT :limit OFFSET :skip"
         result = db.execute(text(query), params).fetchall()
@@ -100,10 +90,13 @@ def create_adjustment(
 
         # 1. Get Current Stock
         stock_query = """
-            SELECT quantity FROM inventory 
+            SELECT quantity, average_cost FROM inventory
             WHERE product_id = :pid AND warehouse_id = :wh
+            FOR UPDATE
         """
-        current_qty = db.execute(text(stock_query), {"pid": data.product_id, "wh": data.warehouse_id}).scalar() or 0.0
+        stock_row = db.execute(text(stock_query), {"pid": data.product_id, "wh": data.warehouse_id}).fetchone()
+        current_qty = stock_row.quantity if stock_row else 0.0
+        warehouse_unit_cost = float(stock_row.average_cost or 0) if stock_row else 0.0
 
         difference = data.new_quantity - float(current_qty)
 
@@ -190,8 +183,9 @@ def create_adjustment(
         acc_adjustment = get_mapped_account_id(db, "acc_map_inventory_adjustment")
 
         if acc_inventory and acc_adjustment:
-            cost_price = db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": data.product_id}).scalar() or 0
-            adjustment_value = abs(difference) * float(cost_price)
+            fallback_cost = db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": data.product_id}).scalar() or 0
+            unit_cost = warehouse_unit_cost if warehouse_unit_cost > 0 else float(fallback_cost)
+            adjustment_value = abs(difference) * unit_cost
 
             if adjustment_value > 0.01:
                 # Fiscal lock check (T019 fix — was bypassing fiscal lock)

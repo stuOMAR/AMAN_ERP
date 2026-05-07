@@ -12,12 +12,13 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, require_module, check_permission
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
 from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,26 @@ def create_order(
     for item in order_in.items:
         validate_quantity_for_product(db, item.product_id, item.quantity)
 
+    user_perms = current_user.permissions or []
+    can_override_price = check_permission(user_perms, "pos.price_override") or check_permission(user_perms, "pos.manage")
+    for item in order_in.items:
+        product_price = db.execute(
+            text("SELECT selling_price, min_price, max_price FROM products WHERE id = :id"),
+            {"id": item.product_id},
+        ).fetchone()
+        if product_price:
+            requested_price = _dec(item.unit_price).quantize(_D4, ROUND_HALF_UP)
+            selling_price = _dec(product_price.selling_price).quantize(_D4, ROUND_HALF_UP)
+            min_price = _dec(product_price.min_price).quantize(_D4, ROUND_HALF_UP)
+            max_price = _dec(product_price.max_price).quantize(_D4, ROUND_HALF_UP)
+            if requested_price != selling_price:
+                if not can_override_price:
+                    raise HTTPException(status_code=403, detail="pos_price_override_permission_required")
+                if min_price > 0 and requested_price < min_price:
+                    raise HTTPException(status_code=400, detail="price_below_minimum")
+                if max_price > 0 and requested_price > max_price:
+                    raise HTTPException(status_code=400, detail="price_above_maximum")
+
     # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
     # produces the same numbers as routers/sales/invoices for the same
     # inputs. Per-line OrderLineCreate.discount_amount is an *absolute*
@@ -68,11 +89,24 @@ def create_order(
             amt = gross
         return (amt * Decimal("100") / gross).quantize(Decimal("0.000001"), ROUND_HALF_UP)
 
+    # Resolve branch early so tax engine can use it
+    pos_session = db.execute(text("SELECT branch_id, warehouse_id, treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order_in.session_id}).fetchone()
+    branch_id = order_in.branch_id or (pos_session.branch_id if pos_session else None)
+    warehouse_id = order_in.warehouse_id or (pos_session.warehouse_id if pos_session else None)
+    treasury_id = pos_session.treasury_account_id if pos_session else None
+    branch_id = validate_branch_access(current_user, branch_id)
+
+    # Resolve tax per line via engine (branch-aware, no hardcoded rates)
+    _resolved_taxes = {}
+    for item in order_in.items:
+        tax_info = resolve_line_tax(branch_id, item.product_id, db, customer_id=getattr(order_in, 'customer_id', None))
+        _resolved_taxes[item.product_id] = tax_info
+
     line_dicts = [
         {
             "quantity": item.quantity,
             "unit_price": item.unit_price,
-            "tax_rate": item.tax_rate,
+            "tax_rate": _resolved_taxes[item.product_id]["tax_rate"],
             "discount": _line_discount_pct(item.quantity, item.unit_price, item.discount_amount),
         }
         for item in order_in.items
@@ -165,6 +199,22 @@ def create_order(
         if wh_branch:
              validate_branch_access(current_user, wh_branch)
 
+    if order_in.client_order_id:
+        existing_order = db.execute(text("""
+            SELECT id, order_number, total_amount, status, created_at
+            FROM pos_orders
+            WHERE client_order_id = :client_order_id
+            LIMIT 1
+        """), {"client_order_id": order_in.client_order_id}).fetchone()
+        if existing_order:
+            return OrderResponse(
+                id=existing_order.id,
+                order_number=existing_order.order_number,
+                total_amount=existing_order.total_amount,
+                status=existing_order.status,
+                created_at=existing_order.created_at,
+            )
+
     # Validate payments cover total for paid orders
     if order_in.status == 'paid':
         total_payments = sum(_dec(p.amount) for p in order_in.payments)
@@ -175,11 +225,10 @@ def create_order(
             elif total_payments < total:
                 raise HTTPException(status_code=400, detail=f"المبلغ المدفوع ({total_payments:.2f}) أقل من إجمالي الطلب ({total:.2f})")
 
-    # Fetch session info for branch_id if not provided
-    pos_session = db.execute(text("SELECT branch_id, warehouse_id, treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order_in.session_id}).fetchone()
-    branch_id = order_in.branch_id or (pos_session.branch_id if pos_session else None)
-    warehouse_id = order_in.warehouse_id or (pos_session.warehouse_id if pos_session else None)
-    treasury_id = pos_session.treasury_account_id if pos_session else None
+    # Treasury validation (branch_id already resolved above)
+    selected_treasury = None
+    if treasury_id:
+        selected_treasury = validate_treasury_account_access(db, current_user, treasury_id, branch_id)
 
     import uuid
     order_number = f"POS-{uuid.uuid4().hex[:8].upper()}"
@@ -190,10 +239,10 @@ def create_order(
         INSERT INTO pos_orders (
             order_number, session_id, customer_id, walk_in_customer_name, 
             warehouse_id, branch_id, status, subtotal, tax_amount, 
-            discount_amount, total_amount, paid_amount, note, created_by
+            discount_amount, total_amount, paid_amount, note, client_order_id, created_by, party_site_id
         ) VALUES (
             :num, :sess, :cust, :walkin, :wh, :branch, :status, :subtotal, :tax,
-            :disc, :total, :paid, :note, :uid
+            :disc, :total, :paid, :note, :client_order_id, :uid, :party_site_id
         ) RETURNING id
     """), {
         "num": order_number,
@@ -209,7 +258,9 @@ def create_order(
         "total": total,
         "paid": _dec(order_in.paid_amount).quantize(_D2, ROUND_HALF_UP),
         "note": order_in.note,
-        "uid": current_user.id
+        "client_order_id": order_in.client_order_id,
+        "uid": current_user.id,
+        "party_site_id": order_in.party_site_id,
     }).fetchone()
     
     order_id = result.id
@@ -219,12 +270,12 @@ def create_order(
         # Fetch product details for the record
         prod_info = db.execute(text("SELECT product_name, product_code, barcode FROM products WHERE id = :id"), {"id": item.product_id}).fetchone()
         
+        # Use pre-resolved tax info
+        tax_info = _resolved_taxes[item.product_id]
+        
         item_subtotal = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
-        # T3.10: pass per-line discount as a *percentage* (already
-        # converted from item.discount_amount) so the helper applies
-        # discount before tax — matching routers/sales/invoices.
         _line_disc_pct = _line_discount_pct(item.quantity, item.unit_price, item.discount_amount)
-        _la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, _line_disc_pct)
+        _la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], _line_disc_pct)
         tax_amount = _la["tax_amount"]
         item_total = _la["line_total"]
 
@@ -232,12 +283,12 @@ def create_order(
             INSERT INTO pos_order_lines (
                 order_id, product_id, description,
                 quantity, original_price, unit_price,
-                tax_rate, tax_amount, subtotal, total,
+                tax_rate, tax_rate_id, tax_amount, subtotal, total,
                 warehouse_id
             ) VALUES (
                 :oid, :pid, :desc,
                 :qty, :orig, :price,
-                :tax_r, :tax_a, :sub, :tot,
+                :tax_r, :tax_rid, :tax_a, :sub, :tot,
                 :wh
             )
         """), {
@@ -247,7 +298,8 @@ def create_order(
             "qty": item.quantity,
             "orig": _dec(item.unit_price).quantize(_D2, ROUND_HALF_UP),
             "price": _dec(item.unit_price).quantize(_D2, ROUND_HALF_UP),
-            "tax_r": _dec(item.tax_rate),
+            "tax_r": tax_info["tax_rate"],
+            "tax_rid": tax_info["tax_rate_id"],
             "tax_a": tax_amount,
             "sub": item_subtotal,
             "tot": item_total,
@@ -359,7 +411,7 @@ def create_order(
         # DYNAMIC TREASURY MAPPING
         acc_cash = None
         if treasury_id:
-             acc_cash = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).scalar()
+               acc_cash = selected_treasury.get("gl_account_id") if selected_treasury else None
         if not acc_cash:
              acc_cash = get_mapped_account_id(db, "acc_map_cash_main") or get_acc_id("BOX")
 
@@ -394,7 +446,7 @@ def create_order(
 
         # Sales Discount (separate account for proper reporting)
         if discount_dec > 0:
-            acc_discount = get_acc_id("DISC-SALE") or get_acc_id("SALE-DISC")
+            acc_discount = get_mapped_account_id(db, "acc_map_sales_discount") or get_acc_id("DISC-SALE") or get_acc_id("SALE-DISC")
             if acc_discount:
                 je_lines.append({
                     "account_id": acc_discount,
@@ -403,10 +455,10 @@ def create_order(
                     "description": f"POS Discount - {order_number}"
                 })
             else:
-                # Fallback: If no discount account, net into sales (legacy behavior)
-                # Adjust the sales credit we just added
-                if je_lines and je_lines[-1]["account_id"] == acc_sales:
-                    je_lines[-1]["credit"] = (subtotal - discount_dec).quantize(_D2, ROUND_HALF_UP)
+                raise HTTPException(
+                    status_code=422,
+                    detail="حساب خصم المبيعات غير مضبوط (acc_map_sales_discount أو DISC-SALE/SALE-DISC)",
+                )
 
         # C. Credit: VAT
         if acc_vat_out and tax_total > 0:
@@ -448,8 +500,7 @@ def create_order(
             import uuid
             je_num = f"JE-POS-{order_number}"
             # Get treasury currency
-            treasury_info = db.execute(text("SELECT currency FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).fetchone() if treasury_id else None
-            pos_currency = treasury_info[0] if treasury_info else base_currency
+            pos_currency = selected_treasury.get("currency") if selected_treasury else base_currency
 
             gl_create_journal_entry(
                 db=db,
@@ -479,11 +530,12 @@ def create_order(
             try:
                 credit_payments = sum(_dec(p.amount) for p in order_in.payments if p.method in ('credit', 'on_account'))
                 if credit_payments > 0:
-                    db.execute(text("""
-                        UPDATE parties
-                        SET current_balance = current_balance + :amt, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :pid
-                    """), {"amt": credit_payments.quantize(_D2, ROUND_HALF_UP), "pid": order_in.customer_id})
+                    credit_amt = credit_payments.quantize(_D2, ROUND_HALF_UP)
+
+                    # Update party_site_balances (positive = increases customer balance)
+                    from utils.party_balance import update_party_site_balance
+                    update_party_site_balance(db, party_id=order_in.customer_id, branch_id=branch_id,
+                                              currency=pos_currency, amount=float(credit_amt))
             except Exception:
                 # SEC-T2.11: silently dropping a credit-balance UPDATE leaves the
                 # customer ledger out of sync with the GL. Surface the failure
@@ -518,32 +570,25 @@ def create_order(
 
 @router.get("/orders/held", response_model=List[dict], dependencies=[Depends(require_permission("pos.view"))])
 def get_held_orders(
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Get all held orders for current session"""
     try:
-        allowed_branches = current_user.allowed_branches or []
-        if current_user.role == "admin" or not allowed_branches:
-            result = db.execute(text("""
-                SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
-                       COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
-                       (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count
-                FROM pos_orders po
-                LEFT JOIN parties c ON po.customer_id = c.id
-                WHERE po.status = 'hold'
-                ORDER BY po.created_at DESC
-            """)).fetchall()
-        else:
-            result = db.execute(text("""
-                SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
-                       COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
-                       (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count
-                FROM pos_orders po
-                LEFT JOIN parties c ON po.customer_id = c.id
-                WHERE po.status = 'hold' AND po.branch_id = ANY(:branches)
-                ORDER BY po.created_at DESC
-            """), {"branches": allowed_branches}).fetchall()
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        params = {}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
+        result = db.execute(text(f"""
+            SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
+                   COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
+                   (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count
+            FROM pos_orders po
+            LEFT JOIN parties c ON po.customer_id = c.id
+            WHERE po.status = 'hold'
+            {branch_filter}
+            ORDER BY po.created_at DESC
+        """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
     except Exception as e:
@@ -647,9 +692,7 @@ def create_return(
     if not order:
         raise HTTPException(status_code=404, detail="Original order not found or not paid")
         
-    # Validate branch access
-    if order.branch_id:
-        validate_branch_access(current_user, order.branch_id)
+    branch_id = validate_branch_access(current_user, order.branch_id)
     
     total_refund = Decimal('0')
 
@@ -670,6 +713,8 @@ def create_return(
             LEFT JOIN treasury_accounts ta ON s.treasury_account_id = ta.id
             WHERE s.id = :sid
         """), {"sid": order.session_id}).fetchone()
+        if session_info and session_info.treasury_account_id:
+            validate_treasury_account_access(db, current_user, session_info.treasury_account_id, branch_id)
         if session_info and _dec(session_info.cash_balance) < total_refund:
             raise HTTPException(status_code=400, detail=f"رصيد الصندوق غير كافٍ للمرتجع. الرصيد الحالي: {_dec(session_info.cash_balance):.2f}, المطلوب: {total_refund:.2f}")
 
@@ -785,7 +830,10 @@ def create_return(
     # Get treasury for session
     session_treasury = db.execute(text("SELECT treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order.session_id}).fetchone()
     if session_treasury and session_treasury.treasury_account_id:
-        acc_cash = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": session_treasury.treasury_account_id}).scalar() or acc_cash
+        selected_treasury = validate_treasury_account_access(
+            db, current_user, session_treasury.treasury_account_id, branch_id
+        )
+        acc_cash = selected_treasury.get("gl_account_id") or acc_cash
     
     total_refund_with_tax = (total_refund + total_refund_tax).quantize(_D2, ROUND_HALF_UP)
 
@@ -829,7 +877,7 @@ def create_return(
             description=f"POS Return for Order {order.order_number}",
             lines=je_lines,
             user_id=current_user.id,
-            branch_id=None,
+            branch_id=branch_id,
             reference=f"RTN-{order.order_number}",
             currency=base_currency,
             source="POS-Return",

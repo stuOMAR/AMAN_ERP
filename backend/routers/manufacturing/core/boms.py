@@ -11,7 +11,7 @@ from utils.i18n import http_error
 from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from database import get_db_connection
 from utils.tx import transactional
 from utils.accounting import get_base_currency
@@ -44,8 +44,7 @@ def list_boms(
     """List Boms."""
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT b.*, p.product_name as product_name, r.name as route_name
@@ -55,13 +54,16 @@ def list_boms(
             WHERE b.is_deleted = false
         """
         params = {}
-        if validated_branch:
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params).strip()
+        if branch_condition:
             query += """
                 AND b.product_id IN (
-                    SELECT DISTINCT product_id FROM inventory WHERE branch_id = :branch_id
+                    SELECT DISTINCT inv.product_id
+                    FROM inventory inv
+                    JOIN warehouses w ON inv.warehouse_id = w.id
+                    WHERE 1=1 {branch_condition}
                 )
-            """
-            params["branch_id"] = validated_branch
+            """.format(branch_condition=branch_condition)
         query += " ORDER BY b.id DESC LIMIT :limit OFFSET :offset"
         params["limit"] = limit
         params["offset"] = offset

@@ -1,16 +1,18 @@
 
 import React, { useEffect, useState } from 'react';
 import { useNavigate } from 'react-router-dom';
-import api from '../../utils/api';
+import api, { treasuryAPI } from '../../utils/api';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../context/ToastContext';
 import { Layout, Store, Calculator, Info, ArrowLeft, Play, Wallet } from 'lucide-react';
 import { getIndustryFeature } from '../../hooks/useIndustryType';
+import { useBranch } from '../../context/BranchContext';
 
 const POSHome = () => {
     const { t, i18n } = useTranslation();
     const { showToast } = useToast();
     const navigate = useNavigate();
+    const { currentBranch } = useBranch();
     const isRTL = i18n.dir() === 'rtl';
 
     const [loading, setLoading] = useState(true);
@@ -33,7 +35,7 @@ const POSHome = () => {
             await fetchTreasuryAccounts();
         };
         init();
-    }, []);
+    }, [currentBranch?.id]);
 
     const checkActiveSession = async () => {
         try {
@@ -62,7 +64,7 @@ const POSHome = () => {
 
     const fetchTreasuryAccounts = async () => {
         try {
-            const response = await api.get('/treasury/accounts');
+            const response = await treasuryAPI.listAccounts(currentBranch?.id);
             // Filter only Cash/Bank accounts if needed, but for now show all active
             const activeAccounts = response.data.filter(acc => acc.is_active);
             setTreasuryAccounts(activeAccounts);

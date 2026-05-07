@@ -13,7 +13,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, require_module
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
@@ -40,7 +40,7 @@ def list_tax_payments(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب مدفوعات الضرائب مع فلترة حسب الفرع والسنة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         where = "WHERE 1=1"
         params = {}
@@ -50,9 +50,7 @@ def list_tax_payments(
         if status:
             where += " AND tp.status = :status"
             params["status"] = status
-        if branch_id:
-            where += " AND tr.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        where += f" {branch_scope_filter_from_scope(branch_scope, 'tr.branch_id', params)}"
         if year:
             where += " AND EXTRACT(YEAR FROM tp.payment_date) = :year"
             params["year"] = year
@@ -86,6 +84,7 @@ def create_tax_payment(
             tr = db.execute(text("SELECT * FROM tax_returns WHERE id = :id"), {"id": data.tax_return_id}).fetchone()
             if not tr:
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
+            branch_id = validate_branch_access(current_user, tr.branch_id)
             if tr.status in ("cancelled", "draft"):
                 raise HTTPException(status_code=400, detail="لا يمكن الدفع على إقرار ملغى أو مسودة. يجب تقديمه أولاً")
     
@@ -122,16 +121,27 @@ def create_tax_payment(
     
             bank_account_id = None
             if data.treasury_account_id:
-                bank_row = db.execute(text(
-                    "SELECT gl_account_id FROM treasury_accounts WHERE id = :id"
-                ), {"id": data.treasury_account_id}).fetchone()
-                if bank_row:
-                    bank_account_id = bank_row.gl_account_id
+                bank_row = validate_treasury_account_access(
+                    db, current_user, data.treasury_account_id, branch_id
+                )
+                bank_account_id = bank_row.get("gl_account_id")
     
             if not bank_account_id:
-                bank_row = db.execute(text(
-                    "SELECT gl_account_id FROM treasury_accounts WHERE is_active = true AND gl_account_id IS NOT NULL LIMIT 1"
-                )).fetchone()
+                if branch_id:
+                    bank_row = db.execute(text(
+                        """
+                        SELECT gl_account_id
+                        FROM treasury_accounts
+                        WHERE is_active = true
+                          AND gl_account_id IS NOT NULL
+                          AND branch_id = :branch_id
+                        LIMIT 1
+                        """
+                    ), {"branch_id": branch_id}).fetchone()
+                else:
+                    bank_row = db.execute(text(
+                        "SELECT gl_account_id FROM treasury_accounts WHERE is_active = true AND gl_account_id IS NOT NULL LIMIT 1"
+                    )).fetchone()
                 if bank_row:
                     bank_account_id = bank_row.gl_account_id
     
@@ -157,7 +167,7 @@ def create_tax_payment(
                     description=f"دفع ضريبة — إقرار {tr.return_number} — فترة {tr.tax_period}",
                     lines=je_lines,
                     user_id=current_user.id,
-                    branch_id=tr.branch_id,
+                    branch_id=branch_id,
                     reference=payment_number,
                     currency=base_currency,
                     exchange_rate=1.0,

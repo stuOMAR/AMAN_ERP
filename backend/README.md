@@ -160,3 +160,63 @@ that the frontend's `apiClient.js` sets automatically.
 
 Both preserve original IDs and (for audit) the hash-chain columns so
 forensic verification can still walk the chain.
+
+## Feature 023: Sales/POS/CRM/ZATCA + Inventory/Manufacturing
+
+### New Endpoints
+
+| Module | Endpoint | Method | Description |
+|--------|----------|--------|-------------|
+| Sales | `/sales/orders/{id}/invoice` | POST | Convert order to invoice (idempotent) |
+| Sales | `/sales/invoices/{id}/cancel` | POST | Cancel posted invoice |
+| Returns | `/returns` | POST/GET | Create and list returns |
+| Returns | `/returns/{id}/post` | POST | Post a return |
+| Returns | `/returns/{id}/cancel` | POST | Cancel a return |
+| POS | `/pos/offline/batches` | POST/GET | Submit/list offline batches |
+| POS | `/pos/offline/batches/{id}/retry` | POST | Retry failed batch |
+| POS | `/pos/sales/{id}/cancel` | POST | Cancel POS sale |
+| CRM | `/crm/velocity` | GET | Sales velocity metrics |
+| CRM | `/crm/funnel` | GET | Stage conversion funnel |
+| CRM | `/crm/cashflow-forecast` | GET | Probability-weighted forecast |
+| Einvoicing | `/einvoicing/outbox` | GET | List ZATCA outbox rows |
+| Einvoicing | `/einvoicing/outbox/{id}/reprocess` | POST | Reprocess failed outbox |
+| Manufacturing | `/manufacturing/mrp/run` | POST | Run MRP net requirements |
+| Manufacturing | `/manufacturing/mrp/recommendations` | GET | List MRP recommendations |
+| Manufacturing | `/manufacturing/mrp/recommendations/{id}/accept` | POST | Accept recommendation |
+| Manufacturing | `/manufacturing/orders/{id}/complete` | POST | Partial production completion |
+| Manufacturing | `/manufacturing/orders/{id}/approve` | POST | Approve large MO |
+| Manufacturing | `/manufacturing/orders/{id}/qc/pass` | POST | Pass QC gate |
+| Manufacturing | `/manufacturing/orders/{id}/qc/fail` | POST | Fail QC gate |
+| Inventory | `/inventory/archival/status` | GET | Archival status |
+| Inventory | `/inventory/archival/run` | POST | Trigger archival |
+| Inventory | `/inventory/transfer` | ANY | **410 Gone** — use `/inventory/transfers` |
+
+### Workers
+
+| Worker | Interval | Purpose |
+|--------|----------|---------|
+| `zatca_outbox` | 5s | Process pending e-invoicing submissions |
+| `pos_offline_reconciler` | 10s | Reconcile offline POS batches |
+| `auto_reorder` | 60m | Scan reorder points, create recommendations |
+| `inventory_archiver` | Daily 03:00 | Archive old inventory transactions |
+| `mrp` | Configurable | Run MRP net requirements |
+
+### CI Lint Guards
+
+- `check_no_float_money.py` — No float in cost/qty arithmetic
+- `check_invoice_state_writers.py` — Only invoice_state.py writes invoices.state
+- `check_je_source_id.py` — Use source/source_id, not reference_number
+- `check_pos_lock_usage.py` — POS writes must use pos_stock_lock
+- `check_get_acc_id_callsites.py` — Use account_mapping.resolve(), not get_acc_id
+
+### Settings Keys
+
+- `inventory.auto_reorder_enabled` — Enable auto-reorder (default: false)
+- `inventory.retention_days` — Transaction retention before archival (default: 365)
+- `inventory.low_stock_debounce_hours` — Webhook debounce window (default: 24)
+- `mfg.mrp_interval_minutes` — MRP scheduler interval (default: 60)
+- `mfg.mrp_horizon_days` — MRP planning horizon (default: 30)
+- `mfg.large_mo_threshold` — Cost threshold for approval gate (default: 10000)
+- `mfg.shopfloor_attendance_link_enabled` — Link labor to attendance (default: false)
+- `crm.funnel_window_days` — Funnel analysis window (default: 90)
+- `crm.cashflow_horizon_days` — Cashflow forecast horizon (default: 90)

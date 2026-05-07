@@ -1,0 +1,432 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 كل الفروع ▼" [ref=e110] [cursor=pointer]:
+            - generic [ref=e111]:
+              - text: 🏢
+              - generic [ref=e112]: كل الفروع
+            - generic [ref=e113]: ▼
+          - button "🔔" [ref=e115] [cursor=pointer]
+          - generic [ref=e117] [cursor=pointer]:
+            - generic [ref=e118]:
+              - generic [ref=e119]: omaradel
+              - generic [ref=e120]: "ID: 34773f13"
+            - generic [ref=e121]: O
+      - main [ref=e123]:
+        - generic [ref=e124]:
+          - generic [ref=e125]:
+            - button "العودة" [ref=e126] [cursor=pointer]:
+              - img [ref=e127]
+            - generic [ref=e129]:
+              - heading "الموظفين" [level=1] [ref=e130]
+              - paragraph [ref=e131]: إدارة ملفات الموظفين وصلاحياتهم
+            - button "موظف جديد" [ref=e133] [cursor=pointer]:
+              - img [ref=e134]
+              - text: موظف جديد
+          - generic [ref=e135]:
+            - table [ref=e136]:
+              - rowgroup [ref=e137]:
+                - row "كود الموظف الموظف المنصب / القسم معلومات الاتصال الحالة الربط بالنظام الربط المالي إجمالي الراتب الإجراءات" [ref=e138]:
+                  - columnheader "كود الموظف" [ref=e139]
+                  - columnheader "الموظف" [ref=e140]
+                  - columnheader "المنصب / القسم" [ref=e141]
+                  - columnheader "معلومات الاتصال" [ref=e142]
+                  - columnheader "الحالة" [ref=e143]
+                  - columnheader "الربط بالنظام" [ref=e144]
+                  - columnheader "الربط المالي" [ref=e145]
+                  - columnheader "إجمالي الراتب" [ref=e146]
+                  - columnheader "الإجراءات" [ref=e147]
+              - rowgroup [ref=e148]:
+                - row "EMP-011 مأ معتمد أول موافق مستوى أول الإدارة العليا approver1@aman.com 0500000011 active - - 0.00 SAR" [ref=e149]:
+                  - cell "EMP-011" [ref=e150]
+                  - cell "مأ معتمد أول" [ref=e151]:
+                    - generic [ref=e152]:
+                      - generic [ref=e153]: مأ
+                      - generic [ref=e155]: معتمد أول
+                  - cell "موافق مستوى أول الإدارة العليا" [ref=e156]:
+                    - generic [ref=e157]: موافق مستوى أول
+                    - text: الإدارة العليا
+                  - cell "approver1@aman.com 0500000011" [ref=e158]:
+                    - generic [ref=e159]:
+                      - generic [ref=e160]:
+                        - img [ref=e161]
+                        - text: approver1@aman.com
+                      - generic [ref=e164]:
+                        - img [ref=e165]
+                        - text: "0500000011"
+                  - cell "active" [ref=e167]
+                  - cell "-" [ref=e168]
+                  - cell "-" [ref=e169]
+                  - cell "0.00 SAR" [ref=e170]:
+                    - generic [ref=e171]: 0.00 SAR
+                  - cell [ref=e172]:
+                    - button [ref=e173]:
+                      - img [ref=e174]
+                - row "EMP-010 را ريم الموظفة موظف الموارد البشرية employee@aman.com 0500000010 active - - 0.00 SAR" [ref=e178]:
+                  - cell "EMP-010" [ref=e179]
+                  - cell "را ريم الموظفة" [ref=e180]:
+                    - generic [ref=e181]:
+                      - generic [ref=e182]: را
+                      - generic [ref=e184]: ريم الموظفة
+                  - cell "موظف الموارد البشرية" [ref=e185]:
+                    - generic [ref=e186]: موظف
+                    - text: الموارد البشرية
+                  - cell "employee@aman.com 0500000010" [ref=e187]:
+                    - generic [ref=e188]:
+                      - generic [ref=e189]:
+                        - img [ref=e190]
+                        - text: employee@aman.com
+                      - generic [ref=e193]:
+                        - img [ref=e194]
+                        - text: "0500000010"
+                  - cell "active" [ref=e196]
+                  - cell "-" [ref=e197]
+                  - cell "-" [ref=e198]
+                  - cell "0.00 SAR" [ref=e199]:
+                    - generic [ref=e200]: 0.00 SAR
+                  - cell [ref=e201]:
+                    - button [ref=e202]:
+                      - img [ref=e203]
+                - row "EMP-009 فا فهد الكاشير كاشير نقاط البيع cashier@aman.com 0500000009 active - - 0.00 SAR" [ref=e207]:
+                  - cell "EMP-009" [ref=e208]
+                  - cell "فا فهد الكاشير" [ref=e209]:
+                    - generic [ref=e210]:
+                      - generic [ref=e211]: فا
+                      - generic [ref=e213]: فهد الكاشير
+                  - cell "كاشير نقاط البيع" [ref=e214]:
+                    - generic [ref=e215]: كاشير
+                    - text: نقاط البيع
+                  - cell "cashier@aman.com 0500000009" [ref=e216]:
+                    - generic [ref=e217]:
+                      - generic [ref=e218]:
+                        - img [ref=e219]
+                        - text: cashier@aman.com
+                      - generic [ref=e222]:
+                        - img [ref=e223]
+                        - text: "0500000009"
+                  - cell "active" [ref=e225]
+                  - cell "-" [ref=e226]
+                  - cell "-" [ref=e227]
+                  - cell "0.00 SAR" [ref=e228]:
+                    - generic [ref=e229]: 0.00 SAR
+                  - cell [ref=e230]:
+                    - button [ref=e231]:
+                      - img [ref=e232]
+                - row "EMP-008 لا ليلى الموارد البشرية مدير موارد بشرية الموارد البشرية hr@aman.com 0500000008 active - - 0.00 SAR" [ref=e236]:
+                  - cell "EMP-008" [ref=e237]
+                  - cell "لا ليلى الموارد البشرية" [ref=e238]:
+                    - generic [ref=e239]:
+                      - generic [ref=e240]: لا
+                      - generic [ref=e242]: ليلى الموارد البشرية
+                  - cell "مدير موارد بشرية الموارد البشرية" [ref=e243]:
+                    - generic [ref=e244]: مدير موارد بشرية
+                    - text: الموارد البشرية
+                  - cell "hr@aman.com 0500000008" [ref=e245]:
+                    - generic [ref=e246]:
+                      - generic [ref=e247]:
+                        - img [ref=e248]
+                        - text: hr@aman.com
+                      - generic [ref=e251]:
+                        - img [ref=e252]
+                        - text: "0500000008"
+                  - cell "active" [ref=e254]
+                  - cell "-" [ref=e255]
+                  - cell "-" [ref=e256]
+                  - cell "0.00 SAR" [ref=e257]:
+                    - generic [ref=e258]: 0.00 SAR
+                  - cell [ref=e259]:
+                    - button [ref=e260]:
+                      - img [ref=e261]
+                - row "EMP-007 يا ياسر المشتريات مدير مشتريات المشتريات purchasing@aman.com 0500000007 active - - 0.00 SAR" [ref=e265]:
+                  - cell "EMP-007" [ref=e266]
+                  - cell "يا ياسر المشتريات" [ref=e267]:
+                    - generic [ref=e268]:
+                      - generic [ref=e269]: يا
+                      - generic [ref=e271]: ياسر المشتريات
+                  - cell "مدير مشتريات المشتريات" [ref=e272]:
+                    - generic [ref=e273]: مدير مشتريات
+                    - text: المشتريات
+                  - cell "purchasing@aman.com 0500000007" [ref=e274]:
+                    - generic [ref=e275]:
+                      - generic [ref=e276]:
+                        - img [ref=e277]
+                        - text: purchasing@aman.com
+                      - generic [ref=e280]:
+                        - img [ref=e281]
+                        - text: "0500000007"
+                  - cell "active" [ref=e283]
+                  - cell "-" [ref=e284]
+                  - cell "-" [ref=e285]
+                  - cell "0.00 SAR" [ref=e286]:
+                    - generic [ref=e287]: 0.00 SAR
+                  - cell [ref=e288]:
+                    - button [ref=e289]:
+                      - img [ref=e290]
+                - row "EMP-006 ما مونا المخازن أمين مخزن المخازن wh.jeddah@aman.com 0500000006 active - - 0.00 SAR" [ref=e294]:
+                  - cell "EMP-006" [ref=e295]
+                  - cell "ما مونا المخازن" [ref=e296]:
+                    - generic [ref=e297]:
+                      - generic [ref=e298]: ما
+                      - generic [ref=e300]: مونا المخازن
+                  - cell "أمين مخزن المخازن" [ref=e301]:
+                    - generic [ref=e302]: أمين مخزن
+                    - text: المخازن
+                  - cell "wh.jeddah@aman.com 0500000006" [ref=e303]:
+                    - generic [ref=e304]:
+                      - generic [ref=e305]:
+                        - img [ref=e306]
+                        - text: wh.jeddah@aman.com
+                      - generic [ref=e309]:
+                        - img [ref=e310]
+                        - text: "0500000006"
+                  - cell "active" [ref=e312]
+                  - cell "-" [ref=e313]
+                  - cell "-" [ref=e314]
+                  - cell "0.00 SAR" [ref=e315]:
+                    - generic [ref=e316]: 0.00 SAR
+                  - cell [ref=e317]:
+                    - button [ref=e318]:
+                      - img [ref=e319]
+                - row "EMP-005 خا خالد المخازن أمين مخزن المخازن wh.riyadh@aman.com 0500000005 active - - 0.00 SAR" [ref=e323]:
+                  - cell "EMP-005" [ref=e324]
+                  - cell "خا خالد المخازن" [ref=e325]:
+                    - generic [ref=e326]:
+                      - generic [ref=e327]: خا
+                      - generic [ref=e329]: خالد المخازن
+                  - cell "أمين مخزن المخازن" [ref=e330]:
+                    - generic [ref=e331]: أمين مخزن
+                    - text: المخازن
+                  - cell "wh.riyadh@aman.com 0500000005" [ref=e332]:
+                    - generic [ref=e333]:
+                      - generic [ref=e334]:
+                        - img [ref=e335]
+                        - text: wh.riyadh@aman.com
+                      - generic [ref=e338]:
+                        - img [ref=e339]
+                        - text: "0500000005"
+                  - cell "active" [ref=e341]
+                  - cell "-" [ref=e342]
+                  - cell "-" [ref=e343]
+                  - cell "0.00 SAR" [ref=e344]:
+                    - generic [ref=e345]: 0.00 SAR
+                  - cell [ref=e346]:
+                    - button [ref=e347]:
+                      - img [ref=e348]
+                - row "EMP-004 سا سارة المبيعات مدير مبيعات المبيعات sales@aman.com 0500000004 active - - 0.00 SAR" [ref=e352]:
+                  - cell "EMP-004" [ref=e353]
+                  - cell "سا سارة المبيعات" [ref=e354]:
+                    - generic [ref=e355]:
+                      - generic [ref=e356]: سا
+                      - generic [ref=e358]: سارة المبيعات
+                  - cell "مدير مبيعات المبيعات" [ref=e359]:
+                    - generic [ref=e360]: مدير مبيعات
+                    - text: المبيعات
+                  - cell "sales@aman.com 0500000004" [ref=e361]:
+                    - generic [ref=e362]:
+                      - generic [ref=e363]:
+                        - img [ref=e364]
+                        - text: sales@aman.com
+                      - generic [ref=e367]:
+                        - img [ref=e368]
+                        - text: "0500000004"
+                  - cell "active" [ref=e370]
+                  - cell "-" [ref=e371]
+                  - cell "-" [ref=e372]
+                  - cell "0.00 SAR" [ref=e373]:
+                    - generic [ref=e374]: 0.00 SAR
+                  - cell [ref=e375]:
+                    - button [ref=e376]:
+                      - img [ref=e377]
+                - row "EMP-003 أا أحمد المحاسب محاسب رئيسي المالية والمحاسبة accountant@aman.com 0500000003 active - - 0.00 SAR" [ref=e381]:
+                  - cell "EMP-003" [ref=e382]
+                  - cell "أا أحمد المحاسب" [ref=e383]:
+                    - generic [ref=e384]:
+                      - generic [ref=e385]: أا
+                      - generic [ref=e387]: أحمد المحاسب
+                  - cell "محاسب رئيسي المالية والمحاسبة" [ref=e388]:
+                    - generic [ref=e389]: محاسب رئيسي
+                    - text: المالية والمحاسبة
+                  - cell "accountant@aman.com 0500000003" [ref=e390]:
+                    - generic [ref=e391]:
+                      - generic [ref=e392]:
+                        - img [ref=e393]
+                        - text: accountant@aman.com
+                      - generic [ref=e396]:
+                        - img [ref=e397]
+                        - text: "0500000003"
+                  - cell "active" [ref=e399]
+                  - cell "-" [ref=e400]
+                  - cell "-" [ref=e401]
+                  - cell "0.00 SAR" [ref=e402]:
+                    - generic [ref=e403]: 0.00 SAR
+                  - cell [ref=e404]:
+                    - button [ref=e405]:
+                      - img [ref=e406]
+                - row "EMP-002 نا نادية المالية مدير مالي المالية والمحاسبة cfo@aman.com 0500000002 active - - 0.00 SAR" [ref=e410]:
+                  - cell "EMP-002" [ref=e411]
+                  - cell "نا نادية المالية" [ref=e412]:
+                    - generic [ref=e413]:
+                      - generic [ref=e414]: نا
+                      - generic [ref=e416]: نادية المالية
+                  - cell "مدير مالي المالية والمحاسبة" [ref=e417]:
+                    - generic [ref=e418]: مدير مالي
+                    - text: المالية والمحاسبة
+                  - cell "cfo@aman.com 0500000002" [ref=e419]:
+                    - generic [ref=e420]:
+                      - generic [ref=e421]:
+                        - img [ref=e422]
+                        - text: cfo@aman.com
+                      - generic [ref=e425]:
+                        - img [ref=e426]
+                        - text: "0500000002"
+                  - cell "active" [ref=e428]
+                  - cell "-" [ref=e429]
+                  - cell "-" [ref=e430]
+                  - cell "0.00 SAR" [ref=e431]:
+                    - generic [ref=e432]: 0.00 SAR
+                  - cell [ref=e433]:
+                    - button [ref=e434]:
+                      - img [ref=e435]
+                - row "EMP-001 عع عمر عادل مدير الشركة الإدارة العليا omar@aman.com 0500000001 active - - 0.00 SAR" [ref=e439]:
+                  - cell "EMP-001" [ref=e440]
+                  - cell "عع عمر عادل" [ref=e441]:
+                    - generic [ref=e442]:
+                      - generic [ref=e443]: عع
+                      - generic [ref=e445]: عمر عادل
+                  - cell "مدير الشركة الإدارة العليا" [ref=e446]:
+                    - generic [ref=e447]: مدير الشركة
+                    - text: الإدارة العليا
+                  - cell "omar@aman.com 0500000001" [ref=e448]:
+                    - generic [ref=e449]:
+                      - generic [ref=e450]:
+                        - img [ref=e451]
+                        - text: omar@aman.com
+                      - generic [ref=e454]:
+                        - img [ref=e455]
+                        - text: "0500000001"
+                  - cell "active" [ref=e457]
+                  - cell "-" [ref=e458]
+                  - cell "-" [ref=e459]
+                  - cell "0.00 SAR" [ref=e460]:
+                    - generic [ref=e461]: 0.00 SAR
+                  - cell [ref=e462]:
+                    - button [ref=e463]:
+                      - img [ref=e464]
+              - rowgroup [ref=e468]:
+                - row "إجمالي الرواتب 0.00 SAR" [ref=e469]:
+                  - cell "إجمالي الرواتب" [ref=e470]
+                  - cell "0.00 SAR" [ref=e471]:
+                    - generic [ref=e472]: 0.00 SAR
+                  - cell [ref=e473]
+            - generic [ref=e474]:
+              - generic [ref=e475]:
+                - generic [ref=e476]: عرض 1-11 من 11
+                - combobox [ref=e477] [cursor=pointer]:
+                  - option "10 / صفحة"
+                  - option "25 / صفحة" [selected]
+                  - option "50 / صفحة"
+                  - option "100 / صفحة"
+              - generic [ref=e478]:
+                - button "الأولى" [disabled] [ref=e479]:
+                  - img [ref=e480]
+                - button "السابقة" [disabled] [ref=e483]:
+                  - img [ref=e484]
+                - button "1" [ref=e486] [cursor=pointer]
+                - button "التالية" [disabled] [ref=e487]:
+                  - img [ref=e488]
+                - button "الأخيرة" [disabled] [ref=e490]:
+                  - img [ref=e491]

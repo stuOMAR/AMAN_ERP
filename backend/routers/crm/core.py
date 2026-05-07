@@ -52,8 +52,30 @@ class OpportunityUpdate(BaseModel):
 class ActivityCreate(BaseModel):
     activity_type: str  # call, email, meeting, note, task
     title: str
+    contact_id: Optional[int] = None
     description: Optional[str] = None
     due_date: Optional[str] = None
+    # T10.2 #151: completion-tracking fields. ``is_completed`` maps to
+    # the existing ``completed`` BOOLEAN column on opportunity_activities.
+    outcome: Optional[str] = None        # e.g. won, lost, follow_up, no_answer
+    duration_minutes: Optional[int] = None
+    is_completed: Optional[bool] = None
+
+
+class ActivityUpdate(BaseModel):
+    """T10.2 #150: partial-update payload for opportunity_activities.
+
+    All fields optional — caller sets only what changes (typical use:
+    mark an activity complete with outcome + duration_minutes).
+    """
+    activity_type: Optional[str] = None
+    title: Optional[str] = None
+    contact_id: Optional[int] = None
+    description: Optional[str] = None
+    due_date: Optional[str] = None
+    outcome: Optional[str] = None
+    duration_minutes: Optional[int] = None
+    is_completed: Optional[bool] = None
 
 class TicketCreate(BaseModel):
     subject: str

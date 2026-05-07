@@ -1,0 +1,151 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🔔 4" [ref=e110] [cursor=pointer]:
+            - text: 🔔
+            - generic [ref=e111]: "4"
+          - generic [ref=e113] [cursor=pointer]:
+            - generic [ref=e114]:
+              - generic [ref=e115]: aaaa
+              - generic [ref=e116]: "ID: e24bcd11"
+            - generic [ref=e117]: O
+      - main [ref=e119]:
+        - generic [ref=e290]:
+          - generic [ref=e291]:
+            - button "العودة" [ref=e292] [cursor=pointer]:
+              - img [ref=e293]
+            - generic [ref=e295]:
+              - heading "السنوات المالية" [level=1] [ref=e296]
+              - paragraph [ref=e297]: إدارة السنوات المالية وإقفال نهاية السنة
+            - button "+ سنة مالية جديدة" [active] [ref=e298] [cursor=pointer]
+          - table [ref=e301]:
+            - rowgroup [ref=e302]:
+              - row "السنة تاريخ البداية تاريخ النهاية الحالة الفترات حساب الأرباح المبقاة تاريخ الإقفال إجراءات" [ref=e303]:
+                - columnheader "السنة" [ref=e304]
+                - columnheader "تاريخ البداية" [ref=e305]
+                - columnheader "تاريخ النهاية" [ref=e306]
+                - columnheader "الحالة" [ref=e307]
+                - columnheader "الفترات" [ref=e308]
+                - columnheader "حساب الأرباح المبقاة" [ref=e309]
+                - columnheader "تاريخ الإقفال" [ref=e310]
+                - columnheader "إجراءات" [ref=e311]
+            - rowgroup [ref=e312]:
+              - row "لا توجد سنوات مالية. قم بإنشاء واحدة." [ref=e313]:
+                - cell "لا توجد سنوات مالية. قم بإنشاء واحدة." [ref=e314]
+          - generic [ref=e316]:
+            - generic [ref=e317]:
+              - heading "إنشاء سنة مالية" [level=3] [ref=e318]
+              - button "✕" [ref=e319]
+            - generic [ref=e320]:
+              - generic [ref=e321]:
+                - generic [ref=e322]: السنة
+                - spinbutton [ref=e323]: "2026"
+              - generic [ref=e324]:
+                - generic [ref=e325]: تاريخ البداية
+                - generic [ref=e326]:
+                  - generic:
+                    - img
+                  - textbox "YYYY/MM/DD" [ref=e329]: 2026/01/01
+              - generic [ref=e330]:
+                - generic [ref=e331]: تاريخ النهاية
+                - generic [ref=e332]:
+                  - generic:
+                    - img
+                  - textbox "YYYY/MM/DD" [ref=e335]: 2026/12/31
+            - generic [ref=e336]:
+              - button "إلغاء" [ref=e337] [cursor=pointer]
+              - button "إنشاء" [ref=e338] [cursor=pointer]

@@ -8,15 +8,28 @@ logger = logging.getLogger(__name__)
 from .common import (
     build_branch_filter, kpi_item, ratio_status, _gl_balance, _count_table, _sum_column
 )
+from utils.accounting import get_base_currency
+from utils.currency_display import document_amount_base_sql
 
 
 def get_procurement_kpis(db, start_date: date, end_date: date,
                          branch_id: Optional[int] = None) -> dict:
     """KPIs for Purchase Manager."""
-    branch_sql, bp = build_branch_filter(branch_id)
+    invoice_branch_sql, invoice_bp = build_branch_filter(branch_id, table_alias="i")
+    po_branch_sql, po_bp = build_branch_filter(branch_id, table_alias="po")
+    base_currency = get_base_currency(db) or "SAR"
 
     # Total PO Value
-    po_value = _sum_column(db, "purchase_orders", "total", branch_id, "order_date", start_date, end_date)
+    po_value = 0
+    try:
+        po_total_base_sql = document_amount_base_sql("po.total", "po")
+        po_value = float(db.execute(text(f"""
+            SELECT COALESCE(SUM({po_total_base_sql}), 0)
+            FROM purchase_orders po
+            WHERE po.order_date BETWEEN :s AND :e {po_branch_sql}
+        """), {"s": start_date, "e": end_date, "base_currency": base_currency, **po_bp}).scalar() or 0)
+    except Exception:
+        pass
     po_count = _count_table(db, "purchase_orders", branch_id, "order_date", start_date, end_date)
 
     # Pending RFQs
@@ -28,13 +41,14 @@ def get_procurement_kpis(db, start_date: date, end_date: date,
     # Top 10 Suppliers
     top_suppliers = []
     try:
+        invoice_total_base_sql = document_amount_base_sql("i.total", "i")
         rows = db.execute(text(f"""
-            SELECT p.name, COALESCE(SUM(i.total), 0) as total
+            SELECT p.name, COALESCE(SUM({invoice_total_base_sql}), 0) as total
             FROM invoices i
             JOIN parties p ON i.party_id = p.id
-            WHERE i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :s AND :e {branch_sql}
+            WHERE i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :s AND :e {invoice_branch_sql}
             GROUP BY p.name ORDER BY total DESC LIMIT 10
-        """), {"s": start_date, "e": end_date, **bp}).fetchall()
+        """), {"s": start_date, "e": end_date, "base_currency": base_currency, **invoice_bp}).fetchall()
         top_suppliers = [{"name": r[0], "value": float(r[1])} for r in rows]
     except Exception:
         pass
@@ -67,13 +81,13 @@ def get_procurement_kpis(db, start_date: date, end_date: date,
         pass
 
     kpis = [
-        kpi_item("po_value", "Total PO Value", "إجمالي قيمة أوامر الشراء", po_value, "SAR"),
+        kpi_item("po_value", "Total PO Value", "إجمالي قيمة أوامر الشراء", po_value, base_currency),
         kpi_item("po_count", "Purchase Orders", "عدد أوامر الشراء", po_count, ""),
         kpi_item("pending_rfqs", "Pending RFQs", "طلبات عروض أسعار معلقة", pending_rfqs, ""),
         kpi_item("on_time_delivery", "Supplier On-Time Delivery", "التسليم في الموعد", on_time_pct, "%",
                  benchmark=95.0, benchmark_source="Best Practice",
                  status=ratio_status(on_time_pct, 95, 80)),
-        kpi_item("ap_balance", "Accounts Payable", "رصيد الذمم الدائنة", ap_balance, "SAR"),
+        kpi_item("ap_balance", "Accounts Payable", "رصيد الذمم الدائنة", ap_balance, base_currency),
         kpi_item("avg_lead_time", "Avg Lead Time", "متوسط وقت التسليم", avg_lead_time, "days",
                  benchmark=14, benchmark_source="Industry Avg",
                  status=ratio_status(avg_lead_time, 14, 30, higher_is_better=False)),

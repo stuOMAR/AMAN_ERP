@@ -9,12 +9,14 @@ import CustomDatePicker from '../../components/common/CustomDatePicker';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import { PageLoading, Spinner } from '../../components/common/LoadingStates'
+import { useBranch } from '../../context/BranchContext';
 
 export default function ExpenseForm() {
   const { t } = useTranslation();
   const { id } = useParams();
   const navigate = useNavigate();
   const { showToast } = useToast();
+  const { currentBranch } = useBranch();
   const isEdit = Boolean(id);
   const currency = getCurrency() || '';
 
@@ -45,12 +47,12 @@ export default function ExpenseForm() {
     if (isEdit) {
       loadExpense();
     }
-  }, [id]);
+  }, [id, currentBranch?.id]);
 
   const loadOptions = async () => {
     try {
       const [treasuriesRes, accountsRes, costCentersRes, projectsRes] = await Promise.all([
-        api.get('/treasury/accounts'),
+        api.get('/treasury/accounts', { params: { branch_id: currentBranch?.id } }),
         api.get('/accounting/accounts', { params: { account_type: 'expense' } }),
         api.get('/cost-centers/'),
         api.get('/projects/', { params: { status: 'in_progress' } })

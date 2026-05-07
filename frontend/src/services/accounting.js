@@ -1,7 +1,7 @@
 import api from './apiClient'
 
 export const accountingAPI = {
-    list: (params) => api.get('/accounting/accounts', { params }),
+    list: (params, config = {}) => api.get('/accounting/accounts', { params, ...config }),
     create: (data) => api.post('/accounting/accounts', data),
     update: (id, data) => api.put(`/accounting/accounts/${id}`, data),
     delete: (id) => api.delete(`/accounting/accounts/${id}`),
@@ -22,6 +22,7 @@ export const accountingAPI = {
     listJournalEntries: (params) => api.get('/accounting/journal-entries', { params }),
     getJournalEntry: (id) => api.get(`/accounting/journal-entries/${id}`),
     postJournalEntry: (id) => api.post(`/accounting/journal-entries/${id}/post`),
+    reverseJournalEntry: (id, data) => api.post(`/accounting/journal-entries/${id}/reverse`, data),
 
     // Recurring Templates (ACC-003)
     listRecurringTemplates: (params) => api.get('/accounting/recurring-templates', { params }),
@@ -48,14 +49,15 @@ export const accountingAPI = {
     createLeaveProvision: (data) => api.post('/accounting/provisions/leave', data),
 
     // Intercompany Transactions (IC-001) — legacy v1
-    listIntercompanyTransactions: (params) => api.get('/accounting/intercompany-v1/transactions', { params }),
-    createIntercompanyTransaction: (data) => api.post('/accounting/intercompany-v1/transactions', data),
-    processIntercompanyTransaction: (id) => api.post(`/accounting/intercompany-v1/transactions/${id}/process`),
-    getIntercompanyEliminationReport: () => api.get('/accounting/intercompany-v1/elimination-report'),
+    listIntercompanyTransactions: (params) => api.get('/accounting/intercompany/transactions', { params }),
+    createIntercompanyTransaction: (data) => api.post('/accounting/intercompany/transactions', data),
+    processIntercompanyTransaction: (id) => api.post(`/accounting/intercompany/transactions/${id}/process`),
+    getIntercompanyEliminationReport: (params) => api.get('/accounting/intercompany/consolidate', { params }),
 
     // Intercompany v2 — Entity Groups, Transactions, Consolidation, Mappings
     listEntityGroups: () => api.get('/accounting/intercompany/entities'),
     createEntityGroup: (data) => api.post('/accounting/intercompany/entities', data),
+    updateEntityGroup: (id, data) => api.patch(`/accounting/intercompany/entities/${id}`, data),
     listICTransactionsV2: (params) => api.get('/accounting/intercompany/transactions', { params }),
     createICTransactionV2: (data) => api.post('/accounting/intercompany/transactions', data),
     getICTransactionV2: (id) => api.get(`/accounting/intercompany/transactions/${id}`),
@@ -73,14 +75,14 @@ export const accountingAPI = {
 }
 
 export const costCentersAPI = {
-    list: () => api.get('/cost-centers/'),
+    list: (params) => api.get('/cost-centers/', { params }),
     create: (data) => api.post('/cost-centers/', data),
     update: (id, data) => api.put(`/cost-centers/${id}`, data),
     delete: (id) => api.delete(`/cost-centers/${id}`)
 }
 
 export const budgetsAPI = {
-    list: () => api.get('/accounting/budgets/'),
+    list: (params) => api.get('/accounting/budgets/', { params }),
     create: (data) => api.post('/accounting/budgets/', data),
     get: (id) => api.get(`/accounting/budgets/${id}`),
     update: (id, data) => api.put(`/accounting/budgets/${id}`, data),
@@ -90,20 +92,8 @@ export const budgetsAPI = {
     delete: (id) => api.delete(`/accounting/budgets/${id}`),
     activate: (id) => api.post(`/accounting/budgets/${id}/activate`),
     close: (id) => api.post(`/accounting/budgets/${id}/close`),
-    getOverrunAlerts: (threshold) => api.get('/accounting/budgets/alerts/overruns', { params: { threshold } }),
-    getStats: () => api.get('/accounting/budgets/stats/summary')
-}
-
-export const budgetImprovementsAPI = {
-    createByCostCenter: (data) => api.post('/accounting/budgets/by-cost-center', data),
-    getByCostCenter: (ccId) => api.get(`/accounting/budgets/by-cost-center/${ccId}`),
-    getMultiYear: (params) => api.get('/accounting/budgets/multi-year', { params }),
-    getComparison: (params) => api.get('/accounting/budgets/comparison', { params }),
-    listCostCenterBudgets: (params) => api.get('/accounting/budgets/by-cost-center', { params }),
-    listMultiYearBudgets: (params) => api.get('/accounting/budgets/multi-year', { params }),
-    createCostCenterBudget: (data) => api.post('/accounting/budgets/by-cost-center', data),
-    createMultiYearBudget: (data) => api.post('/accounting/budgets/multi-year', data),
-    compareBudgets: (id1, id2) => api.get(`/accounting/budgets/comparison`, { params: { budget_id_1: id1, budget_id_2: id2 } }),
+    getOverrunAlerts: (params) => api.get('/accounting/budgets/alerts/overruns', { params }),
+    getStats: (params) => api.get('/accounting/budgets/stats/summary', { params })
 }
 
 export const currenciesAPI = {

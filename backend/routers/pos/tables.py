@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -41,17 +41,10 @@ def list_tables(
     db: Session = Depends(get_db)
 ):
     """List Tables."""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     q = "SELECT * FROM pos_tables WHERE is_active = true"
     params = {}
-    if branch_id:
-        validate_branch_access(current_user, branch_id)
-        q += " AND branch_id = :bid"
-        params["bid"] = branch_id
-    else:
-        allowed_branches = current_user.allowed_branches or []
-        if current_user.role != "admin" and allowed_branches:
-            q += " AND branch_id = ANY(:branches)"
-            params["branches"] = allowed_branches
+    q += f" {branch_scope_filter_from_scope(branch_scope, 'branch_id', params)}"
     if floor:
         q += " AND floor = :floor"
         params["floor"] = floor

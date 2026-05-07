@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -56,19 +56,41 @@ def get_pwa_manifest(current_user: UserResponse = Depends(get_current_user)):
 
 
 @router.get("/pwa/config", response_model=Dict[str, Any])
-def get_pwa_config(current_user: UserResponse = Depends(get_current_user)):
+def get_pwa_config(
+    branch_id: Optional[int] = None,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
     """PWA offline config - cached products and settings"""
-    db = get_company_db(current_user.company_id)
     try:
-        products = db.execute(text("""
-            SELECT id, name, name_ar, sku, sale_price, tax_rate, category_id, unit_id, barcode
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        product_params = {}
+        product_branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", product_params)
+        product_scope_clause = ""
+        if product_branch_filter:
+            product_scope_clause = f"""
+                AND EXISTS (
+                    SELECT 1
+                    FROM inventory i
+                    JOIN warehouses w ON w.id = i.warehouse_id
+                    WHERE i.product_id = products.id
+                    {product_branch_filter}
+                )
+            """
+        products = db.execute(text(f"""
+            SELECT id, product_name as name, product_code as sku, selling_price as sale_price, tax_rate, category_id, barcode
             FROM products WHERE is_active = TRUE
-            ORDER BY name LIMIT 5000
-        """)).fetchall()
+            {product_scope_clause}
+            ORDER BY product_name LIMIT 5000
+        """), product_params).fetchall()
         tax_rates = db.execute(text("SELECT * FROM tax_rates WHERE is_active = TRUE")).fetchall()
-        payment_methods = db.execute(text(
-            "SELECT * FROM pos_payment_methods WHERE is_active = TRUE ORDER BY sort_order"
-        )).fetchall()
+        payment_methods = []
+        try:
+            payment_methods = db.execute(text(
+                "SELECT * FROM pos_payment_methods WHERE is_active = TRUE ORDER BY sort_order"
+            )).fetchall()
+        except Exception:
+            pass  # pos_payment_methods table may not exist
         return {
             "products": [dict(r._mapping) for r in products],
             "tax_rates": [dict(r._mapping) for r in tax_rates],
@@ -78,5 +100,3 @@ def get_pwa_config(current_user: UserResponse = Depends(get_current_user)):
     except Exception as e:
         logger.error(f"Error loading PWA config: {e}")
         return {"products": [], "tax_rates": [], "payment_methods": [], "error": "Failed to load configuration"}
-    finally:
-        db.close()

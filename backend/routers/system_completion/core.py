@@ -87,11 +87,19 @@ def _zakat_balance_query(account_filter: str, account_types: list, branch_id=Non
         """
         return sql, {"branch_id": branch_id}
     else:
-        sql = f"""
-            SELECT COALESCE(SUM(a.balance), 0)
-            FROM accounts a WHERE a.account_type IN ('{type_list}')
-            AND ({account_filter})
-        """
+        # For all branches: use ABS(balance) for credit-normal accounts
+        if sign == "credit":
+            sql = f"""
+                SELECT COALESCE(SUM(ABS(a.balance)), 0)
+                FROM accounts a WHERE a.account_type IN ('{type_list}')
+                AND ({account_filter})
+            """
+        else:
+            sql = f"""
+                SELECT COALESCE(SUM(a.balance), 0)
+                FROM accounts a WHERE a.account_type IN ('{type_list}')
+                AND ({account_filter})
+            """
         return sql, {}
 
 

@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access, validate_treasury_account_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -31,7 +31,7 @@ def get_db(current_user: UserResponse = Depends(get_current_user)):
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, get_db
+from .core import _D2, _D4, _dec, get_db, _get_populated_session
 
 @router.post("/sessions/open", response_model=SessionResponse, dependencies=[Depends(require_permission("pos.sessions"))])
 def open_session(
@@ -42,10 +42,20 @@ def open_session(
 ):
     """Open Session."""
     user_id = current_user.id
-    
-    # Validate branch access
-    validate_branch_access(current_user, session_in.branch_id)
-    
+
+    # Resolve branch_id from warehouse if not provided
+    branch_id = session_in.branch_id
+    if not branch_id and session_in.warehouse_id:
+        branch_id = db.execute(
+            text("SELECT branch_id FROM warehouses WHERE id = :id"),
+            {"id": session_in.warehouse_id}
+        ).scalar()
+
+    # Validate branch access (after resolving from warehouse)
+    branch_id = validate_branch_access(current_user, branch_id)
+    if session_in.treasury_account_id:
+        validate_treasury_account_access(db, current_user, session_in.treasury_account_id, branch_id)
+
     # CONC-FIX: Use INSERT ... ON CONFLICT to prevent TOCTOU race condition.
     # A UNIQUE INDEX on (user_id) WHERE status='opened' must exist.
     # Fallback: check-then-insert inside a serialized read for environments without the index.
@@ -53,27 +63,27 @@ def open_session(
         text("SELECT id FROM pos_sessions WHERE user_id = :uid AND status = 'opened' FOR UPDATE SKIP LOCKED"),
         {"uid": user_id}
     ).fetchone()
-    
+
     if existing_session:
         raise HTTPException(status_code=400, detail="User already has an open session")
-    
+
     # Create new session
     # Generate session code
     import uuid
     session_code = f"SESS-{uuid.uuid4().hex[:8].upper()}"
-    
+
     sql = text("""
         INSERT INTO pos_sessions (session_code, user_id, warehouse_id, opening_balance, status, branch_id, notes, treasury_account_id)
         VALUES (:code, :uid, :wh, :bal, 'opened', :branch, :notes, :tid)
         RETURNING id, session_code, user_id, warehouse_id, status, opened_at, opening_balance, closing_balance, total_sales, difference, treasury_account_id
     """)
-    
+
     result = db.execute(sql, {
         "code": session_code,
         "uid": user_id,
         "wh": session_in.warehouse_id,
         "bal": session_in.opening_balance,
-        "branch": session_in.branch_id,
+        "branch": branch_id,
         "notes": session_in.notes,
         "tid": session_in.treasury_account_id
     }).fetchone()
@@ -89,8 +99,8 @@ def open_session(
         db, user_id=current_user.id, username=current_user.username,
         action="open_pos_session", resource_type="pos_session",
         resource_id=str(session_id),
-        details={"branch_id": session_in.branch_id, "warehouse_id": session_in.warehouse_id, "opening_balance": str(session_in.opening_balance)},
-        request=request, branch_id=session_in.branch_id
+        details={"branch_id": branch_id, "warehouse_id": session_in.warehouse_id, "opening_balance": str(session_in.opening_balance)},
+        request=request, branch_id=branch_id
     )
 
     populated = _get_populated_session(db, session_id, user_id)
@@ -168,20 +178,22 @@ def close_session(
     # FISCAL-LOCK: Reject if accounting period is closed
     check_fiscal_period_open(db, datetime.now().date())
 
+    # Resolve branch_id for logging and GL entries
+    branch_id = db.execute(text("""
+        SELECT w.branch_id FROM pos_sessions s
+        JOIN warehouses w ON s.warehouse_id = w.id
+        WHERE s.id = :id
+    """), {"id": session_id}).scalar()
+
     # Create Cash Over/Short GL Entry if there's a difference
     if abs(difference) > _D2:
         from utils.accounting import get_mapped_account_id
         acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
         acc_over_short = get_mapped_account_id(db, "acc_map_cash_over_short") or get_mapped_account_id(db, "acc_map_expense_other")
-        
+
         if acc_cash and acc_over_short:
             import random
             je_num = f"JE-POS-CLOSE-{session_id}-{random.randint(100,999)}"
-            branch_id = db.execute(text("""
-                SELECT w.branch_id FROM pos_sessions s 
-                JOIN warehouses w ON s.warehouse_id = w.id 
-                WHERE s.id = :id
-            """), {"id": session_id}).scalar()
             
             diff_abs = abs(difference).quantize(_D2, ROUND_HALF_UP)
             lines_data = []

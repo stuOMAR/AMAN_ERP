@@ -16,6 +16,12 @@ class EntityGroupCreate(BaseModel):
     group_currency: str = Field(default="SAR", max_length=10)
 
 
+class EntityGroupUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=255)
+    parent_id: Optional[int] = None
+    group_currency: Optional[str] = Field(default=None, max_length=10)
+
+
 class EntityGroupRead(BaseModel):
     id: int
     name: str
@@ -43,6 +49,11 @@ class IntercompanyTransactionCreate(BaseModel):
     source_currency: str = Field(default="SAR", max_length=10)
     target_amount: Optional[Decimal] = Field(default=None, ge=0, decimal_places=4)
     target_currency: Optional[str] = Field(default=None, max_length=10)
+    # Tri-currency: the *money* moved (e.g., USD between SAR and EGP
+    # branches). When omitted the transaction is treated as legacy
+    # single-currency (transaction_currency = source_currency).
+    transaction_currency: Optional[str] = Field(default=None, max_length=10)
+    transaction_amount: Optional[Decimal] = Field(default=None, ge=0, decimal_places=4)
     exchange_rate: Decimal = Field(default=Decimal("1"), gt=0, decimal_places=8)
     reference_document: Optional[str] = Field(default=None, max_length=255)
 
@@ -52,6 +63,10 @@ class IntercompanyTransactionCreate(BaseModel):
             self.target_amount = (self.source_amount * self.exchange_rate).quantize(Decimal("0.0001"))
         if self.target_currency is None:
             self.target_currency = self.source_currency
+        if self.transaction_currency is None:
+            self.transaction_currency = self.source_currency
+        if self.transaction_amount is None:
+            self.transaction_amount = self.source_amount
         return self
 
 
@@ -64,6 +79,8 @@ class IntercompanyTransactionRead(BaseModel):
     source_currency: str
     target_amount: Decimal
     target_currency: str
+    transaction_currency: Optional[str] = None
+    transaction_amount: Optional[Decimal] = None
     exchange_rate: Decimal
     source_journal_entry_id: Optional[int] = None
     target_journal_entry_id: Optional[int] = None

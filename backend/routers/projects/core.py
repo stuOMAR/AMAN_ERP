@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, require_module
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
     get_base_currency, compute_line_amounts, compute_invoice_totals
@@ -21,6 +21,7 @@ from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from sqlalchemy import text
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,7 @@ router = APIRouter()
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-router = APIRouter(prefix="/projects", tags=["Projects"], dependencies=[Depends(require_module("projects"))])
+router = APIRouter()
 from schemas.projects import (
     ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
     ProjectExpenseCreate, ProjectRevenueCreate,
@@ -69,7 +70,6 @@ async def get_projects(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب قائمة المشاريع مع ملخص مالي"""
-    validated_branch = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {}
@@ -79,9 +79,9 @@ async def get_projects(
             filters.append("p.status = :status")
             params["status"] = status_filter
 
-        if validated_branch:
-            filters.append("p.branch_id = :branch_id")
-            params["branch_id"] = validated_branch
+        branch_clause = branch_scope_filter(current_user, branch_id, "p.branch_id", params)
+        if branch_clause:
+            filters.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
 
         where = " AND ".join(filters)
 
@@ -644,29 +644,31 @@ async def create_project_invoice(
         inv_num = generate_sequential_number(db, f"INV-{datetime.now().year}", "invoices", "invoice_number")
         
         # 2. Calculate Totals (centralized — no inline float math)
-        line_dicts = [
-            {"quantity": item.quantity, "unit_price": item.unit_price,
-             "tax_rate": item.tax_rate, "discount": item.discount}
-            for item in invoice_data.items
-        ]
-        totals = compute_invoice_totals(line_dicts)
-        subtotal = float(totals["subtotal"])
-        total_tax = float(totals["total_tax"])
-        total_discount = float(totals["total_discount"])
-        grand_total = float(totals["grand_total"])
-        
+        line_dicts = []
         line_items_data = []
         for item in invoice_data.items:
-            la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, item.discount)
+            if item.product_id and project.branch_id:
+                tax_info = resolve_line_tax(project.branch_id, item.product_id, db, invoice_data.invoice_date, customer_id=invoice_data.customer_id)
+                effective_tax_rate = tax_info["tax_rate"]
+            else:
+                effective_tax_rate = _dec(item.tax_rate or 0)
+            la = compute_line_amounts(item.quantity, item.unit_price, effective_tax_rate, item.discount)
+            line_dicts.append({"quantity": item.quantity, "unit_price": item.unit_price,
+                               "tax_rate": effective_tax_rate, "discount": item.discount})
             line_items_data.append({
                 "pid": item.product_id,
                 "desc": item.description,
                 "qty": item.quantity,
                 "price": item.unit_price,
-                "tax": item.tax_rate,
+                "tax": effective_tax_rate,
                 "disc": item.discount,
                 "total": float(la['line_total'])
             })
+        totals = compute_invoice_totals(line_dicts)
+        subtotal = float(totals["subtotal"])
+        total_tax = float(totals["total_tax"])
+        total_discount = float(totals["total_discount"])
+        grand_total = float(totals["grand_total"])
         
         # 3. Create Invoice Header
         inv_currency = invoice_data.currency or get_base_currency(db)

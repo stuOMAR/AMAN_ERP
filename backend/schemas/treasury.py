@@ -15,6 +15,7 @@ class TreasuryAccountCreate(BaseModel):
     iban: Optional[str] = None
     opening_balance: Optional[float] = 0.0
     exchange_rate: Optional[float] = 1.0
+    allow_overdraft: bool = False
 
 
 class TreasuryAccountResponse(TreasuryAccountCreate):

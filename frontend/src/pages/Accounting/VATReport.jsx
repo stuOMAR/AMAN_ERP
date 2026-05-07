@@ -31,7 +31,7 @@ function VATReport() {
                 companiesAPI.getCurrentCompany(localStorage.getItem('company_id'))
             ])
             setReport(reportRes.data)
-            setCurrency(companyRes.data.currency || '')
+            setCurrency(reportRes.data.display_currency || companyRes.data.currency || '')
         } catch (err) {
             setError(t('accounting.vat.load_error'))
             console.error(err)
@@ -110,23 +110,23 @@ function VATReport() {
                             <tbody>
                                 <tr>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.sales_basic_15')}</td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.output_vat.taxable)}</td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.output_vat.vat)}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.output_vat.taxable)} {currency}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.output_vat.vat)} {currency}</td>
                                 </tr>
                                 <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.output_total')}</td>
-                                    <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(report.output_vat.taxable)}</td>
-                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{formatNumber(report.output_vat.vat)}</td>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(report.output_vat.taxable)} {currency}</td>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: 'var(--text-secondary)' }}>{formatNumber(report.output_vat.vat)} {currency}</td>
                                 </tr>
                                 <tr>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.purchases_basic_15')}</td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.input_vat.taxable)}</td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.input_vat.vat)}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.input_vat.taxable)} {currency}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(report.input_vat.vat)} {currency}</td>
                                 </tr>
                                 <tr style={{ borderBottom: '2px solid var(--border-color)' }}>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.input_total')}</td>
-                                    <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(report.input_vat.taxable)}</td>
-                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: 'var(--primary)' }}>{formatNumber(report.input_vat.vat)}</td>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(report.input_vat.taxable)} {currency}</td>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: 'var(--primary)' }}>{formatNumber(report.input_vat.vat)} {currency}</td>
                                 </tr>
                                 <tr style={{ background: 'var(--bg-secondary)', fontSize: '1.2rem' }}>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.net_tax')}</td>

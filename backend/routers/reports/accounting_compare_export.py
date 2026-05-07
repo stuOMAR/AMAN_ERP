@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -31,14 +31,12 @@ def compare_profit_loss(
     """مقارنة قوائم الدخل بين فترات متعددة
     periods: comma-separated pairs start:end  e.g. 2025-01-01:2025-12-31,2024-01-01:2024-12-31
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
             raise HTTPException(status_code=400, detail="يجب تحديد فترتين على الأقل للمقارنة")
-
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
 
         # Fetch all revenue/expense accounts once
         all_accounts = db.execute(text("""
@@ -51,8 +49,7 @@ def compare_profit_loss(
         period_results = []
         for p in parsed:
             params = {"start": p["start"], "end": p["end"]}
-            if branch_id:
-                params["branch_id"] = branch_id
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
             balances = db.execute(text(f"""
                 SELECT a.id,
@@ -62,8 +59,8 @@ def compare_profit_loss(
                         ELSE 0
                     END), 0) as balance
                 FROM accounts a
-                LEFT JOIN journal_lines jl ON a.id = jl.account_id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
+                JOIN journal_lines jl ON a.id = jl.account_id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id
                     AND je.entry_date BETWEEN :start AND :end
                     AND je.status = 'posted' {branch_filter}
                 WHERE a.account_type IN ('revenue', 'expense')
@@ -116,14 +113,12 @@ def compare_balance_sheet(
     """مقارنة الميزانية العمومية بين تواريخ متعددة
     periods: comma-separated dates  e.g. 2025-12-31,2024-12-31
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         dates = [d.strip() for d in periods.split(",") if d.strip()]
         if len(dates) < 2:
             raise HTTPException(status_code=400, detail="يجب تحديد تاريخين على الأقل")
-
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
 
         all_accounts = db.execute(text("""
             SELECT id, account_number, name, name_en, account_type, parent_id
@@ -135,8 +130,7 @@ def compare_balance_sheet(
         period_results = []
         for d in dates:
             params = {"end": d}
-            if branch_id:
-                params["branch_id"] = branch_id
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
             balances = db.execute(text(f"""
                 SELECT a.id,
@@ -145,8 +139,8 @@ def compare_balance_sheet(
                         ELSE jl.credit - jl.debit
                     END), 0) as balance
                 FROM accounts a
-                LEFT JOIN journal_lines jl ON a.id = jl.account_id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
+                JOIN journal_lines jl ON a.id = jl.account_id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id
                     AND je.entry_date <= :end
                     AND je.status = 'posted' {branch_filter}
                 WHERE a.account_type IN ('asset', 'liability', 'equity')
@@ -205,8 +199,6 @@ def export_profit_loss(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير قائمة الدخل (PDF/Excel)"""
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     # Parse dates
     try:
         s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
@@ -262,8 +254,6 @@ def export_balance_sheet(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير الميزانية العمومية (PDF/Excel)"""
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     try:
         target_date = datetime.strptime(as_of_date, "%Y-%m-%d").date() if as_of_date else date.today()
     except ValueError:
@@ -308,14 +298,12 @@ def compare_trial_balance(
     current_user: dict = Depends(get_current_user)
 ):
     """مقارنة ميزان المراجعة بين فترات متعددة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
             raise HTTPException(status_code=400, detail="يجب تحديد فترتين على الأقل")
-
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
 
         all_accounts = db.execute(text("""
             SELECT id, account_number, name, name_en, account_type, parent_id
@@ -326,16 +314,15 @@ def compare_trial_balance(
         period_results = []
         for p in parsed:
             params = {"start": p["start"], "end": p["end"]}
-            if branch_id:
-                params["branch_id"] = branch_id
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
             balances = db.execute(text(f"""
                 SELECT a.id,
                     COALESCE(SUM(jl.debit), 0) as total_debit,
                     COALESCE(SUM(jl.credit), 0) as total_credit
                 FROM accounts a
-                LEFT JOIN journal_lines jl ON a.id = jl.account_id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
+                JOIN journal_lines jl ON a.id = jl.account_id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id
                     AND je.entry_date BETWEEN :start AND :end
                     AND je.status = 'posted' {branch_filter}
                 GROUP BY a.id
@@ -421,9 +408,19 @@ def _build_comparison_table(account_list, period_results, mode):
                 has_data = True
             period_values.append(bal)
         if has_data:
-            # Calculate change between first two periods
-            change = period_values[0] - period_values[1] if len(period_values) >= 2 else 0
-            change_pct = (change / abs(period_values[1]) * 100) if len(period_values) >= 2 and period_values[1] != 0 else 0
+            period_changes = []
+            period_change_pct = []
+            for idx in range(len(period_values) - 1):
+                delta = period_values[idx] - period_values[idx + 1]
+                period_changes.append(delta)
+                period_change_pct.append(
+                    round((delta / abs(period_values[idx + 1]) * 100), 2)
+                    if period_values[idx + 1] != 0 else 0
+                )
+
+            # Backward-compatible first-pair fields for existing clients.
+            change = period_changes[0] if period_changes else 0
+            change_pct = period_change_pct[0] if period_change_pct else 0
 
             rows.append({
                 "account_id": a["id"],
@@ -434,6 +431,8 @@ def _build_comparison_table(account_list, period_results, mode):
                 "periods": period_values,
                 "change": change,
                 "change_pct": round(change_pct, 2),
+                "period_changes": period_changes,
+                "period_change_pct": period_change_pct,
             })
     return rows
 
@@ -450,7 +449,6 @@ def export_trial_balance(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير ميزان المراجعة (PDF/Excel)"""
-    branch_id = validate_branch_access(current_user, branch_id)
     s = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
     e = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
     data = get_trial_balance(start_date=str(s), end_date=str(e), branch_id=branch_id, current_user=current_user)
@@ -483,7 +481,6 @@ def export_general_ledger(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير دفتر الأستاذ لحساب معين"""
-    branch_id = validate_branch_access(current_user, branch_id)
     data = get_general_ledger(account_id=account_id, start_date=start_date, end_date=end_date, branch_id=branch_id, current_user=current_user)
     flat = []
     balance = Decimal("0")
@@ -514,7 +511,6 @@ def export_cashflow(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير تقرير التدفقات النقدية"""
-    branch_id = validate_branch_access(current_user, branch_id)
     data = get_cashflow_report(start_date=start_date, end_date=end_date, branch_id=branch_id, current_user=current_user)
     flat = []
     for item in data.get("inflows", []):

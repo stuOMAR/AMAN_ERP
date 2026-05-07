@@ -5,7 +5,7 @@ Inventory Module - Price Lists CRUD
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 import logging
 
 from database import get_db_connection, get_system_db
@@ -19,16 +19,25 @@ logger = logging.getLogger(__name__)
 
 
 @price_lists_router.get("/price-lists", response_model=List[dict], dependencies=[Depends(require_permission("stock.view"))])
-def list_price_lists(current_user: dict = Depends(get_current_user)):
+def list_price_lists(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض قوائم الأسعار"""
     db = get_db_connection(current_user.company_id)
     try:
-        result = db.execute(text("""
-            SELECT id, price_list_name as name, currency, 
-                   (status = 'active') as is_active, is_default 
-            FROM customer_price_lists 
-            ORDER BY id
-        """)).fetchall()
+        branch_filter = ""
+        params = {}
+        if branch_id:
+            branch_filter = "AND (cpl.branch_id = :branch_id OR cpl.branch_id IS NULL)"
+            params["branch_id"] = branch_id
+        
+        result = db.execute(text(f"""
+            SELECT cpl.id, cpl.price_list_name as name, cpl.currency, 
+                   (cpl.status = 'active') as is_active, cpl.is_default,
+                   cpl.branch_id, b.branch_name
+            FROM customer_price_lists cpl
+            LEFT JOIN branches b ON cpl.branch_id = b.id
+            WHERE 1=1 {branch_filter}
+            ORDER BY cpl.id
+        """), params).fetchall()
         return [dict(row._mapping) for row in result]
     finally:
         db.close()
@@ -61,13 +70,13 @@ def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_cu
 
         result = db.execute(text("""
             INSERT INTO customer_price_lists (
-                price_list_code, price_list_name, currency, status, is_default
+                price_list_code, price_list_name, currency, branch_id, status, is_default
             )
-            VALUES (:code, :name, :curr, :status, :default)
+            VALUES (:code, :name, :curr, :branch_id, :status, :default)
             RETURNING id
         """), {
             "code": code, "name": data.name, "curr": company_currency,
-            "status": status_str, "default": data.is_default
+            "branch_id": data.branch_id, "status": status_str, "default": data.is_default
         }).fetchone()
 
         db.commit()
@@ -101,6 +110,7 @@ def update_price_list(
         db.execute(text("""
             UPDATE customer_price_lists SET
                 price_list_name = :name,
+                branch_id = :branch_id,
                 status = :status,
                 is_default = :default,
                 updated_at = NOW()
@@ -108,6 +118,7 @@ def update_price_list(
         """), {
             "id": id,
             "name": data.name,
+            "branch_id": data.branch_id,
             "status": status_str,
             "default": data.is_default
         })

@@ -1,0 +1,36 @@
+openapi: 3.1.0
+info:
+  title: Locale Defaults (R8)
+  version: "1.0.0"
+paths:
+  /locale/defaults:
+    get:
+      summary: Locale defaults consumed by Register / Onboarding / Branches
+      parameters:
+        - in: query
+          name: country
+          schema: { type: string, description: ISO 3166-1 alpha-2 }
+        - in: query
+          name: tenant_id
+          schema: { type: string }
+      responses:
+        "200":
+          description: Defaults
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [language, currency, timezone, date_format, number_format, first_day_of_week]
+                properties:
+                  language: { type: string, example: ar }
+                  currency: { type: string, example: SAR }
+                  timezone: { type: string, example: Asia/Riyadh }
+                  date_format: { type: string, example: YYYY-MM-DD }
+                  number_format:
+                    type: object
+                    required: [decimal_separator, thousand_separator, fraction_digits]
+                    properties:
+                      decimal_separator: { type: string }
+                      thousand_separator: { type: string }
+                      fraction_digits: { type: integer }
+                  first_day_of_week: { type: integer, minimum: 0, maximum: 6 }

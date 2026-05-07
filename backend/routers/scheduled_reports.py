@@ -15,7 +15,7 @@ import json
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 
 logger = logging.getLogger(__name__)
@@ -75,12 +75,10 @@ def list_scheduled_reports(
     current_user: dict = Depends(get_current_user)
 ):
     """List all scheduled reports."""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
-        branch_filter = "AND (sr.branch_id = :branch_id OR sr.branch_id IS NULL)" if branch_id else ""
         params = {"uid": current_user.id}
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "sr.branch_id", params)
 
         query = f"""
             SELECT sr.*, b.branch_name, u.full_name as created_by_name

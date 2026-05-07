@@ -1,10 +1,12 @@
 import logging
 import os
+from contextlib import contextmanager
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
 from sqlalchemy import text
 from datetime import datetime, timedelta, date
+from typing import Any, Generator, Optional
 
 from database import engine as system_engine, _get_engine
 from utils.email import send_email
@@ -56,6 +58,124 @@ scheduler = BackgroundScheduler(
     job_defaults={"coalesce": True, "max_instances": 1, "misfire_grace_time": 120},
     timezone=_SCHEDULER_TZ,
 )
+
+
+class IdempotentSkip(Exception):
+    """Raised when a scheduled job run is absorbed as a duplicate."""
+
+
+def get_scheduler_instance() -> BackgroundScheduler:
+    """Return the process-local APScheduler instance."""
+    return scheduler
+
+
+def get_scheduler_jobs() -> list[dict[str, Any]]:
+    """List registered scheduler jobs for the operations UI."""
+    jobs = []
+    for job in scheduler.get_jobs():
+        execution = _job_execution_log.get(job.id, {})
+        status = execution.get("status")
+        if status != "running":
+            status = "scheduled" if job.next_run_time else "paused"
+
+        jobs.append({
+            "job_id": job.id,
+            "name": job.name or job.id,
+            "status": status,
+            "next_run": job.next_run_time.isoformat() if job.next_run_time else None,
+            "trigger": str(job.trigger),
+            "last_run": execution.get("last_run"),
+            "last_error": execution.get("error"),
+        })
+    return jobs
+
+
+async def trigger_job(job_id: str) -> bool:
+    """Schedule an existing job to run as soon as the scheduler wakes up."""
+    job = scheduler.get_job(job_id)
+    if not job:
+        return False
+
+    try:
+        scheduler.modify_job(job_id, next_run_time=datetime.now(scheduler.timezone))
+        scheduler.wakeup()
+        return True
+    except Exception as exc:
+        logger.error("Failed to trigger scheduler job %s: %s", job_id, exc)
+        return False
+
+
+@contextmanager
+def idempotent_run(
+    job_id: str,
+    scheduled_for: datetime,
+    attempt: int = 1,
+    tenant_id: str | None = None,
+) -> Generator[None, None, None]:
+    """Guard scheduled work against duplicate execution."""
+    from database import get_tenant_db
+
+    run_id = None
+    try:
+        with get_tenant_db(tenant_id) as db:
+            result = db.execute(
+                text("""
+                    INSERT INTO scheduled_job_runs
+                        (job_id, scheduled_for, attempt, status, started_at, tenant_id)
+                    VALUES
+                        (:job_id, :scheduled_for, :attempt, 'running', NOW(), :tenant_id)
+                    ON CONFLICT (job_id, scheduled_for, attempt) DO NOTHING
+                    RETURNING id
+                """),
+                {
+                    "job_id": job_id,
+                    "scheduled_for": scheduled_for,
+                    "attempt": attempt,
+                    "tenant_id": tenant_id,
+                },
+            )
+            row = result.fetchone()
+            if row is None:
+                logger.info(
+                    "Idempotent skip: job=%s scheduled_for=%s attempt=%d",
+                    job_id, scheduled_for, attempt,
+                )
+                raise IdempotentSkip(
+                    f"Job {job_id} already run for {scheduled_for} attempt {attempt}"
+                )
+            run_id = row[0]
+            db.commit()
+
+        yield
+
+        with get_tenant_db(tenant_id) as db:
+            db.execute(
+                text("""
+                    UPDATE scheduled_job_runs
+                    SET status = 'succeeded', finished_at = NOW()
+                    WHERE id = :id
+                """),
+                {"id": run_id},
+            )
+            db.commit()
+    except IdempotentSkip:
+        raise
+    except Exception as exc:
+        if run_id is not None:
+            try:
+                with get_tenant_db(tenant_id) as db:
+                    db.execute(
+                        text("""
+                            UPDATE scheduled_job_runs
+                            SET status = 'failed', finished_at = NOW(), error = :error
+                            WHERE id = :id
+                        """),
+                        {"id": run_id, "error": str(exc)[:2000]},
+                    )
+                    db.commit()
+            except Exception:
+                logger.exception("Failed to update scheduled_job_runs status")
+        raise
 
 
 def _get_company_engine_for_db(db_name: str):
@@ -188,9 +308,19 @@ def check_scheduled_reports():
             # Connect to company DB
             engine = _get_company_engine_for_db(db_name)
             
-            with engine.connect() as conn:
-                reports = conn.execute(text("SELECT * FROM scheduled_reports WHERE is_active = TRUE AND (next_run_at <= NOW() OR next_run_at IS NULL)")).fetchall()
-                
+            with engine.begin() as conn:
+                # T10.2 #139: use FOR UPDATE SKIP LOCKED so concurrent
+                # scheduler workers do not pick the same due row twice.
+                # The enclosing engine.begin() ensures the row lock is
+                # held for the entire processing transaction (until the
+                # UPDATE next_run_at commits in process_scheduled_report).
+                reports = conn.execute(text(
+                    "SELECT * FROM scheduled_reports "
+                    "WHERE is_active = TRUE "
+                    "  AND (next_run_at <= NOW() OR next_run_at IS NULL) "
+                    "FOR UPDATE SKIP LOCKED"
+                )).fetchall()
+
                 for report in reports:
                     process_scheduled_report(conn, report)
                     
@@ -228,6 +358,16 @@ def refresh_analytics_materialized_views():
             engine = _get_company_engine_for_db(db_name)
 
             with engine.connect() as conn:
+                # T10.1 P1 #11 — track per-MV refresh timestamps so the
+                # frontend can show a "data refreshed N minutes ago" badge.
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS analytics_mv_freshness (
+                        mv_name VARCHAR(128) PRIMARY KEY,
+                        last_refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        refresh_duration_ms INTEGER
+                    )
+                """))
+                conn.commit()
                 for mv_name in MATERIALIZED_VIEWS:
                     try:
                         # Check if the materialized view exists before refreshing
@@ -236,12 +376,38 @@ def refresh_analytics_materialized_views():
                             {"name": mv_name}
                         ).scalar()
                         if exists:
+                            import time as _t
+                            _start = _t.monotonic()
                             conn.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv_name}"))
+                            _dur_ms = int((_t.monotonic() - _start) * 1000)
+                            conn.execute(text("""
+                                INSERT INTO analytics_mv_freshness (mv_name, last_refreshed_at, refresh_duration_ms)
+                                VALUES (:n, NOW(), :d)
+                                ON CONFLICT (mv_name) DO UPDATE
+                                  SET last_refreshed_at = EXCLUDED.last_refreshed_at,
+                                      refresh_duration_ms = EXCLUDED.refresh_duration_ms
+                            """), {"n": mv_name, "d": _dur_ms})
                             conn.commit()
                     except Exception as e:
                         logger.warning(f"⚠️ Failed to refresh {mv_name} in {db_name}: {e}")
 
                 logger.info(f"✅ Refreshed materialized views in {db_name}")
+
+            # T10.2 #148: invalidate the analytics aggregate caches that
+            # are derived from these MVs. Without this, the API still
+            # serves cached results computed BEFORE the refresh, so the
+            # MV refresh has no observable effect for up to one cache
+            # TTL on top of the 15-minute MV interval.
+            try:
+                from utils.cache import invalidate_aggregates
+                company_id = db_name.replace("aman_", "", 1)
+                invalidate_aggregates(
+                    company_id,
+                    "reports", "dashboard", "sales_kpi",
+                    "trial_balance", "ar_aging", "ap_aging",
+                )
+            except Exception as e:
+                logger.warning(f"⚠️ Cache invalidation after MV refresh failed for {db_name}: {e}")
         except Exception as e:
             logger.error(f"❌ Error refreshing MVs in {db_name}: {e}")
 
@@ -906,57 +1072,97 @@ def auto_reconcile_all_drafts():
 
 def _auto_match_reconciliation(conn, reconciliation_id: int):
     """Core auto-match logic reused by both the API and the scheduler."""
-    rec = conn.execute(text(
-        "SELECT id, account_id, start_date, end_date FROM bank_reconciliations WHERE id = :id"
-    ), {"id": reconciliation_id}).fetchone()
+    from decimal import Decimal
+
+    def _dec(value) -> Decimal:
+        return Decimal(str(value or 0))
+
+    rec = conn.execute(text("""
+        SELECT r.id, t.gl_account_id, r.statement_date, r.branch_id,
+               COALESCE(r.tolerance_amount, 0) AS tolerance_amount
+        FROM bank_reconciliations r
+        JOIN treasury_accounts t ON r.treasury_account_id = t.id
+        WHERE r.id = :id AND r.status = 'draft'
+    """), {"id": reconciliation_id}).fetchone()
     if not rec:
         return
 
-    # Unmatched bank statement lines
-    bank_lines = conn.execute(text("""
-        SELECT id, transaction_date, amount, transaction_type
+    statement_lines = conn.execute(text("""
+        SELECT id, transaction_date, debit, credit
         FROM bank_statement_lines
-        WHERE reconciliation_id = :rid AND is_matched = FALSE
+        WHERE reconciliation_id = :rid
+          AND (is_reconciled = FALSE OR is_reconciled IS NULL)
         ORDER BY transaction_date, id
     """), {"rid": reconciliation_id}).fetchall()
 
-    for bl in bank_lines:
-        # Lock candidate journal lines to prevent concurrent match
-        match_dir = "debit" if bl.transaction_type in ("credit", "deposit") else "credit"
-        candidate = conn.execute(text(f"""
-            SELECT jl.id
-            FROM journal_lines jl
-            JOIN journal_entries je ON jl.journal_entry_id = je.id
-            WHERE jl.account_id = :acc
-              AND ABS(jl.{match_dir} - :amt) < 0.01
-              AND je.entry_date BETWEEN :start AND :end
-              AND jl.is_reconciled = FALSE
-            FOR UPDATE SKIP LOCKED
-            LIMIT 1
-        """), {
-            "acc": rec.account_id,
-            "amt": float(bl.amount),
-            "start": rec.start_date,
-            "end": rec.end_date,
-        }).fetchone()
+    branch_filter = ""
+    ledger_params = {"gl_id": rec.gl_account_id, "stmt_date": rec.statement_date}
+    if rec.branch_id:
+        branch_filter = "AND je.branch_id = :branch_id"
+        ledger_params["branch_id"] = rec.branch_id
 
-        if not candidate:
-            continue
+    ledger_lines = conn.execute(text(f"""
+        SELECT jl.id, je.entry_date, jl.debit, jl.credit
+        FROM journal_lines jl
+        JOIN journal_entries je ON jl.journal_entry_id = je.id
+        WHERE jl.account_id = :gl_id
+          AND (jl.is_reconciled = FALSE OR jl.is_reconciled IS NULL)
+          AND je.status = 'posted'
+          AND je.entry_date <= :stmt_date
+          {branch_filter}
+        ORDER BY je.entry_date, jl.id
+        FOR UPDATE OF jl SKIP LOCKED
+    """), ledger_params).fetchall()
 
+    amount_tolerance = max(_dec(rec.tolerance_amount), Decimal("0"))
+    matched_journal_lines = set()
+    matched_count = 0
+
+    for statement_line in statement_lines:
+        statement_debit = _dec(statement_line.debit)
+        statement_credit = _dec(statement_line.credit)
+        for journal_line in ledger_lines:
+            if journal_line.id in matched_journal_lines:
+                continue
+            journal_debit = _dec(journal_line.debit)
+            journal_credit = _dec(journal_line.credit)
+
+            amounts_match = False
+            if statement_debit > 0 and journal_credit > 0:
+                amounts_match = abs(statement_debit - journal_credit) <= amount_tolerance
+            elif statement_credit > 0 and journal_debit > 0:
+                amounts_match = abs(statement_credit - journal_debit) <= amount_tolerance
+            if not amounts_match:
+                continue
+
+            day_diff = abs((statement_line.transaction_date - journal_line.entry_date).days)
+            if day_diff > 3:
+                continue
+
+            conn.execute(text("""
+                UPDATE bank_statement_lines
+                SET is_reconciled = TRUE, matched_journal_line_id = :journal_line_id
+                WHERE id = :statement_line_id
+            """), {
+                "journal_line_id": journal_line.id,
+                "statement_line_id": statement_line.id,
+            })
+            conn.execute(text("""
+                UPDATE journal_lines
+                SET is_reconciled = TRUE, reconciliation_id = :reconciliation_id
+                WHERE id = :journal_line_id
+            """), {
+                "reconciliation_id": reconciliation_id,
+                "journal_line_id": journal_line.id,
+            })
+            matched_journal_lines.add(journal_line.id)
+            matched_count += 1
+            break
+
+    if matched_count:
         conn.execute(text(
-            "UPDATE bank_statement_lines SET is_matched=TRUE, matched_journal_line_id=:jl WHERE id=:id"
-        ), {"jl": candidate.id, "id": bl.id})
-        conn.execute(text(
-            "UPDATE journal_lines SET is_reconciled=TRUE WHERE id=:id"
-        ), {"id": candidate.id})
-
-    # Update matched count on the reconciliation
-    matched = conn.execute(text(
-        "SELECT COUNT(*) FROM bank_statement_lines WHERE reconciliation_id=:rid AND is_matched=TRUE"
-    ), {"rid": reconciliation_id}).scalar() or 0
-    conn.execute(text(
-        "UPDATE bank_reconciliations SET matched_count=:cnt, updated_at=CURRENT_TIMESTAMP WHERE id=:id"
-    ), {"cnt": matched, "id": reconciliation_id})
+            "UPDATE bank_reconciliations SET updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+        ), {"id": reconciliation_id})
 
 
 # ── T4.4 — Low stock alerts ───────────────────────────────────────────────────
@@ -1078,6 +1284,29 @@ def process_pos_offline_inbox():
                                        processed_at = CURRENT_TIMESTAMP
                                  WHERE id = :id
                             """), {"err": conflict_reason[:500], "id": item.id})
+                            # T17 #88 — also surface in the sync-conflicts table
+                            # so managers see it on the resolution dashboard.
+                            try:
+                                import json as _json2
+                                kind = "price_drift" if "price drift" in (conflict_reason or "") else (
+                                    "stock_oversold" if "stock" in (conflict_reason or "").lower() else "other"
+                                )
+                                conn.execute(text("""
+                                    INSERT INTO pos_sync_conflicts
+                                        (session_id, client_op_id, op_type,
+                                         client_payload, conflict_kind, server_state,
+                                         resolution, created_at)
+                                    VALUES (:sid, :cop, 'order',
+                                            CAST(:cp AS JSONB), :kind, NULL,
+                                            'pending', NOW())
+                                """), {
+                                    "sid": item.session_id,
+                                    "cop": item.client_uuid,
+                                    "cp": _json2.dumps(payload),
+                                    "kind": kind,
+                                })
+                            except Exception:
+                                pass
                             logger.warning("[%s] POS offline conflict id=%s: %s",
                                            db_name, item.id, conflict_reason)
                             continue
@@ -1239,6 +1468,806 @@ def _evaluate_single_alert(eng, rule, condition: dict):
         logger.info("Smart alert '%s' (id=%d) fired — alert_id=%d", rule.name, rule.id, alert_id)
 
 
+# ── T10.1 P1 #67 — Monthly EOS provision snapshot ────────────────────────────
+def run_eos_provision_snapshot():
+    """Snapshot end-of-service gratuity for every active employee.
+
+    Runs on the 1st of each month at 03:30 (after monthly inventory
+    archival). Writes one row per (employee_id, period_end) into
+    ``eos_provisions``. The delta vs. the previous snapshot represents
+    the period's expense; finance can review and post the JE manually
+    via a dedicated endpoint, or we auto-post it later.
+    """
+    from database import _get_all_company_db_names
+    from utils.hr_helpers import calculate_eos_gratuity
+    from decimal import Decimal as _D
+
+    period_end = date.today().replace(day=1) - timedelta(days=1)  # last day of previous month
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'eos_provisions'
+                """)).scalar()
+                if not exists:
+                    continue
+                employees = conn.execute(text("""
+                    SELECT id, hire_date,
+                           COALESCE(basic_salary, 0)
+                           + COALESCE(housing_allowance, 0)
+                           + COALESCE(transport_allowance, 0) AS monthly_salary
+                      FROM employees
+                     WHERE is_active = TRUE
+                       AND hire_date IS NOT NULL
+                       AND hire_date <= :pe
+                """), {"pe": period_end}).fetchall()
+
+                for emp in employees:
+                    years = _D(str((period_end - emp.hire_date).days)) / _D("365.25")
+                    if years <= 0:
+                        continue
+                    salary = _D(str(emp.monthly_salary or 0))
+                    if salary <= 0:
+                        continue
+                    eos = calculate_eos_gratuity(salary, years, "termination")
+                    accrued = eos["full_gratuity"]
+                    prev = conn.execute(text("""
+                        SELECT accrued_gratuity FROM eos_provisions
+                        WHERE employee_id = :eid AND period_end < :pe
+                        ORDER BY period_end DESC LIMIT 1
+                    """), {"eid": emp.id, "pe": period_end}).scalar()
+                    delta = accrued - _D(str(prev or 0))
+                    conn.execute(text("""
+                        INSERT INTO eos_provisions
+                            (employee_id, period_end, years_of_service,
+                             monthly_salary, accrued_gratuity, delta_from_previous)
+                        VALUES (:eid, :pe, :yrs, :sal, :acc, :delta)
+                        ON CONFLICT (employee_id, period_end) DO UPDATE
+                          SET years_of_service = EXCLUDED.years_of_service,
+                              monthly_salary = EXCLUDED.monthly_salary,
+                              accrued_gratuity = EXCLUDED.accrued_gratuity,
+                              delta_from_previous = EXCLUDED.delta_from_previous
+                    """), {
+                        "eid": emp.id,
+                        "pe": period_end,
+                        "yrs": str(years.quantize(_D("0.0001"))),
+                        "sal": str(salary),
+                        "acc": str(accrued),
+                        "delta": str(delta),
+                    })
+                logger.info("[%s] EOS provision snapshot for %s: %d employees",
+                            db_name, period_end, len(employees))
+        except Exception as e:
+            logger.error("EOS provision snapshot failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #57/#58 — Hard-delete soft-deleted documents past retention ────
+def purge_soft_deleted_documents():
+    """Hard-delete document rows + uploaded files older than retention.
+
+    Reads ``document_retention_days`` from ``company_settings`` (default
+    365 days). Documents soft-deleted before that cutoff are removed
+    along with their files on disk. Set to 0 to disable.
+    """
+    from database import _get_all_company_db_names
+    import os as _os
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                tbl_exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.tables
+                    WHERE table_name = 'documents'
+                """)).scalar()
+                if not tbl_exists:
+                    continue
+                col_exists = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'documents' AND column_name = 'is_deleted'
+                """)).scalar()
+                if not col_exists:
+                    continue
+
+                limit_row = conn.execute(text(
+                    "SELECT setting_value FROM company_settings "
+                    "WHERE setting_key = 'document_retention_days'"
+                )).scalar()
+                try:
+                    retention = int(limit_row) if limit_row not in (None, "") else 365
+                except (ValueError, TypeError):
+                    retention = 365
+                if retention <= 0:
+                    continue
+                cutoff = datetime.utcnow() - timedelta(days=retention)
+
+                rows = conn.execute(text("""
+                    SELECT id, file_path FROM documents
+                     WHERE is_deleted = TRUE
+                       AND COALESCE(deleted_at, updated_at, created_at) < :cutoff
+                """), {"cutoff": cutoff}).fetchall()
+
+                deleted = 0
+                for r in rows:
+                    if r.file_path:
+                        try:
+                            if _os.path.isfile(r.file_path):
+                                _os.remove(r.file_path)
+                        except Exception:
+                            logger.warning("Could not remove file %s", r.file_path)
+                    conn.execute(text("DELETE FROM documents WHERE id = :id"), {"id": r.id})
+                    deleted += 1
+                if deleted:
+                    logger.info("[%s] purged %d soft-deleted documents", db_name, deleted)
+        except Exception as e:
+            logger.error("purge_soft_deleted_documents failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #110g — Treasury vs GL reconciliation health check ─────────────
+def reconcile_treasury_balances():
+    """Compare ``treasury_accounts.current_balance`` against the GL-derived
+    balance for each treasury. Discrepancies are written to a
+    ``treasury_reconciliation_alerts`` row (created on demand) and a
+    high-priority notification is raised for finance admins.
+
+    This is a *detection* job — it does NOT mutate balances. The
+    canonical fix path is the helper ``utils.treasury_balance.recalc``
+    triggered by an admin once the discrepancy is investigated.
+    """
+    from database import _get_all_company_db_names
+    from decimal import Decimal as _D
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS treasury_reconciliation_alerts (
+                        id SERIAL PRIMARY KEY,
+                        treasury_account_id INTEGER NOT NULL,
+                        as_of TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                        recorded_balance DECIMAL(18, 4) NOT NULL,
+                        gl_balance DECIMAL(18, 4) NOT NULL,
+                        discrepancy DECIMAL(18, 4) NOT NULL,
+                        is_resolved BOOLEAN DEFAULT FALSE,
+                        resolved_at TIMESTAMPTZ
+                    )
+                """))
+                rows = conn.execute(text("""
+                    SELECT ta.id, ta.name, ta.current_balance, ta.gl_account_id,
+                           COALESCE((
+                               SELECT SUM(jl.debit - jl.credit)
+                                 FROM journal_lines jl
+                                 JOIN journal_entries je ON jl.journal_entry_id = je.id
+                                WHERE jl.account_id = ta.gl_account_id
+                                  AND je.status = 'posted'
+                           ), 0) AS gl_balance
+                      FROM treasury_accounts ta
+                     WHERE ta.is_active = TRUE
+                       AND ta.gl_account_id IS NOT NULL
+                """)).fetchall()
+                for r in rows:
+                    rec = _D(str(r.current_balance or 0))
+                    gl = _D(str(r.gl_balance or 0))
+                    diff = rec - gl
+                    if abs(diff) > _D("0.01"):
+                        conn.execute(text("""
+                            INSERT INTO treasury_reconciliation_alerts
+                                (treasury_account_id, recorded_balance, gl_balance, discrepancy)
+                            VALUES (:tid, :rec, :gl, :diff)
+                        """), {"tid": r.id, "rec": str(rec), "gl": str(gl), "diff": str(diff)})
+                        logger.warning(
+                            "[%s] treasury %s (#%s) discrepancy: recorded=%s gl=%s diff=%s",
+                            db_name, r.name, r.id, rec, gl, diff,
+                        )
+        except Exception as e:
+            logger.error("reconcile_treasury_balances failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #41 — CRM stale opportunity & expected-close alerts ─────────────
+def crm_followup_alerts():
+    """Notify owners about:
+
+    * opportunities not updated for ``crm_stale_days`` (default 14) days, and
+        * opportunities whose ``expected_close_date`` is within
+            ``crm_close_horizon_days`` (default 7) days but still open, and
+        * opportunity activities whose ``due_date`` has arrived and are not done.
+
+    Avoids duplicate alerts within 24h via a guard on the
+    ``crm_followup_alerts_log`` table created here.
+    """
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                # ensure log table
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS crm_followup_alerts_log (
+                        id SERIAL PRIMARY KEY,
+                        opportunity_id INTEGER NOT NULL,
+                        alert_type VARCHAR(40) NOT NULL,
+                        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_crm_followup_log "
+                    "ON crm_followup_alerts_log(opportunity_id, alert_type, sent_at)"
+                ))
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS crm_activity_reminders_log (
+                        id SERIAL PRIMARY KEY,
+                        activity_id INTEGER NOT NULL,
+                        sent_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_crm_activity_reminders_log "
+                    "ON crm_activity_reminders_log(activity_id, sent_at)"
+                ))
+
+                def _setting(key, default):
+                    try:
+                        v = conn.execute(text(
+                            "SELECT setting_value FROM company_settings WHERE setting_key = :k"
+                        ), {"k": key}).scalar()
+                        return int(v) if v is not None else default
+                    except Exception:
+                        return default
+
+                stale_days = _setting("crm_stale_days", 14)
+                horizon_days = _setting("crm_close_horizon_days", 7)
+
+                # Stale: untouched > stale_days, still open
+                stale_rows = conn.execute(text("""
+                    SELECT o.id, o.title, o.assigned_to, o.expected_close_date
+                      FROM sales_opportunities o
+                     WHERE COALESCE(o.is_deleted, FALSE) = FALSE
+                       AND o.stage NOT IN ('won','lost','closed','closed_won','closed_lost')
+                       AND o.updated_at < NOW() - make_interval(days => :d)
+                       AND NOT EXISTS (
+                           SELECT 1 FROM crm_followup_alerts_log l
+                            WHERE l.opportunity_id = o.id
+                              AND l.alert_type = 'stale'
+                              AND l.sent_at > NOW() - INTERVAL '24 hours'
+                       )
+                     LIMIT 500
+                """), {"d": stale_days}).fetchall()
+
+                for r in stale_rows:
+                    if not r.assigned_to:
+                        continue
+                    conn.execute(text("""
+                        INSERT INTO notifications
+                            (user_id, type, title, message, is_read, created_at)
+                        VALUES (:uid, 'crm_stale_opportunity',
+                                'فرصة مهملة', :msg, FALSE, NOW())
+                    """), {
+                        "uid": r.assigned_to,
+                        "msg": f"الفرصة #{r.id} ({r.title}) لم تُحدَّث منذ {stale_days} يوم",
+                    })
+                    conn.execute(text(
+                        "INSERT INTO crm_followup_alerts_log (opportunity_id, alert_type) "
+                        "VALUES (:oid, 'stale')"
+                    ), {"oid": r.id})
+
+                # Approaching close
+                close_rows = conn.execute(text("""
+                    SELECT o.id, o.title, o.assigned_to, o.expected_close_date
+                      FROM sales_opportunities o
+                     WHERE COALESCE(o.is_deleted, FALSE) = FALSE
+                       AND o.stage NOT IN ('won','lost','closed','closed_won','closed_lost')
+                       AND o.expected_close_date IS NOT NULL
+                       AND o.expected_close_date <= CURRENT_DATE + make_interval(days => :h)
+                       AND o.expected_close_date >= CURRENT_DATE
+                       AND NOT EXISTS (
+                           SELECT 1 FROM crm_followup_alerts_log l
+                            WHERE l.opportunity_id = o.id
+                              AND l.alert_type = 'expected_close'
+                              AND l.sent_at > NOW() - INTERVAL '24 hours'
+                       )
+                     LIMIT 500
+                """), {"h": horizon_days}).fetchall()
+
+                for r in close_rows:
+                    if not r.assigned_to:
+                        continue
+                    conn.execute(text("""
+                        INSERT INTO notifications
+                            (user_id, type, title, message, is_read, created_at)
+                        VALUES (:uid, 'crm_expected_close',
+                                'فرصة قاربت تاريخ الإغلاق', :msg, FALSE, NOW())
+                    """), {
+                        "uid": r.assigned_to,
+                        "msg": f"الفرصة #{r.id} ({r.title}) تاريخ الإغلاق المتوقع {r.expected_close_date}",
+                    })
+                    conn.execute(text(
+                        "INSERT INTO crm_followup_alerts_log (opportunity_id, alert_type) "
+                        "VALUES (:oid, 'expected_close')"
+                    ), {"oid": r.id})
+
+                activity_rows = conn.execute(text("""
+                    SELECT a.id, a.title, a.activity_type, a.due_date,
+                           o.id AS opportunity_id, o.title AS opportunity_title,
+                           o.assigned_to
+                      FROM opportunity_activities a
+                      JOIN sales_opportunities o ON o.id = a.opportunity_id
+                     WHERE COALESCE(a.completed, FALSE) = FALSE
+                       AND a.due_date IS NOT NULL
+                       AND a.due_date <= CURRENT_DATE
+                       AND COALESCE(o.is_deleted, FALSE) = FALSE
+                       AND o.stage NOT IN ('won','lost','closed','closed_won','closed_lost')
+                       AND NOT EXISTS (
+                           SELECT 1 FROM crm_activity_reminders_log l
+                            WHERE l.activity_id = a.id
+                              AND l.sent_at > NOW() - INTERVAL '24 hours'
+                       )
+                     ORDER BY a.due_date ASC
+                     LIMIT 500
+                """)).fetchall()
+
+                for activity in activity_rows:
+                    if not activity.assigned_to:
+                        continue
+                    conn.execute(text("""
+                        INSERT INTO notifications
+                            (user_id, type, title, message, is_read, created_at)
+                        VALUES (:uid, 'crm_activity_due',
+                                'نشاط CRM مستحق', :msg, FALSE, NOW())
+                    """), {
+                        "uid": activity.assigned_to,
+                        "msg": (
+                            f"النشاط #{activity.id} ({activity.title or activity.activity_type}) "
+                            f"للفرصة #{activity.opportunity_id} ({activity.opportunity_title}) "
+                            f"مستحق في {activity.due_date}"
+                        ),
+                    })
+                    conn.execute(text(
+                        "INSERT INTO crm_activity_reminders_log (activity_id) VALUES (:activity_id)"
+                    ), {"activity_id": activity.id})
+
+                if stale_rows or close_rows or activity_rows:
+                    logger.info(
+                        "[%s] crm_followup_alerts: stale=%s close=%s activities=%s",
+                        db_name, len(stale_rows), len(close_rows), len(activity_rows),
+                    )
+        except Exception as e:
+            logger.error("crm_followup_alerts failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #110c — Temporal correlation fraud detection ────────────────────
+def detect_suspicious_temporal_patterns():
+    """Flag suspicious user activity patterns inside a short time window.
+
+    Pattern A — *vendor speed-run*: same user creates a supplier, then
+    posts a purchase invoice for that supplier, then approves it, all
+    inside ``fraud_window_minutes`` (default 5).
+
+    Pattern B — *self approval*: same user approves a document they
+    themselves created (covers expenses, purchase invoices, journal
+    entries) — independent of timing.
+
+    Findings are written to ``fraud_correlation_alerts`` (created on
+    demand) and a high-priority notification is sent to users with
+    role ``admin`` / ``superuser``.
+    """
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                conn.execute(text("""
+                    CREATE TABLE IF NOT EXISTS fraud_correlation_alerts (
+                        id SERIAL PRIMARY KEY,
+                        pattern VARCHAR(80) NOT NULL,
+                        user_id INTEGER,
+                        related_resource_type VARCHAR(60),
+                        related_resource_id VARCHAR(60),
+                        details JSONB,
+                        is_resolved BOOLEAN DEFAULT FALSE,
+                        created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                    )
+                """))
+                conn.execute(text(
+                    "CREATE INDEX IF NOT EXISTS idx_fraud_corr_alerts_pattern_user "
+                    "ON fraud_correlation_alerts(pattern, user_id, created_at)"
+                ))
+
+                # window setting
+                try:
+                    val = conn.execute(text(
+                        "SELECT setting_value FROM company_settings WHERE setting_key='fraud_window_minutes'"
+                    )).scalar()
+                    window_min = int(val) if val else 5
+                except Exception:
+                    window_min = 5
+
+                # Pattern A — vendor speed-run within last 24h
+                # Use audit_logs for resource_type='supplier' (create) and
+                # resource_type='purchase_invoice' (create + approve).
+                try:
+                    rows_a = conn.execute(text("""
+                        WITH suppliers AS (
+                            SELECT user_id, resource_id::text AS supplier_id, created_at
+                              FROM audit_logs
+                             WHERE action = 'supplier.create'
+                               AND created_at > NOW() - INTERVAL '24 hours'
+                        ), inv AS (
+                            SELECT user_id, resource_id::text AS invoice_id, created_at,
+                                   (details->>'supplier_id') AS supplier_id
+                              FROM audit_logs
+                             WHERE action IN ('purchase_invoice.create','purchase.create')
+                               AND created_at > NOW() - INTERVAL '24 hours'
+                        ), appr AS (
+                            SELECT user_id, resource_id::text AS invoice_id, created_at
+                              FROM audit_logs
+                             WHERE action IN ('purchase_invoice.approve','approval.approve')
+                               AND created_at > NOW() - INTERVAL '24 hours'
+                        )
+                        SELECT s.user_id, s.supplier_id, i.invoice_id,
+                               s.created_at AS sup_at, i.created_at AS inv_at, a.created_at AS app_at
+                          FROM suppliers s
+                          JOIN inv i ON i.user_id = s.user_id
+                                    AND i.supplier_id = s.supplier_id
+                                    AND i.created_at BETWEEN s.created_at
+                                                     AND s.created_at + make_interval(mins => :w)
+                          JOIN appr a ON a.user_id = s.user_id
+                                     AND a.invoice_id = i.invoice_id
+                                     AND a.created_at BETWEEN i.created_at
+                                                       AND i.created_at + make_interval(mins => :w)
+                          WHERE NOT EXISTS (
+                              SELECT 1 FROM fraud_correlation_alerts f
+                               WHERE f.pattern = 'vendor_speedrun'
+                                 AND f.related_resource_type = 'purchase_invoice'
+                                 AND f.related_resource_id = i.invoice_id
+                          )
+                         LIMIT 200
+                    """), {"w": window_min}).fetchall()
+                except Exception as e:
+                    logger.debug("[%s] vendor_speedrun query skipped: %s", db_name, e)
+                    rows_a = []
+
+                import json as _json
+                for r in rows_a:
+                    conn.execute(text("""
+                        INSERT INTO fraud_correlation_alerts
+                            (pattern, user_id, related_resource_type, related_resource_id, details)
+                        VALUES ('vendor_speedrun', :uid, 'purchase_invoice', :iid, CAST(:det AS JSONB))
+                    """), {
+                        "uid": r.user_id,
+                        "iid": r.invoice_id,
+                        "det": _json.dumps({
+                            "supplier_id": r.supplier_id,
+                            "supplier_at": str(r.sup_at),
+                            "invoice_at": str(r.inv_at),
+                            "approved_at": str(r.app_at),
+                            "window_minutes": window_min,
+                        }),
+                    })
+
+                # Pattern B — self approval (last 24h)
+                try:
+                    rows_b = conn.execute(text("""
+                        WITH creates AS (
+                            SELECT user_id, action, resource_type, resource_id, created_at
+                              FROM audit_logs
+                             WHERE action IN ('expense.create','purchase_invoice.create',
+                                              'journal_entry.create','expense.submit')
+                               AND created_at > NOW() - INTERVAL '24 hours'
+                        ), approvals AS (
+                            SELECT user_id, resource_type, resource_id, created_at
+                              FROM audit_logs
+                             WHERE action IN ('expense.approve','purchase_invoice.approve',
+                                              'journal_entry.approve','approval.approve')
+                               AND created_at > NOW() - INTERVAL '24 hours'
+                        )
+                        SELECT c.user_id, c.resource_type, c.resource_id,
+                               c.created_at AS create_at, a.created_at AS approve_at
+                          FROM creates c
+                          JOIN approvals a USING (user_id, resource_type, resource_id)
+                         WHERE NOT EXISTS (
+                              SELECT 1 FROM fraud_correlation_alerts f
+                               WHERE f.pattern = 'self_approval'
+                                 AND f.related_resource_type = c.resource_type
+                                 AND f.related_resource_id = c.resource_id::text
+                         )
+                         LIMIT 200
+                    """)).fetchall()
+                except Exception as e:
+                    logger.debug("[%s] self_approval query skipped: %s", db_name, e)
+                    rows_b = []
+
+                for r in rows_b:
+                    conn.execute(text("""
+                        INSERT INTO fraud_correlation_alerts
+                            (pattern, user_id, related_resource_type, related_resource_id, details)
+                        VALUES ('self_approval', :uid, :rt, :rid, CAST(:det AS JSONB))
+                    """), {
+                        "uid": r.user_id,
+                        "rt": r.resource_type,
+                        "rid": str(r.resource_id),
+                        "det": _json.dumps({
+                            "created_at": str(r.create_at),
+                            "approved_at": str(r.approve_at),
+                        }),
+                    })
+
+                if rows_a or rows_b:
+                    # Notify admins
+                    try:
+                        conn.execute(text("""
+                            INSERT INTO notifications
+                                (user_id, type, title, message, is_read, created_at)
+                            SELECT u.id, 'fraud_alert',
+                                'تنبيه: نمط نشاط مشبوه',
+                                :msg, FALSE, NOW()
+                              FROM company_users u
+                             WHERE u.is_active = TRUE
+                               AND u.role IN ('admin','superuser','system_admin')
+                        """), {
+                            "msg": f"تم رصد {len(rows_a)} نمط 'إنشاء+اعتماد سريع' و {len(rows_b)} حالة اعتماد ذاتي خلال 24 ساعة"
+                        })
+                    except Exception:
+                        pass
+                    logger.warning(
+                        "[%s] fraud patterns detected: vendor_speedrun=%s self_approval=%s",
+                        db_name, len(rows_a), len(rows_b),
+                    )
+        except Exception as e:
+            logger.error("detect_suspicious_temporal_patterns failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #80 — FSM SLA breach detection ─────────────────────────────────
+def check_fsm_sla_breaches():
+    """Notify FSM owners when service-request SLA timers cross thresholds.
+
+    Two checks run for non-completed/non-cancelled service_requests:
+      * **response breach**: ``response_due_at < NOW()`` and
+        ``first_response_at IS NULL``.
+      * **resolution breach**: ``resolution_due_at < NOW()`` and
+        ``status NOT IN ('completed','cancelled')``.
+
+    Each breach flips the corresponding ``sla_breach_*`` flag once, then
+    fires a single notification. Warning notifications also fire when the
+    SLA window has < ``fsm_sla_warn_minutes`` (default 30) remaining and
+    ``sla_warned_at`` is NULL.
+    """
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                # Skip tenants without the SLA columns yet.
+                has_cols = conn.execute(text("""
+                    SELECT 1 FROM information_schema.columns
+                     WHERE table_name='service_requests'
+                       AND column_name='response_due_at' LIMIT 1
+                """)).fetchone()
+                if not has_cols:
+                    continue
+
+                try:
+                    val = conn.execute(text(
+                        "SELECT setting_value FROM company_settings "
+                        "WHERE setting_key='fsm_sla_warn_minutes'"
+                    )).scalar()
+                    warn_min = int(val) if val else 30
+                except Exception:
+                    warn_min = 30
+
+                # Response breaches (newly crossed).
+                resp_rows = conn.execute(text("""
+                    UPDATE service_requests
+                       SET sla_breach_response = TRUE,
+                           updated_at = NOW()
+                     WHERE COALESCE(is_deleted,FALSE) = FALSE
+                       AND status NOT IN ('completed','cancelled')
+                       AND first_response_at IS NULL
+                       AND response_due_at < NOW()
+                       AND COALESCE(sla_breach_response,FALSE) = FALSE
+                 RETURNING id, assigned_to, title
+                """)).fetchall()
+
+                # Resolution breaches.
+                resol_rows = conn.execute(text("""
+                    UPDATE service_requests
+                       SET sla_breach_resolution = TRUE,
+                           updated_at = NOW()
+                     WHERE COALESCE(is_deleted,FALSE) = FALSE
+                       AND status NOT IN ('completed','cancelled')
+                       AND resolution_due_at < NOW()
+                       AND COALESCE(sla_breach_resolution,FALSE) = FALSE
+                 RETURNING id, assigned_to, title
+                """)).fetchall()
+
+                # Approaching-deadline warnings.
+                warn_rows = conn.execute(text("""
+                    UPDATE service_requests
+                       SET sla_warned_at = NOW()
+                     WHERE COALESCE(is_deleted,FALSE) = FALSE
+                       AND status NOT IN ('completed','cancelled')
+                       AND sla_warned_at IS NULL
+                       AND (
+                           (first_response_at IS NULL
+                              AND response_due_at BETWEEN NOW()
+                                                  AND NOW() + make_interval(mins => :w))
+                           OR
+                           resolution_due_at BETWEEN NOW()
+                                              AND NOW() + make_interval(mins => :w)
+                       )
+                 RETURNING id, assigned_to, title
+                """), {"w": warn_min}).fetchall()
+
+                def _notify(rows, kind: str, title: str):
+                    for r in rows:
+                        if not r.assigned_to:
+                            continue
+                        try:
+                            conn.execute(text("""
+                                INSERT INTO notifications
+                                    (user_id, type, title, message, is_read, created_at)
+                                VALUES (:uid, :tp, :ttl, :msg, FALSE, NOW())
+                            """), {
+                                "uid": r.assigned_to,
+                                "tp": f"fsm_sla_{kind}",
+                                "ttl": title,
+                                "msg": f"#{r.id} — {r.title or ''}",
+                            })
+                        except Exception:
+                            pass
+
+                _notify(resp_rows,  "response_breach",   "خرق SLA — وقت الاستجابة")
+                _notify(resol_rows, "resolution_breach", "خرق SLA — وقت الحل")
+                _notify(warn_rows,  "warn",              "اقتراب موعد SLA")
+                if resp_rows or resol_rows or warn_rows:
+                    logger.info(
+                        "[%s] FSM SLA: response=%s resolution=%s warn=%s",
+                        db_name, len(resp_rows), len(resol_rows), len(warn_rows),
+                    )
+        except Exception as e:
+            logger.error("check_fsm_sla_breaches failed for %s: %s", db_name, e)
+
+
+# ── T10.1 P1 #89 — Payment gateway retry worker ─────────────────────────────
+def process_payment_gateway_retries():
+    """Drain queued payment-gateway operations with exponential back-off.
+
+    The gateway adapter (Stripe / Tap / PayTabs / etc.) writes to
+    ``payment_gateway_retries`` when a transient error occurs. This worker
+    picks rows with ``status='pending' AND next_attempt_at < NOW()``,
+    invokes ``integrations.payments.dispatch.replay(row)`` if available,
+    and either marks ``succeeded``/``failed``/``dead`` accordingly. Rows
+    that exceed ``max_attempts`` move to ``dead``.
+    """
+    from database import _get_all_company_db_names
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.connect() as conn:
+                has_tbl = conn.execute(text("""
+                    SELECT 1 FROM information_schema.tables
+                     WHERE table_name='payment_gateway_retries' LIMIT 1
+                """)).fetchone()
+                if not has_tbl:
+                    continue
+
+                rows = conn.execute(text("""
+                    SELECT id, gateway, operation, reference_type, reference_id,
+                           request_payload, attempt_count, max_attempts
+                      FROM payment_gateway_retries
+                     WHERE status = 'pending'
+                       AND next_attempt_at < NOW()
+                     ORDER BY next_attempt_at ASC
+                     LIMIT 50
+                """)).fetchall()
+
+            try:
+                from integrations.payments import dispatch as _payment_dispatch
+            except Exception:
+                _payment_dispatch = None
+
+            for r in rows:
+                with eng.begin() as conn:
+                    success = False
+                    err: Optional[str] = None
+                    try:
+                        if _payment_dispatch and hasattr(_payment_dispatch, "replay"):
+                            _payment_dispatch.replay(
+                                gateway=r.gateway,
+                                operation=r.operation,
+                                payload=r.request_payload,
+                                reference_type=r.reference_type,
+                                reference_id=r.reference_id,
+                            )
+                            success = True
+                        else:
+                            err = "no payments dispatch.replay implementation"
+                    except Exception as e:
+                        err = str(e)[:500]
+
+                    if success:
+                        conn.execute(text("""
+                            UPDATE payment_gateway_retries
+                               SET status='succeeded', updated_at=NOW(),
+                                   attempt_count = attempt_count + 1
+                             WHERE id = :id
+                        """), {"id": r.id})
+                    else:
+                        new_attempt = (r.attempt_count or 0) + 1
+                        is_dead = new_attempt >= (r.max_attempts or 5)
+                        # Exponential back-off: 1, 2, 4, 8, 16 ... minutes.
+                        backoff_min = min(2 ** (new_attempt - 1), 60)
+                        conn.execute(text("""
+                            UPDATE payment_gateway_retries
+                               SET status = CASE WHEN :dead THEN 'dead' ELSE 'pending' END,
+                                   attempt_count = :att,
+                                   last_error = :err,
+                                   next_attempt_at = NOW() + make_interval(mins => :bo),
+                                   updated_at = NOW()
+                             WHERE id = :id
+                        """), {
+                            "dead": is_dead,
+                            "att": new_attempt,
+                            "err": err,
+                            "bo": backoff_min,
+                            "id": r.id,
+                        })
+        except Exception as e:
+            logger.error("process_payment_gateway_retries failed for %s: %s", db_name, e)
+
+
+def extract_attachment_content():
+    """T18 #96 \u2014 walk attachments missing extracted content and run the
+    best-effort extractor over them.
+
+    We process at most ``BATCH`` rows per tenant per run so a single huge
+    bulk-upload doesn't starve the scheduler of other work.
+    """
+    from database import _get_all_company_db_names
+    from services.content_extraction import extract_text
+    BATCH = 50
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                rows = conn.execute(text("""
+                    SELECT id, file_path, mime_type, file_name
+                    FROM attachments
+                    WHERE content_text IS NULL
+                      AND content_extracted_at IS NULL
+                      AND content_extraction_error IS NULL
+                    ORDER BY id
+                    LIMIT :n
+                """), {"n": BATCH}).fetchall()
+                for r in rows:
+                    try:
+                        extracted = extract_text(r.file_path, r.mime_type, r.file_name)
+                        if extracted:
+                            conn.execute(text("""
+                                UPDATE attachments
+                                SET content_text = :t,
+                                    content_extracted_at = NOW()
+                                WHERE id = :id
+                            """), {"t": extracted, "id": r.id})
+                        else:
+                            # Mark as attempted-but-empty so we don't retry forever.
+                            conn.execute(text("""
+                                UPDATE attachments
+                                SET content_extracted_at = NOW(),
+                                    content_extraction_error = 'unsupported_or_empty'
+                                WHERE id = :id
+                            """), {"id": r.id})
+                    except Exception as e:
+                        conn.execute(text("""
+                            UPDATE attachments
+                            SET content_extracted_at = NOW(),
+                                content_extraction_error = :err
+                            WHERE id = :id
+                        """), {"err": str(e)[:200], "id": r.id})
+        except Exception as e:
+            logger.error("extract_attachment_content failed for %s: %s", db_name, e)
+
+
 def start_scheduler():
     # Helper: register with execution tracking wrapper
     def _add(fn, trigger, job_id, **kw):
@@ -1252,9 +2281,12 @@ def start_scheduler():
     _add(refresh_analytics_materialized_views,'interval', 'analytics_mv_refresh',   minutes=15)
     _add(archive_old_audit_logs,              'interval', 'audit_archival',          hours=24)
     # T9.3 — monthly archival of inventory_transactions older than 7 years.
-    _add(archive_old_inventory_transactions,  'cron',     'inventory_archival',       day=1, hour=3)
+    # T10.2 #138: monthly cron jobs need a wider misfire grace window than
+    # the default (120s) — if the host is briefly busy at midnight on the
+    # 1st, a 2-minute window misses the entire month. Use 30 minutes.
+    _add(archive_old_inventory_transactions,  'cron',     'inventory_archival',       day=1, hour=3, misfire_grace_time=1800)
     _add(retry_failed_notifications,          'interval', 'notification_retry',      minutes=1)
-    _add(auto_fx_revaluation,                 'cron',     'fx_monthly_reval',        day=1, hour=2)
+    _add(auto_fx_revaluation,                 'cron',     'fx_monthly_reval',        day=1, hour=2, misfire_grace_time=1800)
     _add(check_zatca_csid_expiry,             'interval', 'zatca_csid_expiry',       hours=12)
     # T4.6 — auto-activate due cheques
     _add(activate_due_cheques,                'cron',     'activate_due_cheques',    hour=6, minute=0)
@@ -1262,6 +2294,22 @@ def start_scheduler():
     _add(run_due_recurring_templates,         'cron',     'recurring_templates',     hour=6, minute=30)
     # T4.8 — auto bank reconciliation
     _add(auto_reconcile_all_drafts,           'cron',     'auto_reconcile',          hour=7, minute=0)
+    # T10.1 P1 #67 — monthly EOS provision snapshot (T10.2 #138: wider grace).
+    _add(run_eos_provision_snapshot,          'cron',     'eos_provision_snapshot', day=1, hour=3, minute=30, misfire_grace_time=1800)
+    # T10.1 P1 #57/#58 — daily DMS soft-delete purge
+    _add(purge_soft_deleted_documents,        'cron',     'dms_purge_soft_deleted', hour=4, minute=0)
+    # T10.1 P1 #110g — daily treasury↔GL discrepancy scan
+    _add(reconcile_treasury_balances,         'cron',     'treasury_gl_recon',       hour=5, minute=0)
+    # T10.1 P1 #41 — CRM follow-up alerts (stale + expected close)
+    _add(crm_followup_alerts,                 'cron',     'crm_followup_alerts',     hour=8, minute=0)
+    # T10.1 P1 #110c — temporal correlation fraud detection (every 30 minutes)
+    _add(detect_suspicious_temporal_patterns, 'interval', 'fraud_temporal_corr',     minutes=30)
+    # T10.1 P1 #80 — FSM SLA breach detection (every 15 minutes)
+    _add(check_fsm_sla_breaches,              'interval', 'fsm_sla_check',           minutes=15)
+    # T10.1 P1 #89 — payment gateway retry worker (every 2 minutes)
+    _add(process_payment_gateway_retries,     'interval', 'payment_retry_worker',    minutes=2)
+    # T18 P1 #96 — attachment full-text extraction (every 10 minutes)
+    _add(extract_attachment_content,          'interval', 'attachment_text_extract', minutes=10)
     # T4.4 — low stock alerts
     _add(check_low_stock_alerts,              'interval', 'low_stock_alerts',        minutes=30)
     # T4.5 — POS offline inbox worker
@@ -1280,6 +2328,30 @@ def start_scheduler():
         _add(process_sms_retries_all_tenants,     'interval', 'sms_retry_queue',     minutes=1)
     except ImportError:
         logger.warning("integration_retry_service unavailable; skipping retry jobs")
+
+    # Feature 022 — audit outbox flush worker (every 15 seconds)
+    try:
+        from services.audit_outbox_worker import flush as _flush_audit_outbox
+        _add(_flush_audit_outbox, 'interval', 'audit_outbox_flush', seconds=15)
+        logger.info("audit.outbox.worker: registered (interval=15s)")
+    except ImportError:
+        logger.warning("audit_outbox_worker unavailable; skipping")
+
+    # Feature 022 — ghost-employee detection (daily at 3:00 AM)
+    try:
+        from services.ghost_employee_rule import run_ghost_employee_check
+        _add(run_ghost_employee_check, 'cron', 'ghost_employee_check', hour=3, minute=0)
+        logger.info("ghost_employee_check: registered (daily 03:00)")
+    except ImportError:
+        logger.warning("ghost_employee_rule unavailable; skipping")
+
+    # Feature 022 — auto-approve expenses below threshold (daily at 7:30 AM)
+    try:
+        from services.expense_auto_approve import run_auto_approve
+        _add(run_auto_approve, 'cron', 'expense_auto_approve', hour=7, minute=30)
+        logger.info("expense_auto_approve: registered (daily 07:30)")
+    except ImportError:
+        logger.warning("expense_auto_approve unavailable; skipping")
 
     scheduler.start()
     logger.info("🚀 Scheduler started (jobstore=%s, tz=%s).",

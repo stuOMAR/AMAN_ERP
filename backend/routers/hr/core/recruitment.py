@@ -15,7 +15,7 @@ from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
 from repositories import EmployeeRepository
-from utils.permissions import require_permission, validate_branch_access, check_permission, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, check_permission, require_module
 from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
 from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
@@ -44,21 +44,7 @@ def list_job_openings(status: Optional[str] = None, branch_id: Optional[int] = N
         if status:
             q += " AND jo.status = :status"
             params["status"] = status
-        # Branch access control
-        if current_user.role not in ['admin', 'system_admin', 'manager', 'gm']:
-            if current_user.allowed_branches:
-                if branch_id:
-                    if branch_id not in current_user.allowed_branches:
-                        raise HTTPException(status_code=403, detail="Unauthorized access to this branch")
-                    q += " AND jo.branch_id = :bid"
-                    params["bid"] = branch_id
-                else:
-                    branches_str = ",".join(map(str, current_user.allowed_branches))
-                    q += f" AND (jo.branch_id IN ({branches_str}) OR jo.branch_id IS NULL)"
-        else:
-            if branch_id:
-                q += " AND jo.branch_id = :bid"
-                params["bid"] = branch_id
+        q += " " + branch_scope_filter(current_user, branch_id, "jo.branch_id", params, branch_param="bid")
         q += " ORDER BY jo.created_at DESC"
         result = conn.execute(text(q), params).fetchall()
         return [dict(row._mapping) for row in result]
@@ -121,9 +107,7 @@ def list_all_applications(branch_id: Optional[int] = None, current_user: UserRes
             LEFT JOIN job_openings jo ON ja.opening_id = jo.id
             WHERE 1=1"""
         params = {}
-        if branch_id:
-            q += " AND jo.branch_id = :bid"
-            params["bid"] = branch_id
+        q += " " + branch_scope_filter(current_user, branch_id, "jo.branch_id", params, branch_param="bid")
         q += " ORDER BY ja.created_at DESC"
         result = conn.execute(text(q), params).fetchall()
         return [dict(row._mapping) for row in result]

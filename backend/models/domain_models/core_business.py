@@ -148,9 +148,76 @@ class InvoiceLine(ModelBase):
     quantity: Mapped[float | None] = mapped_column(Numeric(18, 4), default=1)
     unit_price: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 2), default=0)
+    tax_rate_id: Mapped[int | None] = mapped_column(ForeignKey("tax_rates.id"))
     discount: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     markup: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     total: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PartyBalance(ModelBase):
+    """Per-branch, per-currency balance for each party (customer/supplier)."""
+    __tablename__ = "party_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), nullable=False)
+    branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    currency: Mapped[str] = mapped_column(String(3), nullable=False)
+    balance: Mapped[float] = mapped_column(Numeric(18, 4), default=0)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PartySite(ModelBase):
+    """Sites/locations of each party (supplier/customer)."""
+    __tablename__ = "party_sites"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    party_id: Mapped[int] = mapped_column(ForeignKey("parties.id"), nullable=False)
+    site_name: Mapped[str] = mapped_column(String(255), nullable=False)
+    site_name_en: Mapped[str | None] = mapped_column(String(255))
+    country: Mapped[str | None] = mapped_column(String(100))
+    country_code: Mapped[str | None] = mapped_column(String(5))
+    currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    contact_name: Mapped[str | None] = mapped_column(String(255))
+    phone: Mapped[str | None] = mapped_column(String(50))
+    email: Mapped[str | None] = mapped_column(String(255))
+    address: Mapped[str | None] = mapped_column(Text)
+    city: Mapped[str | None] = mapped_column(String(100))
+    tax_number: Mapped[str | None] = mapped_column(String(50))
+    bank_account: Mapped[str | None] = mapped_column(String(100))
+    payment_terms: Mapped[int | None] = mapped_column(Integer, default=30)
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PartySiteBalance(ModelBase):
+    """Balance for each party site per company branch and currency."""
+    __tablename__ = "party_site_balances"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    company_branch_id: Mapped[int] = mapped_column(ForeignKey("branches.id"), nullable=False)
+    party_site_id: Mapped[int] = mapped_column(ForeignKey("party_sites.id"), nullable=False)
+    account_type: Mapped[str] = mapped_column(String(20), nullable=False)  # payable/receivable
+    currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    balance: Mapped[float] = mapped_column(Numeric(18, 4), default=0)
+    gl_account_id: Mapped[int | None] = mapped_column(ForeignKey("accounts.id"))
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PaymentInvoiceLink(ModelBase):
+    """Link between payments and invoices."""
+    __tablename__ = "payment_invoice_links"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    payment_id: Mapped[int] = mapped_column(Integer, nullable=False)
+    invoice_id: Mapped[int] = mapped_column(ForeignKey("invoices.id"), nullable=False)
+    allocated_amount: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
+    currency: Mapped[str] = mapped_column(String(10), nullable=False)
+    exchange_rate: Mapped[float] = mapped_column(Numeric(18, 6), default=1.0)
     created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
@@ -169,7 +236,11 @@ __all__ = [
     "Invoice",
     "InvoiceLine",
     "Party",
+    "PartyBalance",
     "PartyGroup",
+    "PartySite",
+    "PartySiteBalance",
+    "PaymentInvoiceLink",
     "TreasuryAccount",
     "UserBranch",
     "Warehouse",

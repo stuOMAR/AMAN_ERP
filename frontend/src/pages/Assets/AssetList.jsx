@@ -4,6 +4,7 @@ import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
 import { assetsAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
+import { useBranch } from '../../context/BranchContext';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
 import SearchFilter from '../../components/common/SearchFilter';
@@ -13,6 +14,7 @@ const AssetList = () => {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
     const currency = getCurrency();
+    const { currentBranch } = useBranch();
     const [assets, setAssets] = useState([]);
     const [loading, setLoading] = useState(true);
     const [filter, setFilter] = useState('');
@@ -20,12 +22,14 @@ const AssetList = () => {
 
     useEffect(() => {
         fetchAssets();
-    }, [filter]);
+    }, [filter, currentBranch]);
 
     const fetchAssets = async () => {
         try {
             setLoading(true);
-            const response = await assetsAPI.list(filter ? { status: filter } : {});
+            const params = filter ? { status: filter } : {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const response = await assetsAPI.list(params);
             setAssets(response.data);
         } catch (error) {
             console.error("Failed to fetch assets", error);
@@ -76,7 +80,7 @@ const AssetList = () => {
             label: t('assets.cost', 'Cost'),
             headerStyle: { textAlign: 'end' },
             style: { textAlign: 'end', fontWeight: 'bold', color: 'var(--text-dark)' },
-            render: (val) => <>{parseFloat(val).toLocaleString()} {currency}</>,
+            render: (val, row) => <>{parseFloat(val).toLocaleString()} {row.currency || currency}</>,
         },
         {
             key: 'status',

@@ -1,0 +1,438 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🛒 المشتريات" [ref=e35] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e37]: 🛒
+          - generic [ref=e38]: المشتريات
+        - link "🤝 إدارة العلاقات" [ref=e39] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e41]: 🤝
+          - generic [ref=e42]: إدارة العلاقات
+        - link "💸 المصروفات" [ref=e43] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e45]: 💸
+          - generic [ref=e46]: المصروفات
+        - link "🧾 الضرائب" [ref=e47] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e49]: 🧾
+          - generic [ref=e50]: الضرائب
+        - link "📈 التقارير" [ref=e51] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e53]: 📈
+          - generic [ref=e54]: التقارير
+    - generic [ref=e55]:
+      - banner [ref=e56]:
+        - generic [ref=e58] [cursor=pointer]:
+          - generic [ref=e59]:
+            - img [ref=e60]
+            - text: بحث...
+          - generic [ref=e63]: Ctrl+K
+        - generic [ref=e64]:
+          - button "EN" [ref=e65] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e66] [cursor=pointer]:
+            - img [ref=e67]
+          - button "🔔" [ref=e74] [cursor=pointer]
+          - generic [ref=e76] [cursor=pointer]:
+            - generic [ref=e77]:
+              - generic [ref=e78]: Ahmed Accountant
+              - generic [ref=e79]: "ID: e24bcd11"
+            - generic [ref=e80]: A
+      - main [ref=e82]:
+        - generic [ref=e253]:
+          - generic [ref=e255]:
+            - generic [ref=e256]:
+              - button "العودة" [ref=e257] [cursor=pointer]:
+                - img [ref=e258]
+              - heading "🔄 القيود المتكررة" [level=2] [ref=e260]
+            - generic [ref=e261]:
+              - combobox [ref=e262]:
+                - option "الكل" [selected]
+                - option "نشط"
+                - option "متوقف"
+              - button "⚡ توليد المستحقة" [ref=e263] [cursor=pointer]
+              - button "+ قالب جديد" [ref=e264] [cursor=pointer]
+          - table [ref=e634]:
+            - rowgroup [ref=e635]:
+              - row "# الاسم التكرار التنفيذ التالي آخر تنفيذ التنفيذ ترحيل تلقائي الحالة إجراءات" [ref=e636]:
+                - columnheader "#" [ref=e637]
+                - columnheader "الاسم" [ref=e638]
+                - columnheader "التكرار" [ref=e639]
+                - columnheader "التنفيذ التالي" [ref=e640]
+                - columnheader "آخر تنفيذ" [ref=e641]
+                - columnheader "التنفيذ" [ref=e642]
+                - columnheader "ترحيل تلقائي" [ref=e643]
+                - columnheader "الحالة" [ref=e644]
+                - columnheader "إجراءات" [ref=e645]
+            - rowgroup [ref=e646]:
+              - row "1 إيجار شهري شهري 2026-06-03 2026-05-03 1/12 ❌ نشط ⚡ ✏️ 🗑" [ref=e647]:
+                - cell "1" [ref=e648]
+                - cell "إيجار شهري" [ref=e649]:
+                  - link "إيجار شهري" [ref=e650] [cursor=pointer]:
+                    - /url: "#"
+                - cell "شهري" [ref=e651]
+                - cell "2026-06-03" [ref=e652]
+                - cell "2026-05-03" [ref=e653]
+                - cell "1/12" [ref=e654]:
+                  - text: "1"
+                  - generic [ref=e655]: /12
+                - cell "❌" [ref=e656]
+                - cell "نشط" [ref=e657]
+                - cell "⚡ ✏️ 🗑" [ref=e658]:
+                  - generic [ref=e659]:
+                    - button "⚡" [ref=e660] [cursor=pointer]
+                    - button "✏️" [ref=e661] [cursor=pointer]
+                    - button "🗑" [ref=e662] [cursor=pointer]
+          - generic [ref=e675]:
+            - generic [ref=e676]:
+              - heading "تعديل قالب متكرر" [level=5] [ref=e677]
+              - button [ref=e678]
+            - generic [ref=e679]:
+              - generic [ref=e680]:
+                - generic [ref=e681]:
+                  - generic [ref=e682]: اسم القالب *
+                  - textbox [ref=e683]: إيجار شهري
+                - generic [ref=e684]:
+                  - generic [ref=e685]: المرجع
+                  - textbox [ref=e686]
+                - generic [ref=e687]:
+                  - generic [ref=e688]: التكرار *
+                  - combobox [ref=e689]:
+                    - option "يومي"
+                    - option "أسبوعي"
+                    - option "شهري" [selected]
+                    - option "ربع سنوي"
+                    - option "سنوي"
+              - generic [ref=e690]:
+                - generic [ref=e691]:
+                  - generic [ref=e692]: تاريخ البداية *
+                  - generic [ref=e693]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e696]: 2026/01/01
+                - generic [ref=e697]:
+                  - generic [ref=e698]: تاريخ النهاية
+                  - generic [ref=e699]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e702]: 2026/12/31
+                - generic [ref=e703]:
+                  - generic [ref=e704]: التنفيذ التالي
+                  - generic [ref=e705]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e708]: 2026/06/03
+                - generic [ref=e709]:
+                  - generic [ref=e710]: الحد الأقصى للتنفيذ
+                  - spinbutton [ref=e711]: "12"
+              - generic [ref=e712]:
+                - generic [ref=e713]:
+                  - generic [ref=e714]: الوصف
+                  - textbox [ref=e715]: إيجار شهري 20,000 SAR
+                - generic [ref=e718]:
+                  - checkbox "نشط" [active] [ref=e719]
+                  - text: نشط
+                - generic [ref=e722]:
+                  - checkbox "ترحيل تلقائي" [ref=e723]
+                  - text: ترحيل تلقائي
+              - heading "بنود القيد" [level=6] [ref=e724]
+              - table [ref=e726]:
+                - rowgroup [ref=e727]:
+                  - row "الحساب مدين دائن البيان" [ref=e728]:
+                    - columnheader "الحساب" [ref=e729]
+                    - columnheader "مدين" [ref=e730]
+                    - columnheader "دائن" [ref=e731]
+                    - columnheader "البيان" [ref=e732]
+                    - columnheader [ref=e733]
+                - rowgroup [ref=e734]:
+                  - row "5202 - مصروف الإيجار 20000.0000 0.0000 ✕" [ref=e735]:
+                    - cell "5202 - مصروف الإيجار" [ref=e736]:
+                      - combobox [ref=e737]:
+                        - option "-- اختر --"
+                        - option "1 - الأصول"
+                        - option "11 - أصول متداولة"
+                        - option "1101 - النقد وما في حكمه"
+                        - option "110101 - الصندوق الرئيسي"
+                        - option "110102 - البنك"
+                        - option "1102 - العملاء والذمم المدينة"
+                        - option "1103 - المخزون"
+                        - option "110301 - مخزون المواد الأولية"
+                        - option "110302 - مخزون الإنتاج التام"
+                        - option "1104 - سلف وقروض الموظفين"
+                        - option "1105 - مصروفات مدفوعة مقدماً"
+                        - option "110501 - إيجار مدفوع مقدماً"
+                        - option "110502 - تأمين مدفوع مقدماً"
+                        - option "1106 - مدفوعات مقدمة للموردين"
+                        - option "1107 - ضريبة المدخلات"
+                        - option "1108 - شيكات تحت التحصيل"
+                        - option "1109 - أوراق قبض"
+                        - option "1110 - أعمال تحت التشغيل"
+                        - option "1111 - حسابات بين الفروع"
+                        - option "1112 - مخزون في الطريق"
+                        - option "12 - أصول ثابتة"
+                        - option "1201 - الآلات والمعدات"
+                        - option "1202 - السيارات ووسائل النقل"
+                        - option "1203 - الأثاث والمفروشات"
+                        - option "1204 - المباني والإنشاءات"
+                        - option "1205 - الأراضي"
+                        - option "1206 - أجهزة حاسوب وأنظمة"
+                        - option "1207 - الإهلاك المتراكم"
+                        - option "13 - أصول غير ملموسة"
+                        - option "13001 - مخزون بضاعة"
+                        - option "1301 - شهرة"
+                        - option "1302 - براءات اختراع وعلامات تجارية"
+                        - option "1303 - حقوق التأليف والنشر"
+                        - option "1304 - الإطفاء المتراكم"
+                        - option "1305 - أصل حق الاستخدام"
+                        - option "2 - الخصوم"
+                        - option "21 - خصوم متداولة"
+                        - option "2101 - الموردين والذمم الدائنة"
+                        - option "2102 - مصاريف مستحقة"
+                        - option "2103 - ضريبة القيمة المضافة"
+                        - option "210301 - ضريبة المخرجات"
+                        - option "2104 - مشتريات مستلمة غير مفوترة"
+                        - option "2105 - شيكات تحت الدفع"
+                        - option "2106 - التأمينات الاجتماعية المستحقة"
+                        - option "2107 - عربون / دفعات مقدمة من العملاء"
+                        - option "2108 - ضريبة الاستقطاع"
+                        - option "2109 - ضريبة الدخل المستحقة"
+                        - option "2110 - أوراق دفع"
+                        - option "2111 - الزكاة المستحقة"
+                        - option "2112 - تسوية ضريبة القيمة المضافة"
+                        - option "22 - خصوم غير متداولة"
+                        - option "2201 - قروض طويلة الأجل"
+                        - option "2202 - مخصص نهاية الخدمة"
+                        - option "2203 - مخصص الإجازات"
+                        - option "2204 - مخصص الديون المعدومة"
+                        - option "3 - حقوق الملكية"
+                        - option "31 - رأس المال"
+                        - option "32 - الأرباح المبقاة"
+                        - option "33 - أرباح العام الحالي"
+                        - option "34 - الجارى والمسحوبات"
+                        - option "35 - احتياطي إعادة التقييم"
+                        - option "4 - الإيرادات"
+                        - option "41 - إيرادات التشغيل"
+                        - option "4101 - مبيعات البضائع"
+                        - option "41010 - مبيعات متنوعة"
+                        - option "4102 - إيرادات الخدمات"
+                        - option "41020 - مردودات مبيعات"
+                        - option "4103 - مردودات المبيعات"
+                        - option "4104 - خصم مبيعات"
+                        - option "42 - إيرادات أخرى"
+                        - option "4201 - أرباح فروقات عملة (محققة)"
+                        - option "4202 - أرباح فروقات عملة (غير محققة)"
+                        - option "4203 - فوائد محصلة"
+                        - option "4204 - توزيعات أرباح"
+                        - option "4205 - ربح بيع أصول"
+                        - option "4206 - خصومات مكتسبة"
+                        - option "5 - المصروفات"
+                        - option "51 - تكلفة البضاعة المباعة"
+                        - option "5101 - تكلفة مبيعات البضائع"
+                        - option "5102 - تكلفة التصنيع"
+                        - option "5103 - تكلفة العمالة المباشرة"
+                        - option "5104 - المصاريف الصناعية العامة"
+                        - option "52 - المصروفات التشغيلية والإدارية"
+                        - option "5201 - الرواتب والأجور"
+                        - option "5202 - مصروف الإيجار" [selected]
+                        - option "5203 - الكهرباء والمياه"
+                        - option "5204 - الاتصالات والإنترنت"
+                        - option "5205 - الصيانة"
+                        - option "5206 - الرسوم الحكومية"
+                        - option "5207 - التسويق والإعلان"
+                        - option "5208 - مصاريف السفر والتنقل"
+                        - option "5209 - مصروفات عمومية"
+                        - option "5210 - مصروف التأمينات الاجتماعية"
+                        - option "5211 - مصروف التأمين"
+                        - option "5212 - مصروف النظافة"
+                        - option "5213 - مصروف القرطاسية"
+                        - option "5214 - مصروف الضيافة"
+                        - option "5215 - مصروفات قانونية"
+                        - option "5216 - مصروف التدقيق والمراجعة"
+                        - option "5217 - عمولات المبيعات"
+                        - option "5218 - علاقات عامة"
+                        - option "5219 - بدلات الموظفين"
+                        - option "5220 - العمل الإضافي"
+                        - option "5221 - مكافآت نهاية الخدمة (مصروف)"
+                        - option "5222 - مصروف الإجازات"
+                        - option "5223 - مصروف ديون معدومة"
+                        - option "53 - الإهلاك"
+                        - option "54 - المصروفات المالية والبنكية"
+                        - option "5401 - الرسوم البنكية"
+                        - option "5402 - خسائر فروقات عملة (محققة)"
+                        - option "5403 - خسائر فروقات عملة (غير محققة)"
+                        - option "55 - مصروفات أخرى"
+                        - option "5501 - خسائر استبعاد الأصول"
+                        - option "5502 - فروقات صندوق (زيادة/نقصان)"
+                        - option "5503 - فروقات تسوية المخزون"
+                    - cell "20000.0000" [ref=e738]:
+                      - spinbutton [ref=e739]: "20000.0000"
+                    - cell "0.0000" [ref=e740]:
+                      - spinbutton [ref=e741]: "0.0000"
+                    - cell [ref=e742]:
+                      - textbox [ref=e743]
+                    - cell "✕" [ref=e744]:
+                      - button "✕" [disabled] [ref=e745]
+                  - row "110102 - البنك 0.0000 20000.0000 ✕" [ref=e746]:
+                    - cell "110102 - البنك" [ref=e747]:
+                      - combobox [ref=e748]:
+                        - option "-- اختر --"
+                        - option "1 - الأصول"
+                        - option "11 - أصول متداولة"
+                        - option "1101 - النقد وما في حكمه"
+                        - option "110101 - الصندوق الرئيسي"
+                        - option "110102 - البنك" [selected]
+                        - option "1102 - العملاء والذمم المدينة"
+                        - option "1103 - المخزون"
+                        - option "110301 - مخزون المواد الأولية"
+                        - option "110302 - مخزون الإنتاج التام"
+                        - option "1104 - سلف وقروض الموظفين"
+                        - option "1105 - مصروفات مدفوعة مقدماً"
+                        - option "110501 - إيجار مدفوع مقدماً"
+                        - option "110502 - تأمين مدفوع مقدماً"
+                        - option "1106 - مدفوعات مقدمة للموردين"
+                        - option "1107 - ضريبة المدخلات"
+                        - option "1108 - شيكات تحت التحصيل"
+                        - option "1109 - أوراق قبض"
+                        - option "1110 - أعمال تحت التشغيل"
+                        - option "1111 - حسابات بين الفروع"
+                        - option "1112 - مخزون في الطريق"
+                        - option "12 - أصول ثابتة"
+                        - option "1201 - الآلات والمعدات"
+                        - option "1202 - السيارات ووسائل النقل"
+                        - option "1203 - الأثاث والمفروشات"
+                        - option "1204 - المباني والإنشاءات"
+                        - option "1205 - الأراضي"
+                        - option "1206 - أجهزة حاسوب وأنظمة"
+                        - option "1207 - الإهلاك المتراكم"
+                        - option "13 - أصول غير ملموسة"
+                        - option "13001 - مخزون بضاعة"
+                        - option "1301 - شهرة"
+                        - option "1302 - براءات اختراع وعلامات تجارية"
+                        - option "1303 - حقوق التأليف والنشر"
+                        - option "1304 - الإطفاء المتراكم"
+                        - option "1305 - أصل حق الاستخدام"
+                        - option "2 - الخصوم"
+                        - option "21 - خصوم متداولة"
+                        - option "2101 - الموردين والذمم الدائنة"
+                        - option "2102 - مصاريف مستحقة"
+                        - option "2103 - ضريبة القيمة المضافة"
+                        - option "210301 - ضريبة المخرجات"
+                        - option "2104 - مشتريات مستلمة غير مفوترة"
+                        - option "2105 - شيكات تحت الدفع"
+                        - option "2106 - التأمينات الاجتماعية المستحقة"
+                        - option "2107 - عربون / دفعات مقدمة من العملاء"
+                        - option "2108 - ضريبة الاستقطاع"
+                        - option "2109 - ضريبة الدخل المستحقة"
+                        - option "2110 - أوراق دفع"
+                        - option "2111 - الزكاة المستحقة"
+                        - option "2112 - تسوية ضريبة القيمة المضافة"
+                        - option "22 - خصوم غير متداولة"
+                        - option "2201 - قروض طويلة الأجل"
+                        - option "2202 - مخصص نهاية الخدمة"
+                        - option "2203 - مخصص الإجازات"
+                        - option "2204 - مخصص الديون المعدومة"
+                        - option "3 - حقوق الملكية"
+                        - option "31 - رأس المال"
+                        - option "32 - الأرباح المبقاة"
+                        - option "33 - أرباح العام الحالي"
+                        - option "34 - الجارى والمسحوبات"
+                        - option "35 - احتياطي إعادة التقييم"
+                        - option "4 - الإيرادات"
+                        - option "41 - إيرادات التشغيل"
+                        - option "4101 - مبيعات البضائع"
+                        - option "41010 - مبيعات متنوعة"
+                        - option "4102 - إيرادات الخدمات"
+                        - option "41020 - مردودات مبيعات"
+                        - option "4103 - مردودات المبيعات"
+                        - option "4104 - خصم مبيعات"
+                        - option "42 - إيرادات أخرى"
+                        - option "4201 - أرباح فروقات عملة (محققة)"
+                        - option "4202 - أرباح فروقات عملة (غير محققة)"
+                        - option "4203 - فوائد محصلة"
+                        - option "4204 - توزيعات أرباح"
+                        - option "4205 - ربح بيع أصول"
+                        - option "4206 - خصومات مكتسبة"
+                        - option "5 - المصروفات"
+                        - option "51 - تكلفة البضاعة المباعة"
+                        - option "5101 - تكلفة مبيعات البضائع"
+                        - option "5102 - تكلفة التصنيع"
+                        - option "5103 - تكلفة العمالة المباشرة"
+                        - option "5104 - المصاريف الصناعية العامة"
+                        - option "52 - المصروفات التشغيلية والإدارية"
+                        - option "5201 - الرواتب والأجور"
+                        - option "5202 - مصروف الإيجار"
+                        - option "5203 - الكهرباء والمياه"
+                        - option "5204 - الاتصالات والإنترنت"
+                        - option "5205 - الصيانة"
+                        - option "5206 - الرسوم الحكومية"
+                        - option "5207 - التسويق والإعلان"
+                        - option "5208 - مصاريف السفر والتنقل"
+                        - option "5209 - مصروفات عمومية"
+                        - option "5210 - مصروف التأمينات الاجتماعية"
+                        - option "5211 - مصروف التأمين"
+                        - option "5212 - مصروف النظافة"
+                        - option "5213 - مصروف القرطاسية"
+                        - option "5214 - مصروف الضيافة"
+                        - option "5215 - مصروفات قانونية"
+                        - option "5216 - مصروف التدقيق والمراجعة"
+                        - option "5217 - عمولات المبيعات"
+                        - option "5218 - علاقات عامة"
+                        - option "5219 - بدلات الموظفين"
+                        - option "5220 - العمل الإضافي"
+                        - option "5221 - مكافآت نهاية الخدمة (مصروف)"
+                        - option "5222 - مصروف الإجازات"
+                        - option "5223 - مصروف ديون معدومة"
+                        - option "53 - الإهلاك"
+                        - option "54 - المصروفات المالية والبنكية"
+                        - option "5401 - الرسوم البنكية"
+                        - option "5402 - خسائر فروقات عملة (محققة)"
+                        - option "5403 - خسائر فروقات عملة (غير محققة)"
+                        - option "55 - مصروفات أخرى"
+                        - option "5501 - خسائر استبعاد الأصول"
+                        - option "5502 - فروقات صندوق (زيادة/نقصان)"
+                        - option "5503 - فروقات تسوية المخزون"
+                    - cell "0.0000" [ref=e749]:
+                      - spinbutton [ref=e750]: "0.0000"
+                    - cell "20000.0000" [ref=e751]:
+                      - spinbutton [ref=e752]: "20000.0000"
+                    - cell [ref=e753]:
+                      - textbox [ref=e754]
+                    - cell "✕" [ref=e755]:
+                      - button "✕" [disabled] [ref=e756]
+                - rowgroup [ref=e757]:
+                  - row "الإجمالي 20000.00 20000.00 + سطر" [ref=e758]:
+                    - cell "الإجمالي" [ref=e759]
+                    - cell "20000.00" [ref=e760]
+                    - cell "20000.00" [ref=e761]
+                    - cell "+ سطر" [ref=e762]:
+                      - button "+ سطر" [ref=e763] [cursor=pointer]
+            - generic [ref=e764]:
+              - button "إلغاء" [ref=e765] [cursor=pointer]
+              - button "تحديث" [ref=e766] [cursor=pointer]

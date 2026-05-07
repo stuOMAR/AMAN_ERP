@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { assetsAPI, branchesAPI } from '../../services';
 import { useToast } from '../../context/ToastContext';
+import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
 import { Plus, ArrowRightLeft, CheckCircle, RefreshCw } from 'lucide-react';
@@ -13,6 +14,7 @@ const AssetManagement = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
     const currency = getCurrency();
+    const { currentBranch } = useBranch();
     const [activeTab, setActiveTab] = useState('transfers');
     const [transfers, setTransfers] = useState([]);
     const [revaluations, setRevaluations] = useState([]);
@@ -28,12 +30,14 @@ const AssetManagement = () => {
     useEffect(() => {
         fetchData();
         fetchMetadata();
-    }, [activeTab]);
+    }, [activeTab, currentBranch]);
 
     const fetchMetadata = async () => {
         try {
+            const listParams = { limit: 1000 };
+            if (currentBranch?.id) listParams.branch_id = currentBranch.id;
             const [assetsRes, branchesRes] = await Promise.all([
-                assetsAPI.list({ limit: 1000 }),
+                assetsAPI.list(listParams),
                 branchesAPI.list()
             ]);
             setAssets(assetsRes.data?.assets || assetsRes.data || []);

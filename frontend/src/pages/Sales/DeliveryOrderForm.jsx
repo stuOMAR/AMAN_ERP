@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { deliveryOrdersAPI, salesAPI } from '../../utils/api'
+import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
@@ -13,6 +14,7 @@ function DeliveryOrderForm() {
     const navigate = useNavigate()
     const { showToast } = useToast()
     const { currentBranch } = useBranch()
+    const currency = getCurrency()
     const [loading, setLoading] = useState(false)
     const [salesOrders, setSalesOrders] = useState([])
     const [form, setForm] = useState({
@@ -33,8 +35,8 @@ function DeliveryOrderForm() {
             const res = await salesAPI.getOrder(soId)
             const so = res.data
             setForm(f => ({
-                ...f, so_id: soId, party_id: so.party_id,
-                lines: (so.lines || []).map(l => ({
+                ...f, so_id: soId, party_id: so.customer_id || so.party_id,
+                lines: (so.items || so.lines || []).map(l => ({
                     product_id: l.product_id, quantity: l.quantity - (l.delivered_quantity || 0),
                     unit_price: l.unit_price, tax_rate: l.tax_rate || 0,
                     product_name: l.product_name
@@ -117,7 +119,7 @@ function DeliveryOrderForm() {
                             <tr>
                                 <th>{t('common.product')}</th>
                                 <th>{t('common.quantity')}</th>
-                                <th>{t('common.unit_price')}</th>
+                                 <th>{t('common.unit_price')} ({currency})</th>
                                 <th>{t('common.tax_rate')}</th>
                                 {!form.so_id && <th></th>}
                             </tr>
@@ -127,7 +129,7 @@ function DeliveryOrderForm() {
                                 <tr key={i}>
                                     <td>{line.product_name || <input type="number" className="form-input" value={line.product_id} onChange={e => updateLine(i, 'product_id', e.target.value)} placeholder={t('common.product_id')} />}</td>
                                     <td><input type="number" className="form-input" min="1" value={line.quantity} onChange={e => updateLine(i, 'quantity', Number(e.target.value))} style={{ width: 80 }} /></td>
-                                    <td><input type="number" className="form-input" step="0.01" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', Number(e.target.value))} style={{ width: 120 }} /></td>
+                                     <td><input type="number" className="form-input" step="0.01" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', Number(e.target.value))} style={{ width: 120 }} /> <small>{currency}</small></td>
                                     <td><input type="number" className="form-input" step="0.01" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', Number(e.target.value))} style={{ width: 80 }} /></td>
                                     {!form.so_id && <td><button type="button" className="btn-icon text-danger" onClick={() => removeLine(i)}>🗑️</button></td>}
                                 </tr>

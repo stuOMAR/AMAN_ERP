@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from schemas import CategoryCreate, CategoryResponse
 from fastapi import Request
 
@@ -27,17 +27,12 @@ def list_categories(
     """List Categories."""
     db = get_db_connection(current_user.company_id)
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         query = "SELECT id, category_name as name, category_code as code, branch_id FROM product_categories WHERE 1=1"
         params = {}
-        if branch_id:
-            query += " AND (branch_id = :bid OR branch_id IS NULL)"
-            params["bid"] = branch_id
-        else:
-            # INV-011: Enforce allowed_branches when no branch_id specified
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                query += " AND (branch_id IN :branches OR branch_id IS NULL)"
-                params["branches"] = tuple(allowed)
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "branch_id", params, prefix="").strip()
+        if branch_condition:
+            query += f" AND (branch_id IS NULL OR {branch_condition})"
 
         query += " ORDER BY id"
         result = db.execute(text(query), params).fetchall()

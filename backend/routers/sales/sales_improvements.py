@@ -30,63 +30,114 @@ sales_improvements_router = APIRouter()
 # =====================================================
 
 @sales_improvements_router.post("/quotations/{sq_id}/convert", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def convert_quotation_to_order(sq_id: int, current_user=Depends(get_current_user)):
+def convert_quotation_to_order(sq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Auto-convert a sales quotation into a sales order."""
     db = get_db_connection(current_user.company_id)
     try:
         sq = db.execute(text("SELECT * FROM sales_quotations WHERE id = :id"), {"id": sq_id}).fetchone()
         if not sq:
-            raise HTTPException(status_code=404, detail="Quotation not found")
-        if hasattr(sq, 'converted_to_order_id') and sq.converted_to_order_id:
-            raise HTTPException(status_code=400, detail="Already converted")
+            raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
+        if sq.status in ('converted', 'cancelled', 'expired'):
+            existing = db.execute(text("""
+                SELECT id, so_number FROM sales_orders WHERE quotation_id = :id LIMIT 1
+            """), {"id": sq_id}).fetchone()
+            if existing:
+                return {"message": "عرض السعر محول مسبقاً", "order_id": existing.id, "so_number": existing.so_number}
+            raise HTTPException(status_code=400, detail=f"لا يمكن تحويل عرض السعر بالحالة الحالية: {sq.status}")
+
+        lines = db.execute(text("""
+            SELECT * FROM sales_quotation_lines WHERE sq_id = :id ORDER BY id
+        """), {"id": sq_id}).fetchall()
+        if not lines:
+            raise HTTPException(status_code=400, detail="لا يمكن تحويل عرض سعر بدون أصناف")
+        if any(line.product_id is None for line in lines):
+            raise HTTPException(status_code=400, detail="لا يمكن تحويل عرض السعر: يوجد سطر بدون صنف مرتبط")
+
+        # T10.2 #153 — enforce customer credit limit BEFORE creating the
+        # order. Without this, an over-limit customer's quotation flows
+        # straight through to invoice and breaks AR control. We mirror
+        # the check used by the invoice router (parties.credit_limit
+        # vs. credit_used + this order's grand_total).
+        party_id = sq.party_id or sq.customer_id
+        if party_id:
+            party = db.execute(text(
+                "SELECT credit_limit, COALESCE(current_balance, 0) AS credit_used "
+                "FROM parties WHERE id = :id FOR UPDATE"
+            ), {"id": party_id}).fetchone()
+            if party and party.credit_limit and float(party.credit_limit) > 0:
+                from decimal import Decimal as _D
+                limit_ = _D(str(party.credit_limit or 0))
+                used_ = _D(str(party.credit_used or 0))
+                grand = _D(str(sq.total or 0))
+                if used_ + grand > limit_:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=(
+                            f"تجاوز الحد الائتماني عند تحويل عرض السعر إلى طلب. "
+                            f"الحد: {limit_}, المستخدم: {used_}, المطلوب: {grand}"
+                        ),
+                    )
 
         # Generate SO number
-        import uuid
-        so_num = f"SO-{uuid.uuid4().hex[:8].upper()}"
+        from utils.accounting import generate_sequential_number
+        so_num = generate_sequential_number(db, f"SO-{datetime.now().year}", "sales_orders", "so_number")
 
         # Create order from quotation
         so = db.execute(text("""
             INSERT INTO sales_orders (
-                so_number, customer_id, branch_id, order_date, status,
-                total, discount, tax, grand_total, notes, currency, source_quotation_id, created_by
+                so_number, party_id, branch_id, order_date, status,
+                subtotal, discount, tax_amount, total, notes, currency, quotation_id, created_by
             ) VALUES (
                 :num, :cid, :bid, NOW(), 'draft',
-                :total, :disc, :tax, :grand, :notes, :curr, :sqid, :uid
+                :subtotal, :disc, :tax, :total, :notes, :curr, :sqid, :user
             ) RETURNING id
         """), {
-            "num": so_num, "cid": sq.customer_id,
+            "num": so_num, "cid": party_id,
             "bid": getattr(sq, 'branch_id', None),
-            "total": str(getattr(sq, 'total', 0) or 0),
+            "subtotal": str(getattr(sq, 'subtotal', 0) or 0),
             "disc": str(getattr(sq, 'discount', 0) or 0),
-            "tax": str(getattr(sq, 'tax', 0) or 0),
-            "grand": str(getattr(sq, 'grand_total', 0) or 0),
+            "tax": str(getattr(sq, 'tax_amount', 0) or 0),
+            "total": str(getattr(sq, 'total', 0) or 0),
             "notes": getattr(sq, 'notes', None),
             "curr": getattr(sq, 'currency', None),
-            "sqid": sq_id, "uid": current_user.id,
+            "sqid": sq_id,
+            "user": current_user.id,
         }).fetchone()
 
         # Copy lines
-        lines = db.execute(text("SELECT * FROM sales_quotation_lines WHERE quotation_id = :id"), {"id": sq_id}).fetchall()
         for line in lines:
             db.execute(text("""
-                INSERT INTO sales_order_lines (order_id, product_id, quantity, unit_price, discount, tax_rate, subtotal)
-                VALUES (:oid, :pid, :qty, :price, :disc, :tax, :sub)
+                INSERT INTO sales_order_lines (so_id, product_id, description, quantity, unit_price, discount, tax_rate, total)
+                VALUES (:oid, :pid, :desc, :qty, :price, :disc, :tax, :total)
             """), {
                 "oid": so.id, "pid": line.product_id,
+                "desc": getattr(line, 'description', None),
                 "qty": str(line.quantity or 0), "price": str(line.unit_price or 0),
                 "disc": str(getattr(line, 'discount', 0) or 0),
                 "tax": str(getattr(line, 'tax_rate', 0) or 0),
-                "sub": str(getattr(line, 'subtotal', 0) or 0),
+                "total": str(getattr(line, 'total', 0) or 0),
             })
 
         # Mark quotation as converted
         db.execute(text("""
-            UPDATE sales_quotations SET converted_to_order_id = :oid, conversion_date = NOW()
+            UPDATE sales_quotations SET status = 'converted', updated_at = NOW(), updated_by = :user
             WHERE id = :id
-        """), {"oid": so.id, "id": sq_id})
+        """), {"id": sq_id, "user": current_user.username})
+
+        log_activity(
+            db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="sales.quotation.convert_to_order",
+            resource_type="sales_quotation",
+            resource_id=str(sq_id),
+            details={"sq_number": sq.sq_number, "so_number": so_num, "order_id": so.id},
+            request=request,
+            branch_id=getattr(sq, 'branch_id', None),
+        )
 
         db.commit()
-        return {"message": "Quotation converted to order", "order_id": so.id, "so_number": so_num}
+        return {"success": True, "message": "تم تحويل عرض السعر إلى أمر بيع بنجاح", "order_id": so.id, "so_number": so_num}
     except HTTPException:
         raise
     except Exception as e:

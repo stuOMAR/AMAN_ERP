@@ -42,6 +42,9 @@ from db_ddl.tenant_schema import (  # noqa: E402,F401
     get_performance_indexes_sql,
     get_gl_integrity_guards_sql,
     get_phase5_integration_tables_sql,
+    get_audit_security_finance_tables_sql,
+    get_feature023_tables_sql,
+    get_feature024_tables_sql,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -79,9 +82,11 @@ def get_db() -> Generator[Session, None, None]:
 from collections import OrderedDict
 
 # PERF-FIX: Bounded LRU engine cache — prevents connection exhaustion in
-# environments with many companies (each unbounded engine = up to 30 pool conns).
-# Max 50 engines × 30 conns = 1,500 connections max (vs. unlimited before).
-_MAX_ENGINES = 50
+# environments with many companies.
+# Defaults: 50 engines × (2 pool + 3 overflow) = 250 connections max.
+_MAX_ENGINES = max(1, int(getattr(settings, "DB_TENANT_ENGINE_CACHE_SIZE", 50)))
+_TENANT_POOL_SIZE = max(1, int(getattr(settings, "DB_TENANT_POOL_SIZE", 2)))
+_TENANT_MAX_OVERFLOW = max(0, int(getattr(settings, "DB_TENANT_MAX_OVERFLOW", 3)))
 _engines: OrderedDict = OrderedDict()
 
 def _get_engine(company_id: str):
@@ -105,8 +110,8 @@ def _get_engine(company_id: str):
         db_url,
         pool_pre_ping=True,
         pool_recycle=300,
-        pool_size=5,
-        max_overflow=10
+        pool_size=_TENANT_POOL_SIZE,
+        max_overflow=_TENANT_MAX_OVERFLOW
     )
     try:
         from utils.query_counter import install_engine_listener
@@ -153,6 +158,35 @@ def db_connection(company_id: str):
     finally:
         if not conn.closed:
             conn.close()
+
+
+@contextmanager
+def get_tenant_db(company_id: str | None = None):
+    """Return a tenant DB connection, defaulting to the sole active tenant.
+
+    New operational/reporting routers call this helper from request handlers.
+    When a company id is not supplied, use the first active company so local
+    single-tenant development endpoints remain reachable.
+    """
+    tenant_id = str(company_id or "").strip()
+    if not tenant_id:
+        with engine.connect() as system_conn:
+            tenant_id = str(
+                system_conn.execute(
+                    text(
+                        "SELECT id FROM system_companies "
+                        "WHERE status = 'active' "
+                        "ORDER BY created_at NULLS LAST, id "
+                        "LIMIT 1"
+                    )
+                ).scalar()
+                or ""
+            )
+    if not tenant_id:
+        raise RuntimeError("No active tenant database is available")
+
+    with db_connection(tenant_id) as conn:
+        yield conn
 
 def get_company_db(company_id: str) -> Generator[Session, None, None]:
     """Returns a session to the company specific database using cached engine"""
@@ -386,19 +420,24 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 "permissions": '{"all": true}'
             })
             
-            # Default Roles - comprehensive roles with permissions
-            conn.execute(text("""
-                INSERT INTO roles (role_name, role_name_ar, description, permissions, is_system_role) VALUES 
-                ('superuser', 'مدير النظام', 'صلاحيات كاملة للنظام', '["*"]', true),
-                ('admin', 'مدير', 'صلاحيات إدارية كاملة', '["*"]', true),
-                ('manager', 'مدير فرع', 'إدارة المبيعات والمشتريات والمخزون', '["sales.*", "buying.*", "inventory.*", "stock.*", "treasury.view", "treasury.create", "reports.view", "hr.view", "products.*", "contracts.*", "pos.*", "manufacturing.view", "assets.view", "expenses.view", "expenses.create", "expenses.approve", "dashboard.view", "projects.view", "projects.create"]', false),
-                ('accountant', 'محاسب', 'إدارة المحاسبة والتقارير المالية', '["accounting.*", "reports.financial", "reports.view", "treasury.*", "reconciliation.*", "sales.view", "buying.view", "contracts.view", "currencies.view", "currencies.manage", "taxes.view", "taxes.manage", "expenses.view", "expenses.approve", "dashboard.view"]', false),
-                ('sales', 'مبيعات', 'إدارة المبيعات ونقاط البيع', '["sales.*", "products.view", "stock.view", "pos.*", "contracts.view", "dashboard.view"]', false),
-                ('inventory', 'أمين مستودع', 'إدارة المخزون والمنتجات', '["inventory.*", "stock.*", "products.*", "manufacturing.view", "buying.view", "dashboard.view"]', false),
-                ('cashier', 'كاشير', 'نقطة البيع والمبيعات', '["pos.*", "sales.view", "products.view", "stock.view", "treasury.view", "dashboard.view"]', false),
-                ('user', 'مستخدم', 'صلاحيات محدودة', '["dashboard.view"]', false)
-                ON CONFLICT (role_name) DO NOTHING
-            """))
+            # Default roles come from the canonical registry used by /api/roles/init-defaults.
+            import json
+            from routers.roles import DEFAULT_ROLES
+            for role_name, role_data in DEFAULT_ROLES.items():
+                conn.execute(text("""
+                    INSERT INTO roles (role_name, role_name_ar, description, permissions, is_system_role)
+                    VALUES (:name, :name_ar, :description, CAST(:permissions AS JSONB), TRUE)
+                    ON CONFLICT (role_name) DO UPDATE SET
+                        role_name_ar = EXCLUDED.role_name_ar,
+                        description = EXCLUDED.description,
+                        permissions = EXCLUDED.permissions,
+                        is_system_role = TRUE
+                """), {
+                    "name": role_name,
+                    "name_ar": role_data.get("name_ar", role_name),
+                    "description": role_data.get("description", ""),
+                    "permissions": json.dumps(role_data.get("permissions", [])),
+                })
             
             # Default accounts hierarchical structure
             # (account_number, account_code, name, name_en, account_type, parent_index_in_this_list)
@@ -747,6 +786,49 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     INSERT INTO user_branches (user_id, branch_id) VALUES (:uid, :bid)
                 """), {"uid": user_id_result[0], "bid": branch_id})
 
+            # Create default party_sites and party_site_balances tables
+            # (These are created by the schema, but we ensure they exist)
+            # Note: party_sites are created dynamically when parties are created
+            # The default party (admin user) gets a site automatically
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS party_sites (
+                    id SERIAL PRIMARY KEY,
+                    party_id INTEGER NOT NULL REFERENCES parties(id),
+                    site_name VARCHAR(255) NOT NULL,
+                    site_name_en VARCHAR(255),
+                    country VARCHAR(100),
+                    country_code VARCHAR(5),
+                    currency VARCHAR(10) NOT NULL,
+                    contact_name VARCHAR(255),
+                    phone VARCHAR(50),
+                    email VARCHAR(255),
+                    address TEXT,
+                    city VARCHAR(100),
+                    tax_number VARCHAR(50),
+                    bank_account VARCHAR(100),
+                    payment_terms INTEGER DEFAULT 30,
+                    is_default BOOLEAN DEFAULT FALSE,
+                    is_active BOOLEAN DEFAULT TRUE,
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+                )
+            """))
+
+            conn.execute(text("""
+                CREATE TABLE IF NOT EXISTS party_site_balances (
+                    id SERIAL PRIMARY KEY,
+                    company_branch_id INTEGER NOT NULL REFERENCES branches(id),
+                    party_site_id INTEGER NOT NULL REFERENCES party_sites(id),
+                    account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('payable', 'receivable')),
+                    currency VARCHAR(10) NOT NULL,
+                    balance DECIMAL(18,4) DEFAULT 0,
+                    gl_account_id INTEGER REFERENCES accounts(id),
+                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(company_branch_id, party_site_id, account_type, currency)
+                )
+            """))
+
             # Default warehouse
             conn.execute(text("""
                 INSERT INTO warehouses (warehouse_code, warehouse_name, warehouse_name_en, branch_id, is_default, is_active)
@@ -768,10 +850,11 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     VALUES (:code, :name, :name_en, :abbr)
                 """), {"code": unit[0], "name": unit[1], "name_en": unit[2], "abbr": unit[3]})
             
-            # Default tax rate (VAT 15%)
+            # Default tax rate (VAT 15%) — legacy global record
             conn.execute(text("""
                 INSERT INTO tax_rates (tax_code, tax_name, tax_name_en, rate_type, rate_value, is_active)
                 VALUES ('VAT15', 'ضريبة القيمة المضافة', 'VAT', 'percentage', 15, TRUE)
+                ON CONFLICT (tax_code) DO NOTHING
             """))
 
             # ── Tax Compliance: Seed tax_regimes for the company's country ───
@@ -817,6 +900,39 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 INSERT INTO company_tax_settings (country_code) VALUES (:cc)
                 ON CONFLICT (country_code) DO NOTHING
             """), {"cc": country})
+
+            # Tax Engine Seed (Phase 6)
+            # ── Seed real tax rates per country with effective dates ──────────
+            # These are the actual government-mandated VAT rates.
+            # Uses INSERT ... ON CONFLICT (tax_code) DO NOTHING for idempotency.
+
+            _tax_rates_seed = [
+                # (tax_code, tax_name, tax_name_en, country_code, rate_value, is_default, effective_from, effective_to)
+                ("VAT-SA-15", "ضريبة القيمة المضافة", "VAT", "SA", 15, True, "2020-07-01", None),
+                ("VAT-SA-5", "ضريبة القيمة المضافة", "VAT", "SA", 5, False, "2018-01-01", "2020-06-30"),
+                ("VAT-AE-5", "ضريبة القيمة المضافة", "VAT", "AE", 5, True, "2018-01-01", None),
+                ("VAT-EG-14", "ضريبة القيمة المضافة", "VAT", "EG", 14, True, "2017-07-01", None),
+                ("VAT-BH-10", "ضريبة القيمة المضافة", "VAT", "BH", 10, True, "2022-01-01", None),
+                ("EXEMPT-SY", "معفاة", "Exempt", "SY", 0, True, "2024-01-01", None),
+                ("NO-VAT-KW", "بدون ضريبة", "No VAT", "KW", 0, True, "2024-01-01", None),
+                ("NO-VAT-QA", "بدون ضريبة", "No VAT", "QA", 0, True, "2024-01-01", None),
+            ]
+
+            for tr in _tax_rates_seed:
+                conn.execute(text("""
+                    INSERT INTO tax_rates (
+                        tax_code, tax_name, tax_name_en, rate_type, rate_value,
+                        country_code, is_default, effective_from, effective_to, is_active
+                    ) VALUES (
+                        :code, :name, :name_en, 'percentage', :rate,
+                        :cc, :is_default, :eff_from, :eff_to, TRUE
+                    )
+                    ON CONFLICT (tax_code) DO NOTHING
+                """), {
+                    "code": tr[0], "name": tr[1], "name_en": tr[2],
+                    "cc": tr[3], "rate": tr[4], "is_default": tr[5],
+                    "eff_from": tr[6], "eff_to": tr[7],
+                })
 
             # Default Costing Policy
             conn.execute(text("""

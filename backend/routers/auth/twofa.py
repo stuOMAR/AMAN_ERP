@@ -30,7 +30,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import TwoFALoginRequest, clear_failed_attempts, create_access_token, create_refresh_token, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
+from .core import TwoFALoginRequest, _get_client_ip, _hash_token, clear_failed_attempts, create_access_token, create_refresh_token, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
 
 @router.post("/2fa/verify-login", response_model=Dict[str, Any])
 @limiter.limit("10/minute")

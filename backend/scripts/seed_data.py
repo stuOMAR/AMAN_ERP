@@ -255,6 +255,76 @@ def seed_parties(conn):
         
     logger.info(f"✅ Seeded {NUM_PARTIES} parties.")
 
+
+def seed_scenario_references(conn):
+    """Seed deterministic references used by docs/Scenario."""
+    logger.info("Seeding Scenario reference data...")
+
+    scenario_branches = [
+        {"code": "BR-01", "name": "فرع الرياض"},
+        {"code": "BR-02", "name": "فرع جدة"},
+        {"code": "BR-03", "name": "فرع الدمام"},
+    ]
+    conn.execute(text("""
+        INSERT INTO branches (branch_code, branch_name, branch_type, is_active)
+        VALUES (:code, :name, 'branch', TRUE)
+        ON CONFLICT (branch_code) DO UPDATE SET
+            branch_name = EXCLUDED.branch_name,
+            is_active = TRUE
+    """), scenario_branches)
+
+    br01_id = conn.execute(text("SELECT id FROM branches WHERE branch_code = 'BR-01'")).scalar()
+    conn.execute(text("""
+        INSERT INTO parties (
+            party_code, name, party_type, is_customer, is_supplier,
+            email, phone, currency, credit_limit, branch_id, status
+        ) VALUES (
+            'CUST-001', 'عميل السيناريو CUST-001', 'customer', TRUE, FALSE,
+            'cust001@example.com', '0500000001', 'SAR', 1000000, :branch_id, 'active'
+        )
+        ON CONFLICT (party_code) DO UPDATE SET
+            name = EXCLUDED.name,
+            is_customer = TRUE,
+            email = EXCLUDED.email,
+            branch_id = EXCLUDED.branch_id,
+            status = 'active'
+    """), {"branch_id": br01_id})
+
+    unit_id = conn.execute(text("""
+        INSERT INTO product_units (unit_code, unit_name, unit_name_en, abbreviation, is_active)
+        VALUES ('PCS', 'قطعة', 'Piece', 'pcs', TRUE)
+        ON CONFLICT (unit_code) DO UPDATE SET unit_name = EXCLUDED.unit_name, is_active = TRUE
+        RETURNING id
+    """)).scalar()
+    category_id = conn.execute(text("""
+        INSERT INTO product_categories (category_code, category_name, category_name_en, is_active)
+        VALUES ('SCENARIO-SALES', 'أصناف سيناريوهات المبيعات', 'Sales Scenario Items', TRUE)
+        ON CONFLICT (category_code) DO UPDATE SET category_name = EXCLUDED.category_name, is_active = TRUE
+        RETURNING id
+    """)).scalar()
+
+    conn.execute(text("""
+        INSERT INTO products (
+            product_code, sku, product_name, product_name_en, product_type,
+            category_id, unit_id, selling_price, cost_price, tax_rate,
+            is_taxable, is_active, is_track_inventory
+        ) VALUES (
+            'ITM-001', 'ITM-001', 'الصنف القياسي ITM-001', 'Standard Item ITM-001', 'product',
+            :category_id, :unit_id, 5000, 3000, 0,
+            FALSE, TRUE, TRUE
+        )
+        ON CONFLICT (product_code) DO UPDATE SET
+            sku = EXCLUDED.sku,
+            product_name = EXCLUDED.product_name,
+            product_name_en = EXCLUDED.product_name_en,
+            selling_price = EXCLUDED.selling_price,
+            tax_rate = EXCLUDED.tax_rate,
+            is_taxable = EXCLUDED.is_taxable,
+            is_active = TRUE
+    """), {"category_id": category_id, "unit_id": unit_id})
+    conn.commit()
+    logger.info("✅ Seeded Scenario references: BR-01/02/03, CUST-001, ITM-001.")
+
 def seed_journal_entries(conn):
     """Seed Journal Entries (The Heavy Load)"""
     logger.info(f"Seeding {NUM_JOURNAL_ENTRIES} Journal Entries...")
@@ -357,6 +427,7 @@ def main():
         seed_branches(conn)
         seed_accounts(conn)
         seed_parties(conn)
+        seed_scenario_references(conn)
         seed_journal_entries(conn)
         
     logger.info("✨ Seeding Completed Successfully!")

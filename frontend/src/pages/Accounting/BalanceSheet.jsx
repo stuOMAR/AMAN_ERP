@@ -71,10 +71,22 @@ function BalanceSheet() {
     const assetAccounts = data ? data.data.filter(a => a.account_type === 'asset') : []
     const liabilityAccounts = data ? data.data.filter(a => a.account_type === 'liability') : []
     const equityAccounts = data ? data.data.filter(a => a.account_type === 'equity') : []
+    const revenueAccounts = data ? data.data.filter(a => a.account_type === 'revenue') : []
+    const expenseAccounts = data ? data.data.filter(a => a.account_type === 'expense') : []
 
-    const totalAssets = assetAccounts.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalLiabilities = liabilityAccounts.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalEquity = equityAccounts.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    // Only sum leaf accounts (is_header = false) to avoid double counting
+    const leafAssets = assetAccounts.filter(a => !a.is_header)
+    const leafLiabilities = liabilityAccounts.filter(a => !a.is_header)
+    const leafEquity = equityAccounts.filter(a => !a.is_header)
+    const leafRevenue = revenueAccounts.filter(a => !a.is_header)
+    const leafExpenses = expenseAccounts.filter(a => !a.is_header)
+
+    const totalAssets = leafAssets.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    const totalLiabilities = leafLiabilities.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    const totalEquity = leafEquity.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    const totalRevenue = leafRevenue.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    const totalExpenses = leafExpenses.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
+    const netRevenue = totalRevenue + totalExpenses
     const totalLiabAndEquity = totalLiabilities + totalEquity
 
     const flatAssets = flattenTree(assetAccounts)

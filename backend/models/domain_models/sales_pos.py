@@ -88,6 +88,7 @@ class PosOrderLine(AuditMixin, ModelBase):
     original_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     unit_price: Mapped[float] = mapped_column(Numeric(18, 4), nullable=False)
     tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 2), default=0)
+    tax_rate_id: Mapped[int | None] = mapped_column(ForeignKey("tax_rates.id"))
     tax_amount: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     discount_percentage: Mapped[float | None] = mapped_column(Numeric(5, 2), default=0)
     discount_amount: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)

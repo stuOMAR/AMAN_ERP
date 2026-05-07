@@ -14,11 +14,12 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access, validate_treasury_account_access, check_permission
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.cache import cache
 from utils.treasury_gl import ensure_treasury_gl_accounts
+from utils.pii_encryption import encrypt_pii, decrypt_pii
 from fastapi import Request
 from schemas.treasury import TreasuryAccountCreate, TreasuryAccountResponse, TransactionCreate, TransactionResponse
 
@@ -30,6 +31,89 @@ def _dec(v) -> Decimal:
 router = APIRouter(prefix="/treasury", tags=["Treasury & Expenses"], dependencies=[Depends(require_module("treasury"))])
 logger = logging.getLogger(__name__)
 
+
+def _auto_create_capital_account(db, currency_code: str, current_user):
+    """إنشاء حساب رأس المال للعملة تلقائياً — يتخطى إذا كان موجوداً"""
+    try:
+        # Find parent capital account (31)
+        parent = db.execute(text("""
+            SELECT id FROM accounts WHERE account_number = '31' AND is_header = TRUE LIMIT 1
+        """)).fetchone()
+        if not parent:
+            return
+        parent_id = parent[0]
+
+        # Check if capital account for this currency already exists
+        existing_acc = db.execute(text("""
+            SELECT id FROM accounts 
+            WHERE parent_id = :pid AND currency = :curr AND account_type = 'equity' AND is_header = FALSE
+            LIMIT 1
+        """), {"pid": parent_id, "curr": currency_code}).fetchone()
+
+        if existing_acc:
+            logger.info(f"Capital account for {currency_code} already exists (id={existing_acc[0]}), skipping")
+            return
+
+        # Find next available number
+        existing = db.execute(text("""
+            SELECT account_number FROM accounts
+            WHERE parent_id = :pid AND account_number ~ '^31[0-9]{2}$'
+            ORDER BY account_number DESC LIMIT 1
+        """), {"pid": parent_id}).fetchone()
+
+        next_num = str(int(existing[0]) + 1) if existing else "3101"
+
+        # Get currency name
+        cur_row = db.execute(text("SELECT name FROM currencies WHERE code = :code"), {"code": currency_code}).fetchone()
+        cur_name = cur_row[0] if cur_row else currency_code
+
+        db.execute(text("""
+            INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, is_active)
+            VALUES (:num, :code, :name, :name_en, 'equity', :pid, :curr, FALSE, TRUE)
+        """), {
+            "num": next_num, "code": next_num,
+            "name": f"رأس المال - {cur_name}",
+            "name_en": f"Capital - {currency_code}",
+            "pid": parent_id, "curr": currency_code,
+        })
+        db.commit()
+        logger.info(f"Auto-created capital account {next_num} for {currency_code}")
+    except Exception as e:
+        logger.warning(f"Failed to auto-create capital account for {currency_code}: {e}")
+        db.rollback()
+
+
+def _is_branch_privileged(current_user) -> bool:
+    role = (getattr(current_user, 'role', '') or '').strip().lower()
+    permissions = getattr(current_user, 'permissions', []) or []
+    return (
+        role in {'admin', 'system_admin', 'superuser', 'manager', 'gm', 'ceo', 'owner', 'chairman'}
+        or '*' in permissions
+        or check_permission(permissions, 'admin.branches')
+        or check_permission(permissions, 'branches.manage')
+    )
+
+
+def _normalized_allowed_branches(current_user) -> List[int]:
+    branch_ids = []
+    for branch_id in getattr(current_user, 'allowed_branches', []) or []:
+        try:
+            branch_ids.append(int(branch_id))
+        except (TypeError, ValueError):
+            continue
+    return sorted(set(branch_ids))
+
+
+def _treasury_account_scope(current_user, requested_branch_id: Optional[int] = None):
+    if requested_branch_id not in (None, ''):
+        return validate_branch_access(current_user, requested_branch_id), None
+    if _is_branch_privileged(current_user):
+        return None, None
+    allowed_branches = _normalized_allowed_branches(current_user)
+    if allowed_branches:
+        return None, allowed_branches
+    return None, []
+
 # --- Endpoints ---
 
 @router.get("/accounts", response_model=List[TreasuryAccountResponse], dependencies=[Depends(require_permission("treasury.view"))])
@@ -37,14 +121,14 @@ def list_treasury_accounts(branch_id: Optional[int] = None, current_user = Depen
     """عرض حسابات الخزينة والبنوك مع فلترة حسب الفرع"""
     if not current_user.company_id:
          raise HTTPException(status_code=400, detail="يجب تحديد الشركة أولاً")
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_id, allowed_branch_ids = _treasury_account_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         query = """
             SELECT 
                 ta.id, ta.name, ta.name_en, ta.account_type, ta.currency, 
                 ta.gl_account_id, ta.branch_id, ta.bank_name, ta.account_number, 
-                ta.iban, ta.is_active,
+                ta.iban, ta.is_active, ta.allow_overdraft,
                 COALESCE(a.balance, 0) as current_balance,
                 COALESCE(ta.current_balance, 0) as balance_in_currency,
                 b.branch_name as branch_name,
@@ -59,15 +143,46 @@ def list_treasury_accounts(branch_id: Optional[int] = None, current_user = Depen
         if branch_id:
             query += " AND ta.branch_id = :branch_id"
             params["branch_id"] = branch_id
-        else:
-            allowed_branches = getattr(current_user, 'allowed_branches', [])
-            if allowed_branches and "*" not in getattr(current_user, 'permissions', []):
+        elif allowed_branch_ids is not None:
+            if allowed_branch_ids:
                 query += " AND ta.branch_id = ANY(:allowed_branches)"
-                params["allowed_branches"] = allowed_branches
+                params["allowed_branches"] = allowed_branch_ids
+            else:
+                query += " AND 1=0"
         query += " ORDER BY ta.id"
         
         result = db.execute(text(query), params).fetchall()
-        return [dict(row._mapping) for row in result]
+        # T11 P1 #50/#56 — decrypt PII columns on read (legacy plaintext is
+        # passed through unchanged by ``decrypt_pii``).
+        tid = current_user.company_id
+
+        # Get base currency and exchange rates for conversion
+        base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
+        base_currency = base_cur_row[0] if base_cur_row else "SAR"
+        rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
+        rate_map = {r[0]: float(r[1]) for r in rate_rows}
+        rate_map[base_currency] = 1.0
+
+        rows = []
+        for row in result:
+            d = dict(row._mapping)
+            d["iban"]           = decrypt_pii(d.get("iban"),           tenant_id=tid)
+            d["account_number"] = decrypt_pii(d.get("account_number"), tenant_id=tid)
+
+            # current_balance from accounts.balance is already in base currency
+            # balance_in_currency from treasury_accounts.current_balance is in original currency
+            acc_currency = d.get("currency", "") or ""
+            raw_balance = float(d.get("current_balance", 0) or 0)
+            balance_in_cur = float(d.get("balance_in_currency", 0) or 0)
+            rate = rate_map.get(acc_currency, 1.0)
+
+            d["current_balance"] = raw_balance  # Already in base currency
+            d["balance_in_currency"] = balance_in_cur  # Original currency
+            d["exchange_rate"] = rate
+            d["base_currency"] = base_currency
+
+            rows.append(d)
+        return rows
     finally:
         db.close()
 
@@ -76,7 +191,7 @@ def list_transactions(branch_id: Optional[int] = None, limit: int = 50, current_
     """عرض سجل العمليات الأخيرة"""
     if not current_user.company_id:
          raise HTTPException(status_code=400, detail="يجب تحديد الشركة أولاً")
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_id, allowed_branch_ids = _treasury_account_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         query_str = """
@@ -101,11 +216,12 @@ def list_transactions(branch_id: Optional[int] = None, limit: int = 50, current_
         if branch_id:
             query_str += " AND (ta.branch_id = :bid OR t.branch_id = :bid)"
             params["bid"] = branch_id
-        else:
-            allowed_branches = getattr(current_user, 'allowed_branches', [])
-            if allowed_branches and "*" not in getattr(current_user, 'permissions', []):
+        elif allowed_branch_ids is not None:
+            if allowed_branch_ids:
                 query_str += " AND (ta.branch_id = ANY(:allowed_branches) OR t.branch_id = ANY(:allowed_branches))"
-                params["allowed_branches"] = allowed_branches
+                params["allowed_branches"] = allowed_branch_ids
+            else:
+                query_str += " AND 1=0"
             
         query_str += " ORDER BY t.transaction_date DESC, t.id DESC LIMIT :limit"
         
@@ -127,15 +243,21 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
         # Check for duplicate treasury account name
-        existing = db.execute(text("SELECT id FROM treasury_accounts WHERE name = :name"), {"name": account.name}).fetchone()
+        existing = db.execute(
+            text("SELECT id FROM treasury_accounts WHERE name = :name AND is_active = TRUE"),
+            {"name": account.name}
+        ).fetchone()
         if existing:
             raise HTTPException(status_code=400, detail="يوجد حساب خزينة بنفس الاسم بالفعل")
 
         # Check for duplicate bank account number (if provided)
-        if account.account_type == 'bank' and hasattr(account, 'bank_account_number') and account.bank_account_number:
+        if account.account_type == 'bank' and account.account_number:
             existing_bank = db.execute(text(
-                "SELECT id FROM treasury_accounts WHERE bank_account_number = :ban"
-            ), {"ban": account.bank_account_number}).fetchone()
+                """
+                SELECT id FROM treasury_accounts
+                WHERE account_number = :account_number AND is_active = TRUE
+                """
+            ), {"account_number": encrypt_pii(account.account_number, tenant_id=current_user.company_id)}).fetchone()
             if existing_bank:
                 raise HTTPException(status_code=400, detail="رقم الحساب البنكي مسجل بالفعل في حساب خزينة آخر")
 
@@ -153,44 +275,48 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
         
         parent_id = parent_account[0]
         
-        # 2. Generate Account Code
-        # Find max code under 1101
-        last_acc = db.execute(text("SELECT account_code FROM accounts WHERE parent_id = :pid ORDER BY account_code DESC LIMIT 1"), {"pid": parent_id}).fetchone()
+        # 2. Check if GL account already exists for this treasury name
+        existing_gl = db.execute(text("""
+            SELECT id FROM accounts 
+            WHERE parent_id = :pid AND name = :name AND account_type = 'asset'
+            LIMIT 1
+        """), {"pid": parent_id, "name": account.name}).fetchone()
         
-        new_code = "1101001"
-        if last_acc and last_acc[0]:
-            last_code = last_acc[0]
-            if last_code.isdigit():
-                 new_code = str(int(last_code) + 1)
-            else:
-                 # If alphanumeric, just append a random number or increment if suffix is numeric
-                 # Simple fallback: use timestamp suffix to ensure uniqueness
-                 import random
-                 new_code = f"1101{random.randint(100000, 999999)}"
+        if existing_gl:
+            gl_id = existing_gl[0]
+        else:
+            # Generate Account Code — ensure uniqueness
+            last_acc = db.execute(text("SELECT account_code FROM accounts WHERE parent_id = :pid ORDER BY account_code DESC LIMIT 1"), {"pid": parent_id}).fetchone()
+            
+            new_code = "1101001"
+            if last_acc and last_acc[0]:
+                last_code = last_acc[0]
+                if last_code.isdigit():
+                     new_code = str(int(last_code) + 1)
+                else:
+                     import random
+                     new_code = f"1101{random.randint(100000, 999999)}"
+            
+            # Ensure code is unique
+            while db.execute(text("SELECT 1 FROM accounts WHERE account_number = :code"), {"code": new_code}).fetchone():
+                new_code = str(int(new_code) + 1)
+            
+            # Create GL Account
+            gl_query = text("""
+                INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, balance, is_active)
+                VALUES (:num, :code, :name, :name_en, 'asset', :pid, :curr, 0, TRUE)
+                RETURNING id
+            """)
+            gl_id = db.execute(gl_query, {
+                "num": new_code,
+                "code": new_code,
+                "name": account.name,
+                "name_en": account.name_en,
+                "pid": parent_id,
+                "curr": account.currency
+            }).scalar()
         
-        
-        # 3. Create GL Account
-        gl_query = text("""
-            INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, balance, is_active)
-            VALUES (:num, :code, :name, :name_en, 'asset', :pid, :curr, 0, TRUE)
-            RETURNING id
-        """)
-        gl_id = db.execute(gl_query, {
-            "num": new_code, # Use code as number for simplicity here or generate logic
-            "code": new_code,
-            "name": account.name,
-            "name_en": account.name_en,
-            "pid": parent_id,
-            "curr": account.currency
-        }).scalar()
-        
-        # Invalidate chart of accounts cache (new GL account added)
-        try:
-            cache.delete(f"chart_of_accounts:{current_user.company_id}")
-        except Exception:
-            pass
-
-        # Invalidate chart of accounts cache (new GL account added)
+        # Invalidate chart of accounts cache
         try:
             cache.delete(f"chart_of_accounts:{current_user.company_id}")
         except Exception:
@@ -203,17 +329,19 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             RETURNING id, name, name_en, account_type, currency, bank_name, account_number, iban, gl_account_id, current_balance, is_active, branch_id, allow_overdraft
         """)
         
+        # T11 — encrypt PII before persistence
+        _tid = current_user.company_id
         new_treasury = db.execute(treasury_query, {
             "name": account.name,
             "name_en": account.name_en,
             "type": account.account_type,
             "curr": account.currency,
             "bank": account.bank_name,
-            "acc_num": account.account_number,
-            "iban": account.iban,
+            "acc_num": encrypt_pii(account.account_number, tenant_id=_tid),
+            "iban":    encrypt_pii(account.iban,           tenant_id=_tid),
             "gl_id": gl_id,
             "branch_id": account.branch_id,
-            "allow_overdraft": getattr(account, 'allow_overdraft', None)
+            "allow_overdraft": account.allow_overdraft
         }).fetchone()
         
         # 5. Handle Opening Balance
@@ -224,16 +352,52 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             # T1.3a: Don't write current_balance manually here — it will be
             # recomputed from journal_lines after the JE below is posted.
 
-            # Credit Capital (3101 - Placeholder for Capital/Opening Balance)
-            # Find Capital account or use 31 as root
-            capital_acc = db.execute(text("SELECT id FROM accounts WHERE account_number = '31' OR account_code = 'CAP' LIMIT 1")).fetchone()
+            # Credit Capital — find currency-specific capital account
+            # Try: 3101 (SAR), 3102 (EGP), 3103 (AED), etc.
+            capital_acc = db.execute(text("""
+                SELECT id FROM accounts 
+                WHERE parent_id = (SELECT id FROM accounts WHERE account_number = '31' AND is_header = TRUE LIMIT 1)
+                AND currency = :curr AND account_type = 'equity' AND is_header = FALSE
+                LIMIT 1
+            """), {"curr": account.currency}).fetchone()
+
+            if not capital_acc:
+                # Auto-create capital account for this currency
+                _auto_create_capital_account(db, account.currency, current_user)
+                capital_acc = db.execute(text("""
+                    SELECT id FROM accounts 
+                    WHERE parent_id = (SELECT id FROM accounts WHERE account_number = '31' AND is_header = TRUE LIMIT 1)
+                    AND currency = :curr AND account_type = 'equity' AND is_header = FALSE
+                    LIMIT 1
+                """), {"curr": account.currency}).fetchone()
+
             capital_gl_id = capital_acc[0] if capital_acc else None
             
             if capital_gl_id:
-                # Build and validate journal lines
+                # opening_balance is in the account's original currency
+                # gl_service will convert to base currency using exchange_rate
+                opening_balance = float(account.opening_balance)
+                exchange_rate = float(account.exchange_rate or 1)
+
+                # Build journal lines — debit/credit in ORIGINAL currency
+                # gl_service converts to base: debit_base = debit * exchange_rate
                 je_lines = [
-                    {"account_id": gl_id, "debit": float(account.opening_balance), "credit": 0, "currency": account.currency, "exchange_rate": float(account.exchange_rate or 1)},
-                    {"account_id": capital_gl_id, "debit": 0, "credit": float(account.opening_balance) * float(account.exchange_rate or 1), "currency": base_currency, "exchange_rate": 1.0},
+                    {
+                        "account_id": gl_id,
+                        "debit": opening_balance,  # Original currency
+                        "credit": 0,
+                        "currency": account.currency,
+                        "exchange_rate": exchange_rate,
+                        "amount_currency": opening_balance,  # Original currency
+                    },
+                    {
+                        "account_id": capital_gl_id,
+                        "debit": 0,
+                        "credit": opening_balance,  # Original currency
+                        "currency": account.currency,
+                        "exchange_rate": exchange_rate,
+                        "amount_currency": opening_balance,  # Original currency
+                    },
                 ]
                 
                 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -272,13 +436,18 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
 
         # Refresh from DB to get updated balance from GL
         final_query = """
-            SELECT ta.*, COALESCE(a.balance, 0) as current_balance
+            SELECT ta.*, COALESCE(a.balance, 0) as current_balance, b.branch_name as branch_name
             FROM treasury_accounts ta
             LEFT JOIN accounts a ON ta.gl_account_id = a.id
+            LEFT JOIN branches b ON ta.branch_id = b.id
             WHERE ta.id = :id
         """
         final_treasury = db.execute(text(final_query), {"id": new_treasury[0]}).fetchone()
-        return dict(final_treasury._mapping)
+        # T11 — return decrypted IBAN/account_number to caller (UI layer expects plaintext)
+        out = dict(final_treasury._mapping)
+        out["iban"]           = decrypt_pii(out.get("iban"),           tenant_id=current_user.company_id)
+        out["account_number"] = decrypt_pii(out.get("account_number"), tenant_id=current_user.company_id)
+        return out
         
     except HTTPException:
         db.rollback()
@@ -299,6 +468,8 @@ def update_treasury_account(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث حساب خزينة"""
+    if account.branch_id:
+        validate_branch_access(current_user, account.branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         # Check existence
@@ -309,10 +480,21 @@ def update_treasury_account(
         old_gl_account_id = existing.gl_account_id
 
         # Check for duplicate name (excluding current account)
-        dup = db.execute(text("SELECT id FROM treasury_accounts WHERE name = :name AND id != :id"), 
+        dup = db.execute(text("SELECT id FROM treasury_accounts WHERE name = :name AND id != :id AND is_active = TRUE"), 
                         {"name": account.name, "id": id}).fetchone()
         if dup:
             raise HTTPException(status_code=400, detail="يوجد حساب خزينة آخر بنفس الاسم")
+
+        if account.account_type == 'bank' and account.account_number:
+            dup_bank = db.execute(text("""
+                SELECT id FROM treasury_accounts
+                WHERE account_number = :account_number AND id != :id AND is_active = TRUE
+            """), {
+                "account_number": encrypt_pii(account.account_number, tenant_id=current_user.company_id),
+                "id": id,
+            }).fetchone()
+            if dup_bank:
+                raise HTTPException(status_code=400, detail="رقم الحساب البنكي مسجل بالفعل في حساب خزينة آخر")
         
         # Update treasury account
         db.execute(text("""
@@ -335,10 +517,11 @@ def update_treasury_account(
             "type": account.account_type,
             "curr": account.currency,
             "bank": account.bank_name,
-            "acc_num": account.account_number,
-            "iban": account.iban,
+            # T11 — encrypt PII on update
+            "acc_num": encrypt_pii(account.account_number, tenant_id=current_user.company_id),
+            "iban":    encrypt_pii(account.iban,           tenant_id=current_user.company_id),
             "branch_id": account.branch_id,
-            "allow_overdraft": getattr(account, 'allow_overdraft', None)
+            "allow_overdraft": account.allow_overdraft
         })
         
         # Update linked GL account name
@@ -459,11 +642,10 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
     integration tests keep working — the canonical path for new code
     is ``POST /expenses``.
 
-    The shim auto-approves the expense (treasury managers already have
-    the right to post immediately, matching the legacy behaviour) so
-    the JE goes straight to ``posted`` and the treasury balance is
-    updated atomically through the same code path as the unified
-    module.
+    T10.1 P1 #68: this no longer auto-bypasses the approval workflow.
+    The shim consults ``expense_policies`` for the same expense type
+    and respects the policy's ``requires_approval`` /
+    ``auto_approve_below`` thresholds — identical to ``POST /expenses``.
     """
     if data.transaction_type != 'expense':
         raise HTTPException(status_code=400, detail="Invalid transaction type")
@@ -474,6 +656,32 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
 
     from schemas.expenses import ExpenseCreate
     from routers.finance.expenses import create_expense as unified_create_expense
+    from utils.tx import transactional as _tx
+    from decimal import Decimal as _D
+
+    # T10.1 P1 #68 — resolve approval requirement from active policies
+    # before delegating, so the treasury entrypoint cannot bypass the
+    # approval workflow.
+    requires_approval = True
+    try:
+        with _tx(current_user.company_id) as _db:
+            pol = _db.execute(text(
+                "SELECT requires_approval, auto_approve_below "
+                "FROM expense_policies "
+                "WHERE is_active = TRUE AND COALESCE(is_deleted, FALSE) = FALSE "
+                "ORDER BY id DESC LIMIT 1"
+            )).fetchone()
+            if pol is None:
+                requires_approval = False  # no policy → preserve legacy behaviour
+            else:
+                base = bool(getattr(pol, "requires_approval", True))
+                threshold = getattr(pol, "auto_approve_below", None)
+                if base and threshold is not None and _D(str(data.amount)) < _D(str(threshold)):
+                    requires_approval = False
+                else:
+                    requires_approval = base
+    except Exception:
+        requires_approval = True  # fail-safe: enforce approval on policy lookup error
 
     expense_payload = ExpenseCreate(
         expense_date=data.transaction_date,
@@ -489,7 +697,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
         branch_id=data.branch_id,
         receipt_number=data.reference_number,
         vendor_name=None,
-        requires_approval=False,
+        requires_approval=requires_approval,
     )
 
     result = await unified_create_expense(
@@ -525,6 +733,8 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
     try:
         import uuid
         trans_num = f"TRF-{str(uuid.uuid4())[:8].upper()}"
+        validate_treasury_account_access(db, current_user, data.treasury_id)
+        validate_treasury_account_access(db, current_user, data.target_treasury_id)
         
         # Get Source & Target Info — SELECT FOR UPDATE both rows to prevent concurrent balance drift
         # Lock in consistent order (lower id first) to prevent deadlocks
@@ -670,11 +880,9 @@ def get_treasury_balances_report(
     """تقرير أرصدة الخزينة — كل الصناديق والبنوك مع أرصدتها"""
     db = get_db_connection(current_user.company_id)
     try:
-        if branch_id:
-            from utils.permissions import validate_branch_access
-            validate_branch_access(current_user, branch_id)
-
         target_date = as_of_date or date.today().isoformat()
+        params = {}
+        branch_filter = branch_scope_filter(current_user, branch_id, "ta.branch_id", params)
 
         # Get all treasury accounts with current balances
         q = text("""
@@ -685,24 +893,26 @@ def get_treasury_balances_report(
             FROM treasury_accounts ta
             LEFT JOIN branches b ON b.id = ta.branch_id
             WHERE ta.is_active = true
-            """ + (" AND ta.branch_id = :branch_id" if branch_id else "") + """
+            """ + f" {branch_filter}" + """
             ORDER BY ta.account_type, ta.name
         """)
-        params = {"branch_id": branch_id} if branch_id else {}
         rows = db.execute(q, params).fetchall()
 
         # T033: Batch-fetch GL balances for all treasury GL accounts
         gl_account_ids = [r.gl_account_id for r in rows if r.gl_account_id]
         gl_balances: dict = {}
         if gl_account_ids:
-            gl_rows = db.execute(text("""
+            gl_params = {"ids": gl_account_ids}
+            gl_branch_filter = branch_scope_filter(current_user, branch_id, "je.branch_id", gl_params)
+            gl_rows = db.execute(text(f"""
                 SELECT jl.account_id,
                        COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS gl_balance
                 FROM journal_lines jl
                 JOIN journal_entries je ON jl.journal_entry_id = je.id
                 WHERE jl.account_id = ANY(:ids) AND je.status = 'posted'
+                {gl_branch_filter}
                 GROUP BY jl.account_id
-            """), {"ids": gl_account_ids}).fetchall()
+            """), gl_params).fetchall()
             for gr in gl_rows:
                 gl_balances[gr.account_id] = _dec(gr.gl_balance)
 
@@ -757,7 +967,7 @@ def get_treasury_balances_report(
             FROM treasury_transactions tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
             WHERE 1=1
-            """ + (" AND ta.branch_id = :branch_id" if branch_id else "") + """
+            """ + f" {branch_filter}" + """
             ORDER BY tt.created_at DESC LIMIT 10
         """)
         txns = db.execute(txn_q, params).fetchall()
@@ -799,20 +1009,14 @@ def get_treasury_cashflow_report(
     """تقرير التدفقات النقدية للخزينة — التدفقات الداخلة والخارجة"""
     db = get_db_connection(current_user.company_id)
     try:
-        if branch_id:
-            from utils.permissions import validate_branch_access
-            validate_branch_access(current_user, branch_id)
-
         from datetime import datetime
         if not start_date:
             start_date = (datetime.now().replace(day=1)).strftime('%Y-%m-%d')
         if not end_date:
             end_date = datetime.now().strftime('%Y-%m-%d')
 
-        branch_filter = " AND ta.branch_id = :branch_id" if branch_id else ""
         params = {"start_date": start_date, "end_date": end_date}
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter(current_user, branch_id, "ta.branch_id", params)
 
         # Inflows (receipts, deposits, transfers in)
         inflow_q = text(f"""

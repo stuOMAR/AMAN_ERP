@@ -12,7 +12,9 @@ class ServiceRequestCreate(BaseModel):
     customer_id: Optional[int] = None
     asset_id: Optional[int] = None
     assigned_to: Optional[int] = None
+    branch_id: Optional[int] = None
     estimated_hours: Optional[float] = None
+    hourly_rate: Optional[Decimal] = None
     estimated_cost: Optional[Decimal] = None
     scheduled_date: Optional[str] = None
     location: Optional[str] = None
@@ -31,6 +33,7 @@ class ServiceRequestUpdate(BaseModel):
     assigned_to: Optional[int] = None
     estimated_hours: Optional[float] = None
     actual_hours: Optional[float] = None
+    hourly_rate: Optional[Decimal] = None
     estimated_cost: Optional[Decimal] = None
     actual_cost: Optional[Decimal] = None
     scheduled_date: Optional[str] = None
@@ -46,8 +49,12 @@ class TechnicianAssignRequest(BaseModel):
 class ServiceCostCreate(BaseModel):
     quantity: Optional[float] = None
     unit_cost: Optional[Decimal] = None
+    markup_pct: Optional[Decimal] = None
     cost_type: Optional[str] = None
     description: Optional[str] = None
+    # T10.1 P1 #76 — optional inventory linkage; required when cost_type='parts'
+    product_id: Optional[int] = None
+    warehouse_id: Optional[int] = None
 
 
 class DocumentMetaUpdate(BaseModel):

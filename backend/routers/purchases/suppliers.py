@@ -16,7 +16,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -232,13 +232,10 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
         inv_params = {"id": id}
         
         from utils.accounting import get_base_currency
-        from utils.permissions import validate_branch_access
         base_currency = get_base_currency(db)
-        branch_id = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         
-        if branch_id:
-            inv_query += " AND branch_id = :branch_id"
-            inv_params["branch_id"] = branch_id
+        inv_query += branch_scope_filter_from_scope(branch_scope, "branch_id", inv_params)
         
         inv_query += " ORDER BY invoice_date DESC"
         invoices_res = db.execute(text(inv_query), inv_params).fetchall()
@@ -265,9 +262,7 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
             WHERE party_id = :id AND party_type = 'supplier' AND voucher_type = 'payment'
         """
         pay_params = {"id": id}
-        if branch_id:
-            pay_query += " AND branch_id = :branch_id"
-            pay_params["branch_id"] = branch_id
+        pay_query += branch_scope_filter_from_scope(branch_scope, "branch_id", pay_params)
             
         pay_query += " ORDER BY voucher_date DESC"
         payments_res = db.execute(text(pay_query), pay_params).fetchall()
@@ -283,12 +278,15 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
         } for r in payments_res]
 
         # 3. Fetch Receipts (Refund Vouchers)
-        receipts_res = db.execute(text("""
+        receipt_params = {"id": id}
+        receipt_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", receipt_params)
+        receipts_res = db.execute(text(f"""
             SELECT id, voucher_number, voucher_date, amount, payment_method, status, currency
             FROM payment_vouchers
             WHERE party_id = :id AND party_type = 'supplier' AND voucher_type = 'refund'
+            {receipt_branch_filter}
             ORDER BY voucher_date DESC
-        """), {"id": id}).fetchall()
+        """), receipt_params).fetchall()
         
         receipts = [{
             "id": r.id,
@@ -300,29 +298,60 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
             "currency": r.currency or base_currency
         } for r in receipts_res]
 
-        # 4. Get basic info for header
-        supplier = db.execute(text("SELECT name as supplier_name, current_balance, currency FROM parties WHERE id = :id"), {"id": id}).fetchone()
+        # 4. Get basic info for header - using party_site_balances
+        supplier = db.execute(text("SELECT name as supplier_name, currency FROM parties WHERE id = :id"), {"id": id}).fetchone()
         
         supplier_currency = supplier.currency if supplier and supplier.currency else base_currency
-        balance = _dec(supplier.current_balance or 0) if supplier else Decimal('0')
-        exchange_rate = Decimal('1')
         
-        if supplier_currency != base_currency:
-             # Fetch current exchange rate
-             rate_row = db.execute(text("SELECT current_rate FROM currencies WHERE code = :code"), {"code": supplier_currency}).scalar()
-             if rate_row:
-                   exchange_rate = _dec(rate_row)
+        # Compute balance from party_site_balances
+        if branch_id:
+            # Specific branch: show balance in branch's local currency
+            bal_row = db.execute(text("""
+                SELECT COALESCE(SUM(psb.balance), 0) as total, psb.currency
+                FROM party_sites ps
+                JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                WHERE ps.party_id = :pid AND psb.company_branch_id = :bid
+                GROUP BY psb.currency
+            """), {"pid": id, "bid": branch_id}).fetchone()
+            if bal_row:
+                balance = _dec(bal_row.total or 0)
+                balance_currency = bal_row.currency
+            else:
+                balance = Decimal('0')
+                balance_currency = base_currency
+            balance_bc = balance
+        else:
+            # All branches: total converted to SAR
+            total_sar = db.execute(text("""
+                SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_sar
+                FROM party_sites ps
+                JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                WHERE ps.party_id = :pid
+            """), {"pid": id}).scalar() or 0
+            balance = _dec(total_sar)
+            balance_bc = balance
+            balance_currency = base_currency
 
-        balance_bc = (balance * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+        # Get party sites
+        party_sites = db.execute(text("""
+            SELECT ps.id, ps.site_name, ps.currency, ps.is_default,
+                   COALESCE(SUM(psb.balance), 0) as site_balance
+            FROM party_sites ps
+            LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+            WHERE ps.party_id = :pid AND ps.is_active = TRUE
+            GROUP BY ps.id, ps.site_name, ps.currency, ps.is_default
+            ORDER BY ps.is_default DESC, ps.site_name
+        """), {"pid": id}).fetchall()
 
         return {
             "supplier": {
                 "name": supplier.supplier_name if supplier else "Unknown",
                 "balance": str(balance.quantize(_D2, ROUND_HALF_UP)),
-                "balance_bc": str(balance_bc),
-                "currency": supplier_currency,
-                "exchange_rate": str(exchange_rate),
-                "total_purchases": str(total_purchases)
+                "balance_bc": str(balance_bc.quantize(_D2, ROUND_HALF_UP)),
+                "currency": balance_currency,
+                "total_purchases": str(total_purchases),
+                "party_sites": [dict(s._mapping) for s in party_sites]
             },
             "invoices": invoices,
             "payments": payments,

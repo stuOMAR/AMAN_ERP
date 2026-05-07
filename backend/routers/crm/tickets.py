@@ -12,7 +12,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access
 from utils.accounting import generate_sequential_number
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
@@ -34,8 +34,6 @@ def list_tickets(
     current_user=Depends(get_current_user)
 ):
     """List Tickets."""
-    # CRM-F1: enforce branch scope on list
-    branch_id = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         query = """
@@ -46,19 +44,7 @@ def list_tickets(
             WHERE 1=1
         """
         params = {}
-        if branch_id:
-            query += " AND t.branch_id = :branch_id"
-            params["branch_id"] = branch_id
-        else:
-            allowed = getattr(current_user, "allowed_branches", None) or (
-                current_user.get("allowed_branches") if isinstance(current_user, dict) else None
-            )
-            perms = getattr(current_user, "permissions", None) or (
-                current_user.get("permissions") if isinstance(current_user, dict) else []
-            ) or []
-            if allowed and "*" not in perms:
-                query += " AND t.branch_id = ANY(:allowed_branches)"
-                params["allowed_branches"] = list(allowed)
+        query += " " + branch_scope_filter(current_user, branch_id, "t.branch_id", params)
         if status_filter:
             query += " AND t.status = :status"
             params["status"] = status_filter

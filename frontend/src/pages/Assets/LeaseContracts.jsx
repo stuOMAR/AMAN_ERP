@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { assetsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
+import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
 import { Building2, Plus, Calendar, DollarSign, TrendingDown, FileText, Save, X } from 'lucide-react';
@@ -14,6 +15,7 @@ const LeaseContracts = () => {
     const { t, i18n } = useTranslation();
     const { showToast } = useToast();
     const currency = getCurrency();
+    const { currentBranch } = useBranch();
     const [activeTab, setActiveTab] = useState('list');
     const [leases, setLeases] = useState([]);
     const [assets, setAssets] = useState([]);
@@ -26,14 +28,18 @@ const LeaseContracts = () => {
         discount_rate: '5', status: 'active'
     });
 
-    useEffect(() => { fetchData(); }, []);
+    useEffect(() => { fetchData(); }, [currentBranch]);
 
     const fetchData = async () => {
         try {
             setLoading(true);
+            const assetParams = { limit: 5000 };
+            if (currentBranch?.id) {
+                assetParams.branch_id = currentBranch.id;
+            }
             const [lRes, aRes] = await Promise.all([
-                assetsAPI.listLeaseContracts({}),
-                assetsAPI.list({ limit: 5000 })
+                assetsAPI.listLeaseContracts(),
+                assetsAPI.list(assetParams)
             ]);
             setLeases(lRes.data || []);
             setAssets(aRes.data?.assets || aRes.data || []);

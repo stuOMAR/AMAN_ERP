@@ -8,7 +8,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from .schemas import CustomerCreate, CustomerGroupCreate
 
 customers_router = APIRouter()
@@ -19,17 +19,15 @@ logger = logging.getLogger(__name__)
 @customers_router.get("/summary", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_sales_summary(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """ملخص المبيعات"""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         params = {}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         total_customers = db.execute(text(f"SELECT COUNT(*) FROM parties WHERE is_customer = TRUE {branch_filter}"), params).scalar()
         total_invoices = db.execute(text(f"SELECT COUNT(*) FROM invoices WHERE invoice_type = 'sales' {branch_filter}"), params).scalar()
-        total_revenue = db.execute(text(f"SELECT COALESCE(SUM(total), 0) FROM invoices WHERE invoice_type = 'sales' AND status != 'cancelled' {branch_filter}"), params).scalar()
+        total_revenue = db.execute(text(f"SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) FROM invoices WHERE invoice_type = 'sales' AND status != 'cancelled' {branch_filter}"), params).scalar()
         total_receivables = db.execute(text(f"SELECT COALESCE(SUM((total - COALESCE(paid_amount, 0)) * COALESCE(exchange_rate, 1)), 0) FROM invoices WHERE invoice_type = 'sales' AND status IN ('unpaid', 'partial') {branch_filter}"), params).scalar()
 
         # Monthly sales - current month
@@ -59,85 +57,118 @@ def get_sales_summary(branch_id: Optional[int] = None, current_user: dict = Depe
 # --- Customer Endpoints ---
 @customers_router.get("/customers", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_customers(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
-    """عرض قائمة العملاء"""
+    """عرض قائمة العملاء مع أرصدة من party_site_balances"""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
-        query = """
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        branch_cur = base_cur
+        if branch_id:
+            branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
+
+        # Subquery for balance
+        if branch_id:
+            balance_subquery = """
+                SELECT ps.party_id,
+                       COALESCE(SUM(psb.balance), 0) as total_balance,
+                       psb.currency as bal_currency
+                FROM party_sites ps
+                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                WHERE psb.company_branch_id = :bid
+                GROUP BY ps.party_id, psb.currency
+            """
+            balance_params = {"bid": branch_id}
+        else:
+            balance_subquery = """
+                SELECT ps.party_id,
+                       COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_balance,
+                       :base_cur as bal_currency
+                FROM party_sites ps
+                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                GROUP BY ps.party_id
+            """
+            balance_params = {"base_cur": base_cur}
+
+        query = f"""
             SELECT p.id, p.party_code, p.name, p.email, p.phone, p.mobile, p.address,
-                   p.city, p.country, p.tax_number, p.current_balance,
+                   p.city, p.country, p.tax_number,
+                   COALESCE(bal.total_balance, 0) as current_balance,
+                   COALESCE(bal.bal_currency, :display_cur) as balance_currency,
                    p.credit_limit, p.payment_terms, p.status, p.notes,
                    p.party_group_id as group_id, g.group_name as group_name,
+                   p.branch_id,
                    p.name_en, p.currency, p.created_at
             FROM parties p
             LEFT JOIN party_groups g ON p.party_group_id = g.id
-            WHERE p.party_type = 'customer' OR p.is_customer = TRUE
+            LEFT JOIN ({balance_subquery}) bal ON bal.party_id = p.id
+            WHERE (p.party_type = 'customer' OR p.is_customer = TRUE)
         """
-        params = {}
-        if branch_id:
-            query += " AND p.branch_id = :branch_id"
-            params["branch_id"] = branch_id
-        else:
-            # PTY-005: Enforce allowed_branches when no branch_id specified
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND p.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        params = {"display_cur": branch_cur, **balance_params}
 
         query += " ORDER BY p.name"
         result = db.execute(text(query), params).fetchall()
-        return [dict(row._mapping) for row in result]
+        
+        customers = []
+        for row in result:
+            d = dict(row._mapping)
+            d["balance_display"] = float(d.get("current_balance") or 0)
+            d["display_currency"] = d.get("balance_currency") or branch_cur
+            customers.append(d)
+        return customers
     finally:
         db.close()
 
 
-@customers_router.get("/customers/{customer_id}/transactions", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
-def get_customer_transactions(customer_id: int, current_user: dict = Depends(get_current_user)):
+@customers_router.get("/customers/{customer_id}/transactions", dependencies=[Depends(require_permission("sales.view"))])
+def get_customer_transactions(
+    customer_id: int,
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
     """كشف حساب عميل"""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
-        # PTY-008: Check branch access for the customer before returning transactions
-        customer_branch = db.execute(text(
-            "SELECT branch_id FROM parties WHERE id = :cid AND (party_type = 'customer' OR is_customer = TRUE)"
+        customer_exists = db.execute(text(
+            "SELECT 1 FROM parties WHERE id = :cid AND (party_type = 'customer' OR is_customer = TRUE)"
         ), {"cid": customer_id}).fetchone()
-        if not customer_branch:
+        if not customer_exists:
             raise HTTPException(**http_error(404, "customer_not_found"))
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if customer_branch.branch_id and customer_branch.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك الوصول لبيانات عميل خارج فروعك")
 
-        result = db.execute(text("""
-            SELECT 'invoice' as type, invoice_number as reference, 
-                   invoice_date as date, total as amount, status
+        params = {"cid": customer_id}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+
+        # Get invoices
+        invoices = db.execute(text(f"""
+            SELECT id, invoice_number, invoice_date, total, paid_amount, status, currency
             FROM invoices 
             WHERE party_id = :cid AND invoice_type = 'sales'
-            
-            UNION ALL
-            
-            SELECT 'payment' as type, voucher_number as reference,
-                   voucher_date as date, amount, status
+            {branch_filter}
+            ORDER BY invoice_date DESC
+        """), params).fetchall()
+
+        # Get receipts
+        receipts = db.execute(text(f"""
+            SELECT id, voucher_number, voucher_date, amount, status, currency
             FROM payment_vouchers
             WHERE party_id = :cid AND party_type = 'customer' AND voucher_type = 'receipt'
-            
-            UNION ALL
-            
-            SELECT 'return' as type, return_number as reference,
-                   return_date as date, total as amount, status
-            FROM sales_returns
-            WHERE party_id = :cid
-            
-            ORDER BY date DESC
-        """), {"cid": customer_id}).fetchall()
-        return [dict(row._mapping) for row in result]
+            {branch_filter}
+            ORDER BY voucher_date DESC
+        """), params).fetchall()
+
+        return {
+            "customer": {"id": customer_id},
+            "invoices": [dict(row._mapping) for row in invoices],
+            "receipts": [dict(row._mapping) for row in receipts],
+        }
     finally:
         db.close()
 
 
 @customers_router.post("/customers", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(["parties.manage", "sales.create"]))], response_model=Dict[str, Any])
 def create_customer(request: Request, customer: CustomerCreate, current_user: dict = Depends(get_current_user)):
-    """إنشاء عميل جديد"""
+    """إنشاء عميل جديد مع إنشاء موقع افتراضي تلقائياً"""
     db = get_db_connection(current_user.company_id)
     try:
         # Generate Customer Code
@@ -164,6 +195,29 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
             "notes": customer.notes, "status": customer.status, "group_id": customer.group_id,
             "branch_id": customer.branch_id, "currency": customer.currency
         }).fetchone()
+        pid = result[0]
+
+        # إنشاء موقع افتراضي للعميل
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        cust_currency = customer.currency or base_cur
+        
+        db.execute(text("""
+            INSERT INTO party_sites (party_id, site_name, site_name_en, country, country_code, currency, phone, is_default, is_active)
+            VALUES (:pid, :name, :name_en, :country, :cc, :cur, :phone, TRUE, TRUE)
+        """), {
+            "pid": pid,
+            "name": customer.name,
+            "name_en": customer.name_en,
+            "country": customer.country or "",
+            "cc": "",
+            "cur": cust_currency,
+            "phone": customer.phone
+        })
+        
+        # تحديث default_site_id
+        site_id = db.execute(text("SELECT LASTVAL() as id"), {}).fetchone().id
+        db.execute(text("UPDATE parties SET default_site_id = :sid WHERE id = :pid"),
+                  {"sid": site_id, "pid": pid})
 
         db.commit()
 
@@ -188,14 +242,14 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
         db.close()
 
 @customers_router.get("/customers/{customer_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
-def get_customer(customer_id: int, current_user: dict = Depends(get_current_user)):
-    """عرض بيانات عميل محدد"""
+def get_customer(customer_id: int, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+    """عرض بيانات عميل محدد مع أرصدة من party_site_balances"""
     db = get_db_connection(current_user.company_id)
     try:
         customer = db.execute(text("""
             SELECT p.id, p.party_code, p.name, p.name_en, p.party_type, p.is_customer, p.email, p.phone, p.mobile, 
                    p.address, p.city, p.country, p.tax_number, p.credit_limit, p.payment_terms, p.notes, 
-                   p.status, p.party_group_id as group_id, p.branch_id, p.currency, p.current_balance
+                   p.status, p.party_group_id as group_id, p.branch_id, p.currency
             FROM parties p
             WHERE p.id = :cid AND (p.party_type = 'customer' OR p.is_customer = TRUE)
         """), {"cid": customer_id}).fetchone()
@@ -203,13 +257,53 @@ def get_customer(customer_id: int, current_user: dict = Depends(get_current_user
         if not customer:
             raise HTTPException(**http_error(404, "customer_not_found"))
 
-        # PTY-001: Branch access enforcement
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if customer.branch_id and customer.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك الوصول لبيانات عميل خارج فروعك")
+        d = dict(customer._mapping)
 
-        return dict(customer._mapping)
+        # Compute balance from party_site_balances
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        if branch_id:
+            # Specific branch: show balance in branch's local currency
+            bal_row = db.execute(text("""
+                SELECT COALESCE(SUM(psb.balance), 0) as total, psb.currency
+                FROM party_sites ps
+                JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                WHERE ps.party_id = :cid AND psb.company_branch_id = :bid
+                GROUP BY psb.currency
+            """), {"cid": customer_id, "bid": branch_id}).fetchone()
+            if bal_row:
+                d["balance"] = float(bal_row.total or 0)
+                d["balance_bc"] = float(bal_row.total or 0)
+                d["balance_currency"] = bal_row.currency
+            else:
+                d["balance"] = 0
+                d["balance_bc"] = 0
+                d["balance_currency"] = base_cur
+        else:
+            # All branches: total converted to SAR
+            total_sar = db.execute(text("""
+                SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_sar
+                FROM party_sites ps
+                JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                WHERE ps.party_id = :cid
+            """), {"cid": customer_id}).scalar() or 0
+            d["balance"] = float(total_sar)
+            d["balance_bc"] = float(total_sar)
+            d["balance_currency"] = base_cur
+
+        # Get party sites
+        sites = db.execute(text("""
+            SELECT ps.id, ps.site_name, ps.currency, ps.is_default,
+                   COALESCE(SUM(psb.balance), 0) as site_balance
+            FROM party_sites ps
+            LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+            WHERE ps.party_id = :cid AND ps.is_active = TRUE
+            GROUP BY ps.id, ps.site_name, ps.currency, ps.is_default
+            ORDER BY ps.is_default DESC, ps.site_name
+        """), {"cid": customer_id}).fetchall()
+        d["party_sites"] = [dict(s._mapping) for s in sites]
+
+        return d
     finally:
         db.close()
 
@@ -223,12 +317,6 @@ def update_customer(customer_id: int, customer: CustomerCreate, request: Request
         existing = db.execute(text("SELECT id, branch_id FROM parties WHERE id = :id AND (party_type = 'customer' OR is_customer = TRUE)"), {"id": customer_id}).fetchone()
         if not existing:
             raise HTTPException(**http_error(404, "customer_not_found"))
-
-        # PTY-002: Branch access enforcement
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if existing.branch_id and existing.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك تعديل عميل خارج فروعك")
 
         db.execute(text("""
             UPDATE parties 
@@ -281,6 +369,7 @@ def get_customer_outstanding_invoices(
     current_user: dict = Depends(get_current_user)
 ):
     """Fetch unpaid/partial invoices for a customer"""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         query = """
@@ -292,9 +381,7 @@ def get_customer_outstanding_invoices(
               AND status IN ('unpaid', 'partial')
         """
         params = {"cid": customer_id}
-        if branch_id:
-            query += " AND branch_id = :bid"
-            params["bid"] = branch_id
+        query += branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         query += " ORDER BY invoice_date ASC"
 

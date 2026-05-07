@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, validate_branch_access, validate_treasury_account_access
 from utils.audit import log_activity
 from schemas.reconciliation import ReconciliationCreate, StatementLineCreate, MatchRequest, UnmatchRequest
 
@@ -35,7 +35,6 @@ def list_reconciliations(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض قائمة التسويات"""
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         query = """
             SELECT r.*, t.name as account_name, t.currency,
@@ -55,15 +54,7 @@ def list_reconciliations(
         if account_id:
             query += " AND r.treasury_account_id = :aid"
             params["aid"] = account_id
-            
-        if branch_id:
-             query += " AND r.branch_id = :bid"
-             params["bid"] = branch_id
-        else:
-            allowed_branches = getattr(current_user, 'allowed_branches', [])
-            if allowed_branches and "*" not in getattr(current_user, 'permissions', []):
-                query += " AND r.branch_id = ANY(:allowed_branches)"
-                params["allowed_branches"] = allowed_branches
+        query += " " + branch_scope_filter(current_user, branch_id, "r.branch_id", params, branch_param="bid")
              
         query += " ORDER BY r.statement_date DESC"
         
@@ -73,9 +64,14 @@ def list_reconciliations(
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء مسودة تسوية جديدة"""
-    if data.branch_id:
-        validate_branch_access(current_user, data.branch_id)
     with transactional(current_user.company_id) as db:
+        branch_id = validate_branch_access(current_user, data.branch_id)
+        treasury_account = validate_treasury_account_access(
+            db, current_user, data.treasury_account_id, branch_id
+        )
+        if branch_id is None and treasury_account.get("branch_id") is not None:
+            branch_id = int(treasury_account["branch_id"])
+
         # Check if draft already exists for this account
         existing = db.execute(text("""
             SELECT id FROM bank_reconciliations 
@@ -86,18 +82,32 @@ def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depen
         if existing:
             raise HTTPException(status_code=400, detail="يوجد بالفعل تسوية مسودة لهذا الحساب. يرجى إكمالها أو حذفها.")
 
+        tolerance_amount = data.tolerance_amount
+        if tolerance_amount is None:
+            tolerance_amount = db.execute(text("""
+                SELECT setting_value
+                FROM company_settings
+                WHERE setting_key = 'reconciliation_auto_match_tolerance'
+                LIMIT 1
+            """)).scalar()
+        try:
+            tolerance_amount = float(tolerance_amount or 0)
+        except (TypeError, ValueError):
+            tolerance_amount = 0
+
         rec_id = db.execute(text("""
             INSERT INTO bank_reconciliations (
                 treasury_account_id, statement_date, start_balance, end_balance, 
-                status, notes, created_by, branch_id
+                status, notes, created_by, branch_id, tolerance_amount
             ) VALUES (
                 :tid, :date, :start, :end, 
-                'draft', :notes, :uid, :bid
+                'draft', :notes, :uid, :bid, :tol
             ) RETURNING id
         """), {
             "tid": data.treasury_account_id, "date": data.statement_date,
             "start": data.start_balance, "end": data.end_balance,
-            "notes": data.notes, "uid": current_user.id, "bid": data.branch_id
+            "notes": data.notes, "uid": current_user.id, "bid": branch_id,
+            "tol": tolerance_amount,
         }).scalar()
         
         log_activity(db, user_id=current_user.id, username=current_user.username,
@@ -277,7 +287,16 @@ async def preview_import(
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
-    """معاينة ملف كشف الحساب قبل الاستيراد (CSV / Excel)"""
+    """معاينة ملف كشف الحساب قبل الاستيراد (CSV / Excel).
+
+    P1 #59 / #61 fix: enforce file size + extension before parsing the
+    body. Without these guards a 500 MB upload would be loaded fully
+    into memory and a hostile client could ship arbitrary content types.
+    """
+    from utils.sql_safety import (
+        validate_file_size, validate_file_extension,
+        MAX_IMPORT_FILE_SIZE, ALLOWED_IMPORT_EXTENSIONS,
+    )
     with transactional(current_user.company_id) as db:
         try:
             rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
@@ -288,6 +307,9 @@ async def preview_import(
     
             content = await file.read()
             filename = file.filename.lower() if file.filename else ""
+            # P1 #59/#61 — size + extension guard.
+            validate_file_size(content, MAX_IMPORT_FILE_SIZE, "كشف الحساب")
+            validate_file_extension(filename, ALLOWED_IMPORT_EXTENSIONS, "كشف الحساب")
     
             rows = []
             headers = []
@@ -469,8 +491,8 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
 
         # TREAS-F4: per-reconciliation absolute tolerance (0 = exact match)
         amt_tol = _dec(rec_info.tolerance_amount)
-        if amt_tol < _D2:
-            amt_tol = _D2
+        if amt_tol < 0:
+            amt_tol = Decimal("0")
 
         # Get unmatched statement lines
         stmt_lines = db.execute(text("""
@@ -520,16 +542,38 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
                 jl_credit = _dec(jl.credit)
                 jl_date = jl.entry_date
 
-                # Check date tolerance
-                if sl_date and jl_date:
-                    day_diff = abs((sl_date - jl_date).days) if hasattr(sl_date, 'days') or isinstance(sl_date, date) else 999
-                    if isinstance(sl_date, str):
-                        try:
-                            day_diff = abs((datetime.strptime(str(sl_date), '%Y-%m-%d').date() - datetime.strptime(str(jl_date), '%Y-%m-%d').date()).days)
-                        except Exception:
-                            day_diff = 999
+                # Check date tolerance \u2014 T10.2 #256: previously a non
+                # ``%Y-%m-%d`` string silently produced ``day_diff=999``
+                # which excluded the row from matching with no signal.
+                # We now try ISO + a few common bank formats and log a
+                # warning if none parse, so ops can spot the data issue.
+                def _coerce_date(v):
+                    if v is None:
+                        return None
+                    if isinstance(v, datetime):
+                        return v.date()
+                    if isinstance(v, date):
+                        return v
+                    if isinstance(v, str):
+                        for fmt in ("%Y-%m-%d", "%Y/%m/%d", "%d-%m-%Y", "%d/%m/%Y", "%Y-%m-%dT%H:%M:%S"):
+                            try:
+                                return datetime.strptime(v[:len(fmt)+5].strip(), fmt).date()
+                            except ValueError:
+                                continue
+                    return None
+
+                sl_d = _coerce_date(sl_date)
+                jl_d = _coerce_date(jl_date)
+                if sl_d and jl_d:
+                    day_diff = abs((sl_d - jl_d).days)
                     if day_diff > tolerance_days:
                         continue
+                else:
+                    logger.warning(
+                        "auto_match: unparseable date sl=%r jl=%r \u2014 row skipped",
+                        sl_date, jl_date,
+                    )
+                    continue
 
                 # Amount matching with TREAS-F4 tolerance: bank debit=withdrawal
                 # matches GL credit, bank credit=deposit matches GL debit.
@@ -754,7 +798,7 @@ def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user
             raise HTTPException(status_code=500, detail="حدث خطأ أثناء حذف التسوية")
 
 
-@router.post("/{id}/finalize", dependencies=[Depends(require_permission("reconciliation.approve"))], response_model=Dict[str, Any])
+@router.post("/{id}/finalize", dependencies=[Depends(require_sensitive_permission("finance.reconciliation.finalize", critical=True))], response_model=Dict[str, Any])
 def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
     """اعتماد التسوية وإغلاقها"""
     with transactional(current_user.company_id) as db:
@@ -811,10 +855,28 @@ def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_us
         except Exception:
             pass  # Fall back to default 1.00 if company_settings unavailable
 
-        if abs(calculated_end - _dec(rec.end_balance)) > tolerance:
-             raise HTTPException(
-                status_code=400, 
-            detail=f"خطأ في توازن التسوية. الرصيد المحسوب: {float(calculated_end):,.2f}, الرصيد المدخل: {float(_dec(rec.end_balance)):,.2f}"
+        difference = abs(calculated_end - _dec(rec.end_balance))
+        if difference > tolerance:
+            # T066: Return structured drift report for frontend dialog
+            unmatched = db.execute(text("""
+                SELECT id, description, COALESCE(credit, 0) - COALESCE(debit, 0) AS amount
+                  FROM bank_statement_lines
+                 WHERE reconciliation_id = :id AND (is_reconciled = FALSE OR is_reconciled IS NULL)
+                 ORDER BY id
+            """), {"id": id}).fetchall()
+            raise HTTPException(
+                status_code=409,
+                detail={
+                    "error": "reconciliation_drift",
+                    "gl_total": float(calculated_end),
+                    "bank_total": float(_dec(rec.end_balance)),
+                    "difference": float(difference),
+                    "tolerance": float(tolerance),
+                    "unmatched_lines": [
+                        {"id": r.id, "description": r.description, "amount": float(r.amount)}
+                        for r in unmatched
+                    ],
+                },
             )
              
         db.execute(text("""

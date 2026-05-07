@@ -3,12 +3,16 @@ import { treasuryAPI } from '../../utils/api'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
+import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import { PageLoading } from '../../components/common/LoadingStates'
 
 function BankImport() {
     const { t } = useTranslation()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
+    const currency = getCurrency()
     const [batches, setBatches] = useState([])
     const [loading, setLoading] = useState(true)
     const [uploading, setUploading] = useState(false)
@@ -16,8 +20,10 @@ function BankImport() {
     const [lines, setLines] = useState([])
 
     useEffect(() => {
-        treasuryAPI.listBankImports().then(r => setBatches(r.data)).catch(console.error).finally(() => setLoading(false))
-    }, [])
+        const params = {};
+        if (currentBranch?.id) params.branch_id = currentBranch.id;
+        treasuryAPI.listBankImports(params).then(r => setBatches(r.data)).catch(console.error).finally(() => setLoading(false))
+    }, [currentBranch])
 
     const handleUpload = async (e) => {
         const file = e.target.files[0]

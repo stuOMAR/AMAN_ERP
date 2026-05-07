@@ -8,15 +8,18 @@ logger = logging.getLogger(__name__)
 from .common import (
     build_branch_filter, kpi_item, ratio_status, _count_table
 )
+from utils.accounting import get_base_currency
+from utils.currency_display import branch_amount_base_sql
 
 
 def get_hr_kpis(db, start_date: date, end_date: date,
                 branch_id: Optional[int] = None) -> dict:
     """KPIs for HR Manager."""
     branch_sql, bp = build_branch_filter(branch_id, "e")
+    base_currency = get_base_currency(db) or "SAR"
 
     # Headcount
-    headcount = _count_table(db, "employees", extra_where="status = 'active'")
+    headcount = _count_table(db, "employees", branch_id, extra_where="status = 'active'")
 
     # Saudization
     saudi_count = 0
@@ -44,12 +47,14 @@ def get_hr_kpis(db, start_date: date, end_date: date,
     # Payroll total this period (join via period_id to payroll_periods)
     payroll_total = 0
     try:
-        pt = db.execute(text("""
-            SELECT COALESCE(SUM(pe.net_salary), 0)
+        payroll_base_sql = branch_amount_base_sql("pe.net_salary", "e.branch_id")
+        pt = db.execute(text(f"""
+            SELECT COALESCE(SUM({payroll_base_sql}), 0)
             FROM payroll_entries pe
             JOIN payroll_periods pp ON pe.period_id = pp.id
-            WHERE pp.start_date >= :s AND pp.end_date <= :e
-        """), {"s": start_date, "e": end_date}).scalar()
+            JOIN employees e ON pe.employee_id = e.id
+            WHERE pp.start_date >= :s AND pp.end_date <= :e {branch_sql}
+        """), {"s": start_date, "e": end_date, "base_currency": base_currency, **bp}).scalar()
         payroll_total = float(pt or 0)
     except Exception:
         pass
@@ -99,7 +104,7 @@ def get_hr_kpis(db, start_date: date, end_date: date,
                  status=ratio_status(saudization, 26, 10)),
         kpi_item("nitaqat_band", "Nitaqat Band", "نطاق نطاقات", nitaqat, "",
                  status="good" if nitaqat in ("Platinum", "Green") else ("warning" if nitaqat == "Yellow" else "danger")),
-        kpi_item("payroll_total", "Payroll Total", "إجمالي الرواتب", payroll_total, "SAR"),
+        kpi_item("payroll_total", "Payroll Total", "إجمالي الرواتب", payroll_total, base_currency),
         kpi_item("attendance_rate", "Attendance Rate", "معدل الحضور", attendance_rate, "%",
                  benchmark=95.0, benchmark_source="HR Best Practice",
                  status=ratio_status(attendance_rate, 95, 85)),

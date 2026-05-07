@@ -34,9 +34,12 @@ const Promotions = () => {
     const handleCreate = async (e) => {
         e.preventDefault();
         try {
-            const payload = { ...form, value: String(form.value || 0), min_order_amount: String(form.min_order_amount || 0) };
-            if (form.buy_x) payload.buy_x = parseInt(form.buy_x);
-            if (form.get_y) payload.get_y = parseInt(form.get_y);
+            const payload = { ...form, promotion_type: form.type, value: String(form.value || 0), min_order_amount: String(form.min_order_amount || 0) };
+            delete payload.type;
+            if (form.buy_x) payload.buy_qty = parseInt(form.buy_x);
+            if (form.get_y) payload.get_qty = parseInt(form.get_y);
+            delete payload.buy_x;
+            delete payload.get_y;
             await posAPI.createPromotion(payload);
             showToast(t('pos.promotion_created'), 'success');
             setShowModal(false);

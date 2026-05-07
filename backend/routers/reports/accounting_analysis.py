@@ -15,12 +15,21 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+
+
+def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None):
+    if branch_scope is not None:
+        return branch_scope_filter_from_scope(branch_scope, column, params)
+    if branch_id:
+        params["branch_id"] = branch_id
+        return f"AND {column} = :branch_id"
+    return ""
 
 @router.get("/accounting/budget-vs-actual", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
 def get_budget_report(
@@ -29,7 +38,7 @@ def get_budget_report(
     current_user: dict = Depends(get_current_user)
 ):
     """مقارنة الميزانية التقديرية مع الفعلي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if not isinstance(current_user, dict) else current_user.get("company_id")
     db = get_db_connection(company_id)
     try:
@@ -41,9 +50,8 @@ def get_budget_report(
         start_date = budget.start_date
         end_date = budget.end_date
         
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
         params = {"start": start_date, "end": end_date, "bid": budget_id}
-        if branch_id: params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
         # 2. Get Budget Items vs Actuals
         query = f"""
@@ -99,11 +107,10 @@ def get_budget_report(
     finally:
         db.close()
 
-def _get_cashflow_data(db, start_date, end_date, branch_id=None):
+def _get_cashflow_data(db, start_date, end_date, branch_id=None, branch_scope=None):
     """Internal helper: returns cash flow data for programmatic use."""
-    branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
     params = {"start": start_date, "end": end_date}
-    if branch_id: params["branch_id"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
 
     # 1. Get all Cash/Bank GL Account IDs
     # From treasury_accounts table
@@ -185,7 +192,7 @@ def get_cashflow_report(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير التدفقات النقدية (مبسط)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if not isinstance(current_user, dict) else current_user.get("company_id")
     db = get_db_connection(company_id)
     try:
@@ -193,7 +200,7 @@ def get_cashflow_report(
             start_date = date.today().replace(day=1)
         if not end_date:
             end_date = date.today()
-        return _get_cashflow_data(db, start_date, end_date, branch_id)
+        return _get_cashflow_data(db, start_date, end_date, branch_scope=branch_scope)
     finally:
         db.close()
 
@@ -209,7 +216,7 @@ def get_cashflow_ias7(
     قائمة التدفقات النقدية حسب معيار IAS 7
     Cash Flow Statement — Operating / Investing / Financing
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if not isinstance(current_user, dict) else current_user.get("company_id")
     db = get_db_connection(company_id)
     try:
@@ -218,10 +225,8 @@ def get_cashflow_ias7(
         if not end_date:
             end_date = date.today()
 
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
         params = {"start": start_date, "end": end_date}
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
         # Get Cash/Bank accounts
         treasury_gl_ids = [row[0] for row in db.execute(text(
@@ -240,10 +245,14 @@ def get_cashflow_ias7(
 
         params["cash_ids"] = cash_ids
 
-        # IAS 7 classification: based on actual account_type and account name heuristics
-        # Only valid types: asset, liability, equity, revenue, expense
+        # IAS 7 classification: prefer explicit per-account override
+        # (T10.1 P1 #84 — accounts.cash_flow_classification), then
+        # fall back to a heuristic on type + Arabic/English keywords.
+        # Only valid types: asset, liability, equity, revenue, expense.
 
-        def classify(account_type, account_name=''):
+        def classify(account_type, account_name='', explicit=None):
+            if explicit in ('operating', 'investing', 'financing'):
+                return explicit
             at = (account_type or '').lower()
             name_lower = (account_name or '').lower()
 
@@ -269,9 +278,11 @@ def get_cashflow_ias7(
 
             return 'operating'
 
-        # Inflows (debit to cash accounts)
+        # Inflows (debit to cash accounts) — also pulls explicit
+        # ``cash_flow_classification`` for P1 #84 override.
         inflows = db.execute(text(f"""
             SELECT a_other.account_type, a_other.name as account_name,
+                   a_other.cash_flow_classification as explicit_class,
                    SUM(jl_other.credit) as amount
             FROM journal_lines jl_cash
             JOIN journal_entries je ON jl_cash.journal_entry_id = je.id
@@ -282,12 +293,13 @@ def get_cashflow_ias7(
               AND je.entry_date BETWEEN :start AND :end
               AND je.status = 'posted'
               {branch_filter}
-            GROUP BY a_other.account_type, a_other.name
+            GROUP BY a_other.account_type, a_other.name, a_other.cash_flow_classification
         """), params).fetchall()
 
         # Outflows (credit to cash accounts)
         outflows = db.execute(text(f"""
             SELECT a_other.account_type, a_other.name as account_name,
+                   a_other.cash_flow_classification as explicit_class,
                    SUM(jl_other.debit) as amount
             FROM journal_lines jl_cash
             JOIN journal_entries je ON jl_cash.journal_entry_id = je.id
@@ -298,7 +310,7 @@ def get_cashflow_ias7(
               AND je.entry_date BETWEEN :start AND :end
               AND je.status = 'posted'
               {branch_filter}
-            GROUP BY a_other.account_type, a_other.name
+            GROUP BY a_other.account_type, a_other.name, a_other.cash_flow_classification
         """), params).fetchall()
 
         # Opening cash balance
@@ -317,7 +329,7 @@ def get_cashflow_ias7(
         totals = {'operating': Decimal('0'), 'investing': Decimal('0'), 'financing': Decimal('0')}
 
         for row in inflows:
-            activity = classify(row.account_type, row.account_name)
+            activity = classify(row.account_type, row.account_name, getattr(row, 'explicit_class', None))
             amt = Decimal(str(row.amount or 0))
             activities[activity].append({
                 "description": row.account_name,
@@ -328,7 +340,7 @@ def get_cashflow_ias7(
             totals[activity] += amt
 
         for row in outflows:
-            activity = classify(row.account_type, row.account_name)
+            activity = classify(row.account_type, row.account_name, getattr(row, 'explicit_class', None))
             amt = Decimal(str(row.amount or 0))
             activities[activity].append({
                 "description": row.account_name,
@@ -371,7 +383,7 @@ def get_fx_gain_loss_report(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير فروق أسعار العملة — الأرباح والخسائر المحققة وغير المحققة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -380,9 +392,7 @@ def get_fx_gain_loss_report(
             end_date = date.today()
 
         params: dict = {"start": start_date, "end": end_date}
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
         currency_filter = "AND je.currency = :currency" if currency else ""
         if currency:
             params["currency"] = currency
@@ -530,40 +540,61 @@ def horizontal_analysis(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """تحليل أفقي — اتجاه الأرقام عبر الفترات"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    """تحليل أفقي — اتجاه الأرقام عبر الفترات.
+
+    T10.1 P1 #82 / #110h — old implementation issued one query per
+    (account × period) which on a chart of 200 accounts and 4 periods
+    means 800 round-trips and could freeze the system. We now compute
+    all balances in a single query keyed by ``(account_id, period_idx)``
+    and pivot in Python, and we wrap each period sub-query in
+    try/except so a single failure does not silently drop a row.
+    """
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
             raise HTTPException(status_code=400, detail="يجب فترتين على الأقل")
 
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
-
         all_accounts = db.execute(text("SELECT id, account_number, name, name_en, account_type FROM accounts ORDER BY account_number")).fetchall()
+
+        # P1 #82 — one query per period (instead of per account × period).
+        # We assemble a {(account_id, period_idx): balance} map.
+        balance_map: Dict[tuple, Decimal] = {}
+        for idx, p in enumerate(parsed):
+            params = {"start": p["start"], "end": p["end"]}
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
+            try:
+                rows = db.execute(text(f"""
+                    SELECT jl.account_id,
+                           COALESCE(SUM(
+                               CASE WHEN a.account_type IN ('liability', 'equity', 'revenue')
+                                    THEN jl.credit - jl.debit
+                                    ELSE jl.debit - jl.credit
+                               END
+                           ), 0) AS net
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON jl.journal_entry_id = je.id
+                    JOIN accounts a ON jl.account_id = a.id
+                    WHERE je.entry_date BETWEEN :start AND :end
+                      AND je.status = 'posted' {branch_filter}
+                    GROUP BY jl.account_id
+                """), params).fetchall()
+                for r in rows:
+                    balance_map[(r.account_id, idx)] = Decimal(str(r.net))
+            except Exception as exc:
+                # P1 #110h — surface the failure in the response instead
+                # of silently producing a partial report.
+                logger.exception("horizontal_analysis: period %s failed: %s", idx, exc)
+                raise HTTPException(
+                    status_code=500,
+                    detail=f"تعذّر حساب الفترة {idx + 1}: {exc}",
+                )
 
         results = []
         for acct in all_accounts:
             a = acct._mapping
-            period_balances = []
-            for p in parsed:
-                params = {"acct": a["id"], "start": p["start"], "end": p["end"]}
-                if branch_id:
-                    params["branch_id"] = branch_id
-                bal = db.execute(text(f"""
-                    SELECT COALESCE(SUM(
-                        CASE WHEN a.account_type IN ('liability', 'equity', 'revenue')
-                             THEN jl.credit - jl.debit
-                             ELSE jl.debit - jl.credit
-                        END
-                    ), 0) as net
-                    FROM journal_lines jl
-                    JOIN journal_entries je ON jl.journal_entry_id = je.id
-                    JOIN accounts a ON jl.account_id = a.id
-                    WHERE jl.account_id = :acct AND je.entry_date BETWEEN :start AND :end
-                      AND je.status = 'posted' {branch_filter}
-                """), params).scalar()
-                period_balances.append(Decimal(str(bal)))
+            period_balances = [balance_map.get((a["id"], i), Decimal("0")) for i in range(len(parsed))]
 
             if not any(abs(b) > 0.01 for b in period_balances):
                 continue
@@ -594,7 +625,7 @@ def financial_ratios(
     current_user: dict = Depends(get_current_user)
 ):
     """تحليل النسب المالية — سيولة / ربحية / ملاءة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     d = datetime.strptime(as_of_date, "%Y-%m-%d").date() if as_of_date else date.today()
     start_of_year = d.replace(month=1, day=1)
     db = get_db_connection(current_user.company_id)
@@ -607,8 +638,7 @@ def financial_ratios(
                 params["start"] = start
                 params["end"] = end
             br = "AND je.branch_id = :branch_id" if branch_id else ""
-            if branch_id:
-                params["branch_id"] = branch_id
+            br = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
             return Decimal(str(db.execute(text(f"""
                 SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
                 FROM journal_lines jl
@@ -618,15 +648,49 @@ def financial_ratios(
             """), {**params, "atype": type_like}).scalar()))
 
         def code_sum(like_pattern, start=None, end=None):
+            """Sum balances for accounts matching a code prefix.
+
+            Uses account_classifications (aggregation_hint) when available,
+            falling back to account_number LIKE for legacy compatibility.
+            """
+            # Try classifier-based lookup first
+            try:
+                hint = like_pattern.replace("%", "")
+                hint_map = {"11": "current_asset", "12": "fixed_asset",
+                            "21": "current_liability", "22": "long_term_liability"}
+                hint_key = hint_map.get(hint)
+                if hint_key:
+                    acc_rows = db.execute(text("""
+                        SELECT account_id FROM account_classifications
+                        WHERE tenant_id = current_setting('app.tenant_id', true)::bigint
+                          AND aggregation_hint = :hint AND is_active = true
+                    """), {"hint": hint_key}).fetchall()
+                    if acc_rows:
+                        acc_ids = [r[0] for r in acc_rows]
+                        params = {"acc_ids": acc_ids}
+                        df = ""
+                        if start and end:
+                            df = "AND je.entry_date BETWEEN :start AND :end"
+                            params["start"] = start
+                            params["end"] = end
+                        br = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
+                        return Decimal(str(db.execute(text(f"""
+                            SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
+                            FROM journal_lines jl
+                            JOIN journal_entries je ON jl.journal_entry_id = je.id
+                            WHERE jl.account_id = ANY(:acc_ids) AND je.status='posted' {df} {br}
+                        """), params).scalar()))
+            except Exception:
+                pass  # fall through to legacy code-range
+
+            # Legacy fallback: code-range check
             params = {"p": like_pattern}
             df = ""
             if start and end:
                 df = "AND je.entry_date BETWEEN :start AND :end"
                 params["start"] = start
                 params["end"] = end
-            br = "AND je.branch_id = :branch_id" if branch_id else ""
-            if branch_id:
-                params["branch_id"] = branch_id
+            br = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
             return Decimal(str(db.execute(text(f"""
                 SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
                 FROM journal_lines jl
@@ -705,15 +769,13 @@ def cost_center_report(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير مراكز التكلفة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     s = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(month=1, day=1)
     e = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
     try:
         params = {"start": s, "end": e}
-        br = "AND je.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        br = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
         rows = db.execute(text(f"""
             SELECT cc.id, cc.center_name, cc.center_code,
@@ -756,37 +818,35 @@ def detailed_profit_loss(
     Detailed P&L Report — grouped by customer, product, or product category.
     Shows Revenue, COGS, Gross Profit, Gross Margin% per group.
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
         e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
 
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
         params = {"start": s_date, "end": e_date}
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
         if group_by == "product":
             group_col = "COALESCE(p.product_name, il.description, 'غير محدد')"
             group_label = "product_name"
             join_extra = "LEFT JOIN products p ON il.product_id = p.id"
         elif group_by == "category":
-            group_col = "COALESCE(pc.name, 'غير مصنف')"
+            group_col = "COALESCE(pc.category_name, 'غير مصنف')"
             group_label = "category"
             join_extra = """LEFT JOIN products p ON il.product_id = p.id
                            LEFT JOIN product_categories pc ON p.category_id = pc.id"""
         else:  # customer
-            group_col = "COALESCE(pa.name, c.name, 'غير محدد')"
+            group_col = "COALESCE(pa.name, c.customer_name, 'غير محدد')"
             group_label = "customer_name"
             join_extra = """LEFT JOIN parties pa ON i.party_id = pa.id
                            LEFT JOIN customers c ON i.party_id = c.id"""
 
-        # Revenue from sales invoices
+        # Revenue from sales invoices (converted to base currency)
         revenue_query = f"""
             SELECT {group_col} as group_name,
-                   SUM(il.quantity * il.unit_price - COALESCE(il.discount, 0)) as revenue,
-                   SUM(il.quantity * COALESCE(p2.cost_price, 0)) as cogs,
+                   SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * COALESCE(i.exchange_rate, 1)) as revenue,
+                   SUM(il.quantity * COALESCE(il.unit_cost, p2.cost_price, 0)) as cogs,
                    COUNT(DISTINCT i.id) as invoice_count,
                    SUM(il.quantity) as total_qty
             FROM invoice_lines il

@@ -6,54 +6,78 @@ import logging
 
 logger = logging.getLogger(__name__)
 from .common import (
-    kpi_item, ratio_status, _count_table
+    build_branch_filter, kpi_item, ratio_status, _count_table
 )
+from utils.accounting import get_base_currency
 
 
 def get_warehouse_kpis(db, start_date: date, end_date: date,
                        branch_id: Optional[int] = None) -> dict:
     """KPIs for Inventory / Warehouse Manager."""
+    base_currency = get_base_currency(db) or "SAR"
 
-    # Inventory Valuation
-    inv_valuation = 0
+    # Inventory Valuation at Cost (always in base currency)
+    inv_valuation_cost = 0
     try:
-        iv = db.execute(text("""
+        wh_branch_sql, wh_bp = build_branch_filter(branch_id, table_alias="w")
+        iv = db.execute(text(f"""
             SELECT COALESCE(SUM(i.quantity * COALESCE(p.cost_price, 0)), 0)
             FROM inventory i JOIN products p ON i.product_id = p.id
-        """)).scalar()
-        inv_valuation = float(iv or 0)
+            LEFT JOIN warehouses w ON i.warehouse_id = w.id
+            WHERE 1=1 {wh_branch_sql}
+        """), wh_bp).scalar()
+        inv_valuation_cost = float(iv or 0)
     except Exception:
         pass
+
+    # Inventory Valuation at Selling Price (always in base currency)
+    inv_valuation_sell = 0
+    try:
+        iv_sell = db.execute(text(f"""
+            SELECT COALESCE(SUM(i.quantity * COALESCE(p.selling_price, 0)), 0)
+            FROM inventory i JOIN products p ON i.product_id = p.id
+            LEFT JOIN warehouses w ON i.warehouse_id = w.id
+            WHERE 1=1 {wh_branch_sql}
+        """), wh_bp).scalar()
+        inv_valuation_sell = float(iv_sell or 0)
+    except Exception:
+        pass
+
+    # Potential Profit (always in base currency)
+    potential_profit = inv_valuation_sell - inv_valuation_cost
 
     # Stock Turnover = COGS / Avg Inventory Value
     cogs = 0
     try:
+        cogs_branch_sql, cogs_bp = build_branch_filter(branch_id)
         cogs_r = db.execute(text("""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl JOIN journal_entries je ON jl.journal_entry_id = je.id
             JOIN accounts a ON jl.account_id = a.id
             WHERE a.account_type = 'expense' AND a.account_code LIKE '5%'
               AND je.entry_date BETWEEN :s AND :e AND je.status = 'posted'
-        """), {"s": start_date, "e": end_date}).scalar()
+              {cogs_branch_sql}
+        """.format(cogs_branch_sql=cogs_branch_sql)), {"s": start_date, "e": end_date, **cogs_bp}).scalar()
         cogs = float(cogs_r or 0)
     except Exception:
         pass
 
-    stock_turnover = cogs / inv_valuation if inv_valuation > 0 else 0
+    stock_turnover = cogs / inv_valuation_cost if inv_valuation_cost > 0 else 0
     dio = 365 / stock_turnover if stock_turnover > 0 else 0
 
     # Total SKUs & Active
     total_products = _count_table(db, "products")
     active_products = _count_table(db, "products", extra_where="is_active = true")
 
-    # Low Stock Count
+    # Low Stock Count — P1 #99: available = quantity - reserved_quantity
     low_stock = 0
     try:
         ls = db.execute(text("""
             SELECT COUNT(DISTINCT p.id)
             FROM products p
             JOIN inventory i ON p.id = i.product_id
-            WHERE i.quantity <= COALESCE(p.reorder_level, 0) AND p.is_active = true AND p.reorder_level > 0
+            WHERE (i.quantity - COALESCE(i.reserved_quantity, 0)) <= COALESCE(p.reorder_level, 0)
+              AND p.is_active = true AND p.reorder_level > 0
         """)).scalar()
         low_stock = int(ls or 0)
     except Exception:
@@ -91,7 +115,10 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
         pass
 
     kpis = [
-        kpi_item("inv_valuation", "Inventory Valuation", "تقييم المخزون", inv_valuation, "SAR"),
+        kpi_item("inv_valuation_cost", "Inventory at Cost", "قيمة المخزون بالتكلفة", inv_valuation_cost, base_currency),
+        kpi_item("inv_valuation_sell", "Inventory at Selling Price", "قيمة المخزون بسعر البيع", inv_valuation_sell, base_currency),
+        kpi_item("potential_profit", "Potential Profit", "الربح المحتمل", potential_profit, base_currency,
+                 status="good" if potential_profit > 0 else "warning"),
         kpi_item("stock_turnover", "Stock Turnover", "معدل دوران المخزون", stock_turnover, "x",
                  benchmark=6.0, benchmark_source="IAS 2",
                  status=ratio_status(stock_turnover, 6, 3)),

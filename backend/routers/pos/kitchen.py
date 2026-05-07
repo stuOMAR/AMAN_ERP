@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -37,12 +37,15 @@ from .core import _D2, _D4, get_db
 def kitchen_orders(
     station: Optional[str] = None,
     status: Optional[str] = "pending",
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """Kitchen Orders."""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     q = "SELECT * FROM pos_kitchen_orders WHERE 1=1"
     params = {}
+    q += f" {branch_scope_filter_from_scope(branch_scope, 'branch_id', params)}"
     if station:
         q += " AND station = :station"
         params["station"] = station
@@ -57,6 +60,9 @@ def kitchen_orders(
 @router.post("/kitchen/orders", dependencies=[Depends(require_permission("pos.create"))], response_model=Dict[str, Any])
 def send_to_kitchen(data: dict, request: Request, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
     """Send order items to kitchen."""
+    branch_id = data.get("branch_id")
+    if branch_id:
+        validate_branch_access(current_user, branch_id)
     items = data.get("items", [])
     results = []
     for item in items:
@@ -74,7 +80,7 @@ def send_to_kitchen(data: dict, request: Request, current_user: UserResponse = D
             "notes": item.get("notes"),
             "station": item.get("station", "main"),
             "priority": item.get("priority", 0),
-            "branch": data.get("branch_id"),
+            "branch": branch_id,
         }).fetchone()
         results.append(dict(row._mapping))
     db.commit()
@@ -103,9 +109,10 @@ def update_kitchen_status(ko_id: int, data: dict, request: Request, current_user
     log_activity(
         db=db,
         user_id=current_user.id,
+        username=current_user.username,
         action="kitchen_status_changed",
         resource_type="pos_kitchen_order",
-        resource_id=ko_id,
+        resource_id=str(ko_id),
         details={"new_status": new_status},
         request=request,
     )

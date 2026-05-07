@@ -6,7 +6,9 @@ python-jose[cryptography]
 passlib[bcrypt]
 python-multipart
 pandas
-openpyxl
+openpyxl>=3.1
+pypdf>=3.0
+docx2txt>=0.8
 reportlab
 apscheduler
 arabic-reshaper
@@ -38,3 +40,12 @@ firebase-admin
 
 # ── Property-based testing (TASK-032) ─────────
 hypothesis>=6.100
+
+# ── Feature 023: ZATCA UBL signing ─────────
+signxml>=3.2.0
+lxml>=5.0.0
+
+# ── Feature 024: DMS + Notifications ─────────
+python-magic>=0.4.27
+clamd>=1.0.2
+Jinja2>=3.1.0

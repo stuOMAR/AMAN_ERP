@@ -1,0 +1,2001 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e32] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e34]: 🏪
+          - generic [ref=e35]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e36] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e38]: 🛒
+          - generic [ref=e39]: المشتريات
+        - link "📦 المخزون" [ref=e40] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e42]: 📦
+          - generic [ref=e43]: المخزون
+        - link "🏭 التصنيع" [ref=e44] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e46]: 🏭
+          - generic [ref=e47]: التصنيع
+        - link "📐 المشاريع" [ref=e48] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e50]: 📐
+          - generic [ref=e51]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e52] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e54]: 🤝
+          - generic [ref=e55]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e56] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e58]: 🔧
+          - generic [ref=e59]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e60] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e62]: 💸
+          - generic [ref=e63]: المصروفات
+        - link "🧾 الضرائب" [ref=e64] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e66]: 🧾
+          - generic [ref=e67]: الضرائب
+        - link "✅ الاعتمادات" [ref=e68] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e70]: ✅
+          - generic [ref=e71]: الاعتمادات
+        - link "📈 التقارير" [ref=e72] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e74]: 📈
+          - generic [ref=e75]: التقارير
+        - link "👥 الموارد البشرية" [ref=e76] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e78]: 👥
+          - generic [ref=e79]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e80] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e82]: ⚙️
+          - generic [ref=e83]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e84] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e86]: 🎯
+          - generic [ref=e87]: إدارة المؤشرات
+    - generic [ref=e88]:
+      - banner [ref=e89]:
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]:
+            - img [ref=e93]
+            - text: بحث...
+          - generic [ref=e96]: Ctrl+K
+        - generic [ref=e97]:
+          - button "EN" [ref=e98] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+          - button "🏢 كل الفروع ▼" [ref=e107] [cursor=pointer]:
+            - generic [ref=e108]:
+              - text: 🏢
+              - generic [ref=e109]: كل الفروع
+            - generic [ref=e110]: ▼
+          - button "🔔" [ref=e112] [cursor=pointer]
+          - generic [ref=e114] [cursor=pointer]:
+            - generic [ref=e115]:
+              - generic [ref=e116]: aaaa
+              - generic [ref=e117]: "ID: e24bcd11"
+            - generic [ref=e118]: O
+      - main [active] [ref=e120]:
+        - generic [ref=e1153]:
+          - generic [ref=e1154]:
+            - button "العودة" [ref=e1155] [cursor=pointer]:
+              - img [ref=e1156]
+            - generic [ref=e1158]:
+              - heading "شجرة الحسابات" [level=1] [ref=e1159]
+              - paragraph [ref=e1160]: دليل الحسابات والهيكل المحاسبي
+            - button "إضافة حساب رئيسي" [ref=e1162] [cursor=pointer]:
+              - img [ref=e1163]
+              - text: إضافة حساب رئيسي
+          - generic [ref=e1164]:
+            - generic [ref=e1165]:
+              - generic [ref=e1166]: اسم الحساب
+              - generic [ref=e1167]: النوع
+              - generic [ref=e1168]: الرصيد
+              - generic [ref=e1169]: الإجراءات
+            - generic [ref=e1170]:
+              - generic [ref=e1171]:
+                - generic [ref=e1172]:
+                  - generic [ref=e1173] [cursor=pointer]:
+                    - img [ref=e1175]
+                    - img [ref=e1178]
+                    - generic [ref=e1180]: "1"
+                    - generic [ref=e1181]: الأصول
+                  - generic [ref=e1182]: أصول
+                  - generic [ref=e1184]:
+                    - generic [ref=e1185]: "0.00"
+                    - generic [ref=e1186]: SAR
+                  - generic [ref=e1187]:
+                    - button "إضافة حساب فرعي" [ref=e1188] [cursor=pointer]:
+                      - img [ref=e1189]
+                    - button "تعديل" [ref=e1190] [cursor=pointer]:
+                      - img [ref=e1191]
+                - generic [ref=e1193]:
+                  - generic [ref=e1194]:
+                    - generic [ref=e1195]:
+                      - generic [ref=e1196] [cursor=pointer]:
+                        - img [ref=e1198]
+                        - img [ref=e1201]
+                        - generic [ref=e1203]: "11"
+                        - generic [ref=e1204]: أصول متداولة
+                      - generic [ref=e1205]: أصول
+                      - generic [ref=e1207]:
+                        - generic [ref=e1208]: "0.00"
+                        - generic [ref=e1209]: SAR
+                      - generic [ref=e1210]:
+                        - button "إضافة حساب فرعي" [ref=e1211] [cursor=pointer]:
+                          - img [ref=e1212]
+                        - button "تعديل" [ref=e1213] [cursor=pointer]:
+                          - img [ref=e1214]
+                    - generic [ref=e1216]:
+                      - generic [ref=e1217]:
+                        - generic [ref=e1218]:
+                          - generic [ref=e1219] [cursor=pointer]:
+                            - img [ref=e1221]
+                            - img [ref=e1224]
+                            - generic [ref=e1226]: "1101"
+                            - generic [ref=e1227]: النقد وما في حكمه
+                          - generic [ref=e1228]: أصول
+                          - generic [ref=e1230]:
+                            - generic [ref=e1231]: "0.00"
+                            - generic [ref=e1232]: SAR
+                          - generic [ref=e1233]:
+                            - button "إضافة حساب فرعي" [ref=e1234] [cursor=pointer]:
+                              - img [ref=e1235]
+                            - button "تعديل" [ref=e1236] [cursor=pointer]:
+                              - img [ref=e1237]
+                        - generic [ref=e1239]:
+                          - generic [ref=e1241]:
+                            - generic [ref=e1242] [cursor=pointer]:
+                              - img [ref=e1244]
+                              - generic [ref=e1247]: "110101"
+                              - generic [ref=e1248]: الصندوق الرئيسي
+                            - generic [ref=e1249]: أصول
+                            - generic [ref=e1251]:
+                              - generic [ref=e1252]: "0.00"
+                              - generic [ref=e1253]: SAR
+                            - generic [ref=e1254]:
+                              - button "إضافة حساب فرعي" [ref=e1255] [cursor=pointer]:
+                                - img [ref=e1256]
+                              - button "تعديل" [ref=e1257] [cursor=pointer]:
+                                - img [ref=e1258]
+                              - button "حذف" [ref=e1260] [cursor=pointer]:
+                                - img [ref=e1261]
+                          - generic [ref=e1265]:
+                            - generic [ref=e1266] [cursor=pointer]:
+                              - img [ref=e1268]
+                              - generic [ref=e1271]: "110102"
+                              - generic [ref=e1272]: البنك
+                            - generic [ref=e1273]: أصول
+                            - generic [ref=e1275]:
+                              - generic [ref=e1276]: "0.00"
+                              - generic [ref=e1277]: SAR
+                            - generic [ref=e1278]:
+                              - button "إضافة حساب فرعي" [ref=e1279] [cursor=pointer]:
+                                - img [ref=e1280]
+                              - button "تعديل" [ref=e1281] [cursor=pointer]:
+                                - img [ref=e1282]
+                              - button "حذف" [ref=e1284] [cursor=pointer]:
+                                - img [ref=e1285]
+                      - generic [ref=e1289]:
+                        - generic [ref=e1290] [cursor=pointer]:
+                          - img [ref=e1292]
+                          - generic [ref=e1295]: "1102"
+                          - generic [ref=e1296]: العملاء والذمم المدينة
+                        - generic [ref=e1297]: أصول
+                        - generic [ref=e1299]:
+                          - generic [ref=e1300]: "0.00"
+                          - generic [ref=e1301]: SAR
+                        - generic [ref=e1302]:
+                          - button "إضافة حساب فرعي" [ref=e1303] [cursor=pointer]:
+                            - img [ref=e1304]
+                          - button "تعديل" [ref=e1305] [cursor=pointer]:
+                            - img [ref=e1306]
+                          - button "حذف" [ref=e1308] [cursor=pointer]:
+                            - img [ref=e1309]
+                      - generic [ref=e1312]:
+                        - generic [ref=e1313]:
+                          - generic [ref=e1314] [cursor=pointer]:
+                            - img [ref=e1316]
+                            - img [ref=e1319]
+                            - generic [ref=e1321]: "1103"
+                            - generic [ref=e1322]: المخزون
+                            - generic [ref=e1323]: مخزون
+                          - generic [ref=e1324]: أصول
+                          - generic [ref=e1326]:
+                            - generic [ref=e1327]: "0.00"
+                            - generic [ref=e1328]: SAR
+                          - generic [ref=e1329]:
+                            - button "إضافة حساب فرعي" [ref=e1330] [cursor=pointer]:
+                              - img [ref=e1331]
+                            - button "تعديل" [ref=e1332] [cursor=pointer]:
+                              - img [ref=e1333]
+                        - generic [ref=e1335]:
+                          - generic [ref=e1337]:
+                            - generic [ref=e1338] [cursor=pointer]:
+                              - img [ref=e1340]
+                              - generic [ref=e1343]: "110301"
+                              - generic [ref=e1344]: مخزون المواد الأولية
+                              - generic [ref=e1345]: تصنيع
+                            - generic [ref=e1346]: أصول
+                            - generic [ref=e1348]:
+                              - generic [ref=e1349]: "0.00"
+                              - generic [ref=e1350]: SAR
+                            - generic [ref=e1351]:
+                              - button "إضافة حساب فرعي" [ref=e1352] [cursor=pointer]:
+                                - img [ref=e1353]
+                              - button "تعديل" [ref=e1354] [cursor=pointer]:
+                                - img [ref=e1355]
+                              - button "حذف" [ref=e1357] [cursor=pointer]:
+                                - img [ref=e1358]
+                          - generic [ref=e1362]:
+                            - generic [ref=e1363] [cursor=pointer]:
+                              - img [ref=e1365]
+                              - generic [ref=e1368]: "110302"
+                              - generic [ref=e1369]: مخزون الإنتاج التام
+                              - generic [ref=e1370]: تصنيع
+                            - generic [ref=e1371]: أصول
+                            - generic [ref=e1373]:
+                              - generic [ref=e1374]: "0.00"
+                              - generic [ref=e1375]: SAR
+                            - generic [ref=e1376]:
+                              - button "إضافة حساب فرعي" [ref=e1377] [cursor=pointer]:
+                                - img [ref=e1378]
+                              - button "تعديل" [ref=e1379] [cursor=pointer]:
+                                - img [ref=e1380]
+                              - button "حذف" [ref=e1382] [cursor=pointer]:
+                                - img [ref=e1383]
+                      - generic [ref=e1387]:
+                        - generic [ref=e1388] [cursor=pointer]:
+                          - img [ref=e1390]
+                          - generic [ref=e1393]: "1104"
+                          - generic [ref=e1394]: سلف وقروض الموظفين
+                          - generic [ref=e1395]: HR
+                        - generic [ref=e1396]: أصول
+                        - generic [ref=e1398]:
+                          - generic [ref=e1399]: "0.00"
+                          - generic [ref=e1400]: SAR
+                        - generic [ref=e1401]:
+                          - button "إضافة حساب فرعي" [ref=e1402] [cursor=pointer]:
+                            - img [ref=e1403]
+                          - button "تعديل" [ref=e1404] [cursor=pointer]:
+                            - img [ref=e1405]
+                          - button "حذف" [ref=e1407] [cursor=pointer]:
+                            - img [ref=e1408]
+                      - generic [ref=e1411]:
+                        - generic [ref=e1412]:
+                          - generic [ref=e1413] [cursor=pointer]:
+                            - img [ref=e1415]
+                            - img [ref=e1418]
+                            - generic [ref=e1420]: "1105"
+                            - generic [ref=e1421]: مصروفات مدفوعة مقدماً
+                          - generic [ref=e1422]: أصول
+                          - generic [ref=e1424]:
+                            - generic [ref=e1425]: "0.00"
+                            - generic [ref=e1426]: SAR
+                          - generic [ref=e1427]:
+                            - button "إضافة حساب فرعي" [ref=e1428] [cursor=pointer]:
+                              - img [ref=e1429]
+                            - button "تعديل" [ref=e1430] [cursor=pointer]:
+                              - img [ref=e1431]
+                        - generic [ref=e1433]:
+                          - generic [ref=e1435]:
+                            - generic [ref=e1436] [cursor=pointer]:
+                              - img [ref=e1438]
+                              - generic [ref=e1441]: "110501"
+                              - generic [ref=e1442]: إيجار مدفوع مقدماً
+                            - generic [ref=e1443]: أصول
+                            - generic [ref=e1445]:
+                              - generic [ref=e1446]: "0.00"
+                              - generic [ref=e1447]: SAR
+                            - generic [ref=e1448]:
+                              - button "إضافة حساب فرعي" [ref=e1449] [cursor=pointer]:
+                                - img [ref=e1450]
+                              - button "تعديل" [ref=e1451] [cursor=pointer]:
+                                - img [ref=e1452]
+                              - button "حذف" [ref=e1454] [cursor=pointer]:
+                                - img [ref=e1455]
+                          - generic [ref=e1459]:
+                            - generic [ref=e1460] [cursor=pointer]:
+                              - img [ref=e1462]
+                              - generic [ref=e1465]: "110502"
+                              - generic [ref=e1466]: تأمين مدفوع مقدماً
+                            - generic [ref=e1467]: أصول
+                            - generic [ref=e1469]:
+                              - generic [ref=e1470]: "0.00"
+                              - generic [ref=e1471]: SAR
+                            - generic [ref=e1472]:
+                              - button "إضافة حساب فرعي" [ref=e1473] [cursor=pointer]:
+                                - img [ref=e1474]
+                              - button "تعديل" [ref=e1475] [cursor=pointer]:
+                                - img [ref=e1476]
+                              - button "حذف" [ref=e1478] [cursor=pointer]:
+                                - img [ref=e1479]
+                      - generic [ref=e1483]:
+                        - generic [ref=e1484] [cursor=pointer]:
+                          - img [ref=e1486]
+                          - generic [ref=e1489]: "1106"
+                          - generic [ref=e1490]: مدفوعات مقدمة للموردين
+                        - generic [ref=e1491]: أصول
+                        - generic [ref=e1493]:
+                          - generic [ref=e1494]: "0.00"
+                          - generic [ref=e1495]: SAR
+                        - generic [ref=e1496]:
+                          - button "إضافة حساب فرعي" [ref=e1497] [cursor=pointer]:
+                            - img [ref=e1498]
+                          - button "تعديل" [ref=e1499] [cursor=pointer]:
+                            - img [ref=e1500]
+                          - button "حذف" [ref=e1502] [cursor=pointer]:
+                            - img [ref=e1503]
+                      - generic [ref=e1507]:
+                        - generic [ref=e1508] [cursor=pointer]:
+                          - img [ref=e1510]
+                          - generic [ref=e1513]: "1107"
+                          - generic [ref=e1514]: ضريبة المدخلات
+                        - generic [ref=e1515]: أصول
+                        - generic [ref=e1517]:
+                          - generic [ref=e1518]: "0.00"
+                          - generic [ref=e1519]: SAR
+                        - generic [ref=e1520]:
+                          - button "إضافة حساب فرعي" [ref=e1521] [cursor=pointer]:
+                            - img [ref=e1522]
+                          - button "تعديل" [ref=e1523] [cursor=pointer]:
+                            - img [ref=e1524]
+                          - button "حذف" [ref=e1526] [cursor=pointer]:
+                            - img [ref=e1527]
+                      - generic [ref=e1531]:
+                        - generic [ref=e1532] [cursor=pointer]:
+                          - img [ref=e1534]
+                          - generic [ref=e1537]: "1108"
+                          - generic [ref=e1538]: شيكات تحت التحصيل
+                        - generic [ref=e1539]: أصول
+                        - generic [ref=e1541]:
+                          - generic [ref=e1542]: "0.00"
+                          - generic [ref=e1543]: SAR
+                        - generic [ref=e1544]:
+                          - button "إضافة حساب فرعي" [ref=e1545] [cursor=pointer]:
+                            - img [ref=e1546]
+                          - button "تعديل" [ref=e1547] [cursor=pointer]:
+                            - img [ref=e1548]
+                          - button "حذف" [ref=e1550] [cursor=pointer]:
+                            - img [ref=e1551]
+                      - generic [ref=e1555]:
+                        - generic [ref=e1556] [cursor=pointer]:
+                          - img [ref=e1558]
+                          - generic [ref=e1561]: "1109"
+                          - generic [ref=e1562]: أوراق قبض
+                        - generic [ref=e1563]: أصول
+                        - generic [ref=e1565]:
+                          - generic [ref=e1566]: "0.00"
+                          - generic [ref=e1567]: SAR
+                        - generic [ref=e1568]:
+                          - button "إضافة حساب فرعي" [ref=e1569] [cursor=pointer]:
+                            - img [ref=e1570]
+                          - button "تعديل" [ref=e1571] [cursor=pointer]:
+                            - img [ref=e1572]
+                          - button "حذف" [ref=e1574] [cursor=pointer]:
+                            - img [ref=e1575]
+                      - generic [ref=e1579]:
+                        - generic [ref=e1580] [cursor=pointer]:
+                          - img [ref=e1582]
+                          - generic [ref=e1585]: "1110"
+                          - generic [ref=e1586]: أعمال تحت التشغيل
+                          - generic [ref=e1587]: تصنيع
+                        - generic [ref=e1588]: أصول
+                        - generic [ref=e1590]:
+                          - generic [ref=e1591]: "0.00"
+                          - generic [ref=e1592]: SAR
+                        - generic [ref=e1593]:
+                          - button "إضافة حساب فرعي" [ref=e1594] [cursor=pointer]:
+                            - img [ref=e1595]
+                          - button "تعديل" [ref=e1596] [cursor=pointer]:
+                            - img [ref=e1597]
+                          - button "حذف" [ref=e1599] [cursor=pointer]:
+                            - img [ref=e1600]
+                      - generic [ref=e1604]:
+                        - generic [ref=e1605] [cursor=pointer]:
+                          - img [ref=e1607]
+                          - generic [ref=e1610]: "1111"
+                          - generic [ref=e1611]: حسابات بين الفروع
+                        - generic [ref=e1612]: أصول
+                        - generic [ref=e1614]:
+                          - generic [ref=e1615]: "0.00"
+                          - generic [ref=e1616]: SAR
+                        - generic [ref=e1617]:
+                          - button "إضافة حساب فرعي" [ref=e1618] [cursor=pointer]:
+                            - img [ref=e1619]
+                          - button "تعديل" [ref=e1620] [cursor=pointer]:
+                            - img [ref=e1621]
+                          - button "حذف" [ref=e1623] [cursor=pointer]:
+                            - img [ref=e1624]
+                      - generic [ref=e1628]:
+                        - generic [ref=e1629] [cursor=pointer]:
+                          - img [ref=e1631]
+                          - generic [ref=e1634]: "1112"
+                          - generic [ref=e1635]: مخزون في الطريق
+                        - generic [ref=e1636]: أصول
+                        - generic [ref=e1638]:
+                          - generic [ref=e1639]: "0.00"
+                          - generic [ref=e1640]: SAR
+                        - generic [ref=e1641]:
+                          - button "إضافة حساب فرعي" [ref=e1642] [cursor=pointer]:
+                            - img [ref=e1643]
+                          - button "تعديل" [ref=e1644] [cursor=pointer]:
+                            - img [ref=e1645]
+                          - button "حذف" [ref=e1647] [cursor=pointer]:
+                            - img [ref=e1648]
+                  - generic [ref=e1651]:
+                    - generic [ref=e1652]:
+                      - generic [ref=e1653] [cursor=pointer]:
+                        - img [ref=e1655]
+                        - img [ref=e1658]
+                        - generic [ref=e1660]: "12"
+                        - generic [ref=e1661]: أصول ثابتة
+                      - generic [ref=e1662]: أصول
+                      - generic [ref=e1664]:
+                        - generic [ref=e1665]: "0.00"
+                        - generic [ref=e1666]: SAR
+                      - generic [ref=e1667]:
+                        - button "إضافة حساب فرعي" [ref=e1668] [cursor=pointer]:
+                          - img [ref=e1669]
+                        - button "تعديل" [ref=e1670] [cursor=pointer]:
+                          - img [ref=e1671]
+                    - generic [ref=e1673]:
+                      - generic [ref=e1675]:
+                        - generic [ref=e1676] [cursor=pointer]:
+                          - img [ref=e1678]
+                          - generic [ref=e1681]: "1201"
+                          - generic [ref=e1682]: الآلات والمعدات
+                        - generic [ref=e1683]: أصول
+                        - generic [ref=e1685]:
+                          - generic [ref=e1686]: "0.00"
+                          - generic [ref=e1687]: SAR
+                        - generic [ref=e1688]:
+                          - button "إضافة حساب فرعي" [ref=e1689] [cursor=pointer]:
+                            - img [ref=e1690]
+                          - button "تعديل" [ref=e1691] [cursor=pointer]:
+                            - img [ref=e1692]
+                          - button "حذف" [ref=e1694] [cursor=pointer]:
+                            - img [ref=e1695]
+                      - generic [ref=e1699]:
+                        - generic [ref=e1700] [cursor=pointer]:
+                          - img [ref=e1702]
+                          - generic [ref=e1705]: "1202"
+                          - generic [ref=e1706]: السيارات ووسائل النقل
+                        - generic [ref=e1707]: أصول
+                        - generic [ref=e1709]:
+                          - generic [ref=e1710]: "0.00"
+                          - generic [ref=e1711]: SAR
+                        - generic [ref=e1712]:
+                          - button "إضافة حساب فرعي" [ref=e1713] [cursor=pointer]:
+                            - img [ref=e1714]
+                          - button "تعديل" [ref=e1715] [cursor=pointer]:
+                            - img [ref=e1716]
+                          - button "حذف" [ref=e1718] [cursor=pointer]:
+                            - img [ref=e1719]
+                      - generic [ref=e1723]:
+                        - generic [ref=e1724] [cursor=pointer]:
+                          - img [ref=e1726]
+                          - generic [ref=e1729]: "1203"
+                          - generic [ref=e1730]: الأثاث والمفروشات
+                        - generic [ref=e1731]: أصول
+                        - generic [ref=e1733]:
+                          - generic [ref=e1734]: "0.00"
+                          - generic [ref=e1735]: SAR
+                        - generic [ref=e1736]:
+                          - button "إضافة حساب فرعي" [ref=e1737] [cursor=pointer]:
+                            - img [ref=e1738]
+                          - button "تعديل" [ref=e1739] [cursor=pointer]:
+                            - img [ref=e1740]
+                          - button "حذف" [ref=e1742] [cursor=pointer]:
+                            - img [ref=e1743]
+                      - generic [ref=e1747]:
+                        - generic [ref=e1748] [cursor=pointer]:
+                          - img [ref=e1750]
+                          - generic [ref=e1753]: "1204"
+                          - generic [ref=e1754]: المباني والإنشاءات
+                        - generic [ref=e1755]: أصول
+                        - generic [ref=e1757]:
+                          - generic [ref=e1758]: "0.00"
+                          - generic [ref=e1759]: SAR
+                        - generic [ref=e1760]:
+                          - button "إضافة حساب فرعي" [ref=e1761] [cursor=pointer]:
+                            - img [ref=e1762]
+                          - button "تعديل" [ref=e1763] [cursor=pointer]:
+                            - img [ref=e1764]
+                          - button "حذف" [ref=e1766] [cursor=pointer]:
+                            - img [ref=e1767]
+                      - generic [ref=e1771]:
+                        - generic [ref=e1772] [cursor=pointer]:
+                          - img [ref=e1774]
+                          - generic [ref=e1777]: "1205"
+                          - generic [ref=e1778]: الأراضي
+                        - generic [ref=e1779]: أصول
+                        - generic [ref=e1781]:
+                          - generic [ref=e1782]: "0.00"
+                          - generic [ref=e1783]: SAR
+                        - generic [ref=e1784]:
+                          - button "إضافة حساب فرعي" [ref=e1785] [cursor=pointer]:
+                            - img [ref=e1786]
+                          - button "تعديل" [ref=e1787] [cursor=pointer]:
+                            - img [ref=e1788]
+                          - button "حذف" [ref=e1790] [cursor=pointer]:
+                            - img [ref=e1791]
+                      - generic [ref=e1795]:
+                        - generic [ref=e1796] [cursor=pointer]:
+                          - img [ref=e1798]
+                          - generic [ref=e1801]: "1206"
+                          - generic [ref=e1802]: أجهزة حاسوب وأنظمة
+                        - generic [ref=e1803]: أصول
+                        - generic [ref=e1805]:
+                          - generic [ref=e1806]: "0.00"
+                          - generic [ref=e1807]: SAR
+                        - generic [ref=e1808]:
+                          - button "إضافة حساب فرعي" [ref=e1809] [cursor=pointer]:
+                            - img [ref=e1810]
+                          - button "تعديل" [ref=e1811] [cursor=pointer]:
+                            - img [ref=e1812]
+                          - button "حذف" [ref=e1814] [cursor=pointer]:
+                            - img [ref=e1815]
+                      - generic [ref=e1819]:
+                        - generic [ref=e1820] [cursor=pointer]:
+                          - img [ref=e1822]
+                          - generic [ref=e1825]: "1207"
+                          - generic [ref=e1826]: الإهلاك المتراكم
+                        - generic [ref=e1827]: أصول
+                        - generic [ref=e1829]:
+                          - generic [ref=e1830]: "0.00"
+                          - generic [ref=e1831]: SAR
+                        - generic [ref=e1832]:
+                          - button "إضافة حساب فرعي" [ref=e1833] [cursor=pointer]:
+                            - img [ref=e1834]
+                          - button "تعديل" [ref=e1835] [cursor=pointer]:
+                            - img [ref=e1836]
+                          - button "حذف" [ref=e1838] [cursor=pointer]:
+                            - img [ref=e1839]
+                  - generic [ref=e1842]:
+                    - generic [ref=e1843]:
+                      - generic [ref=e1844] [cursor=pointer]:
+                        - img [ref=e1846]
+                        - img [ref=e1849]
+                        - generic [ref=e1851]: "13"
+                        - generic [ref=e1852]: أصول غير ملموسة
+                      - generic [ref=e1853]: أصول
+                      - generic [ref=e1855]:
+                        - generic [ref=e1856]: "0.00"
+                        - generic [ref=e1857]: SAR
+                      - generic [ref=e1858]:
+                        - button "إضافة حساب فرعي" [ref=e1859] [cursor=pointer]:
+                          - img [ref=e1860]
+                        - button "تعديل" [ref=e1861] [cursor=pointer]:
+                          - img [ref=e1862]
+                    - generic [ref=e1864]:
+                      - generic [ref=e1866]:
+                        - generic [ref=e1867] [cursor=pointer]:
+                          - img [ref=e1869]
+                          - generic [ref=e1872]: "13001"
+                          - generic [ref=e1873]: مخزون بضاعة
+                          - generic [ref=e1874]: مخزون
+                        - generic [ref=e1875]: أصول
+                        - generic [ref=e1877]:
+                          - generic [ref=e1878]: "0.00"
+                          - generic [ref=e1879]: SAR
+                        - generic [ref=e1880]:
+                          - button "إضافة حساب فرعي" [ref=e1881] [cursor=pointer]:
+                            - img [ref=e1882]
+                          - button "تعديل" [ref=e1883] [cursor=pointer]:
+                            - img [ref=e1884]
+                          - button "حذف" [ref=e1886] [cursor=pointer]:
+                            - img [ref=e1887]
+                      - generic [ref=e1891]:
+                        - generic [ref=e1892] [cursor=pointer]:
+                          - img [ref=e1894]
+                          - generic [ref=e1897]: "1301"
+                          - generic [ref=e1898]: شهرة
+                        - generic [ref=e1899]: أصول
+                        - generic [ref=e1901]:
+                          - generic [ref=e1902]: "0.00"
+                          - generic [ref=e1903]: SAR
+                        - generic [ref=e1904]:
+                          - button "إضافة حساب فرعي" [ref=e1905] [cursor=pointer]:
+                            - img [ref=e1906]
+                          - button "تعديل" [ref=e1907] [cursor=pointer]:
+                            - img [ref=e1908]
+                          - button "حذف" [ref=e1910] [cursor=pointer]:
+                            - img [ref=e1911]
+                      - generic [ref=e1915]:
+                        - generic [ref=e1916] [cursor=pointer]:
+                          - img [ref=e1918]
+                          - generic [ref=e1921]: "1302"
+                          - generic [ref=e1922]: براءات اختراع وعلامات تجارية
+                        - generic [ref=e1923]: أصول
+                        - generic [ref=e1925]:
+                          - generic [ref=e1926]: "0.00"
+                          - generic [ref=e1927]: SAR
+                        - generic [ref=e1928]:
+                          - button "إضافة حساب فرعي" [ref=e1929] [cursor=pointer]:
+                            - img [ref=e1930]
+                          - button "تعديل" [ref=e1931] [cursor=pointer]:
+                            - img [ref=e1932]
+                          - button "حذف" [ref=e1934] [cursor=pointer]:
+                            - img [ref=e1935]
+                      - generic [ref=e1939]:
+                        - generic [ref=e1940] [cursor=pointer]:
+                          - img [ref=e1942]
+                          - generic [ref=e1945]: "1303"
+                          - generic [ref=e1946]: حقوق التأليف والنشر
+                        - generic [ref=e1947]: أصول
+                        - generic [ref=e1949]:
+                          - generic [ref=e1950]: "0.00"
+                          - generic [ref=e1951]: SAR
+                        - generic [ref=e1952]:
+                          - button "إضافة حساب فرعي" [ref=e1953] [cursor=pointer]:
+                            - img [ref=e1954]
+                          - button "تعديل" [ref=e1955] [cursor=pointer]:
+                            - img [ref=e1956]
+                          - button "حذف" [ref=e1958] [cursor=pointer]:
+                            - img [ref=e1959]
+                      - generic [ref=e1963]:
+                        - generic [ref=e1964] [cursor=pointer]:
+                          - img [ref=e1966]
+                          - generic [ref=e1969]: "1304"
+                          - generic [ref=e1970]: الإطفاء المتراكم
+                        - generic [ref=e1971]: أصول
+                        - generic [ref=e1973]:
+                          - generic [ref=e1974]: "0.00"
+                          - generic [ref=e1975]: SAR
+                        - generic [ref=e1976]:
+                          - button "إضافة حساب فرعي" [ref=e1977] [cursor=pointer]:
+                            - img [ref=e1978]
+                          - button "تعديل" [ref=e1979] [cursor=pointer]:
+                            - img [ref=e1980]
+                          - button "حذف" [ref=e1982] [cursor=pointer]:
+                            - img [ref=e1983]
+                      - generic [ref=e1987]:
+                        - generic [ref=e1988] [cursor=pointer]:
+                          - img [ref=e1990]
+                          - generic [ref=e1993]: "1305"
+                          - generic [ref=e1994]: أصل حق الاستخدام
+                        - generic [ref=e1995]: أصول
+                        - generic [ref=e1997]:
+                          - generic [ref=e1998]: "0.00"
+                          - generic [ref=e1999]: SAR
+                        - generic [ref=e2000]:
+                          - button "إضافة حساب فرعي" [ref=e2001] [cursor=pointer]:
+                            - img [ref=e2002]
+                          - button "تعديل" [ref=e2003] [cursor=pointer]:
+                            - img [ref=e2004]
+                          - button "حذف" [ref=e2006] [cursor=pointer]:
+                            - img [ref=e2007]
+              - generic [ref=e2010]:
+                - generic [ref=e2011]:
+                  - generic [ref=e2012] [cursor=pointer]:
+                    - img [ref=e2014]
+                    - img [ref=e2017]
+                    - generic [ref=e2019]: "2"
+                    - generic [ref=e2020]: الخصوم
+                  - generic [ref=e2021]: خصوم
+                  - generic [ref=e2023]:
+                    - generic [ref=e2024]: "0.00"
+                    - generic [ref=e2025]: SAR
+                  - generic [ref=e2026]:
+                    - button "إضافة حساب فرعي" [ref=e2027] [cursor=pointer]:
+                      - img [ref=e2028]
+                    - button "تعديل" [ref=e2029] [cursor=pointer]:
+                      - img [ref=e2030]
+                - generic [ref=e2032]:
+                  - generic [ref=e2033]:
+                    - generic [ref=e2034]:
+                      - generic [ref=e2035] [cursor=pointer]:
+                        - img [ref=e2037]
+                        - img [ref=e2040]
+                        - generic [ref=e2042]: "21"
+                        - generic [ref=e2043]: خصوم متداولة
+                      - generic [ref=e2044]: خصوم
+                      - generic [ref=e2046]:
+                        - generic [ref=e2047]: "0.00"
+                        - generic [ref=e2048]: SAR
+                      - generic [ref=e2049]:
+                        - button "إضافة حساب فرعي" [ref=e2050] [cursor=pointer]:
+                          - img [ref=e2051]
+                        - button "تعديل" [ref=e2052] [cursor=pointer]:
+                          - img [ref=e2053]
+                    - generic [ref=e2055]:
+                      - generic [ref=e2057]:
+                        - generic [ref=e2058] [cursor=pointer]:
+                          - img [ref=e2060]
+                          - generic [ref=e2063]: "2101"
+                          - generic [ref=e2064]: الموردين والذمم الدائنة
+                        - generic [ref=e2065]: خصوم
+                        - generic [ref=e2067]:
+                          - generic [ref=e2068]: "0.00"
+                          - generic [ref=e2069]: SAR
+                        - generic [ref=e2070]:
+                          - button "إضافة حساب فرعي" [ref=e2071] [cursor=pointer]:
+                            - img [ref=e2072]
+                          - button "تعديل" [ref=e2073] [cursor=pointer]:
+                            - img [ref=e2074]
+                          - button "حذف" [ref=e2076] [cursor=pointer]:
+                            - img [ref=e2077]
+                      - generic [ref=e2080]:
+                        - generic [ref=e2081]:
+                          - generic [ref=e2082] [cursor=pointer]:
+                            - img [ref=e2084]
+                            - img [ref=e2087]
+                            - generic [ref=e2089]: "2102"
+                            - generic [ref=e2090]: مصاريف مستحقة
+                          - generic [ref=e2091]: خصوم
+                          - generic [ref=e2093]:
+                            - generic [ref=e2094]: "0.00"
+                            - generic [ref=e2095]: SAR
+                          - generic [ref=e2096]:
+                            - button "إضافة حساب فرعي" [ref=e2097] [cursor=pointer]:
+                              - img [ref=e2098]
+                            - button "تعديل" [ref=e2099] [cursor=pointer]:
+                              - img [ref=e2100]
+                        - generic [ref=e2104]:
+                          - generic [ref=e2105] [cursor=pointer]:
+                            - img [ref=e2107]
+                            - generic [ref=e2110]: "2104"
+                            - generic [ref=e2111]: مشتريات مستلمة غير مفوترة
+                          - generic [ref=e2112]: خصوم
+                          - generic [ref=e2114]:
+                            - generic [ref=e2115]: "0.00"
+                            - generic [ref=e2116]: SAR
+                          - generic [ref=e2117]:
+                            - button "إضافة حساب فرعي" [ref=e2118] [cursor=pointer]:
+                              - img [ref=e2119]
+                            - button "تعديل" [ref=e2120] [cursor=pointer]:
+                              - img [ref=e2121]
+                            - button "حذف" [ref=e2123] [cursor=pointer]:
+                              - img [ref=e2124]
+                      - generic [ref=e2127]:
+                        - generic [ref=e2128]:
+                          - generic [ref=e2129] [cursor=pointer]:
+                            - img [ref=e2131]
+                            - img [ref=e2134]
+                            - generic [ref=e2136]: "2103"
+                            - generic [ref=e2137]: ضريبة القيمة المضافة
+                          - generic [ref=e2138]: خصوم
+                          - generic [ref=e2140]:
+                            - generic [ref=e2141]: "0.00"
+                            - generic [ref=e2142]: SAR
+                          - generic [ref=e2143]:
+                            - button "إضافة حساب فرعي" [ref=e2144] [cursor=pointer]:
+                              - img [ref=e2145]
+                            - button "تعديل" [ref=e2146] [cursor=pointer]:
+                              - img [ref=e2147]
+                        - generic [ref=e2151]:
+                          - generic [ref=e2152] [cursor=pointer]:
+                            - img [ref=e2154]
+                            - generic [ref=e2157]: "210301"
+                            - generic [ref=e2158]: ضريبة المخرجات
+                          - generic [ref=e2159]: خصوم
+                          - generic [ref=e2161]:
+                            - generic [ref=e2162]: "0.00"
+                            - generic [ref=e2163]: SAR
+                          - generic [ref=e2164]:
+                            - button "إضافة حساب فرعي" [ref=e2165] [cursor=pointer]:
+                              - img [ref=e2166]
+                            - button "تعديل" [ref=e2167] [cursor=pointer]:
+                              - img [ref=e2168]
+                            - button "حذف" [ref=e2170] [cursor=pointer]:
+                              - img [ref=e2171]
+                      - generic [ref=e2175]:
+                        - generic [ref=e2176] [cursor=pointer]:
+                          - img [ref=e2178]
+                          - generic [ref=e2181]: "2105"
+                          - generic [ref=e2182]: شيكات تحت الدفع
+                        - generic [ref=e2183]: خصوم
+                        - generic [ref=e2185]:
+                          - generic [ref=e2186]: "0.00"
+                          - generic [ref=e2187]: SAR
+                        - generic [ref=e2188]:
+                          - button "إضافة حساب فرعي" [ref=e2189] [cursor=pointer]:
+                            - img [ref=e2190]
+                          - button "تعديل" [ref=e2191] [cursor=pointer]:
+                            - img [ref=e2192]
+                          - button "حذف" [ref=e2194] [cursor=pointer]:
+                            - img [ref=e2195]
+                      - generic [ref=e2199]:
+                        - generic [ref=e2200] [cursor=pointer]:
+                          - img [ref=e2202]
+                          - generic [ref=e2205]: "2106"
+                          - generic [ref=e2206]: التأمينات الاجتماعية المستحقة
+                        - generic [ref=e2207]: خصوم
+                        - generic [ref=e2209]:
+                          - generic [ref=e2210]: "0.00"
+                          - generic [ref=e2211]: SAR
+                        - generic [ref=e2212]:
+                          - button "إضافة حساب فرعي" [ref=e2213] [cursor=pointer]:
+                            - img [ref=e2214]
+                          - button "تعديل" [ref=e2215] [cursor=pointer]:
+                            - img [ref=e2216]
+                          - button "حذف" [ref=e2218] [cursor=pointer]:
+                            - img [ref=e2219]
+                      - generic [ref=e2223]:
+                        - generic [ref=e2224] [cursor=pointer]:
+                          - img [ref=e2226]
+                          - generic [ref=e2229]: "2107"
+                          - generic [ref=e2230]: عربون / دفعات مقدمة من العملاء
+                        - generic [ref=e2231]: خصوم
+                        - generic [ref=e2233]:
+                          - generic [ref=e2234]: "0.00"
+                          - generic [ref=e2235]: SAR
+                        - generic [ref=e2236]:
+                          - button "إضافة حساب فرعي" [ref=e2237] [cursor=pointer]:
+                            - img [ref=e2238]
+                          - button "تعديل" [ref=e2239] [cursor=pointer]:
+                            - img [ref=e2240]
+                          - button "حذف" [ref=e2242] [cursor=pointer]:
+                            - img [ref=e2243]
+                      - generic [ref=e2247]:
+                        - generic [ref=e2248] [cursor=pointer]:
+                          - img [ref=e2250]
+                          - generic [ref=e2253]: "2108"
+                          - generic [ref=e2254]: ضريبة الاستقطاع
+                        - generic [ref=e2255]: خصوم
+                        - generic [ref=e2257]:
+                          - generic [ref=e2258]: "0.00"
+                          - generic [ref=e2259]: SAR
+                        - generic [ref=e2260]:
+                          - button "إضافة حساب فرعي" [ref=e2261] [cursor=pointer]:
+                            - img [ref=e2262]
+                          - button "تعديل" [ref=e2263] [cursor=pointer]:
+                            - img [ref=e2264]
+                          - button "حذف" [ref=e2266] [cursor=pointer]:
+                            - img [ref=e2267]
+                      - generic [ref=e2271]:
+                        - generic [ref=e2272] [cursor=pointer]:
+                          - img [ref=e2274]
+                          - generic [ref=e2277]: "2109"
+                          - generic [ref=e2278]: ضريبة الدخل المستحقة
+                        - generic [ref=e2279]: خصوم
+                        - generic [ref=e2281]:
+                          - generic [ref=e2282]: "0.00"
+                          - generic [ref=e2283]: SAR
+                        - generic [ref=e2284]:
+                          - button "إضافة حساب فرعي" [ref=e2285] [cursor=pointer]:
+                            - img [ref=e2286]
+                          - button "تعديل" [ref=e2287] [cursor=pointer]:
+                            - img [ref=e2288]
+                          - button "حذف" [ref=e2290] [cursor=pointer]:
+                            - img [ref=e2291]
+                      - generic [ref=e2295]:
+                        - generic [ref=e2296] [cursor=pointer]:
+                          - img [ref=e2298]
+                          - generic [ref=e2301]: "2110"
+                          - generic [ref=e2302]: أوراق دفع
+                        - generic [ref=e2303]: خصوم
+                        - generic [ref=e2305]:
+                          - generic [ref=e2306]: "0.00"
+                          - generic [ref=e2307]: SAR
+                        - generic [ref=e2308]:
+                          - button "إضافة حساب فرعي" [ref=e2309] [cursor=pointer]:
+                            - img [ref=e2310]
+                          - button "تعديل" [ref=e2311] [cursor=pointer]:
+                            - img [ref=e2312]
+                          - button "حذف" [ref=e2314] [cursor=pointer]:
+                            - img [ref=e2315]
+                      - generic [ref=e2319]:
+                        - generic [ref=e2320] [cursor=pointer]:
+                          - img [ref=e2322]
+                          - generic [ref=e2325]: "2111"
+                          - generic [ref=e2326]: الزكاة المستحقة
+                        - generic [ref=e2327]: خصوم
+                        - generic [ref=e2329]:
+                          - generic [ref=e2330]: "0.00"
+                          - generic [ref=e2331]: SAR
+                        - generic [ref=e2332]:
+                          - button "إضافة حساب فرعي" [ref=e2333] [cursor=pointer]:
+                            - img [ref=e2334]
+                          - button "تعديل" [ref=e2335] [cursor=pointer]:
+                            - img [ref=e2336]
+                          - button "حذف" [ref=e2338] [cursor=pointer]:
+                            - img [ref=e2339]
+                      - generic [ref=e2343]:
+                        - generic [ref=e2344] [cursor=pointer]:
+                          - img [ref=e2346]
+                          - generic [ref=e2349]: "2112"
+                          - generic [ref=e2350]: تسوية ضريبة القيمة المضافة
+                        - generic [ref=e2351]: خصوم
+                        - generic [ref=e2353]:
+                          - generic [ref=e2354]: "0.00"
+                          - generic [ref=e2355]: SAR
+                        - generic [ref=e2356]:
+                          - button "إضافة حساب فرعي" [ref=e2357] [cursor=pointer]:
+                            - img [ref=e2358]
+                          - button "تعديل" [ref=e2359] [cursor=pointer]:
+                            - img [ref=e2360]
+                          - button "حذف" [ref=e2362] [cursor=pointer]:
+                            - img [ref=e2363]
+                  - generic [ref=e2366]:
+                    - generic [ref=e2367]:
+                      - generic [ref=e2368] [cursor=pointer]:
+                        - img [ref=e2370]
+                        - img [ref=e2373]
+                        - generic [ref=e2375]: "22"
+                        - generic [ref=e2376]: خصوم غير متداولة
+                      - generic [ref=e2377]: خصوم
+                      - generic [ref=e2379]:
+                        - generic [ref=e2380]: "0.00"
+                        - generic [ref=e2381]: SAR
+                      - generic [ref=e2382]:
+                        - button "إضافة حساب فرعي" [ref=e2383] [cursor=pointer]:
+                          - img [ref=e2384]
+                        - button "تعديل" [ref=e2385] [cursor=pointer]:
+                          - img [ref=e2386]
+                    - generic [ref=e2388]:
+                      - generic [ref=e2390]:
+                        - generic [ref=e2391] [cursor=pointer]:
+                          - img [ref=e2393]
+                          - generic [ref=e2396]: "2201"
+                          - generic [ref=e2397]: قروض طويلة الأجل
+                        - generic [ref=e2398]: خصوم
+                        - generic [ref=e2400]:
+                          - generic [ref=e2401]: "0.00"
+                          - generic [ref=e2402]: SAR
+                        - generic [ref=e2403]:
+                          - button "إضافة حساب فرعي" [ref=e2404] [cursor=pointer]:
+                            - img [ref=e2405]
+                          - button "تعديل" [ref=e2406] [cursor=pointer]:
+                            - img [ref=e2407]
+                          - button "حذف" [ref=e2409] [cursor=pointer]:
+                            - img [ref=e2410]
+                      - generic [ref=e2414]:
+                        - generic [ref=e2415] [cursor=pointer]:
+                          - img [ref=e2417]
+                          - generic [ref=e2420]: "2202"
+                          - generic [ref=e2421]: مخصص نهاية الخدمة
+                        - generic [ref=e2422]: خصوم
+                        - generic [ref=e2424]:
+                          - generic [ref=e2425]: "0.00"
+                          - generic [ref=e2426]: SAR
+                        - generic [ref=e2427]:
+                          - button "إضافة حساب فرعي" [ref=e2428] [cursor=pointer]:
+                            - img [ref=e2429]
+                          - button "تعديل" [ref=e2430] [cursor=pointer]:
+                            - img [ref=e2431]
+                          - button "حذف" [ref=e2433] [cursor=pointer]:
+                            - img [ref=e2434]
+                      - generic [ref=e2438]:
+                        - generic [ref=e2439] [cursor=pointer]:
+                          - img [ref=e2441]
+                          - generic [ref=e2444]: "2203"
+                          - generic [ref=e2445]: مخصص الإجازات
+                        - generic [ref=e2446]: خصوم
+                        - generic [ref=e2448]:
+                          - generic [ref=e2449]: "0.00"
+                          - generic [ref=e2450]: SAR
+                        - generic [ref=e2451]:
+                          - button "إضافة حساب فرعي" [ref=e2452] [cursor=pointer]:
+                            - img [ref=e2453]
+                          - button "تعديل" [ref=e2454] [cursor=pointer]:
+                            - img [ref=e2455]
+                          - button "حذف" [ref=e2457] [cursor=pointer]:
+                            - img [ref=e2458]
+                      - generic [ref=e2462]:
+                        - generic [ref=e2463] [cursor=pointer]:
+                          - img [ref=e2465]
+                          - generic [ref=e2468]: "2204"
+                          - generic [ref=e2469]: مخصص الديون المعدومة
+                        - generic [ref=e2470]: خصوم
+                        - generic [ref=e2472]:
+                          - generic [ref=e2473]: "0.00"
+                          - generic [ref=e2474]: SAR
+                        - generic [ref=e2475]:
+                          - button "إضافة حساب فرعي" [ref=e2476] [cursor=pointer]:
+                            - img [ref=e2477]
+                          - button "تعديل" [ref=e2478] [cursor=pointer]:
+                            - img [ref=e2479]
+                          - button "حذف" [ref=e2481] [cursor=pointer]:
+                            - img [ref=e2482]
+              - generic [ref=e2485]:
+                - generic [ref=e2486]:
+                  - generic [ref=e2487] [cursor=pointer]:
+                    - img [ref=e2489]
+                    - img [ref=e2492]
+                    - generic [ref=e2494]: "3"
+                    - generic [ref=e2495]: حقوق الملكية
+                  - generic [ref=e2496]: حقوق ملكية
+                  - generic [ref=e2498]:
+                    - generic [ref=e2499]: "0.00"
+                    - generic [ref=e2500]: SAR
+                  - generic [ref=e2501]:
+                    - button "إضافة حساب فرعي" [ref=e2502] [cursor=pointer]:
+                      - img [ref=e2503]
+                    - button "تعديل" [ref=e2504] [cursor=pointer]:
+                      - img [ref=e2505]
+                - generic [ref=e2507]:
+                  - generic [ref=e2509]:
+                    - generic [ref=e2510] [cursor=pointer]:
+                      - img [ref=e2512]
+                      - generic [ref=e2515]: "31"
+                      - generic [ref=e2516]: رأس المال
+                    - generic [ref=e2517]: حقوق ملكية
+                    - generic [ref=e2519]:
+                      - generic [ref=e2520]: "0.00"
+                      - generic [ref=e2521]: SAR
+                    - generic [ref=e2522]:
+                      - button "إضافة حساب فرعي" [ref=e2523] [cursor=pointer]:
+                        - img [ref=e2524]
+                      - button "تعديل" [ref=e2525] [cursor=pointer]:
+                        - img [ref=e2526]
+                      - button "حذف" [ref=e2528] [cursor=pointer]:
+                        - img [ref=e2529]
+                  - generic [ref=e2533]:
+                    - generic [ref=e2534] [cursor=pointer]:
+                      - img [ref=e2536]
+                      - generic [ref=e2539]: "32"
+                      - generic [ref=e2540]: الأرباح المبقاة
+                    - generic [ref=e2541]: حقوق ملكية
+                    - generic [ref=e2543]:
+                      - generic [ref=e2544]: "0.00"
+                      - generic [ref=e2545]: SAR
+                    - generic [ref=e2546]:
+                      - button "إضافة حساب فرعي" [ref=e2547] [cursor=pointer]:
+                        - img [ref=e2548]
+                      - button "تعديل" [ref=e2549] [cursor=pointer]:
+                        - img [ref=e2550]
+                      - button "حذف" [ref=e2552] [cursor=pointer]:
+                        - img [ref=e2553]
+                  - generic [ref=e2557]:
+                    - generic [ref=e2558] [cursor=pointer]:
+                      - img [ref=e2560]
+                      - generic [ref=e2563]: "33"
+                      - generic [ref=e2564]: أرباح العام الحالي
+                    - generic [ref=e2565]: حقوق ملكية
+                    - generic [ref=e2567]:
+                      - generic [ref=e2568]: "0.00"
+                      - generic [ref=e2569]: SAR
+                    - generic [ref=e2570]:
+                      - button "إضافة حساب فرعي" [ref=e2571] [cursor=pointer]:
+                        - img [ref=e2572]
+                      - button "تعديل" [ref=e2573] [cursor=pointer]:
+                        - img [ref=e2574]
+                      - button "حذف" [ref=e2576] [cursor=pointer]:
+                        - img [ref=e2577]
+                  - generic [ref=e2581]:
+                    - generic [ref=e2582] [cursor=pointer]:
+                      - img [ref=e2584]
+                      - generic [ref=e2587]: "34"
+                      - generic [ref=e2588]: الجارى والمسحوبات
+                    - generic [ref=e2589]: حقوق ملكية
+                    - generic [ref=e2591]:
+                      - generic [ref=e2592]: "0.00"
+                      - generic [ref=e2593]: SAR
+                    - generic [ref=e2594]:
+                      - button "إضافة حساب فرعي" [ref=e2595] [cursor=pointer]:
+                        - img [ref=e2596]
+                      - button "تعديل" [ref=e2597] [cursor=pointer]:
+                        - img [ref=e2598]
+                      - button "حذف" [ref=e2600] [cursor=pointer]:
+                        - img [ref=e2601]
+                  - generic [ref=e2605]:
+                    - generic [ref=e2606] [cursor=pointer]:
+                      - img [ref=e2608]
+                      - generic [ref=e2611]: "35"
+                      - generic [ref=e2612]: احتياطي إعادة التقييم
+                    - generic [ref=e2613]: حقوق ملكية
+                    - generic [ref=e2615]:
+                      - generic [ref=e2616]: "0.00"
+                      - generic [ref=e2617]: SAR
+                    - generic [ref=e2618]:
+                      - button "إضافة حساب فرعي" [ref=e2619] [cursor=pointer]:
+                        - img [ref=e2620]
+                      - button "تعديل" [ref=e2621] [cursor=pointer]:
+                        - img [ref=e2622]
+                      - button "حذف" [ref=e2624] [cursor=pointer]:
+                        - img [ref=e2625]
+              - generic [ref=e2628]:
+                - generic [ref=e2629]:
+                  - generic [ref=e2630] [cursor=pointer]:
+                    - img [ref=e2632]
+                    - img [ref=e2635]
+                    - generic [ref=e2637]: "4"
+                    - generic [ref=e2638]: الإيرادات
+                  - generic [ref=e2639]: إيرادات
+                  - generic [ref=e2641]:
+                    - generic [ref=e2642]: "0.00"
+                    - generic [ref=e2643]: SAR
+                  - generic [ref=e2644]:
+                    - button "إضافة حساب فرعي" [ref=e2645] [cursor=pointer]:
+                      - img [ref=e2646]
+                    - button "تعديل" [ref=e2647] [cursor=pointer]:
+                      - img [ref=e2648]
+                - generic [ref=e2650]:
+                  - generic [ref=e2651]:
+                    - generic [ref=e2652]:
+                      - generic [ref=e2653] [cursor=pointer]:
+                        - img [ref=e2655]
+                        - img [ref=e2658]
+                        - generic [ref=e2660]: "41"
+                        - generic [ref=e2661]: إيرادات التشغيل
+                      - generic [ref=e2662]: إيرادات
+                      - generic [ref=e2664]:
+                        - generic [ref=e2665]: "0.00"
+                        - generic [ref=e2666]: SAR
+                      - generic [ref=e2667]:
+                        - button "إضافة حساب فرعي" [ref=e2668] [cursor=pointer]:
+                          - img [ref=e2669]
+                        - button "تعديل" [ref=e2670] [cursor=pointer]:
+                          - img [ref=e2671]
+                    - generic [ref=e2673]:
+                      - generic [ref=e2675]:
+                        - generic [ref=e2676] [cursor=pointer]:
+                          - img [ref=e2678]
+                          - generic [ref=e2681]: "4101"
+                          - generic [ref=e2682]: مبيعات البضائع
+                        - generic [ref=e2683]: إيرادات
+                        - generic [ref=e2685]:
+                          - generic [ref=e2686]: "0.00"
+                          - generic [ref=e2687]: SAR
+                        - generic [ref=e2688]:
+                          - button "إضافة حساب فرعي" [ref=e2689] [cursor=pointer]:
+                            - img [ref=e2690]
+                          - button "تعديل" [ref=e2691] [cursor=pointer]:
+                            - img [ref=e2692]
+                          - button "حذف" [ref=e2694] [cursor=pointer]:
+                            - img [ref=e2695]
+                      - generic [ref=e2699]:
+                        - generic [ref=e2700] [cursor=pointer]:
+                          - img [ref=e2702]
+                          - generic [ref=e2705]: "41010"
+                          - generic [ref=e2706]: مبيعات متنوعة
+                          - generic [ref=e2707]: مبيعات
+                        - generic [ref=e2708]: إيرادات
+                        - generic [ref=e2710]:
+                          - generic [ref=e2711]: "0.00"
+                          - generic [ref=e2712]: SAR
+                        - generic [ref=e2713]:
+                          - button "إضافة حساب فرعي" [ref=e2714] [cursor=pointer]:
+                            - img [ref=e2715]
+                          - button "تعديل" [ref=e2716] [cursor=pointer]:
+                            - img [ref=e2717]
+                          - button "حذف" [ref=e2719] [cursor=pointer]:
+                            - img [ref=e2720]
+                      - generic [ref=e2724]:
+                        - generic [ref=e2725] [cursor=pointer]:
+                          - img [ref=e2727]
+                          - generic [ref=e2730]: "4102"
+                          - generic [ref=e2731]: إيرادات الخدمات
+                          - generic [ref=e2732]: خدمات
+                        - generic [ref=e2733]: إيرادات
+                        - generic [ref=e2735]:
+                          - generic [ref=e2736]: "0.00"
+                          - generic [ref=e2737]: SAR
+                        - generic [ref=e2738]:
+                          - button "إضافة حساب فرعي" [ref=e2739] [cursor=pointer]:
+                            - img [ref=e2740]
+                          - button "تعديل" [ref=e2741] [cursor=pointer]:
+                            - img [ref=e2742]
+                          - button "حذف" [ref=e2744] [cursor=pointer]:
+                            - img [ref=e2745]
+                      - generic [ref=e2749]:
+                        - generic [ref=e2750] [cursor=pointer]:
+                          - img [ref=e2752]
+                          - generic [ref=e2755]: "41020"
+                          - generic [ref=e2756]: مردودات مبيعات
+                          - generic [ref=e2757]: مبيعات
+                        - generic [ref=e2758]: إيرادات
+                        - generic [ref=e2760]:
+                          - generic [ref=e2761]: "0.00"
+                          - generic [ref=e2762]: SAR
+                        - generic [ref=e2763]:
+                          - button "إضافة حساب فرعي" [ref=e2764] [cursor=pointer]:
+                            - img [ref=e2765]
+                          - button "تعديل" [ref=e2766] [cursor=pointer]:
+                            - img [ref=e2767]
+                          - button "حذف" [ref=e2769] [cursor=pointer]:
+                            - img [ref=e2770]
+                      - generic [ref=e2774]:
+                        - generic [ref=e2775] [cursor=pointer]:
+                          - img [ref=e2777]
+                          - generic [ref=e2780]: "4103"
+                          - generic [ref=e2781]: مردودات المبيعات
+                        - generic [ref=e2782]: إيرادات
+                        - generic [ref=e2784]:
+                          - generic [ref=e2785]: "0.00"
+                          - generic [ref=e2786]: SAR
+                        - generic [ref=e2787]:
+                          - button "إضافة حساب فرعي" [ref=e2788] [cursor=pointer]:
+                            - img [ref=e2789]
+                          - button "تعديل" [ref=e2790] [cursor=pointer]:
+                            - img [ref=e2791]
+                          - button "حذف" [ref=e2793] [cursor=pointer]:
+                            - img [ref=e2794]
+                      - generic [ref=e2798]:
+                        - generic [ref=e2799] [cursor=pointer]:
+                          - img [ref=e2801]
+                          - generic [ref=e2804]: "4104"
+                          - generic [ref=e2805]: خصم مبيعات
+                        - generic [ref=e2806]: إيرادات
+                        - generic [ref=e2808]:
+                          - generic [ref=e2809]: "0.00"
+                          - generic [ref=e2810]: SAR
+                        - generic [ref=e2811]:
+                          - button "إضافة حساب فرعي" [ref=e2812] [cursor=pointer]:
+                            - img [ref=e2813]
+                          - button "تعديل" [ref=e2814] [cursor=pointer]:
+                            - img [ref=e2815]
+                          - button "حذف" [ref=e2817] [cursor=pointer]:
+                            - img [ref=e2818]
+                  - generic [ref=e2821]:
+                    - generic [ref=e2822]:
+                      - generic [ref=e2823] [cursor=pointer]:
+                        - img [ref=e2825]
+                        - img [ref=e2828]
+                        - generic [ref=e2830]: "42"
+                        - generic [ref=e2831]: إيرادات أخرى
+                      - generic [ref=e2832]: إيرادات
+                      - generic [ref=e2834]:
+                        - generic [ref=e2835]: "0.00"
+                        - generic [ref=e2836]: SAR
+                      - generic [ref=e2837]:
+                        - button "إضافة حساب فرعي" [ref=e2838] [cursor=pointer]:
+                          - img [ref=e2839]
+                        - button "تعديل" [ref=e2840] [cursor=pointer]:
+                          - img [ref=e2841]
+                    - generic [ref=e2843]:
+                      - generic [ref=e2845]:
+                        - generic [ref=e2846] [cursor=pointer]:
+                          - img [ref=e2848]
+                          - generic [ref=e2851]: "4201"
+                          - generic [ref=e2852]: أرباح فروقات عملة (محققة)
+                        - generic [ref=e2853]: إيرادات
+                        - generic [ref=e2855]:
+                          - generic [ref=e2856]: "0.00"
+                          - generic [ref=e2857]: SAR
+                        - generic [ref=e2858]:
+                          - button "إضافة حساب فرعي" [ref=e2859] [cursor=pointer]:
+                            - img [ref=e2860]
+                          - button "تعديل" [ref=e2861] [cursor=pointer]:
+                            - img [ref=e2862]
+                          - button "حذف" [ref=e2864] [cursor=pointer]:
+                            - img [ref=e2865]
+                      - generic [ref=e2869]:
+                        - generic [ref=e2870] [cursor=pointer]:
+                          - img [ref=e2872]
+                          - generic [ref=e2875]: "4202"
+                          - generic [ref=e2876]: أرباح فروقات عملة (غير محققة)
+                        - generic [ref=e2877]: إيرادات
+                        - generic [ref=e2879]:
+                          - generic [ref=e2880]: "0.00"
+                          - generic [ref=e2881]: SAR
+                        - generic [ref=e2882]:
+                          - button "إضافة حساب فرعي" [ref=e2883] [cursor=pointer]:
+                            - img [ref=e2884]
+                          - button "تعديل" [ref=e2885] [cursor=pointer]:
+                            - img [ref=e2886]
+                          - button "حذف" [ref=e2888] [cursor=pointer]:
+                            - img [ref=e2889]
+                      - generic [ref=e2893]:
+                        - generic [ref=e2894] [cursor=pointer]:
+                          - img [ref=e2896]
+                          - generic [ref=e2899]: "4203"
+                          - generic [ref=e2900]: فوائد محصلة
+                        - generic [ref=e2901]: إيرادات
+                        - generic [ref=e2903]:
+                          - generic [ref=e2904]: "0.00"
+                          - generic [ref=e2905]: SAR
+                        - generic [ref=e2906]:
+                          - button "إضافة حساب فرعي" [ref=e2907] [cursor=pointer]:
+                            - img [ref=e2908]
+                          - button "تعديل" [ref=e2909] [cursor=pointer]:
+                            - img [ref=e2910]
+                          - button "حذف" [ref=e2912] [cursor=pointer]:
+                            - img [ref=e2913]
+                      - generic [ref=e2917]:
+                        - generic [ref=e2918] [cursor=pointer]:
+                          - img [ref=e2920]
+                          - generic [ref=e2923]: "4204"
+                          - generic [ref=e2924]: توزيعات أرباح
+                        - generic [ref=e2925]: إيرادات
+                        - generic [ref=e2927]:
+                          - generic [ref=e2928]: "0.00"
+                          - generic [ref=e2929]: SAR
+                        - generic [ref=e2930]:
+                          - button "إضافة حساب فرعي" [ref=e2931] [cursor=pointer]:
+                            - img [ref=e2932]
+                          - button "تعديل" [ref=e2933] [cursor=pointer]:
+                            - img [ref=e2934]
+                          - button "حذف" [ref=e2936] [cursor=pointer]:
+                            - img [ref=e2937]
+                      - generic [ref=e2941]:
+                        - generic [ref=e2942] [cursor=pointer]:
+                          - img [ref=e2944]
+                          - generic [ref=e2947]: "4205"
+                          - generic [ref=e2948]: ربح بيع أصول
+                        - generic [ref=e2949]: إيرادات
+                        - generic [ref=e2951]:
+                          - generic [ref=e2952]: "0.00"
+                          - generic [ref=e2953]: SAR
+                        - generic [ref=e2954]:
+                          - button "إضافة حساب فرعي" [ref=e2955] [cursor=pointer]:
+                            - img [ref=e2956]
+                          - button "تعديل" [ref=e2957] [cursor=pointer]:
+                            - img [ref=e2958]
+                          - button "حذف" [ref=e2960] [cursor=pointer]:
+                            - img [ref=e2961]
+                      - generic [ref=e2965]:
+                        - generic [ref=e2966] [cursor=pointer]:
+                          - img [ref=e2968]
+                          - generic [ref=e2971]: "4206"
+                          - generic [ref=e2972]: خصومات مكتسبة
+                        - generic [ref=e2973]: إيرادات
+                        - generic [ref=e2975]:
+                          - generic [ref=e2976]: "0.00"
+                          - generic [ref=e2977]: SAR
+                        - generic [ref=e2978]:
+                          - button "إضافة حساب فرعي" [ref=e2979] [cursor=pointer]:
+                            - img [ref=e2980]
+                          - button "تعديل" [ref=e2981] [cursor=pointer]:
+                            - img [ref=e2982]
+                          - button "حذف" [ref=e2984] [cursor=pointer]:
+                            - img [ref=e2985]
+              - generic [ref=e2988]:
+                - generic [ref=e2989]:
+                  - generic [ref=e2990] [cursor=pointer]:
+                    - img [ref=e2992]
+                    - img [ref=e2995]
+                    - generic [ref=e2997]: "5"
+                    - generic [ref=e2998]: المصروفات
+                  - generic [ref=e2999]: مصروفات
+                  - generic [ref=e3001]:
+                    - generic [ref=e3002]: "0.00"
+                    - generic [ref=e3003]: SAR
+                  - generic [ref=e3004]:
+                    - button "إضافة حساب فرعي" [ref=e3005] [cursor=pointer]:
+                      - img [ref=e3006]
+                    - button "تعديل" [ref=e3007] [cursor=pointer]:
+                      - img [ref=e3008]
+                - generic [ref=e3010]:
+                  - generic [ref=e3011]:
+                    - generic [ref=e3012]:
+                      - generic [ref=e3013] [cursor=pointer]:
+                        - img [ref=e3015]
+                        - img [ref=e3018]
+                        - generic [ref=e3020]: "51"
+                        - generic [ref=e3021]: تكلفة البضاعة المباعة
+                      - generic [ref=e3022]: مصروفات
+                      - generic [ref=e3024]:
+                        - generic [ref=e3025]: "0.00"
+                        - generic [ref=e3026]: SAR
+                      - generic [ref=e3027]:
+                        - button "إضافة حساب فرعي" [ref=e3028] [cursor=pointer]:
+                          - img [ref=e3029]
+                        - button "تعديل" [ref=e3030] [cursor=pointer]:
+                          - img [ref=e3031]
+                    - generic [ref=e3033]:
+                      - generic [ref=e3035]:
+                        - generic [ref=e3036] [cursor=pointer]:
+                          - img [ref=e3038]
+                          - generic [ref=e3041]: "5101"
+                          - generic [ref=e3042]: تكلفة مبيعات البضائع
+                        - generic [ref=e3043]: مصروفات
+                        - generic [ref=e3045]:
+                          - generic [ref=e3046]: "0.00"
+                          - generic [ref=e3047]: SAR
+                        - generic [ref=e3048]:
+                          - button "إضافة حساب فرعي" [ref=e3049] [cursor=pointer]:
+                            - img [ref=e3050]
+                          - button "تعديل" [ref=e3051] [cursor=pointer]:
+                            - img [ref=e3052]
+                          - button "حذف" [ref=e3054] [cursor=pointer]:
+                            - img [ref=e3055]
+                      - generic [ref=e3059]:
+                        - generic [ref=e3060] [cursor=pointer]:
+                          - img [ref=e3062]
+                          - generic [ref=e3065]: "5102"
+                          - generic [ref=e3066]: تكلفة التصنيع
+                          - generic [ref=e3067]: تصنيع
+                        - generic [ref=e3068]: مصروفات
+                        - generic [ref=e3070]:
+                          - generic [ref=e3071]: "0.00"
+                          - generic [ref=e3072]: SAR
+                        - generic [ref=e3073]:
+                          - button "إضافة حساب فرعي" [ref=e3074] [cursor=pointer]:
+                            - img [ref=e3075]
+                          - button "تعديل" [ref=e3076] [cursor=pointer]:
+                            - img [ref=e3077]
+                          - button "حذف" [ref=e3079] [cursor=pointer]:
+                            - img [ref=e3080]
+                      - generic [ref=e3084]:
+                        - generic [ref=e3085] [cursor=pointer]:
+                          - img [ref=e3087]
+                          - generic [ref=e3090]: "5103"
+                          - generic [ref=e3091]: تكلفة العمالة المباشرة
+                          - generic [ref=e3092]: تصنيع
+                        - generic [ref=e3093]: مصروفات
+                        - generic [ref=e3095]:
+                          - generic [ref=e3096]: "0.00"
+                          - generic [ref=e3097]: SAR
+                        - generic [ref=e3098]:
+                          - button "إضافة حساب فرعي" [ref=e3099] [cursor=pointer]:
+                            - img [ref=e3100]
+                          - button "تعديل" [ref=e3101] [cursor=pointer]:
+                            - img [ref=e3102]
+                          - button "حذف" [ref=e3104] [cursor=pointer]:
+                            - img [ref=e3105]
+                      - generic [ref=e3109]:
+                        - generic [ref=e3110] [cursor=pointer]:
+                          - img [ref=e3112]
+                          - generic [ref=e3115]: "5104"
+                          - generic [ref=e3116]: المصاريف الصناعية العامة
+                          - generic [ref=e3117]: تصنيع
+                        - generic [ref=e3118]: مصروفات
+                        - generic [ref=e3120]:
+                          - generic [ref=e3121]: "0.00"
+                          - generic [ref=e3122]: SAR
+                        - generic [ref=e3123]:
+                          - button "إضافة حساب فرعي" [ref=e3124] [cursor=pointer]:
+                            - img [ref=e3125]
+                          - button "تعديل" [ref=e3126] [cursor=pointer]:
+                            - img [ref=e3127]
+                          - button "حذف" [ref=e3129] [cursor=pointer]:
+                            - img [ref=e3130]
+                  - generic [ref=e3133]:
+                    - generic [ref=e3134]:
+                      - generic [ref=e3135] [cursor=pointer]:
+                        - img [ref=e3137]
+                        - img [ref=e3140]
+                        - generic [ref=e3142]: "52"
+                        - generic [ref=e3143]: المصروفات التشغيلية والإدارية
+                      - generic [ref=e3144]: مصروفات
+                      - generic [ref=e3146]:
+                        - generic [ref=e3147]: "0.00"
+                        - generic [ref=e3148]: SAR
+                      - generic [ref=e3149]:
+                        - button "إضافة حساب فرعي" [ref=e3150] [cursor=pointer]:
+                          - img [ref=e3151]
+                        - button "تعديل" [ref=e3152] [cursor=pointer]:
+                          - img [ref=e3153]
+                    - generic [ref=e3155]:
+                      - generic [ref=e3157]:
+                        - generic [ref=e3158] [cursor=pointer]:
+                          - img [ref=e3160]
+                          - generic [ref=e3163]: "5201"
+                          - generic [ref=e3164]: الرواتب والأجور
+                          - generic [ref=e3165]: HR
+                        - generic [ref=e3166]: مصروفات
+                        - generic [ref=e3168]:
+                          - generic [ref=e3169]: "0.00"
+                          - generic [ref=e3170]: SAR
+                        - generic [ref=e3171]:
+                          - button "إضافة حساب فرعي" [ref=e3172] [cursor=pointer]:
+                            - img [ref=e3173]
+                          - button "تعديل" [ref=e3174] [cursor=pointer]:
+                            - img [ref=e3175]
+                          - button "حذف" [ref=e3177] [cursor=pointer]:
+                            - img [ref=e3178]
+                      - generic [ref=e3182]:
+                        - generic [ref=e3183] [cursor=pointer]:
+                          - img [ref=e3185]
+                          - generic [ref=e3188]: "5202"
+                          - generic [ref=e3189]: مصروف الإيجار
+                        - generic [ref=e3190]: مصروفات
+                        - generic [ref=e3192]:
+                          - generic [ref=e3193]: "0.00"
+                          - generic [ref=e3194]: SAR
+                        - generic [ref=e3195]:
+                          - button "إضافة حساب فرعي" [ref=e3196] [cursor=pointer]:
+                            - img [ref=e3197]
+                          - button "تعديل" [ref=e3198] [cursor=pointer]:
+                            - img [ref=e3199]
+                          - button "حذف" [ref=e3201] [cursor=pointer]:
+                            - img [ref=e3202]
+                      - generic [ref=e3206]:
+                        - generic [ref=e3207] [cursor=pointer]:
+                          - img [ref=e3209]
+                          - generic [ref=e3212]: "5203"
+                          - generic [ref=e3213]: الكهرباء والمياه
+                        - generic [ref=e3214]: مصروفات
+                        - generic [ref=e3216]:
+                          - generic [ref=e3217]: "0.00"
+                          - generic [ref=e3218]: SAR
+                        - generic [ref=e3219]:
+                          - button "إضافة حساب فرعي" [ref=e3220] [cursor=pointer]:
+                            - img [ref=e3221]
+                          - button "تعديل" [ref=e3222] [cursor=pointer]:
+                            - img [ref=e3223]
+                          - button "حذف" [ref=e3225] [cursor=pointer]:
+                            - img [ref=e3226]
+                      - generic [ref=e3230]:
+                        - generic [ref=e3231] [cursor=pointer]:
+                          - img [ref=e3233]
+                          - generic [ref=e3236]: "5204"
+                          - generic [ref=e3237]: الاتصالات والإنترنت
+                        - generic [ref=e3238]: مصروفات
+                        - generic [ref=e3240]:
+                          - generic [ref=e3241]: "0.00"
+                          - generic [ref=e3242]: SAR
+                        - generic [ref=e3243]:
+                          - button "إضافة حساب فرعي" [ref=e3244] [cursor=pointer]:
+                            - img [ref=e3245]
+                          - button "تعديل" [ref=e3246] [cursor=pointer]:
+                            - img [ref=e3247]
+                          - button "حذف" [ref=e3249] [cursor=pointer]:
+                            - img [ref=e3250]
+                      - generic [ref=e3254]:
+                        - generic [ref=e3255] [cursor=pointer]:
+                          - img [ref=e3257]
+                          - generic [ref=e3260]: "5205"
+                          - generic [ref=e3261]: الصيانة
+                        - generic [ref=e3262]: مصروفات
+                        - generic [ref=e3264]:
+                          - generic [ref=e3265]: "0.00"
+                          - generic [ref=e3266]: SAR
+                        - generic [ref=e3267]:
+                          - button "إضافة حساب فرعي" [ref=e3268] [cursor=pointer]:
+                            - img [ref=e3269]
+                          - button "تعديل" [ref=e3270] [cursor=pointer]:
+                            - img [ref=e3271]
+                          - button "حذف" [ref=e3273] [cursor=pointer]:
+                            - img [ref=e3274]
+                      - generic [ref=e3278]:
+                        - generic [ref=e3279] [cursor=pointer]:
+                          - img [ref=e3281]
+                          - generic [ref=e3284]: "5206"
+                          - generic [ref=e3285]: الرسوم الحكومية
+                        - generic [ref=e3286]: مصروفات
+                        - generic [ref=e3288]:
+                          - generic [ref=e3289]: "0.00"
+                          - generic [ref=e3290]: SAR
+                        - generic [ref=e3291]:
+                          - button "إضافة حساب فرعي" [ref=e3292] [cursor=pointer]:
+                            - img [ref=e3293]
+                          - button "تعديل" [ref=e3294] [cursor=pointer]:
+                            - img [ref=e3295]
+                          - button "حذف" [ref=e3297] [cursor=pointer]:
+                            - img [ref=e3298]
+                      - generic [ref=e3302]:
+                        - generic [ref=e3303] [cursor=pointer]:
+                          - img [ref=e3305]
+                          - generic [ref=e3308]: "5207"
+                          - generic [ref=e3309]: التسويق والإعلان
+                        - generic [ref=e3310]: مصروفات
+                        - generic [ref=e3312]:
+                          - generic [ref=e3313]: "0.00"
+                          - generic [ref=e3314]: SAR
+                        - generic [ref=e3315]:
+                          - button "إضافة حساب فرعي" [ref=e3316] [cursor=pointer]:
+                            - img [ref=e3317]
+                          - button "تعديل" [ref=e3318] [cursor=pointer]:
+                            - img [ref=e3319]
+                          - button "حذف" [ref=e3321] [cursor=pointer]:
+                            - img [ref=e3322]
+                      - generic [ref=e3326]:
+                        - generic [ref=e3327] [cursor=pointer]:
+                          - img [ref=e3329]
+                          - generic [ref=e3332]: "5208"
+                          - generic [ref=e3333]: مصاريف السفر والتنقل
+                        - generic [ref=e3334]: مصروفات
+                        - generic [ref=e3336]:
+                          - generic [ref=e3337]: "0.00"
+                          - generic [ref=e3338]: SAR
+                        - generic [ref=e3339]:
+                          - button "إضافة حساب فرعي" [ref=e3340] [cursor=pointer]:
+                            - img [ref=e3341]
+                          - button "تعديل" [ref=e3342] [cursor=pointer]:
+                            - img [ref=e3343]
+                          - button "حذف" [ref=e3345] [cursor=pointer]:
+                            - img [ref=e3346]
+                      - generic [ref=e3350]:
+                        - generic [ref=e3351] [cursor=pointer]:
+                          - img [ref=e3353]
+                          - generic [ref=e3356]: "5209"
+                          - generic [ref=e3357]: مصروفات عمومية
+                        - generic [ref=e3358]: مصروفات
+                        - generic [ref=e3360]:
+                          - generic [ref=e3361]: "0.00"
+                          - generic [ref=e3362]: SAR
+                        - generic [ref=e3363]:
+                          - button "إضافة حساب فرعي" [ref=e3364] [cursor=pointer]:
+                            - img [ref=e3365]
+                          - button "تعديل" [ref=e3366] [cursor=pointer]:
+                            - img [ref=e3367]
+                          - button "حذف" [ref=e3369] [cursor=pointer]:
+                            - img [ref=e3370]
+                      - generic [ref=e3374]:
+                        - generic [ref=e3375] [cursor=pointer]:
+                          - img [ref=e3377]
+                          - generic [ref=e3380]: "5210"
+                          - generic [ref=e3381]: مصروف التأمينات الاجتماعية
+                          - generic [ref=e3382]: HR
+                        - generic [ref=e3383]: مصروفات
+                        - generic [ref=e3385]:
+                          - generic [ref=e3386]: "0.00"
+                          - generic [ref=e3387]: SAR
+                        - generic [ref=e3388]:
+                          - button "إضافة حساب فرعي" [ref=e3389] [cursor=pointer]:
+                            - img [ref=e3390]
+                          - button "تعديل" [ref=e3391] [cursor=pointer]:
+                            - img [ref=e3392]
+                          - button "حذف" [ref=e3394] [cursor=pointer]:
+                            - img [ref=e3395]
+                      - generic [ref=e3399]:
+                        - generic [ref=e3400] [cursor=pointer]:
+                          - img [ref=e3402]
+                          - generic [ref=e3405]: "5211"
+                          - generic [ref=e3406]: مصروف التأمين
+                        - generic [ref=e3407]: مصروفات
+                        - generic [ref=e3409]:
+                          - generic [ref=e3410]: "0.00"
+                          - generic [ref=e3411]: SAR
+                        - generic [ref=e3412]:
+                          - button "إضافة حساب فرعي" [ref=e3413] [cursor=pointer]:
+                            - img [ref=e3414]
+                          - button "تعديل" [ref=e3415] [cursor=pointer]:
+                            - img [ref=e3416]
+                          - button "حذف" [ref=e3418] [cursor=pointer]:
+                            - img [ref=e3419]
+                      - generic [ref=e3423]:
+                        - generic [ref=e3424] [cursor=pointer]:
+                          - img [ref=e3426]
+                          - generic [ref=e3429]: "5212"
+                          - generic [ref=e3430]: مصروف النظافة
+                        - generic [ref=e3431]: مصروفات
+                        - generic [ref=e3433]:
+                          - generic [ref=e3434]: "0.00"
+                          - generic [ref=e3435]: SAR
+                        - generic [ref=e3436]:
+                          - button "إضافة حساب فرعي" [ref=e3437] [cursor=pointer]:
+                            - img [ref=e3438]
+                          - button "تعديل" [ref=e3439] [cursor=pointer]:
+                            - img [ref=e3440]
+                          - button "حذف" [ref=e3442] [cursor=pointer]:
+                            - img [ref=e3443]
+                      - generic [ref=e3447]:
+                        - generic [ref=e3448] [cursor=pointer]:
+                          - img [ref=e3450]
+                          - generic [ref=e3453]: "5213"
+                          - generic [ref=e3454]: مصروف القرطاسية
+                        - generic [ref=e3455]: مصروفات
+                        - generic [ref=e3457]:
+                          - generic [ref=e3458]: "0.00"
+                          - generic [ref=e3459]: SAR
+                        - generic [ref=e3460]:
+                          - button "إضافة حساب فرعي" [ref=e3461] [cursor=pointer]:
+                            - img [ref=e3462]
+                          - button "تعديل" [ref=e3463] [cursor=pointer]:
+                            - img [ref=e3464]
+                          - button "حذف" [ref=e3466] [cursor=pointer]:
+                            - img [ref=e3467]
+                      - generic [ref=e3471]:
+                        - generic [ref=e3472] [cursor=pointer]:
+                          - img [ref=e3474]
+                          - generic [ref=e3477]: "5214"
+                          - generic [ref=e3478]: مصروف الضيافة
+                        - generic [ref=e3479]: مصروفات
+                        - generic [ref=e3481]:
+                          - generic [ref=e3482]: "0.00"
+                          - generic [ref=e3483]: SAR
+                        - generic [ref=e3484]:
+                          - button "إضافة حساب فرعي" [ref=e3485] [cursor=pointer]:
+                            - img [ref=e3486]
+                          - button "تعديل" [ref=e3487] [cursor=pointer]:
+                            - img [ref=e3488]
+                          - button "حذف" [ref=e3490] [cursor=pointer]:
+                            - img [ref=e3491]
+                      - generic [ref=e3495]:
+                        - generic [ref=e3496] [cursor=pointer]:
+                          - img [ref=e3498]
+                          - generic [ref=e3501]: "5215"
+                          - generic [ref=e3502]: مصروفات قانونية
+                        - generic [ref=e3503]: مصروفات
+                        - generic [ref=e3505]:
+                          - generic [ref=e3506]: "0.00"
+                          - generic [ref=e3507]: SAR
+                        - generic [ref=e3508]:
+                          - button "إضافة حساب فرعي" [ref=e3509] [cursor=pointer]:
+                            - img [ref=e3510]
+                          - button "تعديل" [ref=e3511] [cursor=pointer]:
+                            - img [ref=e3512]
+                          - button "حذف" [ref=e3514] [cursor=pointer]:
+                            - img [ref=e3515]
+                      - generic [ref=e3519]:
+                        - generic [ref=e3520] [cursor=pointer]:
+                          - img [ref=e3522]
+                          - generic [ref=e3525]: "5216"
+                          - generic [ref=e3526]: مصروف التدقيق والمراجعة
+                        - generic [ref=e3527]: مصروفات
+                        - generic [ref=e3529]:
+                          - generic [ref=e3530]: "0.00"
+                          - generic [ref=e3531]: SAR
+                        - generic [ref=e3532]:
+                          - button "إضافة حساب فرعي" [ref=e3533] [cursor=pointer]:
+                            - img [ref=e3534]
+                          - button "تعديل" [ref=e3535] [cursor=pointer]:
+                            - img [ref=e3536]
+                          - button "حذف" [ref=e3538] [cursor=pointer]:
+                            - img [ref=e3539]
+                      - generic [ref=e3543]:
+                        - generic [ref=e3544] [cursor=pointer]:
+                          - img [ref=e3546]
+                          - generic [ref=e3549]: "5217"
+                          - generic [ref=e3550]: عمولات المبيعات
+                        - generic [ref=e3551]: مصروفات
+                        - generic [ref=e3553]:
+                          - generic [ref=e3554]: "0.00"
+                          - generic [ref=e3555]: SAR
+                        - generic [ref=e3556]:
+                          - button "إضافة حساب فرعي" [ref=e3557] [cursor=pointer]:
+                            - img [ref=e3558]
+                          - button "تعديل" [ref=e3559] [cursor=pointer]:
+                            - img [ref=e3560]
+                          - button "حذف" [ref=e3562] [cursor=pointer]:
+                            - img [ref=e3563]
+                      - generic [ref=e3567]:
+                        - generic [ref=e3568] [cursor=pointer]:
+                          - img [ref=e3570]
+                          - generic [ref=e3573]: "5218"
+                          - generic [ref=e3574]: علاقات عامة
+                        - generic [ref=e3575]: مصروفات
+                        - generic [ref=e3577]:
+                          - generic [ref=e3578]: "0.00"
+                          - generic [ref=e3579]: SAR
+                        - generic [ref=e3580]:
+                          - button "إضافة حساب فرعي" [ref=e3581] [cursor=pointer]:
+                            - img [ref=e3582]
+                          - button "تعديل" [ref=e3583] [cursor=pointer]:
+                            - img [ref=e3584]
+                          - button "حذف" [ref=e3586] [cursor=pointer]:
+                            - img [ref=e3587]
+                      - generic [ref=e3591]:
+                        - generic [ref=e3592] [cursor=pointer]:
+                          - img [ref=e3594]
+                          - generic [ref=e3597]: "5219"
+                          - generic [ref=e3598]: بدلات الموظفين
+                        - generic [ref=e3599]: مصروفات
+                        - generic [ref=e3601]:
+                          - generic [ref=e3602]: "0.00"
+                          - generic [ref=e3603]: SAR
+                        - generic [ref=e3604]:
+                          - button "إضافة حساب فرعي" [ref=e3605] [cursor=pointer]:
+                            - img [ref=e3606]
+                          - button "تعديل" [ref=e3607] [cursor=pointer]:
+                            - img [ref=e3608]
+                          - button "حذف" [ref=e3610] [cursor=pointer]:
+                            - img [ref=e3611]
+                      - generic [ref=e3615]:
+                        - generic [ref=e3616] [cursor=pointer]:
+                          - img [ref=e3618]
+                          - generic [ref=e3621]: "5220"
+                          - generic [ref=e3622]: العمل الإضافي
+                        - generic [ref=e3623]: مصروفات
+                        - generic [ref=e3625]:
+                          - generic [ref=e3626]: "0.00"
+                          - generic [ref=e3627]: SAR
+                        - generic [ref=e3628]:
+                          - button "إضافة حساب فرعي" [ref=e3629] [cursor=pointer]:
+                            - img [ref=e3630]
+                          - button "تعديل" [ref=e3631] [cursor=pointer]:
+                            - img [ref=e3632]
+                          - button "حذف" [ref=e3634] [cursor=pointer]:
+                            - img [ref=e3635]
+                      - generic [ref=e3639]:
+                        - generic [ref=e3640] [cursor=pointer]:
+                          - img [ref=e3642]
+                          - generic [ref=e3645]: "5221"
+                          - generic [ref=e3646]: مكافآت نهاية الخدمة (مصروف)
+                        - generic [ref=e3647]: مصروفات
+                        - generic [ref=e3649]:
+                          - generic [ref=e3650]: "0.00"
+                          - generic [ref=e3651]: SAR
+                        - generic [ref=e3652]:
+                          - button "إضافة حساب فرعي" [ref=e3653] [cursor=pointer]:
+                            - img [ref=e3654]
+                          - button "تعديل" [ref=e3655] [cursor=pointer]:
+                            - img [ref=e3656]
+                          - button "حذف" [ref=e3658] [cursor=pointer]:
+                            - img [ref=e3659]
+                      - generic [ref=e3663]:
+                        - generic [ref=e3664] [cursor=pointer]:
+                          - img [ref=e3666]
+                          - generic [ref=e3669]: "5222"
+                          - generic [ref=e3670]: مصروف الإجازات
+                        - generic [ref=e3671]: مصروفات
+                        - generic [ref=e3673]:
+                          - generic [ref=e3674]: "0.00"
+                          - generic [ref=e3675]: SAR
+                        - generic [ref=e3676]:
+                          - button "إضافة حساب فرعي" [ref=e3677] [cursor=pointer]:
+                            - img [ref=e3678]
+                          - button "تعديل" [ref=e3679] [cursor=pointer]:
+                            - img [ref=e3680]
+                          - button "حذف" [ref=e3682] [cursor=pointer]:
+                            - img [ref=e3683]
+                      - generic [ref=e3687]:
+                        - generic [ref=e3688] [cursor=pointer]:
+                          - img [ref=e3690]
+                          - generic [ref=e3693]: "5223"
+                          - generic [ref=e3694]: مصروف ديون معدومة
+                        - generic [ref=e3695]: مصروفات
+                        - generic [ref=e3697]:
+                          - generic [ref=e3698]: "0.00"
+                          - generic [ref=e3699]: SAR
+                        - generic [ref=e3700]:
+                          - button "إضافة حساب فرعي" [ref=e3701] [cursor=pointer]:
+                            - img [ref=e3702]
+                          - button "تعديل" [ref=e3703] [cursor=pointer]:
+                            - img [ref=e3704]
+                          - button "حذف" [ref=e3706] [cursor=pointer]:
+                            - img [ref=e3707]
+                  - generic [ref=e3711]:
+                    - generic [ref=e3712] [cursor=pointer]:
+                      - img [ref=e3714]
+                      - generic [ref=e3717]: "53"
+                      - generic [ref=e3718]: الإهلاك
+                    - generic [ref=e3719]: مصروفات
+                    - generic [ref=e3721]:
+                      - generic [ref=e3722]: "0.00"
+                      - generic [ref=e3723]: SAR
+                    - generic [ref=e3724]:
+                      - button "إضافة حساب فرعي" [ref=e3725] [cursor=pointer]:
+                        - img [ref=e3726]
+                      - button "تعديل" [ref=e3727] [cursor=pointer]:
+                        - img [ref=e3728]
+                      - button "حذف" [ref=e3730] [cursor=pointer]:
+                        - img [ref=e3731]
+                  - generic [ref=e3734]:
+                    - generic [ref=e3735]:
+                      - generic [ref=e3736] [cursor=pointer]:
+                        - img [ref=e3738]
+                        - img [ref=e3741]
+                        - generic [ref=e3743]: "54"
+                        - generic [ref=e3744]: المصروفات المالية والبنكية
+                      - generic [ref=e3745]: مصروفات
+                      - generic [ref=e3747]:
+                        - generic [ref=e3748]: "0.00"
+                        - generic [ref=e3749]: SAR
+                      - generic [ref=e3750]:
+                        - button "إضافة حساب فرعي" [ref=e3751] [cursor=pointer]:
+                          - img [ref=e3752]
+                        - button "تعديل" [ref=e3753] [cursor=pointer]:
+                          - img [ref=e3754]
+                    - generic [ref=e3756]:
+                      - generic [ref=e3758]:
+                        - generic [ref=e3759] [cursor=pointer]:
+                          - img [ref=e3761]
+                          - generic [ref=e3764]: "5401"
+                          - generic [ref=e3765]: الرسوم البنكية
+                        - generic [ref=e3766]: مصروفات
+                        - generic [ref=e3768]:
+                          - generic [ref=e3769]: "0.00"
+                          - generic [ref=e3770]: SAR
+                        - generic [ref=e3771]:
+                          - button "إضافة حساب فرعي" [ref=e3772] [cursor=pointer]:
+                            - img [ref=e3773]
+                          - button "تعديل" [ref=e3774] [cursor=pointer]:
+                            - img [ref=e3775]
+                          - button "حذف" [ref=e3777] [cursor=pointer]:
+                            - img [ref=e3778]
+                      - generic [ref=e3782]:
+                        - generic [ref=e3783] [cursor=pointer]:
+                          - img [ref=e3785]
+                          - generic [ref=e3788]: "5402"
+                          - generic [ref=e3789]: خسائر فروقات عملة (محققة)
+                        - generic [ref=e3790]: مصروفات
+                        - generic [ref=e3792]:
+                          - generic [ref=e3793]: "0.00"
+                          - generic [ref=e3794]: SAR
+                        - generic [ref=e3795]:
+                          - button "إضافة حساب فرعي" [ref=e3796] [cursor=pointer]:
+                            - img [ref=e3797]
+                          - button "تعديل" [ref=e3798] [cursor=pointer]:
+                            - img [ref=e3799]
+                          - button "حذف" [ref=e3801] [cursor=pointer]:
+                            - img [ref=e3802]
+                      - generic [ref=e3806]:
+                        - generic [ref=e3807] [cursor=pointer]:
+                          - img [ref=e3809]
+                          - generic [ref=e3812]: "5403"
+                          - generic [ref=e3813]: خسائر فروقات عملة (غير محققة)
+                        - generic [ref=e3814]: مصروفات
+                        - generic [ref=e3816]:
+                          - generic [ref=e3817]: "0.00"
+                          - generic [ref=e3818]: SAR
+                        - generic [ref=e3819]:
+                          - button "إضافة حساب فرعي" [ref=e3820] [cursor=pointer]:
+                            - img [ref=e3821]
+                          - button "تعديل" [ref=e3822] [cursor=pointer]:
+                            - img [ref=e3823]
+                          - button "حذف" [ref=e3825] [cursor=pointer]:
+                            - img [ref=e3826]
+                  - generic [ref=e3829]:
+                    - generic [ref=e3830]:
+                      - generic [ref=e3831] [cursor=pointer]:
+                        - img [ref=e3833]
+                        - img [ref=e3836]
+                        - generic [ref=e3838]: "55"
+                        - generic [ref=e3839]: مصروفات أخرى
+                      - generic [ref=e3840]: مصروفات
+                      - generic [ref=e3842]:
+                        - generic [ref=e3843]: "0.00"
+                        - generic [ref=e3844]: SAR
+                      - generic [ref=e3845]:
+                        - button "إضافة حساب فرعي" [ref=e3846] [cursor=pointer]:
+                          - img [ref=e3847]
+                        - button "تعديل" [ref=e3848] [cursor=pointer]:
+                          - img [ref=e3849]
+                    - generic [ref=e3851]:
+                      - generic [ref=e3853]:
+                        - generic [ref=e3854] [cursor=pointer]:
+                          - img [ref=e3856]
+                          - generic [ref=e3859]: "5501"
+                          - generic [ref=e3860]: خسائر استبعاد الأصول
+                        - generic [ref=e3861]: مصروفات
+                        - generic [ref=e3863]:
+                          - generic [ref=e3864]: "0.00"
+                          - generic [ref=e3865]: SAR
+                        - generic [ref=e3866]:
+                          - button "إضافة حساب فرعي" [ref=e3867] [cursor=pointer]:
+                            - img [ref=e3868]
+                          - button "تعديل" [ref=e3869] [cursor=pointer]:
+                            - img [ref=e3870]
+                          - button "حذف" [ref=e3872] [cursor=pointer]:
+                            - img [ref=e3873]
+                      - generic [ref=e3877]:
+                        - generic [ref=e3878] [cursor=pointer]:
+                          - img [ref=e3880]
+                          - generic [ref=e3883]: "5502"
+                          - generic [ref=e3884]: فروقات صندوق (زيادة/نقصان)
+                          - generic [ref=e3885]: POS
+                        - generic [ref=e3886]: مصروفات
+                        - generic [ref=e3888]:
+                          - generic [ref=e3889]: "0.00"
+                          - generic [ref=e3890]: SAR
+                        - generic [ref=e3891]:
+                          - button "إضافة حساب فرعي" [ref=e3892] [cursor=pointer]:
+                            - img [ref=e3893]
+                          - button "تعديل" [ref=e3894] [cursor=pointer]:
+                            - img [ref=e3895]
+                          - button "حذف" [ref=e3897] [cursor=pointer]:
+                            - img [ref=e3898]
+                      - generic [ref=e3902]:
+                        - generic [ref=e3903] [cursor=pointer]:
+                          - img [ref=e3905]
+                          - generic [ref=e3908]: "5503"
+                          - generic [ref=e3909]: فروقات تسوية المخزون
+                          - generic [ref=e3910]: مخزون
+                        - generic [ref=e3911]: مصروفات
+                        - generic [ref=e3913]:
+                          - generic [ref=e3914]: "0.00"
+                          - generic [ref=e3915]: SAR
+                        - generic [ref=e3916]:
+                          - button "إضافة حساب فرعي" [ref=e3917] [cursor=pointer]:
+                            - img [ref=e3918]
+                          - button "تعديل" [ref=e3919] [cursor=pointer]:
+                            - img [ref=e3920]
+                          - button "حذف" [ref=e3922] [cursor=pointer]:
+                            - img [ref=e3923]

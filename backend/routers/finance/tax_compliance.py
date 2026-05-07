@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, validator
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, require_module
 from utils.audit import log_activity
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -330,17 +330,26 @@ def get_applicable_taxes(branch_id: int, current_user: dict = Depends(get_curren
     """
     جلب الضرائب المطبقة على فرع معين  
     يستخدم في الفواتير والمعاملات لتحديد الضرائب الواجبة تلقائياً
+    يعتمد على tax_engine لضمان نفس المنطق المستخدم في إنشاء الفواتير
     """
     with transactional(current_user.company_id) as db:
+        from services.tax_engine import get_active_tax_for_branch
+
         branch = db.execute(text(
-            "SELECT id, country_code FROM branches WHERE id = :id"
+            "SELECT id, branch_name, country_code FROM branches WHERE id = :id"
         ), {"id": branch_id}).fetchone()
         if not branch:
             raise HTTPException(**http_error(404, "branch_not_found"))
 
-        branch_cc = branch.country_code or "SA"
+        branch_cc = (branch.country_code or "SA").upper()
 
-        # Get applicable taxes (required + registered, not exempt)
+        # Get the primary tax via engine (same logic as invoice creation)
+        try:
+            primary_tax = get_active_tax_for_branch(branch_id, db)
+        except HTTPException:
+            primary_tax = None
+
+        # Also get all regime-level taxes for the branch (for compliance UI)
         taxes = db.execute(text("""
             SELECT tr.id as regime_id, tr.country_code, tr.tax_type, 
                    tr.name_ar, tr.name_en, tr.default_rate, tr.applies_to,
@@ -360,6 +369,7 @@ def get_applicable_taxes(branch_id: int, current_user: dict = Depends(get_curren
             "branch_id": branch_id,
             "jurisdiction": branch_cc,
             "country": COUNTRY_META.get(branch_cc, {}).get("name_ar", branch_cc),
+            "primary_tax": primary_tax,
             "taxes": [dict(r._mapping) for r in taxes]
         }
 
@@ -401,13 +411,9 @@ def saudi_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND i.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
 
         # ── Box 1: Standard-rated sales (15%) ────────────────────────────────
         box1 = db.execute(text(f"""
@@ -561,15 +567,11 @@ def syrian_income_tax_report(
     """
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND je.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
 
         # Revenue (account_type = 'revenue')
         revenue = db.execute(text(f"""
@@ -682,13 +684,9 @@ def uae_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
-        bf = ""
-        if branch_id:
-            bf = "AND i.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
 
         # Standard supplies (5%)
         standard = db.execute(text(f"""
@@ -783,13 +781,9 @@ def egypt_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {"start": period_start, "end": period_end}
-        bf = ""
-        if branch_id:
-            bf = "AND i.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
 
         # Output VAT (14%)
         output = db.execute(text(f"""
@@ -869,15 +863,11 @@ def generic_income_tax_report(
     """
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
-    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
-        bf = ""
-        if branch_id:
-            bf = "AND je.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        bf = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
 
         revenue = db.execute(text(f"""
             SELECT COALESCE(SUM(jl.credit - jl.debit), 0)

@@ -73,7 +73,7 @@ def post_multibook_journal_entry(
     reference: Optional[str] = None,
     currency: Optional[str] = None,
     exchange_rate: float = 1.0,
-    source: str = "Manual",
+    source: str = "manual",
     source_id: Optional[int] = None,
     username: Optional[str] = None,
     idempotency_key: Optional[str] = None,

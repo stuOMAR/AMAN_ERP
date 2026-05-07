@@ -1,0 +1,16 @@
+{
+  "initialRoute": {
+    "file": "dist/assets/index-ky_L-orV.js",
+    "measuredBytes": 784690,
+    "budgetBytes": 823924,
+    "headroomPercent": 5,
+    "measuredAt": "2026-05-02"
+  },
+  "vendor": {
+    "file": "dist/assets/vendor-BE8IEmm2.js",
+    "measuredBytes": 2713370,
+    "budgetBytes": 2849039,
+    "headroomPercent": 5,
+    "measuredAt": "2026-05-02"
+  }
+}

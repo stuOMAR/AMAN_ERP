@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
+import { getCurrency } from '../../utils/auth'
 import { Calendar, TrendingUp, TrendingDown, CheckCircle, AlertTriangle } from 'lucide-react'
 import BackButton from '../../components/common/BackButton'
 
@@ -11,6 +13,8 @@ import { PageLoading } from '../../components/common/LoadingStates'
 export default function OpeningBalances() {
     const { t, i18n } = useTranslation()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
+    const currency = getCurrency()
 
     const [loading, setLoading] = useState(true)
     const [saving, setSaving] = useState(false)
@@ -20,12 +24,14 @@ export default function OpeningBalances() {
     const [searchTerm, setSearchTerm] = useState('')
     const [filterType, setFilterType] = useState('')
 
-    useEffect(() => { fetchData() }, [])
+    useEffect(() => { fetchData() }, [currentBranch])
 
     const fetchData = async () => {
         setLoading(true)
         try {
-            const res = await accountingAPI.getOpeningBalances()
+            const params = {}
+            if (currentBranch?.id) params.branch_id = currentBranch.id
+            const res = await accountingAPI.getOpeningBalances(params)
             setAccounts(res.data.accounts.map(a => ({
                 ...a,
                 debit: a.opening_debit || 0,
@@ -60,7 +66,7 @@ export default function OpeningBalances() {
                     description: `رصيد افتتاحي - ${a.name}`,
                 }))
 
-            const res = await accountingAPI.saveOpeningBalances({ lines, date: entryDate })
+            const res = await accountingAPI.saveOpeningBalances({ lines, date: entryDate, branch_id: currentBranch?.id || null })
             showToast(res.data.message || (t('opening.saved')), 'success')
             fetchData()
         } catch (err) {
@@ -131,18 +137,18 @@ export default function OpeningBalances() {
                 <div className="card p-3 text-center">
                     <TrendingUp size={24} className="text-primary mb-2" />
                     <div className="small text-muted">{t('opening.total_debit')}</div>
-                    <div className="fw-bold fs-4 text-primary">{formatNum(totalDebit)}</div>
+                    <div className="fw-bold fs-4 text-primary">{formatNum(totalDebit)} <small>{currency}</small></div>
                 </div>
                 <div className="card p-3 text-center">
                     <TrendingDown size={24} className="text-success mb-2" />
                     <div className="small text-muted">{t('opening.total_credit')}</div>
-                    <div className="fw-bold fs-4 text-success">{formatNum(totalCredit)}</div>
+                    <div className="fw-bold fs-4 text-success">{formatNum(totalCredit)} <small>{currency}</small></div>
                 </div>
                 <div className={`card p-3 text-center ${!isBalanced ? 'border-danger' : 'border-success'}`}>
                     {isBalanced ? <CheckCircle size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-danger mb-2" />}
                     <div className="small text-muted">{t('opening.difference')}</div>
                     <div className={`fw-bold fs-4 ${isBalanced ? 'text-success' : 'text-danger'}`}>
-                        {isBalanced ? '✅ 0.00' : formatNum(Math.abs(difference))}
+                        {isBalanced ? '✅ 0.00' : formatNum(Math.abs(difference))} <small>{currency}</small>
                     </div>
                 </div>
             </div>
@@ -215,8 +221,8 @@ export default function OpeningBalances() {
                         <tfoot className="table-dark">
                             <tr className="fw-bold">
                                 <td colSpan="3" className="text-end">{t('opening.total')}</td>
-                                <td>{formatNum(totalDebit)}</td>
-                                <td>{formatNum(totalCredit)}</td>
+                                <td>{formatNum(totalDebit)} <small>{currency}</small></td>
+                                <td>{formatNum(totalCredit)} <small>{currency}</small></td>
                             </tr>
                         </tfoot>
                     </table>

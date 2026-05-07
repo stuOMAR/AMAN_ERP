@@ -3,6 +3,8 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Edit2, Trash2, X } from 'lucide-react';
 import { costCentersAPI } from '../../../utils/api';
+import { useBranch } from '../../../context/BranchContext';
+import { getCurrency } from '../../../utils/auth';
 import { toastEmitter } from '../../../utils/toastEmitter';
 import BackButton from '../../../components/common/BackButton';
 import DataTable from '../../../components/common/DataTable';
@@ -10,6 +12,8 @@ import SearchFilter from '../../../components/common/SearchFilter';
 
 const CostCenterList = () => {
     const { t } = useTranslation();
+    const { currentBranch } = useBranch();
+    const currency = getCurrency();
     const [costCenters, setCostCenters] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
@@ -26,12 +30,14 @@ const CostCenterList = () => {
 
     useEffect(() => {
         fetchCostCenters();
-    }, []);
+    }, [currentBranch]);
 
     const fetchCostCenters = async () => {
         try {
             setLoading(true);
-            const response = await costCentersAPI.list();
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const response = await costCentersAPI.list(params);
             setCostCenters(response.data);
         } catch (error) {
             console.error(error);

@@ -177,6 +177,25 @@ services:
     networks:
       - aman_net
 
+  # ── ClamAV (dev profile for DMS scanning) ──────────────────────────────
+  clamav:
+    image: clamav/clamav:latest
+    container_name: aman_clamav
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:3310:3310"
+    volumes:
+      - clamav_data:/var/lib/clamav
+    healthcheck:
+      test: ["CMD", "clamdscan", "--version"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+    networks:
+      - aman_net
+    profiles:
+      - dev
+
 # ── Volumes ─────────────────────────────────────────────────────────────────
 volumes:
   db_data:
@@ -185,6 +204,7 @@ volumes:
   prometheus_data:
   alertmanager_data:
   grafana_data:
+  clamav_data:
 
 # ── Networks ─────────────────────────────────────────────────────────────────
 networks:

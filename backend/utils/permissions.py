@@ -51,8 +51,8 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     "approvals.manage": ["approvals.view", "approvals.create"],
     # accounting.manage implies view + edit
     "accounting.manage": ["accounting.view", "accounting.edit"],
-    # treasury.manage implies view + create + edit
-    "treasury.manage": ["treasury.view", "treasury.create", "treasury.edit"],
+    # treasury.manage implies full treasury operations
+    "treasury.manage": ["treasury.view", "treasury.create", "treasury.edit", "treasury.delete"],
     # taxes.manage implies taxes.view
     "taxes.manage": ["taxes.view"],
     # settings.manage implies settings.view + settings.edit
@@ -94,13 +94,16 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     # accounting journal entry: post/void imply create
     "accounting.post_journal_entry": ["accounting.create_journal_entry"],
     "accounting.void_journal_entry": ["accounting.create_journal_entry"],
-    # accounting.manage covers all JE granular
-    "accounting.manage": ["accounting.create_journal_entry", "accounting.post_journal_entry", "accounting.void_journal_entry"],
+    # accounting.manage covers accounting view/edit plus all JE granular actions
+    "accounting.manage": [
+        "accounting.view", "accounting.edit",
+        "accounting.create_journal_entry", "accounting.post_journal_entry", "accounting.void_journal_entry",
+    ],
     # Blanket PO: manage implies view; release implies view
     "buying.blanket_manage": ["buying.blanket_view"],
     "buying.blanket_release": ["buying.blanket_view"],
     # Expenses policies: manage implies expense view
-    "expenses.manage": ["expenses.view"],
+    "expenses.manage": ["expenses.view", "expenses.create", "expenses.edit", "expenses.delete", "expenses.approve"],
     # Finance accounting depth: post implies read/view, read implies view
     "finance.accounting_post": ["finance.accounting_read", "finance.accounting_view"],
     "finance.accounting_read": ["finance.accounting_view"],
@@ -210,7 +213,7 @@ SENSITIVE_PERMISSIONS = {
     "admin.users", "settings.manage",
 }
 
-def require_sensitive_permission(permission: Union[str, List[str]]):
+def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
     """Like require_permission but also re-validates against the DB."""
     async def _checker(current_user: Union[dict, Any] = Depends(get_current_user)):
         # First do the normal check
@@ -315,25 +318,42 @@ def validate_branch_access(current_user: dict, requested_branch_id: Union[int, N
         role = getattr(current_user, "role", None)
         permissions = getattr(current_user, "permissions", [])
 
-    # CRITICAL FIX: Admins have full access regardless of allowed_branches
-    if role in ['admin', 'system_admin', 'superuser'] or "*" in permissions:
+    role = (role or "").strip().lower()
+    permissions = permissions or []
+
+    is_privileged_user = (
+        role in {'admin', 'system_admin', 'superuser', 'manager', 'gm', 'ceo', 'owner', 'chairman'}
+        or "*" in permissions
+        or check_permission(permissions, "admin.branches")
+        or check_permission(permissions, "branches.manage")
+    )
+
+    # Admin/company-wide users have full access regardless of allowed_branches.
+    if is_privileged_user:
         if not requested_branch_id or requested_branch_id == "":
             return None
         try:
             return int(requested_branch_id)
         except ValueError:
             raise HTTPException(status_code=400, detail="Invalid branch ID")
+
+    normalized_allowed_branches = set()
+    for branch_id in allowed_branches or []:
+        try:
+            normalized_allowed_branches.add(int(branch_id))
+        except (TypeError, ValueError):
+            continue
     
     # If no restrictions, return as is (handling empty string/None)
-    if not allowed_branches:
+    if not normalized_allowed_branches:
         if requested_branch_id == "": return None 
         return int(requested_branch_id) if requested_branch_id else None
 
     # Handle requested_branch_id
     if requested_branch_id in [None, ""]:
         # User requested ALL, but is restricted.
-        if len(allowed_branches) == 1:
-            return allowed_branches[0] # Auto-select the only allowed branch
+        if len(normalized_allowed_branches) == 1:
+            return next(iter(normalized_allowed_branches)) # Auto-select the only allowed branch
         else:
             raise HTTPException(
                 status_code=status.HTTP_403_FORBIDDEN, 
@@ -346,13 +366,178 @@ def validate_branch_access(current_user: dict, requested_branch_id: Union[int, N
     except ValueError:
         raise HTTPException(status_code=400, detail="Invalid branch ID")
 
-    if rid not in allowed_branches:
+    if rid not in normalized_allowed_branches:
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN, 
             detail="ليس لديك صلاحية للوصول إلى بيانات هذا الفرع"
         )
     
     return rid
+
+
+def _is_branch_privileged(current_user: Union[dict, Any]) -> bool:
+    if isinstance(current_user, dict):
+        role = current_user.get("role")
+        permissions = current_user.get("permissions", []) or []
+    else:
+        role = getattr(current_user, "role", None)
+        permissions = getattr(current_user, "permissions", []) or []
+
+    role = (role or "").strip().lower()
+    return (
+        role in {"admin", "system_admin", "superuser", "manager", "gm", "ceo", "owner", "chairman"}
+        or "*" in permissions
+        or check_permission(permissions, "admin.branches")
+        or check_permission(permissions, "branches.manage")
+    )
+
+
+def _normalized_allowed_branch_ids(current_user: Union[dict, Any]) -> set[int]:
+    if isinstance(current_user, dict):
+        allowed_branches = current_user.get("allowed_branches", []) or []
+    else:
+        allowed_branches = getattr(current_user, "allowed_branches", []) or []
+
+    normalized = set()
+    for branch_id in allowed_branches:
+        try:
+            normalized.add(int(branch_id))
+        except (TypeError, ValueError):
+            continue
+    return normalized
+
+
+def resolve_branch_scope(
+    current_user: Union[dict, Any],
+    requested_branch_id: Union[int, None, str] = None,
+) -> Dict[str, Any]:
+    """Resolve requested branch into either one branch, allowed branches, or company-wide scope.
+
+    Returned shape:
+    - {"branch_id": int, "branch_ids": None}: one requested/validated branch
+    - {"branch_id": None, "branch_ids": list[int]}: all branches allowed to this restricted user
+    - {"branch_id": None, "branch_ids": None}: privileged user, company-wide
+    """
+    if requested_branch_id not in (None, ""):
+        return {"branch_id": validate_branch_access(current_user, requested_branch_id), "branch_ids": None}
+
+    if _is_branch_privileged(current_user):
+        return {"branch_id": None, "branch_ids": None}
+
+    return {
+        "branch_id": None,
+        "branch_ids": sorted(_normalized_allowed_branch_ids(current_user)),
+    }
+
+
+def branch_scope_filter_from_scope(
+    scope: Dict[str, Any],
+    column: str,
+    params: Dict[str, Any],
+    *,
+    branch_param: str = "branch_id",
+    branches_param: str = "allowed_branch_ids",
+    prefix: str = "AND",
+) -> str:
+    """Build a SQL fragment for a resolved branch scope.
+
+    `column` must be a static SQL column/expression owned by the caller.
+    """
+    branch_id = scope.get("branch_id")
+    if branch_id is not None:
+        params[branch_param] = branch_id
+        return f"{prefix} {column} = :{branch_param}"
+
+    branch_ids = scope.get("branch_ids")
+    if branch_ids is None:
+        return ""
+    if not branch_ids:
+        return f"{prefix} 1=0"
+
+    params[branches_param] = branch_ids
+    return f"{prefix} {column} = ANY(:{branches_param})"
+
+
+def branch_scope_filter(
+    current_user: Union[dict, Any],
+    requested_branch_id: Union[int, None, str],
+    column: str,
+    params: Dict[str, Any],
+    *,
+    branch_param: str = "branch_id",
+    branches_param: str = "allowed_branch_ids",
+    prefix: str = "AND",
+) -> str:
+    """Build a safe SQL branch filter for selected branch or all allowed branches."""
+    scope = resolve_branch_scope(current_user, requested_branch_id)
+    return branch_scope_filter_from_scope(
+        scope,
+        column,
+        params,
+        branch_param=branch_param,
+        branches_param=branches_param,
+        prefix=prefix,
+    )
+
+
+def validate_treasury_account_access(
+    db,
+    current_user: Union[dict, Any],
+    treasury_account_id: Union[int, str, None],
+    requested_branch_id: Union[int, str, None] = None,
+    *,
+    allow_inactive: bool = False,
+):
+    """Ensure a selected treasury account belongs to an accessible branch.
+
+    Use this on mutation endpoints that accept treasury/cash account IDs so
+    branch-restricted users cannot bypass the filtered account list by posting
+    a foreign treasury_account_id manually.
+    """
+    if treasury_account_id in (None, ""):
+        return None
+
+    try:
+        account_id = int(treasury_account_id)
+    except (TypeError, ValueError):
+        raise HTTPException(status_code=400, detail="Invalid treasury account ID")
+
+    from sqlalchemy import text
+
+    active_filter = "" if allow_inactive else " AND is_active = TRUE"
+    row = db.execute(text(f"""
+        SELECT id, branch_id, gl_account_id, currency, account_type, current_balance
+        FROM treasury_accounts
+        WHERE id = :id{active_filter}
+    """), {"id": account_id}).mappings().first()
+
+    if not row:
+        raise HTTPException(status_code=404, detail="حساب الخزينة غير موجود أو غير نشط")
+
+    account_branch_id = row.get("branch_id")
+    if requested_branch_id not in (None, ""):
+        branch_id = validate_branch_access(current_user, requested_branch_id)
+        if account_branch_id is None or int(account_branch_id) != int(branch_id):
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="حساب الخزينة المحدد غير مرتبط بهذا الفرع"
+            )
+        return row
+
+    if _is_branch_privileged(current_user):
+        return row
+
+    allowed_branch_ids = _normalized_allowed_branch_ids(current_user)
+    if not allowed_branch_ids:
+        return row
+
+    if allowed_branch_ids and account_branch_id is not None and int(account_branch_id) in allowed_branch_ids:
+        return row
+
+    raise HTTPException(
+        status_code=status.HTTP_403_FORBIDDEN,
+        detail="ليس لديك صلاحية لاستخدام حساب خزينة خارج فروعك"
+    )
 
 
 # ===================== PERM-001: Field-Level Permissions =====================

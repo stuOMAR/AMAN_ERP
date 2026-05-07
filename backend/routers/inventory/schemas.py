@@ -18,7 +18,9 @@ class ProductCreate(BaseModel):
     selling_price: float = 0.0
     buying_price: float = 0.0  # Represents WAC (Weighted Average Cost)
     last_buying_price: float = 0.0  # Represents Last Purchase Price
-    tax_rate: float = 15.0
+    tax_rate: Optional[float] = None  # Ignored — resolved by tax engine; kept for backward compat
+    tax_rate_id: Optional[int] = None  # Link to tax_rates table
+    is_exempt: bool = False  # If true, product is exempt from tax
     description: Optional[str] = None
     category_id: Optional[int] = None
     is_active: bool = True
@@ -75,9 +77,18 @@ class SupplierCreate(BaseModel):
 class SupplierResponse(SupplierCreate):
     id: int
     current_balance: float
+    balance: Optional[float] = None
+    balance_bc: Optional[float] = None
     is_active: bool
     currency: Optional[str] = None
     created_at: datetime
+    display_currency: Optional[str] = None
+    balance_display: Optional[float] = None
+    balance_sar: Optional[float] = None
+    balances: Optional[list] = None
+    sites: Optional[list] = None
+    site_id: Optional[int] = None
+    site_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 
@@ -117,6 +128,7 @@ class StockMovementCreate(BaseModel):
 class PriceListCreate(BaseModel):
     name: str
     currency: str
+    branch_id: Optional[int] = None
     is_active: bool = True
     is_default: bool = False
 

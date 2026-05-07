@@ -1,0 +1,56 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: aman-backup
+  namespace: aman
+  labels:
+    app: aman-backup
+spec:
+  schedule: "0 2 * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      activeDeadlineSeconds: 3600
+      template:
+        metadata:
+          labels:
+            app: aman-backup
+        spec:
+          restartPolicy: OnFailure
+          containers:
+            - name: backup
+              image: aman-erp/backup:latest
+              command: ["/opt/aman/scripts/backup_postgres.sh"]
+              env:
+                - name: POSTGRES_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: aman-secrets
+                      key: postgres-host
+                - name: POSTGRES_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: aman-secrets
+                      key: postgres-user
+                - name: POSTGRES_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: aman-secrets
+                      key: postgres-password
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"
+              volumeMounts:
+                - name: backup-storage
+                  mountPath: /var/aman/backups
+          volumes:
+            - name: backup-storage
+              persistentVolumeClaim:
+                claimName: aman-backup-pvc

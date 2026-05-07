@@ -15,7 +15,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.i18n import http_error, i18n_message
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +80,7 @@ def list_matches(
 ):
     """List Matches."""
     company_id = _get_company_id(current_user)
-    resolved_branch = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         q = """
             SELECT m.id, m.purchase_order_id, m.invoice_id, m.match_status,
@@ -98,9 +98,7 @@ def list_matches(
         if status:
             q += " AND m.match_status = :status"
             params["status"] = status
-        if resolved_branch is not None:
-            q += " AND po.branch_id = :branch_id"
-            params["branch_id"] = resolved_branch
+        q += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         q += " ORDER BY m.id DESC"
         rows = db.execute(text(q), params).fetchall()
         return [

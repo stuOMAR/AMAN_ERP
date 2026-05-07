@@ -225,16 +225,41 @@ def generate_cashflow_forecast(
         })
 
     # --- Recurring journal entries ---
+    # T10.2 #253: previously summed `total_amount` (the full template value),
+    # which inflated the forecast because non-cash legs (e.g. expense vs AP)
+    # were treated as cash. Sum only the legs whose `account_id` matches a
+    # treasury_accounts.gl_account_id, then take net = Σdebit − Σcredit on
+    # those legs (positive = cash inflow, negative = outflow).
     rec_sql = text(
-        "SELECT id, next_run_date, total_amount "
-        "FROM recurring_journal_templates "
-        "WHERE is_active = true AND next_run_date BETWEEN :start AND :end"
+        """
+        SELECT t.id, t.next_run_date,
+               MIN(ta.id) FILTER (
+                   WHERE ta.gl_account_id IS NOT NULL
+                     AND (:bank_account_id IS NULL OR ta.id = :bank_account_id)
+               ) AS bank_account_id,
+               COALESCE(SUM(
+                   CASE
+                       WHEN ta.gl_account_id IS NOT NULL
+                            AND (:bank_account_id IS NULL OR ta.id = :bank_account_id)
+                       THEN COALESCE(rl.debit, 0) - COALESCE(rl.credit, 0)
+                       ELSE 0
+                   END
+               ), 0) AS net_cash
+        FROM recurring_journal_templates t
+        LEFT JOIN recurring_journal_lines rl ON rl.template_id = t.id
+        LEFT JOIN treasury_accounts ta ON ta.gl_account_id = rl.account_id
+        WHERE t.is_active = true
+          AND t.next_run_date BETWEEN :start AND :end
+        GROUP BY t.id, t.next_run_date
+        """
     )
-    for rec in db.execute(rec_sql, {"start": today, "end": end_date}):
-        amt = _dec(rec.total_amount)
+    for rec in db.execute(rec_sql, {"start": today, "end": end_date, "bank_account_id": bank_account_id}):
+        amt = _dec(rec.net_cash)
+        if amt == _ZERO:
+            continue  # no cash leg → not a forecast item
         lines.append({
             "date": rec.next_run_date,
-            "bank_account_id": bank_account_id,
+            "bank_account_id": bank_account_id or rec.bank_account_id,
             "source_type": "recurring",
             "source_document_id": rec.id,
             "inflow": amt if amt > 0 else _ZERO,

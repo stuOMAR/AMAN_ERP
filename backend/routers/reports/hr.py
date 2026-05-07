@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -29,7 +29,7 @@ def get_payroll_trend(
     current_user: dict = Depends(get_current_user)
 ):
     """اتجاه تكاليف الرواتب الشهرية"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         # Calculate start date (first day of month, 'months' ago)
@@ -54,9 +54,7 @@ def get_payroll_trend(
             AND p.end_date >= :start
         """
         
-        if branch_id:
-            query += " AND e.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query += f"\n{branch_scope_filter_from_scope(branch_scope, 'e.branch_id', params)}"
             
         query += """
             GROUP BY TO_CHAR(p.end_date, 'YYYY-MM')
@@ -85,7 +83,7 @@ def get_leave_usage(
     current_user: dict = Depends(get_current_user)
 ):
     """إحصائيات الإجازات حسب النوع"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -95,10 +93,7 @@ def get_leave_usage(
             
         params = {"start": start_date, "end": end_date}
         
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND e.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params)
 
         # Group by Leave Type
         query = f"""

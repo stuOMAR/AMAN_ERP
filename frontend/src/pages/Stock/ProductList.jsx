@@ -35,12 +35,22 @@ function ProductList() {
     const canCreate = hasPermission('stock.create_product')
     const canDelete = hasPermission('stock.delete_product')
 
+    const [branchPrices, setBranchPrices] = useState({});
+    const [branchCurrency, setBranchCurrency] = useState('SAR');
+    const [branchRate, setBranchRate] = useState(1);
+
     useEffect(() => {
         const fetchData = async () => {
             try {
                 setLoading(true)
-                const response = await inventoryAPI.listProducts({ branch_id: currentBranch?.id })
-                setProducts(response.data)
+                const [prodRes, priceRes] = await Promise.all([
+                    inventoryAPI.listProducts({ branch_id: currentBranch?.id }),
+                    inventoryAPI.getBranchPrices(currentBranch?.id)
+                ])
+                setProducts(prodRes.data)
+                setBranchPrices(priceRes.data?.prices || {})
+                setBranchCurrency(priceRes.data?.currency || 'SAR')
+                setBranchRate(priceRes.data?.rate || 1)
 
                 try {
                     const policyRes = await api.get('/costing-policies/current')
@@ -159,21 +169,42 @@ function ProductList() {
             key: 'buying_price',
             label: t('stock.products.table.cost'),
             width: '10%',
-            render: (val) => (
-                <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
-                    {formatNumber(val || 0)} {currency}
-                </div>
-            ),
+            render: (val, row) => {
+                const branchCost = row.branch_avg_cost;
+                const rawCost = branchCost && parseFloat(branchCost) > 0 ? branchCost : val;
+                // Convert from SAR to branch currency
+                const displayCost = branchRate !== 1 ? (parseFloat(rawCost) / branchRate) : rawCost;
+                return (
+                    <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
+                        {formatNumber(displayCost || 0)} {branchCurrency}
+                        {branchCost && parseFloat(branchCost) > 0 && parseFloat(branchCost) !== parseFloat(val) && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                                {t('stock.products.branch_cost', 'Branch Avg')}
+                            </div>
+                        )}
+                    </div>
+                );
+            },
         }] : []),
         {
             key: 'selling_price',
             label: t('stock.products.table.price'),
             width: '10%',
-            render: (val) => (
-                <div style={{ fontWeight: '600', color: 'var(--success)' }}>
-                    {formatNumber(val)} {currency}
-                </div>
-            ),
+            render: (val, row) => {
+                const branchPrice = branchPrices[row.id]?.price;
+                const displayPrice = branchPrice || val;
+                const priceCurrency = branchPrice ? (branchPrices[row.id]?.currency || currency) : currency;
+                return (
+                    <div style={{ fontWeight: '600', color: 'var(--success)' }}>
+                        {formatNumber(displayPrice)} {priceCurrency}
+                        {branchPrice && (
+                            <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                                {t('stock.products.branch_price', 'Branch Price')}
+                            </div>
+                        )}
+                    </div>
+                );
+            },
         },
         {
             key: 'reserved_quantity',

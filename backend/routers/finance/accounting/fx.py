@@ -155,6 +155,11 @@ def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: di
                 source="fx_revaluation",
             )
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="accounting.fx_revaluation",
+                     resource_type="fx_revaluation", resource_id=str(je_num),
+                     details={"currency": req.currency_code, "new_rate": req.new_rate,
+                              "adjustments_count": len(adjustments)})
         trans.commit()
         return {
             "success": True, "journal_entry": je_num,

@@ -10,6 +10,7 @@ import { formatNumber } from '../../utils/format'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function BuyingReturnForm() {
     const { t } = useTranslation()
@@ -31,6 +32,7 @@ function BuyingReturnForm() {
     // Form State
     const [formData, setFormData] = useState({
         supplier_id: '',
+        party_site_id: '',
         warehouse_id: '',
         invoice_id: '', // Linked invoice
         invoice_date: new Date().toISOString().split('T')[0],
@@ -115,7 +117,19 @@ function BuyingReturnForm() {
     }
 
     // Calculations
+    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+
     const calculateTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return {
+                subtotal: backendTotals.subtotal,
+                totalTax: backendTotals.totalTax,
+                totalDiscount: backendTotals.totalDiscount,
+                total: backendTotals.grandTotal,
+            }
+        }
+        // Fallback to local calculation
         let subtotal = 0
         let totalTax = 0
         let totalDiscount = 0
@@ -136,6 +150,21 @@ function BuyingReturnForm() {
 
     const totals = calculateTotals()
 
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: Number(i.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
+
     // Handlers
     const handleItemChange = (index, field, value) => {
         const newItems = items.map((item, i) => {
@@ -148,7 +177,7 @@ function BuyingReturnForm() {
                         updatedItem.description = product.item_name || ''
                         // Use buying price or last purchase price
                         updatedItem.unit_price = product.last_buying_price || product.buying_price || 0
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        updatedItem.tax_rate = null // Resolved by backend engine
                     }
                 }
 
@@ -218,6 +247,7 @@ function BuyingReturnForm() {
         try {
             const payload = {
                 supplier_id: parseInt(formData.supplier_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 branch_id: currentBranch?.id,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 invoice_date: formData.invoice_date,

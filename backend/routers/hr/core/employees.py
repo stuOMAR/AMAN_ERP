@@ -15,7 +15,7 @@ from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
 from repositories import EmployeeRepository
-from utils.permissions import require_permission, validate_branch_access, check_permission, require_module
+from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access, check_permission, require_module
 from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
 from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
@@ -33,7 +33,7 @@ router = APIRouter()
 
 from .core import _D2, _dec
 
-@router.get("/employees", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
+@router.get("/employees", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def get_employees(
     branch_id: Optional[int] = None, 
     current_user: UserResponse = Depends(get_current_user),
@@ -72,29 +72,44 @@ def get_employees(
             WHERE 1=1
         """
         params = {}
+        role = (getattr(current_user, "role", None) or "").strip().lower()
+        user_permissions = getattr(current_user, "permissions", []) or []
+        is_privileged_user = (
+            role in {"admin", "system_admin", "superuser", "manager", "gm"}
+            or check_permission(user_permissions, "admin.branches")
+            or check_permission(user_permissions, "branches.manage")
+        )
+
+        raw_allowed = getattr(current_user, "allowed_branches", None) or []
+        normalized_allowed_branches = set()
+        for b in raw_allowed:
+            try:
+                normalized_allowed_branches.add(int(b))
+            except Exception:
+                continue
         
         # Access Control Logic
-        if current_user.role not in ['admin', 'system_admin', 'manager', 'gm']:
+        if not is_privileged_user:
             # For regular users, restrict to allowed branches
-            if not current_user.allowed_branches:
+            if not normalized_allowed_branches:
                 # If no branches assigned, they see nothing (or maybe just themselves? strict for now)
                 return []
             
-            if branch_id:
+            if branch_id is not None:
                 # If requesting specific branch, verify access
-                if branch_id not in current_user.allowed_branches:
+                if int(branch_id) not in normalized_allowed_branches:
                     raise HTTPException(status_code=403, detail="Unauthorized access to this branch")
-                query += " AND e.branch_id = :bid"
+                query += " AND (e.branch_id = :bid OR ub.branch_id = :bid)"
                 params["bid"] = branch_id
             else:
                 # If no specific branch, show employees in ALL allowed branches
                 # safe string formatting for int list
-                branches_str = ",".join(map(str, current_user.allowed_branches))
-                query += f" AND e.branch_id IN ({branches_str})"
+                branches_str = ",".join(map(str, sorted(normalized_allowed_branches)))
+                query += f" AND (e.branch_id IN ({branches_str}) OR ub.branch_id IN ({branches_str}))"
         else:
             # Admins/Managers can see all or filter by any branch
-            if branch_id:
-                query += " AND e.branch_id = :bid"
+            if branch_id is not None:
+                query += " AND (e.branch_id = :bid OR ub.branch_id = :bid)"
                 params["bid"] = branch_id
 
         query += """
@@ -135,7 +150,7 @@ def get_employees(
             employees = mask_pii_list(employees, EMPLOYEE_PII_FIELDS)
         return employees
 
-@router.post("/employees", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
+@router.post("/employees", dependencies=[Depends(require_sensitive_permission("hr.manage", critical=True))], response_model=Dict[str, Any])
 def create_employee(request: Request, employee: EmployeeCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Employee."""
     conn = get_db_connection(company_id)
@@ -351,14 +366,14 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
 
         return {"message": "Success"}
         
-    except Exception:
+    except Exception as e:
         trans.rollback()
         logger.exception("Internal error")
-        raise HTTPException(**http_error(400, "invalid_data"))
+        raise HTTPException(status_code=400, detail=f"Invalid data: {str(e)}")
     finally:
         conn.close()
 
-@router.put("/employees/{employee_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
+@router.put("/employees/{employee_id}", dependencies=[Depends(require_sensitive_permission("hr.manage", critical=True))], response_model=Dict[str, Any])
 def update_employee(
     request: Request,
     employee_id: int, 
@@ -505,7 +520,7 @@ def update_employee(
 
 # --- Payroll Endpoints ---
 
-@router.post("/end-of-service/calculate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
+@router.post("/end-of-service/calculate", dependencies=[Depends(require_sensitive_permission("hr.manage", critical=True))], response_model=Dict[str, Any])
 def calculate_end_of_service(
     data: EndOfServiceRequest,
     current_user: UserResponse = Depends(get_current_user),

@@ -14,11 +14,13 @@ import BackButton from '../../components/common/BackButton'
 export default function TreasuryAccountList() {
     const { t } = useTranslation()
     const navigate = useNavigate()
-    const { currentBranch } = useBranch()
+    const { currentBranch, branches = [] } = useBranch()
     const [accounts, setAccounts] = useState([])
     const [baseCurrency] = useState(getCurrency() || '')
     const [currencies, setCurrencies] = useState([])
     const [loading, setLoading] = useState(true)
+    const [saving, setSaving] = useState(false)
+    const [accountError, setAccountError] = useState('')
     const [showAdd, setShowAdd] = useState(false)
     const [showEdit, setShowEdit] = useState(false)
     const [showDelete, setShowDelete] = useState(false)
@@ -31,6 +33,58 @@ export default function TreasuryAccountList() {
         opening_balance: 0, exchange_rate: 1, allow_overdraft: false
     })
 
+    const resetAccountForm = () => {
+        const defaultCurrency = (currencies.find(c => c.is_base) || currencies[0])?.code || baseCurrency
+        setAccountForm({
+            name: '', name_en: '', account_type: 'cash', currency: defaultCurrency,
+            bank_name: '', account_number: '', iban: '', branch_id: currentBranch?.id || '',
+            opening_balance: 0, exchange_rate: 1, allow_overdraft: false
+        })
+    }
+
+    const getErrorMessage = (err, fallback) => {
+        const data = err?.response?.data
+        const detail = data?.detail
+        if (Array.isArray(detail)) {
+            return detail.map(item => item?.msg || item).join('، ')
+        }
+        if (typeof detail === 'string') return detail
+        if (detail?.message) return detail.message
+        if (data?.message) return data.message
+        return err?.message || fallback || t('common.error')
+    }
+
+    const normalizeAccountPayload = (includeOpeningBalance = true) => {
+        const payload = {
+            name: accountForm.name.trim(),
+            name_en: accountForm.name_en?.trim() || null,
+            account_type: accountForm.account_type,
+            currency: accountForm.currency,
+            bank_name: accountForm.bank_name?.trim() || null,
+            account_number: accountForm.account_number?.trim() || null,
+            iban: accountForm.iban?.trim() || null,
+            branch_id: accountForm.branch_id ? Number(accountForm.branch_id) : null,
+            exchange_rate: Number(accountForm.exchange_rate) || 1,
+            allow_overdraft: Boolean(accountForm.allow_overdraft),
+        }
+        if (includeOpeningBalance) {
+            payload.opening_balance = Number(accountForm.opening_balance) || 0
+        }
+        return payload
+    }
+
+    const validateAccountForm = () => {
+        if (!accountForm.name.trim()) return t('treasury.account_name_required', 'اسم حساب الخزينة مطلوب')
+        if (!accountForm.currency) return t('treasury.account_currency_required', 'عملة الحساب مطلوبة')
+        return ''
+    }
+
+    const openAddModal = () => {
+        setAccountError('')
+        resetAccountForm()
+        setShowAdd(true)
+    }
+
     const fetchAccounts = async () => {
         try {
             setLoading(true)
@@ -38,6 +92,7 @@ export default function TreasuryAccountList() {
             setAccounts(response.data)
         } catch (err) {
             console.error(err)
+            toastEmitter.emit(getErrorMessage(err, t('treasury.error_loading_accounts', 'تعذر تحميل حسابات الخزينة')), 'error')
         } finally {
             setLoading(false)
         }
@@ -66,25 +121,32 @@ export default function TreasuryAccountList() {
     }
 
     const handleCreate = async () => {
+        const validationError = validateAccountForm()
+        if (validationError) {
+            setAccountError(validationError)
+            return
+        }
+
         try {
-            await treasuryAPI.createAccount({
-                ...accountForm,
-                branch_id: currentBranch?.id || null
-            })
+            setSaving(true)
+            setAccountError('')
+            await treasuryAPI.createAccount(normalizeAccountPayload(true))
             toastEmitter.emit(t('treasury.success_create_account'), 'success')
             setShowAdd(false)
             fetchAccounts()
-            setAccountForm({
-                name: '', name_en: '', account_type: 'cash', currency: baseCurrency,
-                bank_name: '', account_number: '', iban: '', branch_id: '',
-                opening_balance: 0, exchange_rate: 1, allow_overdraft: false
-            })
+            resetAccountForm()
         } catch (err) {
             console.error(err)
+            const errorMsg = getErrorMessage(err, t('common.error_saving'))
+            setAccountError(errorMsg)
+            toastEmitter.emit(errorMsg, 'error')
+        } finally {
+            setSaving(false)
         }
     }
 
     const handleEditClick = (account) => {
+        setAccountError('')
         setSelectedAccount(account)
         setAccountForm({
             name: account.name || '',
@@ -103,26 +165,27 @@ export default function TreasuryAccountList() {
     }
 
     const handleUpdate = async () => {
+        const validationError = validateAccountForm()
+        if (validationError) {
+            setAccountError(validationError)
+            return
+        }
+
         try {
-            const updateData = {
-                name: accountForm.name,
-                name_en: accountForm.name_en,
-                account_type: accountForm.account_type,
-                currency: accountForm.currency,
-                bank_name: accountForm.bank_name,
-                account_number: accountForm.account_number,
-                iban: accountForm.iban,
-                branch_id: currentBranch?.id || null,
-                allow_overdraft: accountForm.allow_overdraft
-            }
+            setSaving(true)
+            setAccountError('')
+            const updateData = normalizeAccountPayload(false)
             await treasuryAPI.updateAccount(selectedAccount.id, updateData)
             toastEmitter.emit(t('treasury.success_update_account'), 'success')
             setShowEdit(false)
             setSelectedAccount(null)
             fetchAccounts()
         } catch (err) {
-            const errorMsg = err.response?.data?.detail || t('common.error_saving')
+            const errorMsg = getErrorMessage(err, t('common.error_saving'))
+            setAccountError(errorMsg)
             toastEmitter.emit(errorMsg, 'error')
+        } finally {
+            setSaving(false)
         }
     }
 
@@ -164,7 +227,7 @@ export default function TreasuryAccountList() {
         {
             key: 'name',
             label: t('common.name'),
-            width: '40%',
+            width: '30%',
             render: (val, row) => (
                 <div>
                     <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>{val}</div>
@@ -175,12 +238,18 @@ export default function TreasuryAccountList() {
         {
             key: 'account_type',
             label: t('treasury.account_type'),
-            width: '20%',
+            width: '15%',
             render: (val) => (
                 <span className={`badge ${val === 'bank' ? 'badge-info' : 'badge-success'}`}>
                     {val === 'bank' ? t('treasury.bank_name') : t('treasury.cash_box')}
                 </span>
             ),
+        },
+        {
+            key: 'branch_name',
+            label: t('common.branch', 'الفرع'),
+            width: '15%',
+            render: (val) => val || t('branches.all_branches', 'كل الفروع'),
         },
         {
             key: 'current_balance',
@@ -240,7 +309,7 @@ export default function TreasuryAccountList() {
                         <h1 className="workspace-title">{t('treasury.menu.accounts')}</h1>
                         <p className="workspace-subtitle">{t('treasury.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={() => setShowAdd(true)}>
+                    <button className="btn btn-primary" onClick={openAddModal}>
                         <span style={{ marginLeft: '8px' }}>+</span>
                         {t('common.add_new')}
                     </button>
@@ -269,26 +338,40 @@ export default function TreasuryAccountList() {
                 loading={loading}
                 emptyIcon={'\uD83C\uDFE6'}
                 emptyTitle={t('treasury.no_accounts')}
-                emptyAction={{ label: t('common.add_new'), onClick: () => setShowAdd(true) }}
+                emptyAction={{ label: t('common.add_new'), onClick: openAddModal }}
             />
 
             <SimpleModal
                 isOpen={showAdd}
-                onClose={() => setShowAdd(false)}
+                onClose={() => { setAccountError(''); setShowAdd(false); }}
                 title={t('treasury.add_account')}
                 footer={
                     <>
-                        <button className="btn btn-secondary" onClick={() => setShowAdd(false)}>{t('common.cancel')}</button>
-                        <button className="btn btn-primary" onClick={handleCreate}>{t('common.save')}</button>
+                        <button className="btn btn-secondary" onClick={() => { setAccountError(''); setShowAdd(false); }} disabled={saving}>{t('common.cancel')}</button>
+                        <button className="btn btn-primary" onClick={handleCreate} disabled={saving}>{saving ? t('common.saving', 'جاري الحفظ...') : t('common.save')}</button>
                     </>
                 }
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {accountError && <div className="alert alert-error">{accountError}</div>}
                     <div className="form-group">
                         <label className="form-label">{t('treasury.account_type')}</label>
                         <select className="form-input" value={accountForm.account_type} onChange={e => setAccountForm({ ...accountForm, account_type: e.target.value })}>
                             <option value="cash">{t('treasury.cash_box')}</option>
                             <option value="bank">{t('treasury.bank_name')}</option>
+                        </select>
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">{t('treasury.primary_branch', 'الفرع الرئيسي للحساب')}</label>
+                        <select
+                            className="form-input"
+                            value={accountForm.branch_id || ''}
+                            onChange={e => setAccountForm({ ...accountForm, branch_id: e.target.value })}
+                        >
+                            <option value="">{t('branches.all_branches', 'كل الفروع')}</option>
+                            {branches.map(branch => (
+                                <option key={branch.id} value={branch.id}>{branch.branch_name}</option>
+                            ))}
                         </select>
                     </div>
                     <div className="form-group">
@@ -364,27 +447,50 @@ export default function TreasuryAccountList() {
                             </div>
                         </>
                     )}
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <input
+                            type="checkbox"
+                            id="add_allow_overdraft"
+                            checked={accountForm.allow_overdraft}
+                            onChange={e => setAccountForm({ ...accountForm, allow_overdraft: e.target.checked })}
+                        />
+                        <label htmlFor="add_allow_overdraft" className="form-label" style={{ margin: 0 }}>{t('treasury.allow_overdraft', 'السماح بالسحب على المكشوف')}</label>
+                    </div>
                 </div>
             </SimpleModal>
 
             {/* Edit Modal */}
             <SimpleModal
                 isOpen={showEdit}
-                onClose={() => setShowEdit(false)}
+                onClose={() => { setAccountError(''); setShowEdit(false); }}
                 title={t('treasury.edit_account')}
                 footer={
                     <>
-                        <button className="btn btn-secondary" onClick={() => setShowEdit(false)}>{t('common.cancel')}</button>
-                        <button className="btn btn-primary" onClick={handleUpdate}>{t('common.save')}</button>
+                        <button className="btn btn-secondary" onClick={() => { setAccountError(''); setShowEdit(false); }} disabled={saving}>{t('common.cancel')}</button>
+                        <button className="btn btn-primary" onClick={handleUpdate} disabled={saving}>{saving ? t('common.saving', 'جاري الحفظ...') : t('common.save')}</button>
                     </>
                 }
             >
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '16px' }}>
+                    {accountError && <div className="alert alert-error">{accountError}</div>}
                     <div className="form-group">
                         <label className="form-label">{t('treasury.account_type')}</label>
                         <select className="form-input" value={accountForm.account_type} onChange={e => setAccountForm({ ...accountForm, account_type: e.target.value })}>
                             <option value="cash">{t('treasury.cash_box')}</option>
                             <option value="bank">{t('treasury.bank_name')}</option>
+                        </select>
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">{t('treasury.primary_branch', 'الفرع الرئيسي للحساب')}</label>
+                        <select
+                            className="form-input"
+                            value={accountForm.branch_id || ''}
+                            onChange={e => setAccountForm({ ...accountForm, branch_id: e.target.value })}
+                        >
+                            <option value="">{t('branches.all_branches', 'كل الفروع')}</option>
+                            {branches.map(branch => (
+                                <option key={branch.id} value={branch.id}>{branch.branch_name}</option>
+                            ))}
                         </select>
                     </div>
                     <div className="form-group">

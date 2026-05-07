@@ -11,9 +11,9 @@ import { formatNumber } from '../../utils/format'
 function StockHome() {
     const { t, i18n } = useTranslation()
     const navigate = useNavigate()
-    const [stats, setStats] = useState({ product_count: 0, inventory_value: 0, low_stock_count: 0 })
+    const [stats, setStats] = useState({ product_count: 0, inventory_value: 0, low_stock_count: 0, currency: '' })
     const [loading, setLoading] = useState(true)
-    const currency = getCurrency()
+    const currency = stats.currency || getCurrency()
     const { currentBranch } = useBranch()
     const { showToast } = useToast()
 
@@ -137,6 +137,11 @@ function StockHome() {
                             <div className="link-item" onClick={() => navigate('/stock/reports/movements')}>
                                 <span className="link-icon">📈</span>
                                 {t('stock.home.links.movements_report')}
+                                <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
+                            </div>
+                            <div className="link-item" onClick={() => navigate('/stock/reports/profitability')}>
+                                <span className="link-icon">💰</span>
+                                {t('stock.home.links.profitability_report', 'تقرير الربحية')}
                                 <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                             </div>
                         </div>

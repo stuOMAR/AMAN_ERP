@@ -6,22 +6,28 @@ import logging
 
 logger = logging.getLogger(__name__)
 from .common import (
-    kpi_item, ratio_status, _count_table
+    build_branch_filter, kpi_item, ratio_status, _count_table
 )
+from utils.accounting import get_base_currency
+from utils.currency_display import currency_amount_base_sql
 
 
 def get_crm_kpis(db, start_date: date, end_date: date,
                  branch_id: Optional[int] = None) -> dict:
     """KPIs for CRM / Sales Rep."""
+    opp_branch_sql, opp_bp = build_branch_filter(branch_id, table_alias="o")
+    base_currency = get_base_currency(db) or "SAR"
+    opp_currency_sql = "COALESCE(o.currency, (SELECT b.default_currency FROM branches b WHERE b.id = o.branch_id), :base_currency)"
+    expected_base_sql = currency_amount_base_sql("o.expected_value", opp_currency_sql)
 
     # Opportunities
     open_opps = 0
     open_value = 0
     try:
-        oo = db.execute(text("""
-            SELECT COUNT(*), COALESCE(SUM(expected_value), 0)
-            FROM sales_opportunities WHERE stage IN ('open','qualified','proposal')
-        """)).fetchone()
+        oo = db.execute(text(f"""
+            SELECT COUNT(*), COALESCE(SUM({expected_base_sql}), 0)
+            FROM sales_opportunities o WHERE o.stage IN ('open','qualified','proposal') {opp_branch_sql}
+        """), {"base_currency": base_currency, **opp_bp}).fetchone()
         if oo:
             open_opps = int(oo[0] or 0)
             open_value = float(oo[1] or 0)
@@ -41,11 +47,11 @@ def get_crm_kpis(db, start_date: date, end_date: date,
     # Pipeline by Stage
     pipeline_stages = []
     try:
-        stages = db.execute(text("""
-            SELECT stage, COUNT(*), COALESCE(SUM(expected_value), 0)
-            FROM sales_opportunities WHERE stage NOT IN ('won','lost','cancelled')
-            GROUP BY stage ORDER BY COUNT(*) DESC
-        """)).fetchall()
+        stages = db.execute(text(f"""
+            SELECT o.stage, COUNT(*), COALESCE(SUM({expected_base_sql}), 0)
+            FROM sales_opportunities o WHERE o.stage NOT IN ('won','lost','cancelled') {opp_branch_sql}
+            GROUP BY o.stage ORDER BY COUNT(*) DESC
+        """), {"base_currency": base_currency, **opp_bp}).fetchall()
         pipeline_stages = [{"stage": r[0], "count": int(r[1]), "value": float(r[2])} for r in stages]
     except Exception:
         pass
@@ -82,7 +88,7 @@ def get_crm_kpis(db, start_date: date, end_date: date,
 
     kpis = [
         kpi_item("open_opportunities", "Open Opportunities", "الفرص المفتوحة", open_opps, ""),
-        kpi_item("pipeline_value", "Pipeline Value", "قيمة الفرص", open_value, "SAR"),
+        kpi_item("pipeline_value", "Pipeline Value", "قيمة الفرص", open_value, base_currency),
         kpi_item("win_rate", "Win Rate", "معدل الفوز", win_rate, "%",
                  benchmark=35.0, benchmark_source="Industry Avg",
                  status=ratio_status(win_rate, 35, 20)),

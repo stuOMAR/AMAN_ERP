@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { taxesAPI } from '../../utils/api'
+import { taxesAPI, treasuryAPI } from '../../utils/api'
 import { useTranslation } from 'react-i18next'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
@@ -10,12 +10,14 @@ import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
+import { useBranch } from '../../context/BranchContext'
 
 function TaxReturnDetails() {
     const { t } = useTranslation()
   const { showToast } = useToast()
     const { id } = useParams()
     const navigate = useNavigate()
+    const { currentBranch } = useBranch()
     const currency = getCurrency()
     const [loading, setLoading] = useState(true)
     const [data, setData] = useState(null)
@@ -42,8 +44,7 @@ function TaxReturnDetails() {
 
     const fetchTreasury = async () => {
         try {
-            const { default: api } = await import('../../utils/api')
-            const res = await api.get('/treasury/accounts')
+            const res = await treasuryAPI.listAccounts(currentBranch?.id)
             setTreasuryAccounts(res.data || [])
         } catch (e) { /* ignore */ }
     }
@@ -51,7 +52,7 @@ function TaxReturnDetails() {
     useEffect(() => {
         fetchData()
         fetchTreasury()
-    }, [id])
+    }, [id, currentBranch?.id])
 
     const handleFile = async () => {
         setActionLoading(true)

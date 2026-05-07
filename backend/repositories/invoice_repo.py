@@ -28,6 +28,7 @@ class InvoiceRepository:
         party_id: Optional[int] = None,
         status: Optional[str] = None,
         branch_id: Optional[int] = None,
+        branch_ids: Optional[list[int]] = None,
         limit: int = 100,
         offset: int = 0,
     ) -> list[dict]:
@@ -47,6 +48,12 @@ class InvoiceRepository:
         if branch_id:
             where.append("i.branch_id = :branch_id")
             params["branch_id"] = branch_id
+        elif branch_ids is not None:
+            if branch_ids:
+                where.append("i.branch_id = ANY(:branch_ids)")
+                params["branch_ids"] = branch_ids
+            else:
+                where.append("1=0")
 
         sql = f"""
             SELECT i.id,

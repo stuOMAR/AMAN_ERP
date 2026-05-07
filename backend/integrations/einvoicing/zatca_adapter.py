@@ -141,7 +141,7 @@ def build_ubl_xml(invoice: dict, seller_name: str, seller_vat: str,
         <cbc:Name>{_xml_escape(line.get("description"))}</cbc:Name>
         <cac:ClassifiedTaxCategory>
           <cbc:ID>S</cbc:ID>
-          <cbc:Percent>{float(line.get("tax_rate") or 15):.2f}</cbc:Percent>
+          <cbc:Percent>{float(line.get("tax_rate") or 0):.2f}</cbc:Percent>
           <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
         </cac:ClassifiedTaxCategory>
       </cac:Item>

@@ -38,7 +38,7 @@ const StatsCards = ({ stats, loading, currency = '' }) => {
 
     const cards = [
         {
-            title: t('accounting.home.metrics.total_income') || t('dashboard.total_sales'),
+            title: t('dashboard.total_sales'),
             value: formatNumber(stats?.sales || 0),
             trend: (stats?.sales_change || 0) >= 0 ? "up" : "down",
             trendValue: `${stats?.sales_change > 0 ? "+" : ""}${stats?.sales_change || 0}%`

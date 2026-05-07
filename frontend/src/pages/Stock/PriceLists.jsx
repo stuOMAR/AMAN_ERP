@@ -1,9 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
-import { inventoryAPI, currenciesAPI } from '../../utils/api';
+import { inventoryAPI, currenciesAPI, branchesAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
 import { useToast } from '../../context/ToastContext';
+import { useBranch } from '../../context/BranchContext';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 
@@ -11,9 +12,11 @@ const PriceLists = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
     const navigate = useNavigate();
+    const { currentBranch } = useBranch();
     const systemCurrency = getCurrency();
     const [priceLists, setPriceLists] = useState([]);
     const [currencies, setCurrencies] = useState([]);
+    const [branches, setBranches] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
@@ -22,6 +25,7 @@ const PriceLists = () => {
     const [formData, setFormData] = useState({
         name: '',
         currency: '',
+        branch_id: '',
         is_active: true,
         is_default: false
     });
@@ -29,12 +33,15 @@ const PriceLists = () => {
     useEffect(() => {
         fetchPriceLists();
         fetchCurrencies();
-    }, []);
+        fetchBranches();
+    }, [currentBranch]);
 
     const fetchPriceLists = async () => {
         try {
             setLoading(true);
-            const response = await inventoryAPI.listPriceLists();
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const response = await inventoryAPI.listPriceLists(params);
             setPriceLists(response.data);
         } catch (error) {
             showToast(t('errors.fetch_failed'), 'error');
@@ -59,6 +66,16 @@ const PriceLists = () => {
         }
     };
 
+    const fetchBranches = async () => {
+        try {
+            const response = await branchesAPI.list();
+            setBranches(response.data || []);
+        } catch (error) {
+            // Silently fail - branches are optional
+            setBranches([]);
+        }
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
@@ -68,6 +85,7 @@ const PriceLists = () => {
             setFormData({
                 name: '',
                 currency: base ? base.code : systemCurrency || '',
+                branch_id: '',
                 is_active: true,
                 is_default: false
             });
@@ -82,6 +100,7 @@ const PriceLists = () => {
         setFormData({
             name: list.name,
             currency: list.currency,
+            branch_id: list.branch_id || '',
             is_active: list.is_active,
             is_default: list.is_default
         });
@@ -144,6 +163,7 @@ const PriceLists = () => {
                     <thead>
                         <tr>
                             <th>{t('stock.price_lists.table.name')}</th>
+                            <th>{t('stock.price_lists.table.branch', 'Branch')}</th>
                             <th>{t('stock.price_lists.table.currency')}</th>
                             <th>{t('stock.price_lists.table.status')}</th>
                             <th>{t('stock.price_lists.table.notes')}</th>
@@ -153,12 +173,13 @@ const PriceLists = () => {
                     <tbody>
                         {!priceLists || priceLists.length === 0 ? (
                             <tr>
-                                <td colSpan="5" className="text-center py-5 text-muted">{t('stock.price_lists.empty')}</td>
+                                <td colSpan="6" className="text-center py-5 text-muted">{t('stock.price_lists.empty')}</td>
                             </tr>
                         ) : (
                             priceLists.map((list) => (
                                 <tr key={list.id}>
                                     <td className="font-medium text-primary">{list.name}</td>
+                                    <td>{list.branch_name || t('common.all_branches', 'All')}</td>
                                     <td>{list.currency}</td>
                                     <td>
                                         <span className={`status-badge ${list.is_active ? 'active' : 'inactive'}`}>
@@ -241,6 +262,22 @@ const PriceLists = () => {
                                 </select>
                             </div>
 
+                            <div className="form-group">
+                                <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
+                                <select
+                                    value={formData.branch_id}
+                                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                                    className="form-input"
+                                >
+                                    <option value="">{t('common.all_branches', 'All Branches')}</option>
+                                    {branches.map(b => (
+                                        <option key={b.id} value={b.id}>
+                                            {b.branch_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
                             <div className="form-row">
                                 <label className="checkbox-label">
                                     <input
@@ -299,6 +336,22 @@ const PriceLists = () => {
                                     onChange={(e) => setFormData({ ...formData, name: e.target.value })}
                                     className="form-input"
                                 />
+                            </div>
+
+                            <div className="form-group">
+                                <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
+                                <select
+                                    value={formData.branch_id}
+                                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                                    className="form-input"
+                                >
+                                    <option value="">{t('common.all_branches', 'All Branches')}</option>
+                                    {branches.map(b => (
+                                        <option key={b.id} value={b.id}>
+                                            {b.branch_name}
+                                        </option>
+                                    ))}
+                                </select>
                             </div>
 
                             <div className="form-row">

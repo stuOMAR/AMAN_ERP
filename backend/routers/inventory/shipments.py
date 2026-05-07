@@ -13,7 +13,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.accounting import get_mapped_account_id
 from services.gl_service import create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
@@ -148,6 +148,7 @@ def list_shipments(
     """عرض جميع الشحنات"""
     db = get_db_connection(current_user.company_id)
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         query = """
             SELECT s.id, s.shipment_ref, s.status, s.notes, s.created_at, s.shipped_at, s.received_at,
                    sw.warehouse_name as source_warehouse,
@@ -161,17 +162,15 @@ def list_shipments(
             WHERE 1=1
         """
         params = {}
-        if branch_id:
+        if branch_scope["branch_id"] is not None:
+            params["branch_id"] = branch_scope["branch_id"]
             query += " AND (sw.branch_id = :branch_id OR dw.branch_id = :branch_id)"
-            params["branch_id"] = branch_id
-        else:
-            # INV-S02: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND (sw.branch_id IN ({branch_placeholders}) OR dw.branch_id IN ({branch_placeholders}))"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        elif branch_scope["branch_ids"] is not None:
+            if branch_scope["branch_ids"]:
+                params["allowed_branch_ids"] = branch_scope["branch_ids"]
+                query += " AND (sw.branch_id = ANY(:allowed_branch_ids) OR dw.branch_id = ANY(:allowed_branch_ids))"
+            else:
+                query += " AND 1=0"
 
         if status_filter:
             query += " AND s.status = :status"
@@ -193,6 +192,7 @@ def list_incoming_shipments(
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     db = get_db_connection(company_id)
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         query = """
             SELECT s.id, s.shipment_ref, s.status, s.notes, s.created_at,
                    sw.warehouse_name as source_warehouse,
@@ -212,17 +212,7 @@ def list_incoming_shipments(
             WHERE s.status = 'pending'
         """
         params = {}
-        if branch_id:
-            query += " AND dw.branch_id = :bid"
-            params["bid"] = branch_id
-        else:
-            # INV-S02: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND dw.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += branch_scope_filter_from_scope(branch_scope, "dw.branch_id", params)
 
         query += " ORDER BY s.created_at DESC"
         result = db.execute(text(query), params).fetchall()
@@ -360,16 +350,49 @@ def confirm_shipment(
                     sale_document_id=id,
                     costing_method=policy,
                 )
-                CostingService.create_cost_layer(
-                    db,
-                    product_id=item.product_id,
-                    warehouse_id=shipment.destination_warehouse_id,
-                    quantity=item.quantity,
-                    unit_cost=float(source_cost or 0),
-                    source_document_type="shipment_receive",
-                    source_document_id=id,
-                    costing_method=policy,
-                )
+                # T10.1 P1 #101 — recreate one destination layer per
+                # *source* layer (preserving its original unit_cost) so
+                # FIFO/LIFO valuation at the destination matches the
+                # source. Old code created a single bulk layer at the
+                # WAC source_cost, which lost the basis.
+                consumed = db.execute(text("""
+                    SELECT cl.unit_cost, clc.quantity_consumed
+                      FROM cost_layer_consumptions clc
+                      JOIN cost_layers cl ON cl.id = clc.cost_layer_id
+                     WHERE clc.sale_document_type = 'shipment_dispatch'
+                       AND clc.sale_document_id = :sid
+                       AND cl.product_id = :pid
+                       AND cl.warehouse_id = :wid
+                """), {
+                    "sid": id,
+                    "pid": item.product_id,
+                    "wid": shipment.source_warehouse_id,
+                }).fetchall()
+                if consumed:
+                    for src_layer in consumed:
+                        CostingService.create_cost_layer(
+                            db,
+                            product_id=item.product_id,
+                            warehouse_id=shipment.destination_warehouse_id,
+                            quantity=float(src_layer.quantity_consumed),
+                            unit_cost=float(src_layer.unit_cost or 0),
+                            source_document_type="shipment_receive",
+                            source_document_id=id,
+                            costing_method=policy,
+                        )
+                else:
+                    # Defensive fallback (no consumption rows): keep the
+                    # legacy single-layer behaviour using the WAC cost.
+                    CostingService.create_cost_layer(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=shipment.destination_warehouse_id,
+                        quantity=item.quantity,
+                        unit_cost=float(source_cost or 0),
+                        source_document_type="shipment_receive",
+                        source_document_id=id,
+                        costing_method=policy,
+                    )
             except ValueError:
                 # Source warehouse has no cost layers (legacy stock created
                 # outside the layered system). Leave the WAC update below

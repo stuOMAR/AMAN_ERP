@@ -1,0 +1,12 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e225]:
+    - generic [ref=e226]: ⚠️
+    - heading "حدث خطأ" [level=2] [ref=e227]
+    - paragraph [ref=e228]: حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى.
+    - group [ref=e229]:
+      - generic "التفاصيل" [ref=e230] [cursor=pointer]
+    - generic [ref=e231]:
+      - button "حاول مرة أخرى" [ref=e232] [cursor=pointer]
+      - button "Go to Dashboard" [ref=e233] [cursor=pointer]

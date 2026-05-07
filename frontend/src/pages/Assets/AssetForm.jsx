@@ -228,14 +228,19 @@ const AssetForm = () => {
 
                                             <div className="col-12">
                                                 <FormField label={<><DollarSign size={14} /> {t('assets.residual_value', 'Residual Value')}</>} hint={t('assets.residual_hint', 'Expected value at end of useful life')}>
-                                                    <input
-                                                        id="residual_value"
-                                                        type="number"
-                                                        step="0.01"
-                                                        className="form-input"
-                                                        {...register('residual_value')}
-                                                        defaultValue={0}
-                                                    />
+                                                    <div className="input-group">
+                                                        <input
+                                                            id="residual_value"
+                                                            type="number"
+                                                            step="0.01"
+                                                            className="form-input"
+                                                            {...register('residual_value')}
+                                                            defaultValue={0}
+                                                        />
+                                                        <span className="input-group-text">
+                                                            {currency}
+                                                        </span>
+                                                    </div>
                                                 </FormField>
                                             </div>
                                         </div>

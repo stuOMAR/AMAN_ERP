@@ -30,7 +30,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import ForgotPasswordRequest, ResetPasswordRequest, invalidate_user_tokens, oauth2_scheme, oauth2_scheme_optional
+from .core import ForgotPasswordRequest, ResetPasswordRequest, _ensure_reset_table, _hash_reset_token, invalidate_user_tokens, oauth2_scheme, oauth2_scheme_optional
 
 @router.post("/forgot-password", response_model=Dict[str, Any])
 @limiter.limit("5/minute")
@@ -137,14 +137,20 @@ async def forgot_password(request: Request, body: ForgotPasswordRequest):
             try:
                 from utils.email import send_email
                 from services.email_service import get_base_template
+                import html as _html
 
+                # P1 #93 — HTML-escape user-controlled values before
+                # splicing into the password-reset email body. The reset
+                # URL is escaped for attribute context.
+                safe_name = _html.escape(str(found_user.full_name or found_user.username or ""))
+                safe_url = _html.escape(str(reset_url or ""), quote=True)
                 body_html = get_base_template(f"""
                     <h2>إعادة تعيين كلمة المرور</h2>
-                    <p>مرحباً {found_user.full_name or found_user.username}،</p>
+                    <p>مرحباً {safe_name}،</p>
                     <p>لقد تلقينا طلباً لإعادة تعيين كلمة المرور الخاصة بك.</p>
                     <p>اضغط على الزر أدناه لإعادة التعيين:</p>
                     <p style="text-align: center;">
-                        <a href="{reset_url}" class="btn">إعادة تعيين كلمة المرور</a>
+                        <a href="{safe_url}" class="btn">إعادة تعيين كلمة المرور</a>
                     </p>
                     <div class="info-box">
                         <p>⏰ هذا الرابط صالح لمدة <strong>ساعة واحدة</strong> فقط.</p>

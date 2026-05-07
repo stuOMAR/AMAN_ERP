@@ -30,6 +30,27 @@ export async function fetchCurrentRate(code) {
     return promise
 }
 
+export function calculateCrossExchangeRate(sourceRate, targetRate) {
+    const source = Number(sourceRate)
+    const target = Number(targetRate)
+    if (!Number.isFinite(source) || source <= 0 || !Number.isFinite(target) || target <= 0) {
+        return 1.0
+    }
+    return Number((source / target).toFixed(8))
+}
+
+export async function fetchCrossExchangeRate(sourceCode, targetCode) {
+    const sourceKey = (sourceCode || '').toUpperCase().trim()
+    const targetKey = (targetCode || '').toUpperCase().trim()
+    if (!sourceKey || !targetKey || sourceKey === targetKey) return 1.0
+
+    const [sourceRate, targetRate] = await Promise.all([
+        fetchCurrentRate(sourceKey),
+        fetchCurrentRate(targetKey),
+    ])
+    return calculateCrossExchangeRate(sourceRate, targetRate)
+}
+
 /** Reset the cache — call after a manager edits exchange rates in settings. */
 export function clearExchangeRateCache(code) {
     if (code) _rateCache.delete(String(code).toUpperCase())

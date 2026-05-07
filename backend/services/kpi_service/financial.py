@@ -8,6 +8,7 @@ logger = logging.getLogger(__name__)
 from .common import (
     get_previous_period, build_branch_filter, kpi_item, ratio_status, _gl_sum, _gl_balance, _gl_balance_by_classification
 )
+from utils.accounting import get_base_currency
 from .charts import (
     _build_ar_aging, _build_ap_aging, _build_financial_alerts
 )
@@ -17,6 +18,7 @@ def get_financial_kpis(db, start_date: date, end_date: date,
                        branch_id: Optional[int] = None) -> dict:
     """KPIs for CFO / Accountant role."""
     prev_start, prev_end = get_previous_period(start_date, end_date)
+    base_currency = get_base_currency(db) or "SAR"
 
     # Current Assets & Liabilities (balance as of end_date)
     current_assets = _gl_balance_by_classification(db, "current_asset", end_date, branch_id)
@@ -31,6 +33,7 @@ def get_financial_kpis(db, start_date: date, end_date: date,
     # Inventory balance
     inventory_balance = 0
     try:
+        inv_branch_sql, inv_bp = build_branch_filter(branch_id)
         inv_result = db.execute(text("""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl
@@ -38,7 +41,8 @@ def get_financial_kpis(db, start_date: date, end_date: date,
             JOIN accounts a ON jl.account_id = a.id
             WHERE (a.account_code LIKE '14%' OR a.name ILIKE '%inventory%' OR a.name ILIKE '%مخزون%')
               AND je.entry_date <= :end_dt AND je.status = 'posted'
-        """), {"end_dt": end_date}).scalar()
+              {inv_branch_sql}
+        """.format(inv_branch_sql=inv_branch_sql)), {"end_dt": end_date, **inv_bp}).scalar()
         inventory_balance = float(inv_result or 0)
     except Exception:
         pass
@@ -56,13 +60,15 @@ def get_financial_kpis(db, start_date: date, end_date: date,
     revenue = _gl_sum(db, "revenue", start_date, end_date, branch_id, debit_minus_credit=False)
     cogs = 0
     try:
+        cogs_branch_sql, cogs_bp = build_branch_filter(branch_id)
         cogs_r = db.execute(text("""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl JOIN journal_entries je ON jl.journal_entry_id = je.id
             JOIN accounts a ON jl.account_id = a.id
             WHERE a.account_type = 'expense' AND a.account_code LIKE '5%'
               AND je.entry_date BETWEEN :s AND :e AND je.status = 'posted'
-        """), {"s": start_date, "e": end_date}).scalar()
+              {cogs_branch_sql}
+        """.format(cogs_branch_sql=cogs_branch_sql)), {"s": start_date, "e": end_date, **cogs_bp}).scalar()
         cogs = float(cogs_r or 0)
     except Exception:
         pass
@@ -97,6 +103,7 @@ def get_financial_kpis(db, start_date: date, end_date: date,
     vat_output = 0
     vat_input = 0
     try:
+        vat_branch_sql, vat_bp = build_branch_filter(branch_id)
         vat_r = db.execute(text("""
             SELECT
                 COALESCE(SUM(CASE WHEN jl.credit > 0 AND a.account_code LIKE '22%' THEN jl.credit ELSE 0 END), 0),
@@ -105,7 +112,8 @@ def get_financial_kpis(db, start_date: date, end_date: date,
             JOIN journal_entries je ON jl.journal_entry_id = je.id
             JOIN accounts a ON jl.account_id = a.id
             WHERE je.entry_date BETWEEN :s AND :e AND je.status = 'posted'
-        """), {"s": start_date, "e": end_date}).fetchone()
+              {vat_branch_sql}
+        """.format(vat_branch_sql=vat_branch_sql)), {"s": start_date, "e": end_date, **vat_bp}).fetchone()
         if vat_r:
             vat_output = float(vat_r[0] or 0)
             vat_input = float(vat_r[1] or 0)
@@ -186,8 +194,8 @@ def get_financial_kpis(db, start_date: date, end_date: date,
         kpi_item("budget_variance", "Budget vs Actual", "الانحراف عن الميزانية", budget_variance, "%",
                  benchmark=0, benchmark_source="Internal",
                  status=ratio_status(abs(budget_variance), 5, 15, higher_is_better=False)),
-        kpi_item("vat_position", "VAT Position", "موقف ضريبة القيمة المضافة", vat_position, "SAR"),
-        kpi_item("zakat_estimate", "Zakat Estimate", "تقدير الزكاة", zakat_estimate, "SAR",
+        kpi_item("vat_position", "VAT Position", "موقف ضريبة القيمة المضافة", vat_position, base_currency),
+        kpi_item("zakat_estimate", "Zakat Estimate", "تقدير الزكاة", zakat_estimate, base_currency,
                  benchmark_source="GAZT"),
     ]
 

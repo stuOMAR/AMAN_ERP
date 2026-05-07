@@ -13,7 +13,7 @@ import logging
 from database import get_db_connection, engine
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from utils.tenant_isolation import resolve_target_company_id
 
 router = APIRouter(prefix="/audit", tags=["Audit Logs"], dependencies=[Depends(require_module("audit"))])
@@ -120,29 +120,8 @@ def list_audit_logs(
         # if not include_archived:
         #     query += " AND (al.is_archived IS NULL OR al.is_archived = FALSE)"
         
-        # Logic for Branch Scope
-        permissions = getattr(current_user, 'permissions', []) or []
-        is_admin = "*" in permissions or getattr(current_user, 'role', None) in ['admin', 'system_admin', 'superuser']
-        
-        if branch_id:
-            if not is_admin:
-                allowed_branches = getattr(current_user, 'allowed_branches', []) or []
-                if not allowed_branches or branch_id not in allowed_branches:
-                     raise HTTPException(status_code=403, detail="ليس لديك صلاحية لعرض سجلات هذا الفرع")
-            
-            query += " AND branch_id = :bid"
-            params["bid"] = branch_id
-        
-        else:
-            if not is_admin:
-                allowed_branches = getattr(current_user, 'allowed_branches', []) or []
-                if allowed_branches:
-                    branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed_branches)))
-                    query += f" AND branch_id IN ({branch_placeholders})"
-                    for i, bid in enumerate(allowed_branches):
-                        params[f"_ab_{i}"] = bid
-                else:
-                    return []
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        query += branch_scope_filter_from_scope(branch_scope, "al.branch_id", params)
             
         if action:
             query += " AND action ILIKE :action"
@@ -259,29 +238,10 @@ def get_audit_stats(
         return {"total_logs": 0, "today_logs": 0, "top_actions": [], "top_users": []}
 
     with transactional(target_company_id) as db:
-        permissions = getattr(current_user, 'permissions', []) or []
-        is_admin = "*" in permissions or getattr(current_user, 'role', None) in ['admin', 'system_admin', 'superuser']
-        
         where_clause = " WHERE 1=1"
         params = {}
-
-        if branch_id:
-            if not is_admin:
-                allowed_branches = getattr(current_user, 'allowed_branches', []) or []
-                if not allowed_branches or branch_id not in allowed_branches:
-                    return {"total_logs": 0, "today_logs": 0, "top_actions": [], "top_users": []}
-            where_clause += " AND branch_id = :bid"
-            params["bid"] = branch_id
-        else:
-            if not is_admin:
-                allowed_branches = getattr(current_user, 'allowed_branches', []) or []
-                if allowed_branches:
-                    branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed_branches)))
-                    where_clause += f" AND branch_id IN ({branch_placeholders})"
-                    for i, bid in enumerate(allowed_branches):
-                        params[f"_ab_{i}"] = bid
-                else:
-                    return {"total_logs": 0, "today_logs": 0, "top_actions": [], "top_users": []}
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        where_clause += f" {branch_scope_filter_from_scope(branch_scope, 'branch_id', params)}"
 
         # Total logs
         total = db.execute(text(f"SELECT COUNT(*) FROM audit_logs {where_clause}"), params).scalar() or 0

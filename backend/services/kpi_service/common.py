@@ -1,7 +1,7 @@
 """kpi_service.common — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
 from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from typing import Any, Optional, Sequence, Tuple
 import logging
 
 logger = logging.getLogger(__name__)
@@ -48,8 +48,19 @@ def get_previous_period(start_date: date, end_date: date) -> Tuple[date, date]:
     return (prev_start, prev_end)
 
 
+def _branch_id_sequence(branch_id: Any) -> Optional[list[int]]:
+    if isinstance(branch_id, (list, tuple, set)):
+        return [int(b) for b in branch_id]
+    return None
+
+
 def build_branch_filter(branch_id: Optional[int], table_alias: str = "je") -> Tuple[str, dict]:
     """Build branch filter SQL clause and params."""
+    branch_ids = _branch_id_sequence(branch_id)
+    if branch_ids is not None:
+        if not branch_ids:
+            return ("AND 1=0", {})
+        return (f"AND {table_alias}.branch_id = ANY(:branch_ids)", {"branch_ids": branch_ids})
     if branch_id:
         return (f"AND {table_alias}.branch_id = :branch_id", {"branch_id": branch_id})
     return ("", {})
@@ -165,13 +176,13 @@ def _gl_balance(db, account_type: str, as_of: date,
 def _gl_balance_by_classification(db, classification: str, as_of: date,
                                    branch_id: Optional[int] = None) -> float:
     """Balance by account classification (current_asset, fixed_asset, current_liability, etc.).
-    Uses account_code patterns since accounts table has no classification column."""
+    Uses account_number patterns since accounts table has no classification column."""
     branch_sql, params = build_branch_filter(branch_id)
     code_filters = {
-        "current_asset": "(a.account_type = 'asset' AND a.account_code ~ '^1[1-5]')",
-        "fixed_asset": "(a.account_type = 'asset' AND a.account_code LIKE '16%')",
-        "current_liability": "(a.account_type = 'liability' AND a.account_code LIKE '21%')",
-        "long_term_liability": "(a.account_type = 'liability' AND a.account_code LIKE '22%')",
+        "current_asset": "(a.account_type = 'asset' AND a.account_number ~ '^1[1-5]')",
+        "fixed_asset": "(a.account_type = 'asset' AND a.account_number ~ '^1[6-9]')",
+        "current_liability": "(a.account_type = 'liability' AND a.account_number ~ '^21')",
+        "long_term_liability": "(a.account_type = 'liability' AND a.account_number ~ '^22')",
     }
     filter_sql = code_filters.get(classification, f"a.account_type = '{classification}'")
     result = db.execute(text(f"""
@@ -193,7 +204,14 @@ def _count_table(db, table: str, branch_id: Optional[int] = None,
     """Count rows in a table with optional filters."""
     conditions = ["1=1"]
     params = {}
-    if branch_id:
+    branch_ids = _branch_id_sequence(branch_id)
+    if branch_ids is not None:
+        if branch_ids:
+            conditions.append("branch_id = ANY(:branch_ids)")
+            params["branch_ids"] = branch_ids
+        else:
+            conditions.append("1=0")
+    elif branch_id:
         conditions.append("branch_id = :branch_id")
         params["branch_id"] = branch_id
     if start_date and date_col:
@@ -215,7 +233,14 @@ def _sum_column(db, table: str, column: str, branch_id: Optional[int] = None,
     """Sum a column in a table with optional filters."""
     conditions = ["1=1"]
     params = {}
-    if branch_id:
+    branch_ids = _branch_id_sequence(branch_id)
+    if branch_ids is not None:
+        if branch_ids:
+            conditions.append("branch_id = ANY(:branch_ids)")
+            params["branch_ids"] = branch_ids
+        else:
+            conditions.append("1=0")
+    elif branch_id:
         conditions.append("branch_id = :branch_id")
         params["branch_id"] = branch_id
     if start_date and date_col:

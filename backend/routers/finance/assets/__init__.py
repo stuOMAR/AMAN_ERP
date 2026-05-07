@@ -15,7 +15,10 @@ from .qr import router as _qr_router
 from .impairment import router as _impairment_router
 
 router = APIRouter(prefix="/assets", tags=['Fixed Assets'], dependencies=[Depends(require_module("assets"))])
-router.include_router(_core_router)
+
+# Collection/static routes must be registered before the core `/{asset_id}`
+# routes, otherwise paths such as `/assets/transfers` and `/assets/leases`
+# are interpreted as an `asset_id` and FastAPI returns a 422 validation error.
 router.include_router(_transfers_router)
 router.include_router(_revaluations_router)
 router.include_router(_maintenance_router)
@@ -25,5 +28,6 @@ router.include_router(_leases_router)
 router.include_router(_insurance_router)
 router.include_router(_qr_router)
 router.include_router(_impairment_router)
+router.include_router(_core_router)
 
 __all__ = ["router"]

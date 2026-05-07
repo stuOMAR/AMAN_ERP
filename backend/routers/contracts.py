@@ -10,9 +10,10 @@ from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
 from utils.tx import transactional
 from schemas.contracts import ContractCreate, ContractUpdate, ContractAmendmentCreate, ContractResponse
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter, require_permission
 from utils.accounting import get_base_currency, compute_line_amounts, compute_invoice_totals
 from utils.audit import log_activity
+from services.tax_engine import resolve_line_tax
 
 logger = logging.getLogger(__name__)
 
@@ -147,8 +148,6 @@ def list_contracts(
     current_user: UserResponse = Depends(get_current_user)
 ):
     """List Contracts."""
-    from utils.permissions import validate_branch_access
-    validated_branch = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         query = """
             SELECT c.*, p.name as party_name 
@@ -157,9 +156,9 @@ def list_contracts(
         """
         params = {}
         conditions = []
-        if validated_branch:
-            conditions.append("c.branch_id = :branch_id")
-            params["branch_id"] = validated_branch
+        branch_clause = branch_scope_filter(current_user, branch_id, "c.branch_id", params)
+        if branch_clause:
+            conditions.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY c.created_at DESC"
@@ -473,8 +472,19 @@ def generate_contract_invoice(
             
             inv_num = generate_sequential_number(db, f"INV-CTR-{dt_date.today().year}", "invoices", "invoice_number")
     
+            # Get user's default branch for tax resolution
+            user_branch = db.execute(text(
+                "SELECT branch_id FROM user_branches WHERE user_id = :uid ORDER BY branch_id LIMIT 1"
+            ), {"uid": current_user.id}).fetchone()
+            _branch_id = user_branch.branch_id if user_branch else None
+
             # Centralized Decimal calculation (Constitution: no inline float math)
-            line_dicts = [{"quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": i.tax_rate} for i in items]
+            line_dicts = []
+            resolved_items = []
+            for i in items:
+                tax_info = resolve_line_tax(_branch_id, i.product_id, db, dt_date.today(), customer_id=contract.party_id) if _branch_id else {"tax_rate": Decimal(str(i.tax_rate or 0)), "tax_rate_id": None}
+                line_dicts.append({"quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": tax_info["tax_rate"]})
+                resolved_items.append({"item": i, "tax_info": tax_info})
             totals = compute_invoice_totals(line_dicts)
             subtotal = float(totals["subtotal"])
             tax_total = float(totals["total_tax"])
@@ -500,14 +510,18 @@ def generate_contract_invoice(
                 "curr": contract.currency or get_base_currency(db)
             }).scalar()
             
-            for item in items:
-                la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate)
+            for ri in resolved_items:
+                item = ri["item"]
+                tax_info = ri["tax_info"]
+                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"])
                 db.execute(text("""
-                    INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, tax_rate, total)
-                    VALUES (:iid, :pid, :desc, :qty, :price, :tax, :total)
+                    INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, tax_rate, tax_rate_id, total)
+                    VALUES (:iid, :pid, :desc, :qty, :price, :tax, :tax_id, :total)
                 """), {
                     "iid": inv_id, "pid": item.product_id, "desc": item.description,
-                    "qty": item.quantity, "price": item.unit_price, "tax": item.tax_rate, "total": float(la['line_total'])
+                    "qty": item.quantity, "price": item.unit_price,
+                    "tax": tax_info["tax_rate"], "tax_id": tax_info.get("tax_rate_id"),
+                    "total": float(la['line_total'])
                 })
             
     

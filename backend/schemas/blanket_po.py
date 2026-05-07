@@ -13,6 +13,7 @@ class BlanketPOCreate(BaseModel):
     branch_id: Optional[int] = None
     currency: Optional[str] = "SAR"
     notes: Optional[str] = None
+    party_site_id: Optional[int] = None
 
 
 class BlanketPORead(BaseModel):

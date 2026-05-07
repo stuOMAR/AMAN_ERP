@@ -1,0 +1,82 @@
+openapi: 3.1.0
+info:
+  title: Search Registry (R7)
+  version: "1.0.0"
+paths:
+  /search/registry:
+    get:
+      summary: Entity registry for the GlobalSearch UI
+      description: Returns the cross-entity registry used by the frontend to render results and route to entities.
+      responses:
+        "200":
+          description: Registry list
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [version, entities]
+                properties:
+                  version: { type: string }
+                  entities:
+                    type: array
+                    items:
+                      type: object
+                      required: [entity_code, label_i18n, route_template, icon]
+                      properties:
+                        entity_code: { type: string, example: invoice }
+                        label_i18n:
+                          type: object
+                          required: [en, ar]
+                          properties:
+                            en: { type: string }
+                            ar: { type: string }
+                        route_template: { type: string, example: "/sales/invoices/:id" }
+                        icon: { type: string }
+                        permissions_required:
+                          type: array
+                          items: { type: string }
+        "503":
+          description: Registry empty (cold deploy)
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  error: { type: object, properties: { code: { type: string, example: search.registry_empty } } }
+  /search:
+    get:
+      summary: Unified cross-entity search (consumed contract)
+      parameters:
+        - in: query
+          name: q
+          required: true
+          schema: { type: string, minLength: 1, maxLength: 256 }
+        - in: query
+          name: entity
+          required: false
+          schema: { type: string }
+        - in: query
+          name: limit
+          required: false
+          schema: { type: integer, minimum: 1, maximum: 50, default: 10 }
+      responses:
+        "200":
+          description: Search results
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [query, results, latency_ms]
+                properties:
+                  query: { type: string }
+                  results:
+                    type: array
+                    items:
+                      type: object
+                      required: [entity_code, id, label]
+                      properties:
+                        entity_code: { type: string }
+                        id: { type: string }
+                        label: { type: string }
+                        snippet: { type: string }
+                  latency_ms: { type: integer }

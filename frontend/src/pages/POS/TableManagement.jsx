@@ -12,7 +12,7 @@ const TableManagement = () => {
     const [tables, setTables] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [form, setForm] = useState({ table_number: '', capacity: 4, zone: '' });
+    const [form, setForm] = useState({ table_number: '', capacity: 4, floor: '' });
 
     useEffect(() => { fetchTables(); }, []);
 
@@ -26,12 +26,13 @@ const TableManagement = () => {
         try {
             await posAPI.createTable({ ...form, capacity: parseInt(form.capacity) });
             showToast(t('pos.table_added'), 'success');
-            setShowModal(false); setForm({ table_number: '', capacity: 4, zone: '' }); fetchTables();
+            setShowModal(false); setForm({ table_number: '', capacity: 4, floor: '' }); fetchTables();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }
     };
 
     const handleSeat = async (id) => {
-        try { await posAPI.seatTable(id, { customer_name: '' }); showToast(t('pos.seated'), 'success'); fetchTables(); }
+        const customerName = window.prompt(t('pos.enter_customer_name') || 'اسم العميل (اختياري)') || '';
+        try { await posAPI.seatTable(id, { customer_name: customerName }); showToast(t('pos.seated'), 'success'); fetchTables(); }
         catch (err) { showToast(t('common.error'), 'error'); }
     };
 
@@ -74,7 +75,7 @@ const TableManagement = () => {
                     <div key={table.id} className="card p-4 text-center" style={{ borderTop: `4px solid ${table.status === 'available' ? '#16a34a' : table.status === 'occupied' ? '#dc2626' : '#d97706'}` }}>
                         <div className="text-2xl font-bold mb-2">#{table.table_number}</div>
                         <div className="mb-2"><span className={`badge ${statusColors[table.status] || 'bg-gray-100'}`}>{statusLabels[table.status] || table.status}</span></div>
-                        <div className="text-sm text-muted mb-3"><Users size={14} className="inline" /> {table.capacity} {t('pos.seats')}{table.zone ? ` — ${table.zone}` : ''}</div>
+                        <div className="text-sm text-muted mb-3"><Users size={14} className="inline" /> {table.capacity} {t('pos.seats')}{table.floor && table.floor !== 'main' ? ` — ${table.floor}` : ''}</div>
                         <div className="d-flex gap-2 justify-content-center">
                             {table.status === 'available' && <button className="btn btn-sm btn-success" onClick={() => handleSeat(table.id)}>{t('pos.seat_btn')}</button>}
                             {table.status === 'occupied' && <button className="btn btn-sm btn-warning" onClick={() => handleClear(table.id)}>{t('pos.clear_btn')}</button>}
@@ -96,7 +97,7 @@ const TableManagement = () => {
                             <div className="form-group"><label className="form-label">{t('pos.capacity')}</label>
                                 <input type="number" className="form-input" min="1" value={form.capacity} onChange={e => setForm({ ...form, capacity: e.target.value })} /></div>
                             <div className="form-group"><label className="form-label">{t('pos.zone')}</label>
-                                <input className="form-input" placeholder={t('pos.zone_placeholder')} value={form.zone} onChange={e => setForm({ ...form, zone: e.target.value })} /></div>
+                                <input className="form-input" placeholder={t('pos.zone_placeholder')} value={form.floor} onChange={e => setForm({ ...form, floor: e.target.value })} /></div>
                             <div className="d-flex gap-3 pt-3">
                                 <button type="submit" className="btn btn-primary flex-1">{t('pos.add')}</button>
                                 <button type="button" className="btn btn-secondary" onClick={() => setShowModal(false)}>{t('pos.cancel')}</button>

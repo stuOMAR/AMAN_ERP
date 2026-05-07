@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from .schemas import SupplierCreate, SupplierResponse
 
 suppliers_router = APIRouter()
@@ -25,60 +25,94 @@ def list_suppliers(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """عرض قائمة الموردين"""
+    """عرض قائمة الموردين مع أرصدة حسب الفرع والموقع"""
     db = get_db_connection(current_user.company_id)
     try:
-        query = """
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        
+        # Get branch currency if branch_id is provided
+        branch_cur = base_cur
+        if branch_id:
+            branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
+        
+        # Subquery to get aggregated balance per party
+        if branch_id:
+            # When branch is selected: show balance in branch's local currency
+            balance_subquery = """
+                SELECT ps.party_id,
+                       COALESCE(SUM(psb.balance), 0) as total_balance,
+                       psb.currency as balance_currency
+                FROM party_sites ps
+                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                WHERE psb.company_branch_id = :bid
+                GROUP BY ps.party_id, psb.currency
+            """
+            balance_params = {"bid": branch_id}
+        else:
+            # When all branches: show total in base currency
+            balance_subquery = """
+                SELECT ps.party_id,
+                       COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_balance,
+                       :base_cur as balance_currency
+                FROM party_sites ps
+                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                GROUP BY ps.party_id
+            """
+            balance_params = {"base_cur": base_cur}
+
+        query = f"""
             SELECT
-                id,
-                name,
-                name_en,
-                phone,
-                email,
-                address,
-                tax_number,
-                commercial_register,
-                currency,
-                status = 'active' as is_active,
-                created_at,
-                party_group_id as group_id,
-                COALESCE(current_balance, 0) as current_balance
+                p.id,
+                p.name,
+                p.name_en,
+                p.phone,
+                p.email,
+                p.address,
+                p.tax_number,
+                p.commercial_register,
+                p.currency,
+                p.status = 'active' as is_active,
+                p.created_at,
+                p.party_group_id as group_id,
+                COALESCE(bal.total_balance, 0) as current_balance,
+                COALESCE(bal.balance_currency, :display_cur) as balance_currency,
+                ps_default.site_name as site_name,
+                ps_default.id as site_id
             FROM parties p
+            LEFT JOIN party_sites ps_default ON ps_default.party_id = p.id AND ps_default.is_default = TRUE
+            LEFT JOIN ({balance_subquery}) bal ON bal.party_id = p.id
             WHERE p.is_supplier = TRUE
         """
-        params = {"limit": limit, "skip": skip}
+        params = {"limit": limit, "skip": skip, "display_cur": branch_cur, **balance_params}
 
-        # PTY-006/019: Apply branch_id filter if provided, else enforce allowed_branches
-        if branch_id:
-            query += " AND p.branch_id = :branch_id"
-            params["branch_id"] = branch_id
-        else:
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND p.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
-
-        query += " ORDER BY p.created_at DESC LIMIT :limit OFFSET :skip"
+        query += " ORDER BY p.name ASC LIMIT :limit OFFSET :skip"
         result = db.execute(text(query), params).fetchall()
 
         suppliers = []
         for row in result:
+            d = dict(row._mapping)
+            display_currency = d.get("balance_currency") or base_cur
+            
             suppliers.append({
-                "id": row.id,
-                "name": row.name,
-                "name_en": row.name_en,
-                "phone": row.phone,
-                "email": row.email,
-                "address": row.address,
-                "tax_number": row.tax_number,
-                "commercial_register": row.commercial_register,
-                "currency": row.currency,
-                "group_id": getattr(row, 'group_id', None),
-                "current_balance": float(row.current_balance or 0),
-                "is_active": row.is_active,
-                "created_at": row.created_at
+                "id": d["id"],
+                "name": d["name"],
+                "name_en": d["name_en"],
+                "phone": d["phone"],
+                "email": d["email"],
+                "address": d["address"],
+                "tax_number": d["tax_number"],
+                "commercial_register": d["commercial_register"],
+                "currency": d["currency"],
+                "group_id": d.get("group_id"),
+                "current_balance": float(d["current_balance"] or 0),
+                "balance_display": float(d["current_balance"] or 0),
+                "display_currency": display_currency,
+                "balance_sar": float(d["current_balance"] or 0) if display_currency == base_cur else float(d["current_balance"] or 0) * float(db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": display_currency}).scalar() or 1),
+                "site_id": d.get("site_id"),
+                "site_name": d.get("site_name"),
+                "is_active": d["is_active"],
+                "created_at": d["created_at"]
             })
         return suppliers
     finally:
@@ -88,30 +122,87 @@ def list_suppliers(
 @suppliers_router.get("/suppliers/{id}", response_model=SupplierResponse, dependencies=[Depends(require_permission("buying.view"))])
 def get_supplier(
     id: int,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """عرض تفاصيل مورد محدد"""
+    """عرض تفاصيل مورد محدد مع مواقعه وأرصدة كل موقع"""
     db = get_db_connection(current_user.company_id)
     try:
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        
         supplier = db.execute(text("""
             SELECT
-                id, name, name_en, phone, email, address, tax_number,
-                commercial_register, currency, branch_id,
-                status = 'active' as is_active, created_at,
-                party_group_id as group_id,
-                COALESCE(current_balance, 0) as current_balance
-            FROM parties
-            WHERE id = :id AND is_supplier = TRUE
+                p.id, p.name, p.name_en, p.phone, p.email, p.address, p.tax_number,
+                p.commercial_register, p.currency, p.branch_id,
+                p.status = 'active' as is_active, p.created_at,
+                p.party_group_id as group_id
+            FROM parties p
+            WHERE p.id = :id AND p.is_supplier = TRUE
         """), {"id": id}).fetchone()
 
         if not supplier:
             raise HTTPException(**http_error(404, "supplier_not_found"))
 
-        # PTY-003: Branch access enforcement
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if supplier.branch_id and supplier.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك الوصول لبيانات مورد خارج فروعك")
+        # Get party sites
+        sites = db.execute(text("""
+            SELECT ps.id, ps.site_name, ps.currency, ps.country, ps.payment_terms, ps.is_default
+            FROM party_sites ps
+            WHERE ps.party_id = :pid AND ps.is_active = TRUE
+            ORDER BY ps.is_default DESC, ps.site_name
+        """), {"pid": id}).fetchall()
+
+        # Get balances per site per branch
+        balance_query = """
+            SELECT ps.id as site_id, ps.site_name, ps.currency as site_currency,
+                   psb.company_branch_id, b.branch_name, psb.account_type, psb.currency, psb.balance
+            FROM party_sites ps
+            LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+            LEFT JOIN branches b ON psb.company_branch_id = b.id
+            WHERE ps.party_id = :pid AND ps.is_active = TRUE
+        """
+        balance_params = {"pid": id}
+        
+        if branch_id:
+            balance_query += " AND (psb.company_branch_id = :bid OR psb.company_branch_id IS NULL)"
+            balance_params["bid"] = branch_id
+        
+        balance_query += " ORDER BY ps.site_name, b.branch_name"
+        balance_rows = db.execute(text(balance_query), balance_params).fetchall()
+        
+        # Group balances by site
+        sites_data = []
+        total_sar = 0
+        for site in sites:
+            site_balances = [r for r in balance_rows if r.site_id == site.id and r.balance is not None]
+            balance_list = []
+            site_total = 0
+            for b in site_balances:
+                bal = float(b.balance)
+                if b.currency != base_cur:
+                    rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": b.currency}).scalar()
+                    bal_sar = bal * float(rate or 1)
+                else:
+                    bal_sar = bal
+                site_total += bal_sar
+                balance_list.append({
+                    "branch_id": b.company_branch_id,
+                    "branch_name": b.branch_name,
+                    "account_type": b.account_type,
+                    "currency": b.currency,
+                    "balance": bal
+                })
+            
+            total_sar += site_total
+            sites_data.append({
+                "id": site.id,
+                "site_name": site.site_name,
+                "currency": site.currency,
+                "country": site.country,
+                "payment_terms": site.payment_terms,
+                "is_default": site.is_default,
+                "balances": balance_list,
+                "total_sar": site_total
+            })
 
         return {
             "id": supplier.id,
@@ -125,7 +216,11 @@ def get_supplier(
             "currency": supplier.currency,
             "branch_id": supplier.branch_id,
             "group_id": getattr(supplier, 'group_id', None),
-            "current_balance": float(supplier.current_balance or 0),
+            "current_balance": total_sar,
+            "balance": total_sar,
+            "balance_bc": total_sar,
+            "sites": sites_data,
+            "balances": [b for site in sites_data for b in site["balances"]],
             "is_active": supplier.is_active,
             "created_at": supplier.created_at
         }
@@ -138,7 +233,7 @@ def create_supplier(
     supplier: SupplierCreate,
     current_user: dict = Depends(get_current_user)
 ):
-    """إنشاء مورد جديد"""
+    """إنشاء مورد جديد مع إنشاء موقع افتراضي تلقائياً"""
     db = get_db_connection(current_user.company_id)
     try:
         from utils.accounting import generate_sequential_number
@@ -173,6 +268,34 @@ def create_supplier(
                 "currency": supplier.currency
             }).fetchone()
             pid = result[0]
+
+        # إنشاء موقع افتراضي للمورد
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        sup_currency = supplier.currency or base_cur
+        
+        # التحقق إذا يوجد موقع افتراضي
+        existing_site = db.execute(text(
+            "SELECT id FROM party_sites WHERE party_id = :pid AND is_default = TRUE LIMIT 1"
+        ), {"pid": pid}).fetchone()
+        
+        if not existing_site:
+            db.execute(text("""
+                INSERT INTO party_sites (party_id, site_name, site_name_en, country, country_code, currency, phone, is_default, is_active)
+                VALUES (:pid, :name, :name_en, :country, :cc, :cur, :phone, TRUE, TRUE)
+            """), {
+                "pid": pid,
+                "name": supplier.name,
+                "name_en": supplier.name_en,
+                "country": supplier.address or "",
+                "cc": "",
+                "cur": sup_currency,
+                "phone": supplier.phone
+            })
+            
+            # تحديث default_site_id
+            site_id = db.execute(text("SELECT LASTVAL() as id"), {}).fetchone().id
+            db.execute(text("UPDATE parties SET default_site_id = :sid WHERE id = :pid"),
+                      {"sid": site_id, "pid": pid})
 
         db.commit()
 
@@ -217,12 +340,6 @@ def update_supplier(
         existing = db.execute(text("SELECT id, created_at, current_balance, branch_id FROM parties WHERE id = :id AND is_supplier = TRUE"), {"id": id}).fetchone()
         if not existing:
             raise HTTPException(**http_error(404, "supplier_not_found"))
-
-        # PTY-004: Branch access enforcement
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if existing.branch_id and existing.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك تعديل مورد خارج فروعك")
 
         db.execute(text("""
             UPDATE parties SET
@@ -293,12 +410,6 @@ def delete_supplier(
         supplier = db.execute(text("SELECT id, name, branch_id FROM parties WHERE id = :id AND is_supplier = TRUE"), {"id": id}).fetchone()
         if not supplier:
             raise HTTPException(**http_error(404, "supplier_not_found"))
-
-        # PTY-003: Branch access enforcement for delete
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if supplier.branch_id and supplier.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك حذف مورد خارج فروعك")
 
         # Check if supplier has balance
         balance = db.execute(text("SELECT COALESCE(current_balance, 0) FROM parties WHERE id = :id"), {"id": id}).scalar()

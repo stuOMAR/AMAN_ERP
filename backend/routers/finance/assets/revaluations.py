@@ -36,15 +36,22 @@ router = APIRouter()
 from .core import AssetRevaluation, _D2, _D4, _dec
 
 @router.get("/revaluations", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
-def list_revaluations(asset_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
+def list_revaluations(asset_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """List Revaluations."""
     with transactional(current_user.company_id) as conn:
-        q = "SELECT * FROM asset_revaluations WHERE 1=1"
+        q = """
+            SELECT r.* FROM asset_revaluations r
+            JOIN assets a ON r.asset_id = a.id
+            WHERE 1=1
+        """
         params = {}
         if asset_id:
-            q += " AND asset_id = :aid"
+            q += " AND r.asset_id = :aid"
             params["aid"] = asset_id
-        q += " ORDER BY revaluation_date DESC"
+        if branch_id:
+            q += " AND a.branch_id = :branch_id"
+            params["branch_id"] = branch_id
+        q += " ORDER BY r.revaluation_date DESC"
         rows = conn.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]
 

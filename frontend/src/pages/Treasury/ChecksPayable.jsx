@@ -73,7 +73,7 @@ function ChecksPayable() {
         try {
             const [suppRes, treasRes] = await Promise.all([
                 inventoryAPI.listSuppliers({ limit: 500 }),
-                treasuryAPI.listAccounts()
+                treasuryAPI.listAccounts(currentBranch?.id)
             ])
             setSuppliers(suppRes.data?.data || suppRes.data || [])
             setTreasuryAccounts(treasRes.data?.items || treasRes.data || [])

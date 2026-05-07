@@ -1,0 +1,236 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e32] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e34]: 🏪
+          - generic [ref=e35]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e36] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e38]: 🛒
+          - generic [ref=e39]: المشتريات
+        - link "📦 المخزون" [ref=e40] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e42]: 📦
+          - generic [ref=e43]: المخزون
+        - link "🏭 التصنيع" [ref=e44] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e46]: 🏭
+          - generic [ref=e47]: التصنيع
+        - link "📐 المشاريع" [ref=e48] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e50]: 📐
+          - generic [ref=e51]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e52] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e54]: 🤝
+          - generic [ref=e55]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e56] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e58]: 🔧
+          - generic [ref=e59]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e60] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e62]: 💸
+          - generic [ref=e63]: المصروفات
+        - link "🧾 الضرائب" [ref=e64] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e66]: 🧾
+          - generic [ref=e67]: الضرائب
+        - link "✅ الاعتمادات" [ref=e68] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e70]: ✅
+          - generic [ref=e71]: الاعتمادات
+        - link "📈 التقارير" [ref=e72] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e74]: 📈
+          - generic [ref=e75]: التقارير
+        - link "👥 الموارد البشرية" [ref=e76] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e78]: 👥
+          - generic [ref=e79]: الموارد البشرية
+        - link "⚙️ الإعدادات" [active] [ref=e80] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e82]: ⚙️
+          - generic [ref=e83]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e84] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e86]: 🎯
+          - generic [ref=e87]: إدارة المؤشرات
+    - generic [ref=e88]:
+      - banner [ref=e89]:
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]:
+            - img [ref=e93]
+            - text: بحث...
+          - generic [ref=e96]: Ctrl+K
+        - generic [ref=e97]:
+          - button "EN" [ref=e98] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+          - button "🔔" [ref=e107] [cursor=pointer]
+          - generic [ref=e109] [cursor=pointer]:
+            - generic [ref=e110]:
+              - generic [ref=e111]: aaaa
+              - generic [ref=e112]: "ID: e24bcd11"
+            - generic [ref=e113]: O
+      - main [ref=e115]:
+        - generic [ref=e287]:
+          - generic [ref=e288]:
+            - heading "إعدادات الشركة" [level=1] [ref=e289]
+            - paragraph [ref=e290]: إدارة معلومات الشركة والبيانات الضريبية
+          - generic [ref=e291]:
+            - button "الإعدادات العامة إدارة معلومات الشركة الأساسية والعنوان" [ref=e292]:
+              - img [ref=e294]
+              - heading "الإعدادات العامة" [level=3] [ref=e297]
+              - paragraph [ref=e298]: إدارة معلومات الشركة الأساسية والعنوان
+            - button "المالية والضريبة إعدادات القيمة المضافة والسنوات المالية" [ref=e299]:
+              - img [ref=e301]
+              - heading "المالية والضريبة" [level=3] [ref=e304]
+              - paragraph [ref=e305]: إعدادات القيمة المضافة والسنوات المالية
+            - button "الربط المحاسبي توجيه الحسابات وربط العمليات بشجرة الحسابات" [ref=e306]:
+              - img [ref=e308]
+              - heading "الربط المحاسبي" [level=3] [ref=e312]
+              - paragraph [ref=e313]: توجيه الحسابات وربط العمليات بشجرة الحسابات
+            - button "الهوية والتوطين تخصيص الشعار والألوان والهوية البصرية" [ref=e314]:
+              - img [ref=e316]
+              - heading "الهوية والتوطين" [level=3] [ref=e322]
+              - paragraph [ref=e323]: تخصيص الشعار والألوان والهوية البصرية
+            - button "المبيعات والعملاء شروط البيع والسياسات الافتراضية للفواتير" [ref=e324]:
+              - img [ref=e326]
+              - heading "المبيعات والعملاء" [level=3] [ref=e330]
+              - paragraph [ref=e331]: شروط البيع والسياسات الافتراضية للفواتير
+            - button "المشتريات والتوريد إعدادات المشتريات والموردين الافتراضية" [ref=e332]:
+              - img [ref=e334]
+              - heading "المشتريات والتوريد" [level=3] [ref=e339]
+              - paragraph [ref=e340]: إعدادات المشتريات والموردين الافتراضية
+            - button "الموارد البشرية إعدادات الموظفين والرواتب وساعات العمل" [ref=e341]:
+              - img [ref=e343]
+              - heading "الموارد البشرية" [level=3] [ref=e348]
+              - paragraph [ref=e349]: إعدادات الموظفين والرواتب وساعات العمل
+            - button "المخزون والمستودعات طرق التقييم، الباركود، وإدارة المستودعات" [ref=e350]:
+              - img [ref=e352]
+              - heading "المخزون والمستودعات" [level=3] [ref=e355]
+              - paragraph [ref=e356]: طرق التقييم، الباركود، وإدارة المستودعات
+            - button "الفواتير والمستندات قوالب الفواتير، الترقيم، وإعدادات الطباعة" [ref=e357]:
+              - img [ref=e359]
+              - heading "الفواتير والمستندات" [level=3] [ref=e362]
+              - paragraph [ref=e363]: قوالب الفواتير، الترقيم، وإعدادات الطباعة
+            - button "إدارة علاقات العملاء (CRM) إدارة العملاء والولاء والائتمان" [ref=e364]:
+              - img [ref=e366]
+              - heading "إدارة علاقات العملاء (CRM)" [level=3] [ref=e368]
+              - paragraph [ref=e369]: إدارة العملاء والولاء والائتمان
+            - button "نقاط البيع (POS) إعدادات نقاط البيع، الطابعات، والأدراج" [ref=e370]:
+              - img [ref=e372]
+              - heading "نقاط البيع (POS)" [level=3] [ref=e374]
+              - paragraph [ref=e375]: إعدادات نقاط البيع، الطابعات، والأدراج
+            - button "الإشعارات والتنبيهات التنبيهات التلقائية، البريد، والرسائل النصية" [ref=e376]:
+              - img [ref=e378]
+              - heading "الإشعارات والتنبيهات" [level=3] [ref=e381]
+              - paragraph [ref=e382]: التنبيهات التلقائية، البريد، والرسائل النصية
+            - button "التقارير والتحليلات جدولة التقارير وصلاحيات الوصول والتحليل" [ref=e383]:
+              - img [ref=e385]
+              - heading "التقارير والتحليلات" [level=3] [ref=e387]
+              - paragraph [ref=e388]: جدولة التقارير وصلاحيات الوصول والتحليل
+            - button "الأمان والخصوصية سياسات المرور، الجلسات، وضع الصيانة" [ref=e389]:
+              - img [ref=e391]
+              - heading "الأمان والخصوصية" [level=3] [ref=e394]
+              - paragraph [ref=e395]: سياسات المرور، الجلسات، وضع الصيانة
+            - button "الربط والمكاملة الربط مع واتساب، الرسائل، برامج خارجية" [ref=e396]:
+              - img [ref=e398]
+              - heading "الربط والمكاملة" [level=3] [ref=e401]
+              - paragraph [ref=e402]: الربط مع واتساب، الرسائل، برامج خارجية
+            - button "أداء النظام تخصيص الأداء، الكاش، وحجم السجلات" [ref=e403]:
+              - img [ref=e405]
+              - heading "أداء النظام" [level=3] [ref=e407]
+              - paragraph [ref=e408]: تخصيص الأداء، الكاش، وحجم السجلات
+            - button "المصاريف والإيرادات تصنيفات المصاريف ومستويات الاعتماد" [ref=e409]:
+              - img [ref=e411]
+              - heading "المصاريف والإيرادات" [level=3] [ref=e414]
+              - paragraph [ref=e415]: تصنيفات المصاريف ومستويات الاعتماد
+            - button "إعدادات المشاريع إعدادات المشاريع، الأرقام، وتتبع الوقت" [ref=e416]:
+              - img [ref=e418]
+              - heading "إعدادات المشاريع" [level=3] [ref=e421]
+              - paragraph [ref=e422]: إعدادات المشاريع، الأرقام، وتتبع الوقت
+            - button "الامتثال (هيئة الزكاة) إعدادات الفوترة الإلكترونية والامتثال للزكاة" [ref=e423]:
+              - img [ref=e425]
+              - heading "الامتثال (هيئة الزكاة)" [level=3] [ref=e428]
+              - paragraph [ref=e429]: إعدادات الفوترة الإلكترونية والامتثال للزكاة
+            - button "إدارة الفروع إدارة الفروع وفصل البيانات والتقارير" [ref=e430]:
+              - img [ref=e432]
+              - heading "إدارة الفروع" [level=3] [ref=e438]
+              - paragraph [ref=e439]: إدارة الفروع وفصل البيانات والتقارير
+            - button "سير العمل والموافقات سير العمل، الموافقات، وتصعيد المهام" [ref=e440]:
+              - img [ref=e442]
+              - heading "سير العمل والموافقات" [level=3] [ref=e446]
+              - paragraph [ref=e447]: سير العمل، الموافقات، وتصعيد المهام
+            - button "التدقيق والنسخ الاحتياطي سجلات المراجعة والنسخ الاحتياطي الدوري" [ref=e448]:
+              - img [ref=e450]
+              - heading "التدقيق والنسخ الاحتياطي" [level=3] [ref=e454]
+              - paragraph [ref=e455]: سجلات المراجعة والنسخ الاحتياطي الدوري
+            - button "إعدادات تسجيل الدخول الموحد إدارة موفري تسجيل الدخول الموحد" [ref=e456]:
+              - img [ref=e458]
+              - heading "إعدادات تسجيل الدخول الموحد" [level=3] [ref=e462]
+              - paragraph [ref=e463]: إدارة موفري تسجيل الدخول الموحد
+          - generic [ref=e464]:
+            - heading "أدوات متقدمة" [level=2] [ref=e465]
+            - generic [ref=e466]:
+              - button "تخصيص الوحدات تفعيل وتعطيل الوحدات حسب نوع النشاط" [ref=e467]:
+                - img [ref=e469]
+                - heading "تخصيص الوحدات" [level=3] [ref=e473]
+                - paragraph [ref=e474]: تفعيل وتعطيل الوحدات حسب نوع النشاط
+              - button "الفروع إدارة فروع الشركة والمواقع" [ref=e475]:
+                - img [ref=e477]
+                - heading "الفروع" [level=3] [ref=e481]
+                - paragraph [ref=e482]: إدارة فروع الشركة والمواقع
+              - button "سياسة التكلفة إدارة سياسات تكلفة المخزون" [ref=e483]:
+                - img [ref=e485]
+                - heading "سياسة التكلفة" [level=3] [ref=e489]
+                - paragraph [ref=e490]: إدارة سياسات تكلفة المخزون
+              - button "استيراد البيانات استيراد العملاء والمنتجات والحسابات من Excel" [ref=e491]:
+                - img [ref=e493]
+                - heading "استيراد البيانات" [level=3] [ref=e496]
+                - paragraph [ref=e497]: استيراد العملاء والمنتجات والحسابات من Excel
+              - button "سجلات المراقبة settings.advanced_tools_desc.audit_logs" [ref=e498]:
+                - img [ref=e500]
+                - heading "سجلات المراقبة" [level=3] [ref=e504]
+                - paragraph [ref=e505]: settings.advanced_tools_desc.audit_logs
+              - button "الأدوار والصلاحيات settings.advanced_tools_desc.roles" [ref=e506]:
+                - img [ref=e508]
+                - heading "الأدوار والصلاحيات" [level=3] [ref=e511]
+                - paragraph [ref=e512]: settings.advanced_tools_desc.roles
+              - button "مفاتيح API إدارة مفاتيح الوصول لواجهة البرمجة" [ref=e513]:
+                - img [ref=e515]
+                - heading "مفاتيح API" [level=3] [ref=e519]
+                - paragraph [ref=e520]: إدارة مفاتيح الوصول لواجهة البرمجة
+              - button "الويب هوك إدارة نقاط الربط الخارجية" [ref=e521]:
+                - img [ref=e523]
+                - heading "الويب هوك" [level=3] [ref=e526]
+                - paragraph [ref=e527]: إدارة نقاط الربط الخارجية

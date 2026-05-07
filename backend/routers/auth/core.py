@@ -30,6 +30,11 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
+# Rate-limit constants (lost during T6.3 router split, restored here).
+MAX_LOGIN_ATTEMPTS = 5
+MAX_USERNAME_ATTEMPTS = 10
+LOCKOUT_SECONDS = 15 * 60  # 15 minutes
+
 # Module-level cache for the rate-limiter Redis client (None = uninitialized
 # or no Redis available). Declared at module scope so ``global _rate_redis``
 # inside ``_get_rate_redis`` resolves on first call.
@@ -231,8 +236,16 @@ def clear_failed_attempts(request: Request, username: str = None):
 
 # ============ SEC-201: Persistent Token Blacklist ============
 # In-memory cache + DB persistence for token blacklist
-_token_blacklist_cache = set()  # Local cache for fast lookup
+_token_blacklist_cache = {}  # token_hash -> expires_at UTC naive datetime
 _blacklist_initialized = False
+
+
+def _prune_blacklist_cache(now: datetime | None = None) -> None:
+    """Drop expired blacklist hashes from the local fast-path cache."""
+    now = (now or datetime.now(timezone.utc)).replace(tzinfo=None)
+    for token_hash, expires_at in list(_token_blacklist_cache.items()):
+        if expires_at <= now:
+            _token_blacklist_cache.pop(token_hash, None)
 
 
 def _ensure_blacklist_table():
@@ -271,7 +284,6 @@ def add_token_to_blacklist(token: str, username: str = None, reason: str = "logo
     """Add token to blacklist (DB + cache)"""
     _ensure_blacklist_table()
     token_hash = _hash_token(token)
-    _token_blacklist_cache.add(token_hash)
 
     try:
         # Extract expiry from token
@@ -282,6 +294,9 @@ def add_token_to_blacklist(token: str, username: str = None, reason: str = "logo
             expires_at = datetime.fromtimestamp(exp, tz=timezone.utc).replace(tzinfo=None)
         else:
             expires_at = datetime.now(timezone.utc) + timedelta(hours=24)
+
+        _prune_blacklist_cache()
+        _token_blacklist_cache[token_hash] = expires_at
 
         from database import engine as sys_engine
         with sys_engine.connect() as conn:
@@ -300,8 +315,12 @@ def is_token_blacklisted(token: str) -> bool:
     token_hash = _hash_token(token)
 
     # Fast cache check
-    if token_hash in _token_blacklist_cache:
-        return True
+    cached_expiry = _token_blacklist_cache.get(token_hash)
+    if cached_expiry is not None:
+        now = datetime.now(timezone.utc).replace(tzinfo=None)
+        if cached_expiry > now:
+            return True
+        _token_blacklist_cache.pop(token_hash, None)
 
     # DB fallback (after restart, cache is empty)
     try:
@@ -309,10 +328,11 @@ def is_token_blacklisted(token: str) -> bool:
         from database import engine as sys_engine
         with sys_engine.connect() as conn:
             row = conn.execute(text(
-                "SELECT 1 FROM token_blacklist WHERE token_hash = :hash AND expires_at > CURRENT_TIMESTAMP"
+                "SELECT expires_at FROM token_blacklist WHERE token_hash = :hash AND expires_at > CURRENT_TIMESTAMP"
             ), {"hash": token_hash}).fetchone()
             if row:
-                _token_blacklist_cache.add(token_hash)  # Populate cache
+                _prune_blacklist_cache()
+                _token_blacklist_cache[token_hash] = row.expires_at  # Populate cache with TTL
                 return True
     except Exception:
         pass
@@ -330,6 +350,7 @@ def cleanup_expired_blacklist():
                 "DELETE FROM token_blacklist WHERE expires_at < CURRENT_TIMESTAMP"
             )).rowcount
             conn.commit()
+            _prune_blacklist_cache()
             if deleted:
                 logger.info(f"🧹 Cleaned {deleted} expired tokens from blacklist")
     except Exception as e:

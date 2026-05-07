@@ -9,6 +9,7 @@ import './TaxHome.css'
 import { formatShortDate } from '../../utils/dateUtils';
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
+import SimpleModal from '../../components/common/SimpleModal'
 
 
 function TaxHome() {
@@ -16,18 +17,19 @@ function TaxHome() {
   const { showToast } = useToast()
     const navigate = useNavigate()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
+    const fallbackCurrency = getCurrency()
     const [loading, setLoading] = useState(true)
     const [summary, setSummary] = useState(null)
     const [rates, setRates] = useState([])
     const [returns, setReturns] = useState([])
     const [activeTab, setActiveTab] = useState('overview')
     const [showRateModal, setShowRateModal] = useState(false)
-    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 15, description: '', country_code: '' })
+    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' })
     const [editingRate, setEditingRate] = useState(null)
     const [branchAnalysis, setBranchAnalysis] = useState(null)
     const [employeeTaxes, setEmployeeTaxes] = useState(null)
     const [filterYear, setFilterYear] = useState(new Date().getFullYear())
+    const currency = summary?.display_currency || branchAnalysis?.display_currency || fallbackCurrency
 
     const fetchAll = async () => {
         try {
@@ -82,6 +84,7 @@ function TaxHome() {
                     tax_name: rateForm.tax_name,
                     tax_name_en: rateForm.tax_name_en,
                     rate_value: String(rateForm.rate_value),
+                    country_code: rateForm.country_code || null,
                     description: rateForm.description
                 })
             } else {
@@ -89,7 +92,7 @@ function TaxHome() {
             }
             setShowRateModal(false)
             setEditingRate(null)
-            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 15, description: '' })
+            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' })
             fetchAll()
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error', 'error'))
@@ -301,7 +304,7 @@ function TaxHome() {
                 <div className="card mt-4">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                         <h3 className="section-title" style={{ margin: 0 }}>{t('taxes.tax_rates')}</h3>
-                        <button className="btn btn-primary btn-sm" onClick={() => { setEditingRate(null); setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 15, description: '', country_code: '' }); setShowRateModal(true) }}>
+                        <button className="btn btn-primary btn-sm" onClick={() => { setEditingRate(null); setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' }); setShowRateModal(true) }}>
                             + {t('taxes.add_rate')}
                         </button>
                     </div>
@@ -422,77 +425,74 @@ function TaxHome() {
             )}
 
             {/* Tax Rate Modal */}
-            {showRateModal && (
-                <div className="modal-backdrop" onClick={() => setShowRateModal(false)}>
-                    <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '500px' }}>
-                        <div className="modal-header">
-                            <h3>{editingRate ? (t('taxes.edit_rate')) : (t('taxes.add_rate'))}</h3>
-                            <button className="btn-close" onClick={() => setShowRateModal(false)}>✕</button>
-                        </div>
-                        <div className="modal-body">
-                            {!editingRate && (
-                                <div className="form-group">
-                                    <label className="form-label">{t('taxes.tax_code')} *</label>
-                                    <input className="form-input" value={rateForm.tax_code}
-                                        onChange={e => setRateForm({...rateForm, tax_code: e.target.value})}
-                                        placeholder="مثال: VAT15, WHT5" />
-                                </div>
-                            )}
-                            <div className="form-group">
-                                <label className="form-label">{t('taxes.tax_name')} *</label>
-                                <input className="form-input" value={rateForm.tax_name}
-                                    onChange={e => setRateForm({...rateForm, tax_name: e.target.value})}
-                                    placeholder="مثال: ضريبة القيمة المضافة" />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('taxes.tax_name_en')}</label>
-                                <input className="form-input" value={rateForm.tax_name_en}
-                                    onChange={e => setRateForm({...rateForm, tax_name_en: e.target.value})}
-                                    placeholder={t('taxes.tax_name_placeholder')} />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('taxes.rate_value')} *</label>
-                                <input className="form-input" type="number" min="0" max="100" step="0.01"
-                                    value={rateForm.rate_value}
-                                    onChange={e => setRateForm({...rateForm, rate_value: parseFloat(e.target.value) || 0})} />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('taxes.country_code')}</label>
-                                <select className="form-input" value={rateForm.country_code || ''}
-                                    onChange={e => setRateForm({...rateForm, country_code: e.target.value || null})}>
-                                    <option value="">{t('taxes.all_countries')}</option>
-                                    <option value="SA">🇸🇦 السعودية</option>
-                                    <option value="SY">🇸🇾 سوريا</option>
-                                    <option value="AE">🇦🇪 الإمارات</option>
-                                    <option value="EG">🇪🇬 مصر</option>
-                                    <option value="JO">🇯🇴 الأردن</option>
-                                    <option value="KW">🇰🇼 الكويت</option>
-                                    <option value="BH">🇧🇭 البحرين</option>
-                                    <option value="OM">🇴🇲 عمان</option>
-                                    <option value="QA">🇶🇦 قطر</option>
-                                    <option value="IQ">🇮🇶 العراق</option>
-                                    <option value="LB">🇱🇧 لبنان</option>
-                                    <option value="TR">🇹🇷 تركيا</option>
-                                </select>
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('taxes.description')}</label>
-                                <textarea className="form-input" rows="2" value={rateForm.description}
-                                    onChange={e => setRateForm({...rateForm, description: e.target.value})} />
-                            </div>
-                        </div>
-                        <div className="modal-footer">
-                            <button className="btn btn-secondary" onClick={() => setShowRateModal(false)}>
-                                {t('common.cancel')}
-                            </button>
-                            <button className="btn btn-primary" onClick={handleCreateRate}
-                                disabled={!rateForm.tax_name || (!editingRate && !rateForm.tax_code)}>
-                                {editingRate ? (t('common.save')) : (t('common.create'))}
-                            </button>
-                        </div>
+            <SimpleModal
+                isOpen={showRateModal}
+                onClose={() => { setShowRateModal(false); setEditingRate(null); }}
+                title={editingRate ? t('taxes.edit_rate') : t('taxes.add_rate')}
+                size="md"
+                footer={
+                    <>
+                        <button className="btn btn-secondary" onClick={() => { setShowRateModal(false); setEditingRate(null); }}>
+                            {t('common.cancel')}
+                        </button>
+                        <button className="btn btn-primary" onClick={handleCreateRate}
+                            disabled={!rateForm.tax_name || (!editingRate && !rateForm.tax_code)}>
+                            {editingRate ? t('common.save') : t('common.create')}
+                        </button>
+                    </>
+                }
+            >
+                {!editingRate && (
+                    <div className="form-group mb-3">
+                        <label className="form-label">{t('taxes.tax_code')} *</label>
+                        <input className="form-input" value={rateForm.tax_code}
+                            onChange={e => setRateForm({...rateForm, tax_code: e.target.value})}
+                            placeholder="مثال: VAT15, WHT5" />
                     </div>
+                )}
+                <div className="form-group mb-3">
+                    <label className="form-label">{t('taxes.tax_name')} *</label>
+                    <input className="form-input" value={rateForm.tax_name}
+                        onChange={e => setRateForm({...rateForm, tax_name: e.target.value})}
+                        placeholder="مثال: ضريبة القيمة المضافة" />
                 </div>
-            )}
+                <div className="form-group mb-3">
+                    <label className="form-label">{t('taxes.tax_name_en')}</label>
+                    <input className="form-input" value={rateForm.tax_name_en}
+                        onChange={e => setRateForm({...rateForm, tax_name_en: e.target.value})}
+                        placeholder={t('taxes.tax_name_placeholder')} />
+                </div>
+                <div className="form-group mb-3">
+                    <label className="form-label">{t('taxes.rate_value')} *</label>
+                    <input className="form-input" type="number" min="0" max="100" step="0.01"
+                        value={rateForm.rate_value}
+                        onChange={e => setRateForm({...rateForm, rate_value: parseFloat(e.target.value) || 0})} />
+                </div>
+                <div className="form-group mb-3">
+                    <label className="form-label">{t('taxes.country_code')}</label>
+                    <select className="form-input" value={rateForm.country_code || ''}
+                        onChange={e => setRateForm({...rateForm, country_code: e.target.value || null})}>
+                        <option value="">{t('taxes.all_countries')}</option>
+                        <option value="SA">🇸🇦 السعودية</option>
+                        <option value="SY">🇸🇾 سوريا</option>
+                        <option value="AE">🇦🇪 الإمارات</option>
+                        <option value="EG">🇪🇬 مصر</option>
+                        <option value="JO">🇯🇴 الأردن</option>
+                        <option value="KW">🇰🇼 الكويت</option>
+                        <option value="BH">🇧🇭 البحرين</option>
+                        <option value="OM">🇴🇲 عمان</option>
+                        <option value="QA">🇶🇦 قطر</option>
+                        <option value="IQ">🇮🇶 العراق</option>
+                        <option value="LB">🇱🇧 لبنان</option>
+                        <option value="TR">🇹🇷 تركيا</option>
+                    </select>
+                </div>
+                <div className="form-group mb-3">
+                    <label className="form-label">{t('taxes.description')}</label>
+                    <textarea className="form-input" rows="2" value={rateForm.description}
+                        onChange={e => setRateForm({...rateForm, description: e.target.value})} />
+                </div>
+            </SimpleModal>
 
             {/* ═══ Branch Tax Analysis Tab ═══ */}
             {activeTab === 'branch_analysis' && (
@@ -559,11 +559,11 @@ function TaxHome() {
                                                 {b.jurisdiction}
                                             </span>
                                         </td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(b.taxable_sales)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }}>{formatNumber(b.output_vat)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--primary)' }}>{formatNumber(b.input_vat)}</td>
+                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(b.taxable_sales)} <small>{b.currency || currency}</small></td>
+                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }}>{formatNumber(b.output_vat)} <small>{b.currency || currency}</small></td>
+                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--primary)' }}>{formatNumber(b.input_vat)} <small>{b.currency || currency}</small></td>
                                         <td style={{ textAlign: 'left', whiteSpace: 'nowrap', fontWeight: '700', color: b.net_vat >= 0 ? 'var(--error)' : 'var(--success)' }}>
-                                            {formatNumber(Math.abs(b.net_vat))} {b.net_vat >= 0 ? '↑' : '↓'}
+                                            {formatNumber(Math.abs(b.net_vat))} <small>{b.currency || currency}</small> {b.net_vat >= 0 ? '↑' : '↓'}
                                         </td>
                                         <td style={{ textAlign: 'center' }}>{b.invoice_count}</td>
                                         <td style={{ textAlign: 'center' }}>

@@ -28,6 +28,7 @@ function PaymentForm() {
     const [treasuryAccounts, setTreasuryAccounts] = useState([]);
     const [formData, setFormData] = useState({
         supplier_id: '',
+        party_site_id: '',
         voucher_date: new Date().toISOString().split('T')[0],
         amount: 0,
         voucher_type: 'payment', // 'payment' or 'refund'

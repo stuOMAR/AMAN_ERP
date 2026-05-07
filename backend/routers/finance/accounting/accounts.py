@@ -15,7 +15,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -28,25 +28,120 @@ logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
 
+
+def _user_field(current_user: Any, field: str, default: Any = None) -> Any:
+    if isinstance(current_user, dict):
+        return current_user.get(field, default)
+    return getattr(current_user, field, default)
+
+
+def _normalize_currency(value: Any, fallback: str = "SAR") -> str:
+    currency = str(value or fallback or "SAR").strip().upper()
+    return currency or str(fallback or "SAR").strip().upper()
+
+
+def _currency_rate(db, currency: str, base_currency: str) -> Decimal:
+    currency = _normalize_currency(currency, base_currency)
+    base_currency = _normalize_currency(base_currency)
+    if currency == base_currency:
+        return Decimal("1")
+
+    row = db.execute(
+        text("""
+            SELECT NULLIF(current_rate, 0) AS rate
+            FROM currencies
+            WHERE UPPER(code) = UPPER(:code)
+            LIMIT 1
+        """),
+        {"code": currency},
+    ).fetchone()
+    rate = _dec(row.rate if row and row.rate else 1)
+    return rate if rate > 0 else Decimal("1")
+
+
+def _branch_currency(db, branch_id: Optional[int], base_currency: str) -> str:
+    if branch_id is None:
+        return _normalize_currency(base_currency)
+    row = db.execute(
+        text("SELECT COALESCE(default_currency, :base) AS currency FROM branches WHERE id = :id"),
+        {"id": branch_id, "base": base_currency},
+    ).fetchone()
+    return _normalize_currency(row.currency if row else base_currency, base_currency)
+
+
+def _first_int(values: Any) -> Optional[int]:
+    for value in values or []:
+        try:
+            return int(value)
+        except (TypeError, ValueError):
+            continue
+    return None
+
+
+def _resolve_coa_display_currency(db, branch_scope: Dict[str, Any], current_user: Any, base_currency: str) -> Dict[str, Any]:
+    base_currency = _normalize_currency(base_currency)
+    branch_id = branch_scope.get("branch_id")
+    branch_ids = branch_scope.get("branch_ids")
+    display_branch_id = branch_id
+
+    if display_branch_id is None:
+        if branch_ids:
+            allowed_first = _first_int(_user_field(current_user, "allowed_branches", []))
+            branch_set = {int(value) for value in branch_ids}
+            display_branch_id = allowed_first if allowed_first in branch_set else int(branch_ids[0])
+        elif branch_ids is None:
+            allowed_first = _first_int(_user_field(current_user, "allowed_branches", []))
+            if allowed_first:
+                display_branch_id = allowed_first
+            else:
+                row = db.execute(text("""
+                    SELECT id
+                    FROM branches
+                    WHERE is_active = TRUE
+                    ORDER BY is_default DESC, id ASC
+                    LIMIT 1
+                """)).fetchone()
+                display_branch_id = int(row.id) if row else None
+
+    display_currency = _branch_currency(db, display_branch_id, base_currency)
+    rate = _currency_rate(db, display_currency, base_currency)
+    return {
+        "currency": display_currency,
+        "base_currency": base_currency,
+        "rate": rate,
+        "display_branch_id": display_branch_id,
+        "is_multi_currency_scope": branch_id is None,
+    }
+
+
+def _base_to_display(value: Decimal, display_meta: Dict[str, Any]) -> Decimal:
+    amount = _dec(value)
+    if display_meta.get("currency") != display_meta.get("base_currency"):
+        rate = _dec(display_meta.get("rate") or 1)
+        if rate > 0:
+            amount = amount / rate
+    return amount
+
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _D4, _dec, _account_code_to_module
 
-@router.get("/accounts", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
+@router.get("/accounts", dependencies=[Depends(require_permission("accounting.view"))], response_model=Any)
 @limiter.limit("200/minute")
 async def get_chart_of_accounts(
     request: Request,
     search: Optional[str] = None,
     account_type: Optional[str] = None,
+    branch_id: Optional[int] = None,
     page: Optional[int] = None,
     page_size: int = 100,
     current_user: dict = Depends(get_current_user)
 ):
     """Fetch all accounts for the current company, optionally filtered by branch balance"""
-    branch_id = validate_branch_access(current_user, None)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     
     # Balances are computed live from journal_lines — no caching
@@ -66,109 +161,194 @@ async def get_chart_of_accounts(
             where_extra += " AND a.account_type = :acct_type"
             extra_params["acct_type"] = account_type
 
-        if branch_id:
-            # Calculate balances specifically for the branch
-            # We calculate both base balance and currency balance if it matches the account currency
-            query = f"""
-                SELECT 
-                    a.id, a.account_number, a.account_code, a.name, a.name_en, a.account_type, a.parent_id, a.currency, a.is_active, a.is_header,
-                    a.balance_currency as total_balance_currency,
-                    CASE 
-                        WHEN a.account_type IN ('asset', 'expense') THEN 
-                            COALESCE(SUM(CASE WHEN je.branch_id = :branch_id THEN jl.debit - jl.credit ELSE 0 END), 0)
-                        ELSE 
-                            COALESCE(SUM(CASE WHEN je.branch_id = :branch_id THEN jl.credit - jl.debit ELSE 0 END), 0)
-                    END as balance,
-                    CASE 
-                        WHEN a.currency IS NOT NULL AND a.currency != '' THEN
-                            CASE 
-                                WHEN a.account_type IN ('asset', 'expense') THEN 
-                                    COALESCE(SUM(CASE WHEN je.branch_id = :branch_id AND jl.currency = a.currency AND jl.debit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                  - COALESCE(SUM(CASE WHEN je.branch_id = :branch_id AND jl.currency = a.currency AND jl.credit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                ELSE 
-                                    COALESCE(SUM(CASE WHEN je.branch_id = :branch_id AND jl.currency = a.currency AND jl.credit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                  - COALESCE(SUM(CASE WHEN je.branch_id = :branch_id AND jl.currency = a.currency AND jl.debit > 0 THEN jl.amount_currency ELSE 0 END), 0)
+        branch_params = {}
+        activity_scope_filter = "TRUE"
+        treasury_scope_filter = "TRUE"
+        scoped_line_condition = "TRUE"
+        restrict_visible_accounts = branch_scope["branch_id"] is not None or branch_scope["branch_ids"] is not None
+
+        if branch_scope["branch_id"] is not None:
+            branch_params["branch_id"] = branch_scope["branch_id"]
+            activity_scope_filter = "je.branch_id = :branch_id"
+            treasury_scope_filter = "ta.branch_id = :branch_id"
+        elif branch_scope["branch_ids"] is not None:
+            if branch_scope["branch_ids"]:
+                branch_params["allowed_branch_ids"] = branch_scope["branch_ids"]
+                activity_scope_filter = "je.branch_id = ANY(:allowed_branch_ids)"
+                treasury_scope_filter = "ta.branch_id = ANY(:allowed_branch_ids)"
+            else:
+                activity_scope_filter = "FALSE"
+                treasury_scope_filter = "FALSE"
+
+        visibility_ctes = ""
+        visibility_condition = ""
+        rollup_visibility_filter = ""
+        if restrict_visible_accounts:
+            visibility_ctes = f"""
+                scoped_activity AS (
+                    SELECT DISTINCT jl.account_id
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                    WHERE je.status = 'posted'
+                      AND {activity_scope_filter}
+                      AND NOT EXISTS (
+                          SELECT 1
+                          FROM treasury_accounts ta_owner
+                          WHERE ta_owner.is_active = TRUE
+                            AND ta_owner.gl_account_id = jl.account_id
+                      )
+                ),
+                scoped_treasury AS (
+                    SELECT DISTINCT ta.gl_account_id AS account_id
+                    FROM treasury_accounts ta
+                    WHERE ta.is_active = TRUE
+                      AND ta.gl_account_id IS NOT NULL
+                      AND {treasury_scope_filter}
+                ),
+                visible_seed AS (
+                    SELECT account_id FROM scoped_activity
+                    UNION
+                    SELECT account_id FROM scoped_treasury
+                ),
+                visible_accounts(id) AS (
+                    SELECT account_id FROM visible_seed
+                    UNION
+                    SELECT parent.id
+                    FROM accounts child
+                    JOIN visible_accounts va ON va.id = child.id
+                    JOIN accounts parent ON parent.id = child.parent_id
+                ),
+            """
+            visibility_condition = "AND a.id IN (SELECT id FROM visible_accounts)"
+            rollup_visibility_filter = "AND d.descendant_id IN (SELECT id FROM visible_accounts)"
+            scoped_line_condition = f"""
+                (
+                    EXISTS (SELECT 1 FROM scoped_treasury st WHERE st.account_id = acc.id)
+                    OR (
+                        NOT EXISTS (
+                            SELECT 1
+                            FROM treasury_accounts ta_owner
+                            WHERE ta_owner.is_active = TRUE
+                              AND ta_owner.gl_account_id = acc.id
+                        )
+                        AND {activity_scope_filter}
+                    )
+                )
+            """
+
+        ctes = f"""
+            WITH RECURSIVE
+                {visibility_ctes}
+                line_balances AS (
+                    SELECT
+                        acc.id AS account_id,
+                        CASE
+                            WHEN acc.account_type IN ('asset', 'expense') THEN
+                                COALESCE(SUM(COALESCE(jl.debit, 0) - COALESCE(jl.credit, 0)), 0)
+                            ELSE
+                                COALESCE(SUM(COALESCE(jl.credit, 0) - COALESCE(jl.debit, 0)), 0)
+                        END AS balance_base,
+                        COALESCE(SUM(
+                            CASE
+                                WHEN acc.currency IS NULL OR jl.currency IS NULL OR UPPER(jl.currency) <> UPPER(acc.currency) THEN 0
+                                WHEN acc.account_type IN ('asset', 'expense') THEN
+                                    CASE WHEN COALESCE(jl.debit, 0) > 0 THEN COALESCE(jl.amount_currency, 0) ELSE -COALESCE(jl.amount_currency, 0) END
+                                ELSE
+                                    CASE WHEN COALESCE(jl.credit, 0) > 0 THEN COALESCE(jl.amount_currency, 0) ELSE -COALESCE(jl.amount_currency, 0) END
                             END
-                        ELSE 0
-                    END as balance_currency
-                FROM accounts a
-                LEFT JOIN journal_lines jl ON jl.account_id = a.id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
-                WHERE 1=1 {where_extra}
-                GROUP BY a.id, a.account_number, a.account_code, a.name, a.name_en, a.account_type, a.parent_id, a.currency, a.is_active, a.is_header, a.balance_currency
-                ORDER BY a.account_number ASC
-            """
-            all_params = {"branch_id": branch_id, **extra_params}
-            
-            # Count total (branch case)
-            count_query = f"""
-                SELECT COUNT(DISTINCT a.id)
-                FROM accounts a
-                LEFT JOIN journal_lines jl ON jl.account_id = a.id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
-                WHERE 1=1 {where_extra}
-            """
-            total_count = db.execute(text(count_query), all_params).scalar() or 0
-            
-            # Add pagination
-            if page is not None and page >= 1:
-                query += " LIMIT :limit OFFSET :offset"
-                all_params["limit"] = page_size
-                all_params["offset"] = (page - 1) * page_size
-                
-            result = db.execute(text(query), all_params)
-        else:
-            # Compute balance from journal_lines aggregation (all branches)
-            # Consistent with branch-specific view — always live from journal_lines
-            query = f"""
-                SELECT 
-                    a.id, a.account_number, a.account_code, a.name, a.name_en, a.account_type,
-                    a.parent_id, a.currency, a.is_active, a.is_header,
-                    a.balance_currency as total_balance_currency,
-                    CASE 
-                        WHEN a.account_type IN ('asset', 'expense') THEN 
-                            COALESCE(SUM(jl.debit - jl.credit), 0)
-                        ELSE 
-                            COALESCE(SUM(jl.credit - jl.debit), 0)
-                    END as balance,
-                    CASE 
-                        WHEN a.currency IS NOT NULL AND a.currency != '' THEN
-                            CASE 
-                                WHEN a.account_type IN ('asset', 'expense') THEN 
-                                    COALESCE(SUM(CASE WHEN jl.currency = a.currency AND jl.debit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                  - COALESCE(SUM(CASE WHEN jl.currency = a.currency AND jl.credit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                ELSE 
-                                    COALESCE(SUM(CASE WHEN jl.currency = a.currency AND jl.credit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                                  - COALESCE(SUM(CASE WHEN jl.currency = a.currency AND jl.debit > 0 THEN jl.amount_currency ELSE 0 END), 0)
-                            END
-                        ELSE 0
-                    END as balance_currency
-                FROM accounts a
-                LEFT JOIN journal_lines jl ON jl.account_id = a.id
-                LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
-                WHERE 1=1 {where_extra}
-                GROUP BY a.id, a.account_number, a.account_code, a.name, a.name_en, a.account_type,
-                         a.parent_id, a.currency, a.is_active, a.is_header, a.balance_currency
-                ORDER BY a.account_number ASC
-            """
+                        ), 0) AS balance_currency
+                    FROM accounts acc
+                    JOIN journal_lines jl ON jl.account_id = acc.id
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                    WHERE je.status = 'posted' AND {scoped_line_condition}
+                    GROUP BY acc.id, acc.account_type, acc.currency
+                ),
+                account_descendants(account_id, descendant_id) AS (
+                    SELECT id, id FROM accounts
+                    UNION ALL
+                    SELECT d.account_id, child.id
+                    FROM account_descendants d
+                    JOIN accounts child ON child.parent_id = d.descendant_id
+                ),
+                account_rollups AS (
+                    SELECT
+                        d.account_id,
+                        COALESCE(SUM(lb.balance_base), 0) AS balance_base
+                    FROM account_descendants d
+                    LEFT JOIN line_balances lb ON lb.account_id = d.descendant_id {rollup_visibility_filter}
+                    GROUP BY d.account_id
+                )
+        """
 
-            # Count total (standard case)
-            count_query = f"SELECT COUNT(*) FROM accounts a WHERE 1=1 {where_extra}"
-            total_count = db.execute(text(count_query), extra_params).scalar() or 0
+        all_params = {**branch_params, **extra_params}
+        query = f"""
+            {ctes}
+            SELECT
+                a.id, a.account_number, a.account_code, a.name, a.name_en, a.account_type,
+                a.parent_id, a.currency, a.is_active, a.is_header,
+                COALESCE(ar.balance_base, 0) AS balance_base,
+                COALESCE(lb.balance_base, 0) AS own_balance_base,
+                CASE WHEN COALESCE(a.is_header, FALSE) THEN 0 ELSE COALESCE(lb.balance_currency, 0) END AS balance_currency
+            FROM accounts a
+            LEFT JOIN account_rollups ar ON ar.account_id = a.id
+            LEFT JOIN line_balances lb ON lb.account_id = a.id
+            WHERE 1=1 {where_extra} {visibility_condition}
+            ORDER BY a.account_number ASC
+        """
 
-            # Add pagination
-            if page is not None and page >= 1:
-                query += " LIMIT :limit OFFSET :offset"
-                extra_params["limit"] = page_size
-                extra_params["offset"] = (page - 1) * page_size
+        count_query = f"""
+            {ctes}
+            SELECT COUNT(*)
+            FROM accounts a
+            WHERE 1=1 {where_extra} {visibility_condition}
+        """
+        total_count = db.execute(text(count_query), all_params).scalar() or 0
 
-            result = db.execute(text(query), extra_params)
+        if page is not None and page >= 1:
+            query += " LIMIT :limit OFFSET :offset"
+            all_params["limit"] = page_size
+            all_params["offset"] = (page - 1) * page_size
+
+        result = db.execute(text(query), all_params)
             
         accounts = [dict(row._mapping) for row in result]
 
         # ── MODULE-001: Add module_tag to each account based on account_code ──
         for acc in accounts:
             acc["module_tag"] = _account_code_to_module(acc.get("account_code", ""))
+
+        # ── CURRENCY-CONVERT: SQL balance is natural balance in base currency.
+        # The main display amount follows the selected branch/main-branch currency;
+        # original account currency remains available as balance_currency.
+        base_currency = get_base_currency(db)
+        display_meta = _resolve_coa_display_currency(db, branch_scope, current_user, base_currency)
+
+        rate_rows = db.execute(text("""
+            SELECT code, current_rate FROM currencies WHERE is_active = TRUE
+        """)).fetchall()
+        rate_map = {_normalize_currency(row[0], base_currency): _dec(row[1]) for row in rate_rows}
+        rate_map[_normalize_currency(base_currency)] = Decimal("1")
+
+        for acc in accounts:
+            acc_currency = _normalize_currency(acc.get("currency"), "") if acc.get("currency") else ""
+            raw_balance = _dec(acc.get("balance_base", 0))
+            raw_own_balance = _dec(acc.get("own_balance_base", 0))
+            raw_balance_currency = _dec(acc.get("balance_currency", 0))
+            display_balance = _base_to_display(raw_balance, display_meta)
+            display_own_balance = _base_to_display(raw_own_balance, display_meta)
+
+            acc["base_balance"] = float(raw_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["own_base_balance"] = float(raw_own_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["balance"] = float(display_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["own_balance"] = float(display_own_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["is_aggregated_balance"] = bool(acc.get("is_header"))
+            acc["balance_origin"] = "aggregate" if acc["is_aggregated_balance"] else "own"
+            acc["balance_currency"] = float(raw_balance_currency.quantize(_D2, ROUND_HALF_UP))
+            acc["exchange_rate"] = float(rate_map.get(acc_currency, Decimal("1")))
+            acc["display_exchange_rate"] = float(display_meta.get("rate") or Decimal("1"))
+            acc["display_currency"] = display_meta.get("currency")
+            acc["base_currency"] = display_meta.get("base_currency")
+            acc["is_multi_currency_scope"] = display_meta.get("is_multi_currency_scope", False)
         
         # Pagination result structure
         if page is not None and page >= 1:
@@ -339,7 +519,6 @@ async def delete_account(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error deleting account: {str(e)}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -371,7 +550,9 @@ async def update_account(
                  
             db.execute(text("""
                 UPDATE accounts 
-                SET name = :name, name_en = :name_en, account_code = :code,
+                SET name = COALESCE(:name, name),
+                    name_en = COALESCE(:name_en, name_en),
+                    account_code = COALESCE(:code, account_code),
                     account_type = COALESCE(:account_type, account_type),
                     parent_id = :parent_id,
                     currency = COALESCE(:currency, currency),
@@ -407,7 +588,6 @@ async def update_account(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error updating account: {str(e)}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -416,18 +596,23 @@ async def update_account(
 @limiter.limit("200/minute")
 def get_opening_balances(
     request: Request,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user),
 ):
     """جلب الأرصدة الافتتاحية - آخر قيد أرصدة افتتاحية مع أرصدة جميع الحسابات"""
     with transactional(current_user.company_id) as db:
         # Find existing opening balance entry
-        ob_entry = db.execute(text("""
+        ob_query = """
             SELECT je.id, je.entry_number, je.entry_date, je.status, je.description
             FROM journal_entries je
             WHERE je.reference = 'OPENING-BALANCE'
-            ORDER BY je.entry_date DESC, je.id DESC
-            LIMIT 1
-        """)).fetchone()
+        """
+        ob_params = {}
+        if branch_id:
+            ob_query += " AND je.branch_id = :branch_id"
+            ob_params["branch_id"] = branch_id
+        ob_query += " ORDER BY je.entry_date DESC, je.id DESC LIMIT 1"
+        ob_entry = db.execute(text(ob_query), ob_params).fetchone()
 
         # Get all accounts with their current balance
         accounts = db.execute(text("""
@@ -554,7 +739,7 @@ def save_opening_balances(
                 description="أرصدة افتتاحية / Opening Balances",
                 lines=gl_lines,
                 user_id=current_user.id,
-                branch_id=getattr(current_user, "branch_id", None),
+                branch_id=data.get("branch_id") or getattr(current_user, "branch_id", None),
                 reference="OPENING-BALANCE",
                 source="opening_balances",
             )

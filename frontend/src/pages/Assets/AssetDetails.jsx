@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next';
 import { useNavigate, useParams } from 'react-router-dom';
 import { assetsAPI, branchesAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
+import { useBranch } from '../../context/BranchContext';
 import { Trash2, Calendar, DollarSign, RefreshCw, ArrowRightLeft } from 'lucide-react';
 import { getCurrency } from '../../utils/auth';
 import { formatShortDate } from '../../utils/dateUtils';
@@ -14,6 +15,7 @@ const AssetDetails = () => {
     const navigate = useNavigate();
     const { id } = useParams();
     const currency = getCurrency();
+    const { currentBranch } = useBranch();
 
     const [asset, setAsset] = useState(null);
     const [schedule, setSchedule] = useState([]);
@@ -32,12 +34,14 @@ const AssetDetails = () => {
 
     useEffect(() => {
         fetchData();
-    }, [id]);
+    }, [id, currentBranch]);
 
     const fetchData = async () => {
         try {
             setLoading(true);
-            const response = await assetsAPI.get(id);
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const response = await assetsAPI.get(id, params);
             setAsset(response.data.asset);
             setSchedule(response.data.schedule);
         } catch (error) {
@@ -182,14 +186,14 @@ const AssetDetails = () => {
                             <label className="text-muted d-block small mb-1">{t('assets.cost', 'Initial Cost')}</label>
                             <div className="fw-bold fs-5 text-dark d-flex align-items-center">
                                 <DollarSign size={18} className="me-2 text-success" />
-                                {parseFloat(asset.cost).toLocaleString()} <span className="text-muted fs-6 ms-1">{currency}</span>
+                                {parseFloat(asset.cost).toLocaleString()} <span className="text-muted fs-6 ms-1">{asset.currency || currency}</span>
                             </div>
                         </div>
 
                         <div className="detail-row mb-3">
                             <label className="text-muted d-block small mb-1">{t('assets.residual_value', 'Residual Value')}</label>
                             <div className="fw-medium">
-                                {parseFloat(asset.residual_value).toLocaleString()} {currency}
+                                {parseFloat(asset.residual_value).toLocaleString()} {asset.currency || currency}
                             </div>
                         </div>
 
@@ -222,9 +226,9 @@ const AssetDetails = () => {
                                     {schedule.map((item, index) => (
                                         <tr key={item.id}>
                                             <td className="fw-medium">{item.fiscal_year}</td>
-                                            <td className="text-end">{parseFloat(item.amount).toLocaleString()}</td>
-                                            <td className="text-end text-muted">{parseFloat(item.accumulated_amount).toLocaleString()}</td>
-                                            <td className="text-end fw-bold text-primary">{parseFloat(item.book_value).toLocaleString()}</td>
+                                            <td className="text-end">{parseFloat(item.amount).toLocaleString()} <small>{asset.currency || currency}</small></td>
+                                            <td className="text-end text-muted">{parseFloat(item.accumulated_amount).toLocaleString()} <small>{asset.currency || currency}</small></td>
+                                            <td className="text-end fw-bold text-primary">{parseFloat(item.book_value).toLocaleString()} <small>{asset.currency || currency}</small></td>
                                             <td className="text-center">
                                                 {item.posted ? (
                                                     <span className="badge bg-success-subtle text-success">{t('status.posted', 'Posted')}</span>

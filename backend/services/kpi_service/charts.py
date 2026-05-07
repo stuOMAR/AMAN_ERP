@@ -8,12 +8,14 @@ logger = logging.getLogger(__name__)
 from .common import (
     build_branch_filter
 )
+from utils.accounting import get_base_currency
+from utils.currency_display import document_amount_base_sql
 
 
 def _build_revenue_expense_chart(db, start_date: date, end_date: date,
                                   branch_id: Optional[int] = None) -> list:
     """Monthly revenue vs expenses trend chart."""
-    branch_sql, bp = build_branch_filter(branch_id)
+    branch_sql, bp = build_branch_filter(branch_id, table_alias="je")
     data = []
     try:
         rows = db.execute(text(f"""
@@ -38,15 +40,17 @@ def _build_revenue_expense_chart(db, start_date: date, end_date: date,
 def _build_sales_trend_chart(db, start_date: date, end_date: date,
                               branch_id: Optional[int] = None) -> list:
     """Daily sales trend."""
-    branch_sql, bp = build_branch_filter(branch_id)
+    branch_sql, bp = build_branch_filter(branch_id, table_alias="i")
+    total_base_sql = document_amount_base_sql("i.total", "i")
+    base_currency = get_base_currency(db) or "SAR"
     data = []
     try:
         rows = db.execute(text(f"""
-            SELECT DATE(invoice_date) as day, COALESCE(SUM(total), 0)
-            FROM invoices
-            WHERE invoice_type = 'sales' AND invoice_date BETWEEN :s AND :e AND status != 'cancelled' {branch_sql}
-            GROUP BY DATE(invoice_date) ORDER BY day
-        """), {"s": start_date, "e": end_date, **bp}).fetchall()
+            SELECT DATE(i.invoice_date) as day, COALESCE(SUM({total_base_sql}), 0)
+            FROM invoices i
+            WHERE i.invoice_type = 'sales' AND i.invoice_date BETWEEN :s AND :e AND i.status != 'cancelled' {branch_sql}
+            GROUP BY DATE(i.invoice_date) ORDER BY day
+        """), {"s": start_date, "e": end_date, "base_currency": base_currency, **bp}).fetchall()
         data = [{"date": str(r[0]), "value": float(r[1])} for r in rows]
     except Exception:
         pass
@@ -60,7 +64,9 @@ def _build_sales_trend_chart(db, start_date: date, end_date: date,
 
 def _build_ar_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
     """AR Aging buckets: 0-30, 31-60, 61-90, 90+."""
-    branch_sql, bp = build_branch_filter(branch_id)
+    branch_sql, bp = build_branch_filter(branch_id, table_alias="i")
+    due_base_sql = document_amount_base_sql("(i.total - COALESCE(i.paid_amount, 0))", "i")
+    base_currency = get_base_currency(db) or "SAR"
     aging = [
         {"bucket": "0-30", "bucket_ar": "0-30 يوم", "value": 0},
         {"bucket": "31-60", "bucket_ar": "31-60 يوم", "value": 0},
@@ -71,16 +77,16 @@ def _build_ar_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
         rows = db.execute(text(f"""
             SELECT
                 CASE
-                    WHEN (:today - due_date) <= 30 THEN '0-30'
-                    WHEN (:today - due_date) <= 60 THEN '31-60'
-                    WHEN (:today - due_date) <= 90 THEN '61-90'
+                    WHEN (:today - i.due_date) <= 30 THEN '0-30'
+                    WHEN (:today - i.due_date) <= 60 THEN '31-60'
+                    WHEN (:today - i.due_date) <= 90 THEN '61-90'
                     ELSE '90+'
                 END as bucket,
-                COALESCE(SUM(total - COALESCE(paid_amount, 0)), 0)
-            FROM invoices
-            WHERE invoice_type = 'sales' AND status IN ('sent', 'partially_paid') AND due_date IS NOT NULL {branch_sql}
+                COALESCE(SUM({due_base_sql}), 0)
+            FROM invoices i
+            WHERE i.invoice_type = 'sales' AND i.status IN ('sent', 'partially_paid') AND i.due_date IS NOT NULL {branch_sql}
             GROUP BY bucket
-        """), {"today": as_of, **bp}).fetchall()
+        """), {"today": as_of, "base_currency": base_currency, **bp}).fetchall()
         bucket_map = {r[0]: float(r[1]) for r in rows}
         for a in aging:
             a["value"] = bucket_map.get(a["bucket"], 0)
@@ -91,7 +97,9 @@ def _build_ar_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
 
 def _build_ap_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
     """AP Aging buckets."""
-    branch_sql, bp = build_branch_filter(branch_id)
+    branch_sql, bp = build_branch_filter(branch_id, table_alias="i")
+    due_base_sql = document_amount_base_sql("(i.total - COALESCE(i.paid_amount, 0))", "i")
+    base_currency = get_base_currency(db) or "SAR"
     aging = [
         {"bucket": "0-30", "bucket_ar": "0-30 يوم", "value": 0},
         {"bucket": "31-60", "bucket_ar": "31-60 يوم", "value": 0},
@@ -102,16 +110,16 @@ def _build_ap_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
         rows = db.execute(text(f"""
             SELECT
                 CASE
-                    WHEN (:today - due_date) <= 30 THEN '0-30'
-                    WHEN (:today - due_date) <= 60 THEN '31-60'
-                    WHEN (:today - due_date) <= 90 THEN '61-90'
+                    WHEN (:today - i.due_date) <= 30 THEN '0-30'
+                    WHEN (:today - i.due_date) <= 60 THEN '31-60'
+                    WHEN (:today - i.due_date) <= 90 THEN '61-90'
                     ELSE '90+'
                 END as bucket,
-                COALESCE(SUM(total - COALESCE(paid_amount, 0)), 0)
-            FROM invoices
-            WHERE invoice_type = 'purchase' AND status IN ('received', 'partially_paid') AND due_date IS NOT NULL {branch_sql}
+                COALESCE(SUM({due_base_sql}), 0)
+            FROM invoices i
+            WHERE i.invoice_type = 'purchase' AND i.status IN ('received', 'partially_paid') AND i.due_date IS NOT NULL {branch_sql}
             GROUP BY bucket
-        """), {"today": as_of, **bp}).fetchall()
+        """), {"today": as_of, "base_currency": base_currency, **bp}).fetchall()
         bucket_map = {r[0]: float(r[1]) for r in rows}
         for a in aging:
             a["value"] = bucket_map.get(a["bucket"], 0)

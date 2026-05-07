@@ -13,12 +13,12 @@ from utils.tx import transactional
 import logging
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
+from utils.cache import invalidate_company_cache, invalidate_aggregates
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.gl_service import create_journal_entry as gl_create_journal_entry, reverse_journal_entry as gl_reverse_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
 from utils.cache import cache
@@ -35,7 +35,7 @@ router = APIRouter()
 
 from .core import _D2, _D4, _dec
 
-@router.post("/journal-entries", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
+@router.post("/journal-entries", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_sensitive_permission("accounting.edit", critical=True))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 async def create_journal_entry(
     request: Request,
@@ -70,8 +70,6 @@ async def create_journal_entry(
                 if existing:
                     return {"success": True, "message": "قيد موجود مسبقاً (مفتاح تكرار)", "entry_number": existing.entry_number, "entry_id": existing.id, "status": existing.status, "idempotent": True}
     
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
-    
             entry_status = entry_data.get("status", "posted")
     
             # Fiscal-period lock: block posting into a closed period.
@@ -98,7 +96,11 @@ async def create_journal_entry(
                 idempotency_key=idempotency_key,
             )
     
-            invalidate_company_cache(str(current_user.company_id))
+            # T12 — scoped invalidation: a posted JE only affects accounting
+            # aggregates (reports, dashboard, trial balance, COA balances).
+            invalidate_aggregates(str(current_user.company_id),
+                                  "reports", "dashboard", "trial_balance",
+                                  "chart_of_accounts")
             
     
             # AUDIT LOG
@@ -131,7 +133,6 @@ async def create_journal_entry(
                         "link": f"/accounting/journal/{journal_id}",
                         "current_uid": current_user.id
                     })
-                    db.commit()
                 except Exception:
                     pass
     
@@ -140,7 +141,6 @@ async def create_journal_entry(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error creating journal: {str(e)}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -162,24 +162,19 @@ def list_journal_entries(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة القيود اليومية مع فلترة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    page = max(1, int(page or 1))
+    limit = min(200, max(1, int(limit or 50)))
     with transactional(current_user.company_id) as db:
         conditions = []
         params = {}
 
-        # Branch filtering
-        if branch_id:
-            conditions.append("je.branch_id = :branch_id")
-            params["branch_id"] = branch_id
-        else:
-            allowed_branches = getattr(current_user, 'allowed_branches', [])
-            if allowed_branches and "*" not in getattr(current_user, 'permissions', []):
-                conditions.append("je.branch_id = ANY(:allowed_branches)")
-                params["allowed_branches"] = allowed_branches
+        branch_clause = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
+        if branch_clause:
+            conditions.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
 
-        if search and search.strip() in ('draft', 'posted', 'voided'):
+        if search and search.strip() in ('draft', 'posted', 'void', 'voided'):
             conditions.append("je.status = :status_val")
-            params["status_val"] = search.strip()
+            params["status_val"] = 'void' if search.strip() == 'voided' else search.strip()
 
         if date_from:
             conditions.append("je.entry_date >= :date_from")
@@ -239,6 +234,8 @@ def list_journal_entries(
                 "created_by_name": r.created_by_name,
                 "created_at": str(r.created_at) if r.created_at else None,
                 "posted_at": str(r.posted_at) if r.posted_at else None,
+                "source": r.source,
+                "source_id": r.source_id,
             })
 
         return {
@@ -292,6 +289,8 @@ def get_journal_entry(
             "created_by_name": entry.created_by_name,
             "created_at": str(entry.created_at) if entry.created_at else None,
             "posted_at": str(entry.posted_at) if entry.posted_at else None,
+            "source": entry.source,
+            "source_id": entry.source_id,
             "lines": [{
                 "id": l.id,
                 "account_id": l.account_id,
@@ -306,7 +305,7 @@ def get_journal_entry(
                 "cost_center_id": l.cost_center_id,
             } for l in lines]
         }
-@router.post("/journal-entries/{entry_id}/post", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
+@router.post("/journal-entries/{entry_id}/post", dependencies=[Depends(require_sensitive_permission("accounting.manage", critical=True))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 async def post_journal_entry(
     entry_id: int,
@@ -368,7 +367,10 @@ async def post_journal_entry(
                 WHERE id = :id
             """), {"id": entry_id})
     
-            invalidate_company_cache(str(current_user.company_id))
+            # T12 — scoped invalidation (post/unpost only affects accounting)
+            invalidate_aggregates(str(current_user.company_id),
+                                  "reports", "dashboard", "trial_balance",
+                                  "chart_of_accounts")
             
     
             log_activity(
@@ -397,7 +399,6 @@ async def post_journal_entry(
                     "link": f"/accounting/journal/{entry_id}",
                     "current_uid": current_user.id
                 })
-                db.commit()
             except Exception:
                 pass
     
@@ -405,11 +406,10 @@ async def post_journal_entry(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error posting journal entry: {e}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
-@router.post("/journal-entries/{entry_id}/void", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
+@router.post("/journal-entries/{entry_id}/void", dependencies=[Depends(require_sensitive_permission("accounting.manage", critical=True))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 async def void_journal_entry(
     entry_id: int,
@@ -430,8 +430,15 @@ async def void_journal_entry(
             if not original:
                 raise HTTPException(status_code=404, detail="القيد غير موجود")
             
-            if original.status == 'voided':
+            if original.status in ('void', 'voided'):
                 raise HTTPException(status_code=400, detail="القيد ملغى بالفعل")
+
+            if original.status == 'reversed':
+                raise HTTPException(status_code=400, detail="تم عكس هذا القيد مسبقاً ولا يمكن إلغاؤه")
+
+            # Block voiding a reversal entry (to prevent infinite reversal chains)
+            if (original.source or '').strip().lower() in ('reversal',):
+                raise HTTPException(status_code=400, detail="لا يمكن إلغاء قيد عكسي")
     
             # ACC-F4: source-doc-aware authorization.
             # A JE that was auto-generated by another module should only be
@@ -514,13 +521,13 @@ async def void_journal_entry(
                 reference=original.entry_number,
                 currency=original.currency,
                 exchange_rate=_dec(original.exchange_rate or 1),
-                source="journal_void",
+                source="reversal",
                 source_id=entry_id,
             )
             
             # 5. Mark original as voided
             db.execute(text("""
-                UPDATE journal_entries SET status = 'voided' WHERE id = :id
+                UPDATE journal_entries SET status = 'void' WHERE id = :id
             """), {"id": entry_id})
             
             
@@ -545,10 +552,66 @@ async def void_journal_entry(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error voiding journal entry: {str(e)}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
+class ReverseJERequest(BaseModel):
+    reversal_date: Optional[str] = None
+    reason: Optional[str] = None
+
+
+@router.post("/journal-entries/{entry_id}/reverse", dependencies=[Depends(require_sensitive_permission("accounting.manage", critical=True))], response_model=Dict[str, Any])
+@limiter.limit("100/minute")
+def reverse_journal_entry_endpoint(
+    entry_id: int,
+    request: Request,
+    body: ReverseJERequest = Body(default_factory=ReverseJERequest),
+    current_user: dict = Depends(get_current_user)
+):
+    """إنشاء قيد عكسي لقيد مرحَّل مع الاحتفاظ بالقيد الأصلي."""
+    with transactional(current_user.company_id) as db:
+        try:
+            # Validate reversal date period is open
+            reversal_date = body.reversal_date or str(date.today())
+            check_fiscal_period_open(db, reversal_date)
+
+            rev_id, rev_num = gl_reverse_journal_entry(
+                db=db,
+                je_id=entry_id,
+                user_id=current_user.id,
+                company_id=current_user.company_id,
+                reversal_date=reversal_date,
+                reason=body.reason,
+            )
+
+            log_activity(
+                db,
+                user_id=current_user.id,
+                username=current_user.username,
+                action="accounting.journal.reverse",
+                resource_type="journal_entry",
+                resource_id=str(entry_id),
+                details={"reversal_entry_id": rev_id, "reversal_entry_number": rev_num, "reason": body.reason},
+                request=request,
+            )
+
+            invalidate_aggregates(str(current_user.company_id),
+                                  "reports", "dashboard", "trial_balance",
+                                  "chart_of_accounts")
+
+            return {
+                "success": True,
+                "message": f"تم إنشاء القيد العكسي {rev_num} بنجاح",
+                "reversal_entry_id": rev_id,
+                "reversal_entry_number": rev_num,
+            }
+        except HTTPException:
+            raise
+        except Exception as e:
+            logger.exception("Error reversing journal entry")
+            raise HTTPException(**http_error(500, "internal_error"))
+
+
 # ============================================================
 # Fiscal Year Management & Year-End Closing (ACC-001)
 # ============================================================

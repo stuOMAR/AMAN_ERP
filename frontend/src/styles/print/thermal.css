@@ -1,0 +1,51 @@
+/* T238: Thermal printer styles — @media print isolation. */
+
+@media print and (max-width: 80mm) {
+  body {
+    font-size: 12px;
+    line-height: 1.4;
+    margin: 0;
+    padding: 0;
+  }
+
+  .no-print {
+    display: none !important;
+  }
+
+  .receipt-header {
+    text-align: center;
+    font-weight: bold;
+    margin-bottom: 8px;
+  }
+
+  .receipt-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 2px 0;
+    border-bottom: 1px dashed #ccc;
+  }
+
+  .receipt-total {
+    font-weight: bold;
+    font-size: 14px;
+    margin-top: 8px;
+    padding-top: 8px;
+    border-top: 2px solid #000;
+  }
+
+  .receipt-footer {
+    text-align: center;
+    margin-top: 16px;
+    font-size: 10px;
+  }
+
+  table {
+    width: 100%;
+    border-collapse: collapse;
+  }
+
+  th, td {
+    padding: 2px 4px;
+    text-align: left;
+  }
+}

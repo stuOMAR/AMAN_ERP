@@ -33,8 +33,45 @@ def _period_params(from_date: Optional[date] = None, to_date: Optional[date] = N
 
 
 def _gl_balance(db, account_prefix: str, from_date: date, to_date: date, side: str = "debit"):
-    """Sum journal line debits/credits for accounts starting with prefix."""
+    """Sum journal line debits/credits for accounts matching a category.
+
+    Uses account_classifications when available, falling back to
+    account_number LIKE for legacy compatibility.
+    """
     col = "debit" if side == "debit" else "credit"
+
+    # Map common prefixes to classifier categories
+    _CATEGORY_MAP = {
+        "51": ("expense", "cost_of_goods"),
+        "41": ("revenue", "sales"),
+        "6": ("expense", "operating"),
+    }
+    hint_key = _CATEGORY_MAP.get(account_prefix)
+
+    if hint_key:
+        try:
+            cat, hint = hint_key
+            acc_rows = db.execute(text("""
+                SELECT account_id FROM account_classifications
+                WHERE tenant_id = current_setting('app.tenant_id', true)::bigint
+                  AND statement_category = :cat AND aggregation_hint = :hint
+                  AND is_active = true
+            """), {"cat": cat, "hint": hint}).fetchall()
+            if acc_rows:
+                acc_ids = [r[0] for r in acc_rows]
+                row = db.execute(text(f"""
+                    SELECT COALESCE(SUM(jl.{col}), 0) AS total
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                    WHERE jl.account_id = ANY(:acc_ids)
+                      AND je.entry_date BETWEEN :d1 AND :d2
+                      AND je.status = 'posted'
+                """), {"acc_ids": acc_ids, "d1": from_date, "d2": to_date}).fetchone()
+                return Decimal(str(row.total)) if row else Decimal("0")
+        except Exception:
+            pass  # fall through to legacy
+
+    # Legacy fallback: code-range check
     row = db.execute(text(f"""
         SELECT COALESCE(SUM(jl.{col}), 0) AS total
         FROM journal_lines jl

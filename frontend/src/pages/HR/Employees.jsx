@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next';
 import {
     Mail, Phone,
     CheckCircle, XCircle, Shield,
-    DollarSign, MoreVertical
+    DollarSign, MoreVertical, Plus
 } from 'lucide-react';
 import { hrAPI, branchesAPI, rolesAPI, currenciesAPI } from '../../utils/api';
 import { formatNumber } from '../../utils/format';
@@ -15,6 +15,18 @@ import '../../index.css';
 
 import { useLocation } from 'react-router-dom';
 import BackButton from '../../components/common/BackButton';
+
+const toAmount = (value) => {
+    const n = Number(value);
+    return Number.isFinite(n) ? n : 0;
+};
+
+const employeeTotalSalary = (emp) => (
+    toAmount(emp.salary)
+    + toAmount(emp.housing_allowance)
+    + toAmount(emp.transport_allowance)
+    + toAmount(emp.other_allowances)
+);
 
 const Employees = () => {
     const { t } = useTranslation();
@@ -141,7 +153,9 @@ const Employees = () => {
         e.preventDefault();
         try {
             if (isEditMode) {
-                await hrAPI.updateEmployee(selectedId, formData);
+                // Remove role from update payload — backend rejects role changes via HR endpoint
+                const { role, ...updateData } = formData;
+                await hrAPI.updateEmployee(selectedId, updateData);
             } else {
                 await hrAPI.createEmployee(formData);
             }
@@ -321,7 +335,7 @@ const Employees = () => {
                                     </td>
                                     <td>
                                         <div className="fw-bold">
-                                            {formatNumber((emp.salary || 0) + (emp.housing_allowance || 0) + (emp.transport_allowance || 0) + (emp.other_allowances || 0))} {emp.currency || companyCurrency}
+                                            {formatNumber(employeeTotalSalary(emp))} {emp.currency || companyCurrency}
                                         </div>
                                     </td>
                                     <td>
@@ -336,13 +350,13 @@ const Employees = () => {
                     {employees.length > 0 && (
                         <tfoot className="table-footer bg-light">
                             <tr>
-                                <td colSpan="6" className="text-start fw-bold p-3">{t("hr.employees.total_salaries")}</td>
+                                <td colSpan="7" className="text-start fw-bold p-3">{t("hr.employees.total_salaries")}</td>
                                 <td className="fw-bold text-primary p-3" style={{ fontSize: '1.1rem' }}>
                                     {(() => {
                                         const byCurrency = {};
                                         employees.forEach(emp => {
                                             const c = emp.currency || companyCurrency;
-                                            const total = (emp.salary || 0) + (emp.housing_allowance || 0) + (emp.transport_allowance || 0) + (emp.other_allowances || 0);
+                                            const total = employeeTotalSalary(emp);
                                             byCurrency[c] = (byCurrency[c] || 0) + total;
                                         });
                                         // Sort: base currency first, then alphabetically

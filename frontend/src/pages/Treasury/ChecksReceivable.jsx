@@ -33,7 +33,7 @@ function ChecksReceivable() {
     const [form, setForm] = useState({
         check_number: '', drawer_name: '', bank_name: '', branch_name: '',
         amount: '', currency: getCurrency(), issue_date: new Date().toISOString().split('T')[0],
-        due_date: '', party_id: '', treasury_account_id: '', notes: ''
+        due_date: '', party_id: '', party_site_id: '', treasury_account_id: '', notes: ''
     })
     const [saving, setSaving] = useState(false)
 
@@ -73,7 +73,7 @@ function ChecksReceivable() {
         try {
             const [custRes, treasRes] = await Promise.all([
                 salesAPI.listCustomers({ limit: 500 }),
-                treasuryAPI.listAccounts()
+                treasuryAPI.listAccounts(currentBranch?.id)
             ])
             setCustomers(custRes.data?.data || custRes.data || [])
             setTreasuryAccounts(treasRes.data?.items || treasRes.data || [])

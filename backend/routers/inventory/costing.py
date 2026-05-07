@@ -7,7 +7,7 @@ from typing import Optional
 
 from database import db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from services.costing_service import CostingService
 from schemas.costing import (
     CostLayerRead,
@@ -28,20 +28,26 @@ costing_router = APIRouter(prefix="/costing", tags=["Inventory Costing"])
 def list_cost_layers(
     product_id: Optional[int] = Query(None),
     warehouse_id: Optional[int] = Query(None),
+    branch_id: Optional[int] = Query(None),
     include_exhausted: bool = Query(False),
     current_user=Depends(get_current_user),
 ):
     """List cost layers with optional product/warehouse filter."""
-    from utils.permissions import validate_branch_access
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if hasattr(current_user, "company_id") else current_user.get("company_id")
     with db_connection(company_id) as conn:
         if warehouse_id:
             wh_row = conn.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).fetchone()
             if wh_row:
                 validate_branch_access(current_user, wh_row.branch_id)
+                if branch_scope["branch_id"] is not None and wh_row.branch_id != branch_scope["branch_id"]:
+                    return []
+                if branch_scope["branch_ids"] is not None and wh_row.branch_id not in branch_scope["branch_ids"]:
+                    return []
         rows = CostingService.get_cost_layers(
             conn, product_id=product_id, warehouse_id=warehouse_id,
             include_exhausted=include_exhausted,
+            branch_id=branch_scope["branch_id"], branch_ids=branch_scope["branch_ids"],
         )
         return [dict(r._mapping) for r in rows]
 
@@ -54,19 +60,25 @@ def list_cost_layers(
 def get_product_layers(
     product_id: int,
     warehouse_id: Optional[int] = Query(None),
+    branch_id: Optional[int] = Query(None),
     include_exhausted: bool = Query(False),
     current_user=Depends(get_current_user),
 ):
     """Get all cost layers for a specific product."""
-    from utils.permissions import validate_branch_access
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if hasattr(current_user, "company_id") else current_user.get("company_id")
     with db_connection(company_id) as conn:
         if warehouse_id:
             wh_row = conn.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).fetchone()
             if wh_row:
                 validate_branch_access(current_user, wh_row.branch_id)
+                if branch_scope["branch_id"] is not None and wh_row.branch_id != branch_scope["branch_id"]:
+                    return []
+                if branch_scope["branch_ids"] is not None and wh_row.branch_id not in branch_scope["branch_ids"]:
+                    return []
         rows = CostingService.get_cost_layers(
             conn, product_id=product_id, warehouse_id=warehouse_id, include_exhausted=include_exhausted,
+            branch_id=branch_scope["branch_id"], branch_ids=branch_scope["branch_ids"],
         )
         return [dict(r._mapping) for r in rows]
 
@@ -81,7 +93,6 @@ def change_costing_method(
     current_user=Depends(get_current_user),
 ):
     """Change the costing method (FIFO/LIFO) for a product/warehouse."""
-    from utils.permissions import validate_branch_access
     company_id = current_user.company_id if hasattr(current_user, "company_id") else current_user.get("company_id")
     user_id = str(current_user.id if hasattr(current_user, "id") else current_user.get("id"))
     with db_connection(company_id) as conn:
@@ -108,17 +119,28 @@ def change_costing_method(
 def get_valuation_report(
     as_of_date: Optional[date] = Query(None),
     warehouse_id: Optional[int] = Query(None),
+    branch_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
     """Get inventory valuation report by costing method."""
-    from utils.permissions import validate_branch_access
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if hasattr(current_user, "company_id") else current_user.get("company_id")
     with db_connection(company_id) as conn:
         if warehouse_id:
             wh_row = conn.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).fetchone()
             if wh_row:
                 validate_branch_access(current_user, wh_row.branch_id)
-        return CostingService.calculate_inventory_valuation(conn, as_of_date=as_of_date)
+                if branch_scope["branch_id"] is not None and wh_row.branch_id != branch_scope["branch_id"]:
+                    return {"as_of_date": str(as_of_date or "current"), "items": [], "grand_total": 0}
+                if branch_scope["branch_ids"] is not None and wh_row.branch_id not in branch_scope["branch_ids"]:
+                    return {"as_of_date": str(as_of_date or "current"), "items": [], "grand_total": 0}
+        return CostingService.calculate_inventory_valuation(
+            conn,
+            as_of_date=as_of_date,
+            warehouse_id=warehouse_id,
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
+        )
 
 
 @costing_router.get(
@@ -129,15 +151,26 @@ def get_valuation_report(
 def get_consumption_history(
     product_id: int,
     warehouse_id: Optional[int] = Query(None),
+    branch_id: Optional[int] = Query(None),
     current_user=Depends(get_current_user),
 ):
     """Get consumption history for a product's cost layers."""
-    from utils.permissions import validate_branch_access
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = current_user.company_id if hasattr(current_user, "company_id") else current_user.get("company_id")
     with db_connection(company_id) as conn:
         if warehouse_id:
             wh_row = conn.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).fetchone()
             if wh_row:
                 validate_branch_access(current_user, wh_row.branch_id)
-        rows = CostingService.get_consumption_history(conn, product_id=product_id)
+                if branch_scope["branch_id"] is not None and wh_row.branch_id != branch_scope["branch_id"]:
+                    return []
+                if branch_scope["branch_ids"] is not None and wh_row.branch_id not in branch_scope["branch_ids"]:
+                    return []
+        rows = CostingService.get_consumption_history(
+            conn,
+            product_id=product_id,
+            warehouse_id=warehouse_id,
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
+        )
         return [dict(r._mapping) for r in rows]

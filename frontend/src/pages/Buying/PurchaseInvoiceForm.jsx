@@ -3,13 +3,14 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { purchasesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber, getStep } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
-import { formatNumber, getStep } from '../../utils/format'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function PurchaseInvoiceForm() {
     const { t } = useTranslation()
@@ -32,6 +33,7 @@ function PurchaseInvoiceForm() {
     // Form State
     const [formData, setFormData] = useState({
         supplier_id: '',
+        party_site_id: '',
         warehouse_id: '',
         invoice_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
@@ -119,7 +121,25 @@ function PurchaseInvoiceForm() {
     }, [warehouses, currentBranch, formData.warehouse_id])
 
     // Calculations
+    // Backend-powered calculations
+    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+
     const calculateTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return {
+                subtotal: backendTotals.subtotal,
+                totalDiscount: backendTotals.totalDiscount,
+                totalMarkup: 0,
+                totalTax: backendTotals.totalTax,
+                total: backendTotals.grandTotal,
+                globalEffectType: 'discount',
+                globalEffectPercent: 0,
+                globalMakeupAmount: 0,
+                globalDiscountAmount: backendTotals.totalDiscount,
+            }
+        }
+        // Fallback to local calculation
         let subtotal = 0
         let totalTax = 0
         let totalDiscount = 0
@@ -179,6 +199,21 @@ function PurchaseInvoiceForm() {
         }
     }
 
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: Number(i.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
+
     const totals = calculateTotals()
 
     // Handlers
@@ -191,9 +226,11 @@ function PurchaseInvoiceForm() {
                     const product = products.find(p => p.id === parseInt(value))
                     if (product) {
                         updatedItem.description = product.item_name || ''
-                        // Use last_buying_price if available (UI Convenience), otherwise fall back to buying_price (WAC)
-                        updatedItem.unit_price = product.last_buying_price || product.buying_price || 0
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        // Use branch price if available, otherwise use product default
+                        const branchPrices = window.__branchPrices || {}
+                        const priceInfo = branchPrices[parseInt(value)]
+                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || 0)
+                        updatedItem.tax_rate = null // Resolved by backend engine
 
                         // Try applying item-level effect from group
                         const supplier = suppliers.find(s => s.id === parseInt(formData.supplier_id));
@@ -204,7 +241,8 @@ function PurchaseInvoiceForm() {
                                     updatedItem.discount_percent = group.discount_percentage;
                                 } else if (group.effect_type === 'markup') {
                                     // Markup applied by increasing unit_price
-                                    updatedItem.unit_price = updatedItem.unit_price * (1 + (group.discount_percentage / 100));
+                                    const basePrice = priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || 0)
+                                    updatedItem.unit_price = basePrice * (1 + (group.discount_percentage / 100));
                                 }
                             }
                         }
@@ -279,6 +317,7 @@ function PurchaseInvoiceForm() {
                 branch_id: currentBranch ? currentBranch.id : null,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 supplier_id: parseInt(formData.supplier_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 invoice_date: formData.invoice_date,
                 due_date: formData.due_date,
                 payment_method: formData.payment_method,

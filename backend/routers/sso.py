@@ -201,7 +201,7 @@ async def test_ldap(body: LdapTestRequest):
 # Public endpoints — SAML metadata, ACS callback, SSO login initiation
 # ---------------------------------------------------------------------------
 
-@router.get("/providers", response_model=Dict[str, Any])
+@router.get("/providers", response_model=List[Dict[str, Any]])
 async def list_active_providers(
     company_id: Optional[str] = None,
     company_code: Optional[str] = None,
@@ -209,9 +209,19 @@ async def list_active_providers(
     """
     Public endpoint — returns active SSO providers for the login page.
     Called before authentication, so company_id must be supplied as a query param.
+    Returns an empty list if the company is not found or SSO is not configured.
     """
-    cid = _resolve_company_id_public(company_id, company_code)
-    return sso_service.get_active_sso_configs(cid)
+    try:
+        cid = _resolve_company_id_public(company_id, company_code)
+    except HTTPException:
+        return []
+    try:
+        return sso_service.get_active_sso_configs(cid)
+    except (OperationalError, ProgrammingError):
+        # sso_configurations table may not exist on older tenant DBs
+        return []
+    except Exception:
+        return []
 
 
 @router.get("/saml/metadata", response_model=Dict[str, Any])

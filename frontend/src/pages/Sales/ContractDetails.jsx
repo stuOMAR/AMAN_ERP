@@ -3,6 +3,7 @@ import { useNavigate, useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { Edit2, RefreshCw, FileText, XCircle, Calendar, DollarSign, User, Clock } from 'lucide-react'
 import { contractsAPI } from '../../utils/api'
+import { getCurrency } from '../../utils/auth'
 import { formatNumber } from '../../utils/format'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useToast } from '../../context/ToastContext'
@@ -16,6 +17,7 @@ export default function ContractDetails() {
     const navigate = useNavigate()
     const { id } = useParams()
     const { showToast } = useToast()
+    const currency = getCurrency()
 
     const [contract, setContract] = useState(null)
     const [loading, setLoading] = useState(true)
@@ -192,7 +194,7 @@ export default function ContractDetails() {
                     </div>
                     <div className="metric-content">
                         <span className="metric-label">{t('contracts.details.total_value')}</span>
-                        <span className="metric-value">{formatNumber(contract.total_amount)} {contract.currency}</span>
+                        <span className="metric-value">{formatNumber(contract.total_amount)} {contract.currency || currency}</span>
                     </div>
                 </div>
                 <div className="metric-card">
@@ -255,7 +257,7 @@ export default function ContractDetails() {
                         </div>
                         <div>
                             <label className="form-label" style={{ fontWeight: 'normal', color: '#888' }}>{t('contracts.details.currency')}</label>
-                            <p>{contract.currency}</p>
+                            <p>{contract.currency || currency}</p>
                         </div>
                     </div>
                     {contract.notes && (
@@ -272,15 +274,15 @@ export default function ContractDetails() {
                     <div style={{ marginTop: '12px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}>
                             <span>{t('contracts.details.subtotal')}</span>
-                            <span>{formatNumber(subtotal)} {contract.currency}</span>
+                            <span>{formatNumber(subtotal)} {contract.currency || currency}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}>
                             <span>{t('contracts.details.tax')}</span>
-                            <span>{formatNumber(taxTotal)} {contract.currency}</span>
+                            <span>{formatNumber(taxTotal)} {contract.currency || currency}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0', fontWeight: 'bold', fontSize: '1.2rem' }}>
                             <span>{t('contracts.details.grand_total')}</span>
-                            <span style={{ color: 'var(--primary)' }}>{formatNumber(contract.total_amount)} {contract.currency}</span>
+                            <span style={{ color: 'var(--primary)' }}>{formatNumber(contract.total_amount)} {contract.currency || currency}</span>
                         </div>
                     </div>
                 </div>
@@ -306,9 +308,9 @@ export default function ContractDetails() {
                                 <td>{idx + 1}</td>
                                 <td>{item.description || '—'}</td>
                                 <td>{formatNumber(item.quantity)}</td>
-                                <td>{formatNumber(item.unit_price)} {contract.currency}</td>
+                                <td>{formatNumber(item.unit_price)} {contract.currency || currency}</td>
                                 <td>{item.tax_rate}%</td>
-                                <td style={{ fontWeight: 'bold' }}>{formatNumber(item.total)} {contract.currency}</td>
+                                <td style={{ fontWeight: 'bold' }}>{formatNumber(item.total)} {contract.currency || currency}</td>
                             </tr>
                         ))}
                         {(contract.items || []).length === 0 && (

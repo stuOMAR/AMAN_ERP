@@ -8,6 +8,7 @@ import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
+import SimpleModal from '../../components/common/SimpleModal'
 
 function WarehouseList() {
     const { t } = useTranslation()
@@ -101,10 +102,21 @@ function WarehouseList() {
             }
 
             const nextCode = `WH-${String(nextNum).padStart(3, '0')}`;
-            setFormData({ name: '', code: nextCode, branch_id: currentBranch?.id || null })
+            // Default to the user's current branch if scoped to one
+            const defaultBranch = currentBranch?.id || null
+            setFormData({ name: '', code: nextCode, branch_id: defaultBranch })
         }
         setShowModal(true)
     }
+
+    const filteredBranches = useMemo(() => {
+        // If user is scoped to a specific branch, only show that branch
+        if (currentBranch) {
+            return branches.filter(b => b.id === currentBranch.id)
+        }
+        // Admin / all branches selected - show all
+        return branches
+    }, [branches, currentBranch])
 
     const filteredWarehouses = useMemo(() => {
         if (!search) return warehouses
@@ -198,64 +210,51 @@ function WarehouseList() {
             />
 
             {/* Modal */}
-            {showModal && (
-                <div style={{
-                    position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-                    background: 'rgba(0,0,0,0.5)', zIndex: 1000,
-                    display: 'flex', alignItems: 'center', justifyContent: 'center'
-                }}>
-                    <div className="fade-in" style={{
-                        background: 'white', padding: '24px', borderRadius: '12px',
-                        width: '400px', maxWidth: '90%'
-                    }}>
-                        <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>
-                            <h2 style={{ fontSize: '18px', fontWeight: '700' }}>
-                                {editingItem ? t('stock.warehouses.form.edit_title') : t('stock.warehouses.form.title')}
-                            </h2>
-                            <button onClick={() => setShowModal(false)}><X size={20} /></button>
-                        </div>
-
-                        <form onSubmit={handleSubmit}>
-                            <div className="form-group">
-                                <label className="form-label">{t('stock.warehouses.form.name')}</label>
-                                <input
-                                    className="form-input"
-                                    value={formData.name}
-                                    onChange={e => setFormData({ ...formData, name: e.target.value })}
-                                    required
-                                    autoFocus
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('stock.warehouses.form.code')}</label>
-                                <input
-                                    className="form-input"
-                                    value={formData.code}
-                                    onChange={e => setFormData({ ...formData, code: e.target.value })}
-                                    required
-                                />
-                            </div>
-                            <div className="form-group">
-                                <label className="form-label">{t('branches.select_branch')}</label>
-                                <select
-                                    className="form-input"
-                                    value={formData.branch_id || ''}
-                                    onChange={e => setFormData({ ...formData, branch_id: e.target.value ? parseInt(e.target.value) : null })}
-                                >
-                                    <option value="">-- {t('common.select')} --</option>
-                                    {branches.map(b => (
-                                        <option key={b.id} value={b.id}>{b.branch_name}</option>
-                                    ))}
-                                </select>
-                            </div>
-                            <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
-                                <button type="submit" className="btn btn-primary btn-block">{t('stock.warehouses.form.save')}</button>
-                                <button type="button" className="btn" style={{ background: 'var(--bg-secondary)', width: '100%' }} onClick={() => setShowModal(false)}>{t('stock.warehouses.form.cancel')}</button>
-                            </div>
-                        </form>
+            <SimpleModal
+                isOpen={showModal}
+                onClose={() => { setShowModal(false); setEditingItem(null); }}
+                title={editingItem ? t('stock.warehouses.form.edit_title') : t('stock.warehouses.form.title')}
+                size="sm"
+            >
+                <form onSubmit={handleSubmit}>
+                    <div className="form-group">
+                        <label className="form-label">{t('stock.warehouses.form.name')}</label>
+                        <input
+                            className="form-input"
+                            value={formData.name}
+                            onChange={e => setFormData({ ...formData, name: e.target.value })}
+                            required
+                            autoFocus
+                        />
                     </div>
-                </div>
-            )}
+                    <div className="form-group">
+                        <label className="form-label">{t('stock.warehouses.form.code')}</label>
+                        <input
+                            className="form-input"
+                            value={formData.code}
+                            onChange={e => setFormData({ ...formData, code: e.target.value })}
+                            required
+                        />
+                    </div>
+                    <div className="form-group">
+                        <label className="form-label">{t('branches.select_branch')}</label>
+                        <select
+                            className="form-input"
+                            value={formData.branch_id || ''}
+                            onChange={e => setFormData({ ...formData, branch_id: e.target.value ? parseInt(e.target.value) : null })}
+                        >
+                            <option value="">-- {t('common.select')} --</option>
+                            {filteredBranches.map(b => (
+                                <option key={b.id} value={b.id}>{b.branch_name}</option>
+                            ))}
+                        </select>
+                    </div>
+                    <div style={{ display: 'flex', gap: '10px', marginTop: '24px' }}>
+                        <button type="submit" className="btn btn-primary" style={{ flex: 1 }}>{t('stock.warehouses.form.save')}</button>
+                        <button type="button" className="btn btn-outline" style={{ flex: 1 }} onClick={() => { setShowModal(false); setEditingItem(null); }}>{t('stock.warehouses.form.cancel')}</button>
+                    </div>
+                </form>
+            </SimpleModal>
         </div>
     )
 }

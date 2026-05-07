@@ -27,7 +27,7 @@ const NotesReceivable = () => {
     const [form, setForm] = useState({
         note_number: '', drawer_name: '', bank_name: '', amount: '',
         currency: getCurrency(), issue_date: new Date().toISOString().split('T')[0],
-        due_date: '', maturity_date: '', party_id: '', treasury_account_id: '', notes: ''
+        due_date: '', maturity_date: '', party_id: '', party_site_id: '', treasury_account_id: '', notes: ''
     });
     const [collectForm, setCollectForm] = useState({ collection_date: new Date().toISOString().split('T')[0], treasury_account_id: '' });
     const [protestForm, setProtestForm] = useState({ protest_date: new Date().toISOString().split('T')[0], reason: '' });

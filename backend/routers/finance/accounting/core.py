@@ -15,9 +15,10 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
+from utils.currency_display import base_to_display_amount, resolve_display_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
@@ -44,71 +45,58 @@ def get_accounting_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب ملخص إحصائيات المحاسبة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
-        if branch_id:
-            # Calculate branch-specific summary
-            # Standard: Asset/Expense balance = Debit - Credit, Others = Credit - Debit
-            # Revenue summary
-            total_income = db.execute(text("""
-                SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
-                FROM journal_lines jl
-                JOIN journal_entries je ON jl.journal_entry_id = je.id
-                JOIN accounts a ON jl.account_id = a.id
-                WHERE a.account_type = 'revenue' AND je.branch_id = :branch_id
-            """), {"branch_id": branch_id}).scalar() or 0
-            
-            # Expense summary
-            total_expenses = db.execute(text("""
-                SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
-                FROM journal_lines jl
-                JOIN journal_entries je ON jl.journal_entry_id = je.id
-                JOIN accounts a ON jl.account_id = a.id
-                WHERE a.account_type = 'expense' AND je.branch_id = :branch_id
-            """), {"branch_id": branch_id}).scalar() or 0
-            
-            # Cash/Bank summary
-            # Cash/Bank summary
-            # Dynamic Treasury Lookup
-            treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
-            legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
-            all_cash_ids = list(set(treasury_ids + legacy_ids))
-            
-            cash_balance = 0
-            if all_cash_ids:
-                 cash_balance = db.execute(text("""
-                    SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
-                    FROM journal_lines jl
-                    JOIN journal_entries je ON jl.journal_entry_id = je.id
-                    JOIN accounts a ON jl.account_id = a.id
-                    WHERE a.id = ANY(:cash_ids)
-                    AND je.branch_id = :branch_id
-                """), {"cash_ids": all_cash_ids, "branch_id": branch_id}).scalar() or 0
-        else:
-            # 1. Total Income (Revenue accounts balance)
-            total_income = db.execute(text("SELECT COALESCE(SUM(balance), 0) FROM accounts WHERE account_type = 'revenue'")).scalar() or 0
-            
-            # 2. Total Expenses (Expense accounts balance)
-            total_expenses = db.execute(text("SELECT COALESCE(SUM(balance), 0) FROM accounts WHERE account_type = 'expense'")).scalar() or 0
-            
-            # 3. Cash/Bank Balance (Asset accounts with BOX or BNK codes OR linked to treasury)
-            # Dynamic Treasury Lookup
-            treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
-            legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
-            all_cash_ids = list(set(treasury_ids + legacy_ids))
-            
-            cash_balance = 0
-            if all_cash_ids:
-                cash_balance = db.execute(text("""
-                    SELECT COALESCE(SUM(balance), 0) FROM accounts 
-                    WHERE id = ANY(:cash_ids)
-                """), {"cash_ids": all_cash_ids}).scalar() or 0
+        params = {}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
+        total_income = db.execute(text(f"""
+            SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
+            FROM journal_lines jl
+            JOIN journal_entries je ON jl.journal_entry_id = je.id
+            JOIN accounts a ON jl.account_id = a.id
+            WHERE a.account_type = 'revenue' AND je.status = 'posted'
+            AND je.description NOT LIKE '%%إقفال%%'
+            AND je.description NOT LIKE '%%closing%%'
+            AND je.description NOT LIKE '%%ترحيل%%'
+            {branch_filter}
+        """), params).scalar() or 0
+        total_expenses = db.execute(text(f"""
+            SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
+            FROM journal_lines jl
+            JOIN journal_entries je ON jl.journal_entry_id = je.id
+            JOIN accounts a ON jl.account_id = a.id
+            WHERE a.account_type = 'expense' AND je.status = 'posted'
+            AND je.description NOT LIKE '%%إقفال%%'
+            AND je.description NOT LIKE '%%closing%%'
+            AND je.description NOT LIKE '%%ترحيل%%'
+            {branch_filter}
+        """), params).scalar() or 0
+
+        treasury_params = {}
+        treasury_branch_filter = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", treasury_params)
+        cash_balance = db.execute(text(f"""
+            SELECT COALESCE(SUM(COALESCE(a.balance, 0)), 0)
+            FROM treasury_accounts ta
+            JOIN accounts a ON a.id = ta.gl_account_id
+            WHERE ta.is_active = TRUE
+              AND ta.gl_account_id IS NOT NULL
+              {treasury_branch_filter}
+        """), treasury_params).scalar() or 0
+
+        display_meta = resolve_display_currency(db, branch_scope)
+        total_income = base_to_display_amount(total_income, display_meta)
+        total_expenses = base_to_display_amount(total_expenses, display_meta)
+        cash_balance = base_to_display_amount(cash_balance, display_meta)
+        net_profit = total_income - total_expenses
         
         return {
             "total_income": float(total_income),
             "total_expenses": float(total_expenses),
-            "net_profit": float(total_income - total_expenses),
-            "cash_balance": float(cash_balance)
+            "net_profit": float(net_profit),
+            "cash_balance": float(cash_balance),
+            "display_currency": display_meta.get("currency"),
+            "base_currency": display_meta.get("base_currency"),
+            "is_multi_currency_scope": display_meta.get("is_multi_currency_scope"),
         }
 # ── MODULE-001: Map account_code to the module it belongs to ──
 # Used to show module tags in COA and for module-based filtering

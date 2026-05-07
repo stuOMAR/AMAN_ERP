@@ -22,6 +22,7 @@ class ProductRepository:
         category_id: Optional[int] = None,
         is_active: Optional[bool] = None,
         branch_id: Optional[int] = None,
+        branch_ids: Optional[list[int]] = None,
         search: Optional[str] = None,
         limit: int = 100,
         offset: int = 0,
@@ -36,14 +37,30 @@ class ProductRepository:
             where.append("p.is_active = :is_active")
             params["is_active"] = is_active
         if search:
-            where.append("(p.product_name ILIKE :q OR p.product_code ILIKE :q)")
-            params["q"] = f"%{search}%"
+            # T10.1 P1 #110i — old query used ``ILIKE '%foo%'`` on both
+            # ``product_name`` and ``product_code``, which forces a
+            # sequential scan because the leading wildcard defeats the
+            # default B-tree index. We now:
+            #   • match ``product_code`` as a prefix (anchored ILIKE
+            #     ``'foo%'``) so it can use the B-tree index on the
+            #     column, and
+            #   • keep substring search on ``product_name`` but rely on
+            #     the trigram (``pg_trgm``) GIN index created in
+            #     ``db_ddl/tenant_schema.py`` for #110i.
+            where.append(
+                "(p.product_name ILIKE :q_contains OR p.product_code ILIKE :q_prefix)"
+            )
+            params["q_contains"] = f"%{search}%"
+            params["q_prefix"] = f"{search}%"
 
         inv_join = ""
         if branch_id:
             inv_join = """
                 LEFT JOIN (
-                    SELECT inv.product_id, SUM(inv.quantity) AS stock_qty
+                    SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                           CASE WHEN SUM(inv.quantity) > 0 THEN
+                               SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
+                           ELSE 0 END AS avg_cost
                       FROM inventory inv
                       JOIN warehouses w ON inv.warehouse_id = w.id
                      WHERE w.branch_id = :branch_id
@@ -51,10 +68,40 @@ class ProductRepository:
                 ) inv_sum ON p.id = inv_sum.product_id
             """
             params["branch_id"] = branch_id
+        elif branch_ids is not None:
+            if branch_ids:
+                inv_join = """
+                    LEFT JOIN (
+                        SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                               CASE WHEN SUM(inv.quantity) > 0 THEN
+                                   SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
+                               ELSE 0 END AS avg_cost
+                          FROM inventory inv
+                          JOIN warehouses w ON inv.warehouse_id = w.id
+                         WHERE w.branch_id = ANY(:branch_ids)
+                         GROUP BY inv.product_id
+                    ) inv_sum ON p.id = inv_sum.product_id
+                """
+                params["branch_ids"] = branch_ids
+            else:
+                inv_join = """
+                    LEFT JOIN (
+                        SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                               CASE WHEN SUM(inv.quantity) > 0 THEN
+                                   SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
+                               ELSE 0 END AS avg_cost
+                          FROM inventory inv
+                         WHERE 1=0
+                         GROUP BY inv.product_id
+                    ) inv_sum ON p.id = inv_sum.product_id
+                """
         else:
             inv_join = """
                 LEFT JOIN (
-                    SELECT product_id, SUM(quantity) AS stock_qty
+                    SELECT product_id, SUM(quantity) AS stock_qty,
+                           CASE WHEN SUM(quantity) > 0 THEN
+                               SUM(average_cost * quantity) / SUM(quantity)
+                           ELSE 0 END AS avg_cost
                       FROM inventory
                      GROUP BY product_id
                 ) inv_sum ON p.id = inv_sum.product_id
@@ -62,7 +109,8 @@ class ProductRepository:
 
         sql = f"""
             SELECT p.*,
-                   COALESCE(inv_sum.stock_qty, 0) AS current_stock
+                   COALESCE(inv_sum.stock_qty, 0) AS current_stock,
+                   COALESCE(inv_sum.avg_cost, p.cost_price, 0) AS branch_avg_cost
               FROM products p
               {inv_join}
              WHERE {' AND '.join(where)}

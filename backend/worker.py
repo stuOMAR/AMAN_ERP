@@ -57,6 +57,52 @@ def main() -> int:
     from services.scheduler import start_scheduler, scheduler
 
     logger.info("🛠  AMAN ERP scheduler worker starting …")
+
+    # Feature 022: Audit outbox worker banner
+    try:
+        from services.audit_outbox_worker import start_worker as _audit_banner
+        _audit_banner()
+    except ImportError:
+        pass
+
+    # ── Feature 023 workers ───────────────────────────────────────────
+    try:
+        from services.einvoicing.outbox import start_worker as _zatca_banner
+        _zatca_banner()
+    except ImportError:
+        pass
+
+    try:
+        from services.pos.pos_offline_reconcile import start_worker as _offline_banner
+        _offline_banner()
+    except ImportError:
+        pass
+
+    # Scheduled workers (stubs — scheduler adds them as jobs)
+    try:
+        from services.inventory.auto_reorder import run_auto_reorder
+        scheduler.add_job(run_auto_reorder, 'interval', minutes=60, id='auto_reorder',
+                          replace_existing=True)
+        logger.info("worker.auto_reorder scheduled (every 60m)")
+    except Exception:
+        pass
+
+    try:
+        from services.inventory.archival import run_archival
+        scheduler.add_job(run_archival, 'cron', hour=3, minute=0, id='inventory_archiver',
+                          replace_existing=True)
+        logger.info("worker.inventory_archiver scheduled (daily 03:00 UTC)")
+    except Exception:
+        pass
+
+    try:
+        from services.manufacturing.mrp import run_mrp
+        scheduler.add_job(run_mrp, 'interval', minutes=60, id='mrp',
+                          replace_existing=True)
+        logger.info("worker.mrp scheduled (every 60m)")
+    except Exception:
+        pass
+
     start_scheduler()
     logger.info("✅ Scheduler running. Press Ctrl-C to stop.")
 

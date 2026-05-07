@@ -13,7 +13,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.assets import (
@@ -56,16 +56,12 @@ def list_assets(
     current_user: dict = Depends(get_current_user)
 ):
     """List Assets."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     
     with transactional(current_user.company_id) as conn:
         params = {}
         query = "SELECT * FROM assets WHERE 1=1"
-        
-        if branch_id:
-            query += " AND branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query += f" {branch_scope_filter_from_scope(branch_scope, 'branch_id', params)}"
         if status:
             query += " AND status = :status"
             params["status"] = status
@@ -448,4 +444,57 @@ class AssetTransfer(BaseModel):
 class AssetRevaluation(BaseModel):
     new_value: Decimal
     reason: Optional[str] = "إعادة تقييم"
+
+
+def create_asset_return_write_down(
+    conn, asset_id: int, *, user_id: int, company_id: str
+) -> tuple[int, str] | None:
+    """Create a write-down JE when an asset is returned with remaining NBV.
+
+    If NBV > 0, posts a JE that writes the asset down to zero:
+      DR  Loss on asset return (from settings)
+      CR  Fixed asset account
+
+    Returns (je_id, entry_number) if a JE was posted, None if NBV is zero.
+    Links via journal_entries.source = 'asset', source_id = asset_id.
+    """
+    from services.gl_service import create_journal_entry
+
+    asset = conn.execute(
+        text("SELECT id, cost FROM assets WHERE id = :id"), {"id": asset_id}
+    ).fetchone()
+    if not asset:
+        return None
+
+    acc_depr = conn.execute(text("""
+        SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule
+        WHERE asset_id = :id AND posted = TRUE
+    """), {"id": asset_id}).scalar() or 0
+
+    nbv = (_dec(asset.cost) - _dec(acc_depr)).quantize(_D2, ROUND_HALF_UP)
+    if nbv <= 0:
+        return None
+
+    acc_fixed = get_mapped_account_id(conn, "acc_map_fixed_assets")
+    acc_loss = get_mapped_account_id(conn, "acc_map_asset_loss")
+    if not acc_fixed or not acc_loss:
+        return None
+
+    je_id, je_num = create_journal_entry(
+        conn,
+        company_id=company_id,
+        date=str(date.today()),
+        description=f"Asset return write-down #{asset_id} (NBV={nbv})",
+        lines=[
+            {"account_id": acc_loss, "debit": float(nbv), "credit": 0,
+             "description": "Loss on asset return"},
+            {"account_id": acc_fixed, "debit": 0, "credit": float(nbv),
+             "description": "Asset return write-down"},
+        ],
+        user_id=user_id,
+        source="asset",
+        source_id=asset_id,
+        idempotency_key=f"asset_return_write_down:{asset_id}",
+    )
+    return je_id, je_num
 

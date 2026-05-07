@@ -71,7 +71,7 @@ def _close(db):
         pass
 
 
-def _load_gateway_config(db, provider: str) -> Dict[str, Any]:
+def _load_gateway_config(db, provider: str, *, tenant_id: Optional[str] = None) -> Dict[str, Any]:
     """Fetch tenant-scoped gateway credentials from `company_settings`."""
     row = db.execute(
         text("""
@@ -90,6 +90,21 @@ def _load_gateway_config(db, provider: str) -> Dict[str, Any]:
         cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
     except Exception as e:
         raise HTTPException(500, f"gateway config is not valid JSON: {e}")
+    if tenant_id:
+        try:
+            from services.integration_keys_service import get_active_key
+            for key_name in ("secret_key", "webhook_secret", "api_key", "client_secret"):
+                vault_value = get_active_key(
+                    db,
+                    integration_type="payments",
+                    provider=provider.lower(),
+                    key_name=key_name,
+                    tenant_id=tenant_id,
+                )
+                if vault_value:
+                    cfg[key_name] = vault_value
+        except Exception:
+            logger.exception("payment key vault lookup failed for provider=%s", provider)
     return cfg
 
 
@@ -131,7 +146,7 @@ def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
                     "idempotent_replay": True,
                 }
 
-        cfg = _load_gateway_config(db, body.provider)
+        cfg = _load_gateway_config(db, body.provider, tenant_id=current_user.company_id)
         gateway = get_gateway(body.provider, **cfg)
         result = gateway.create_charge(
             amount=body.amount,
@@ -211,6 +226,23 @@ async def webhook(provider: str, company_id: str, request: Request):
     `https://…/finance/payments/webhook/{provider}/{company_id}` so the
     tenant is known from the URL and we can load the right secrets.
     """
+    # Feature 022: per-tenant Redis token-bucket rate limit
+    try:
+        from services.webhook_rate_limit import check_and_consume
+        tenant_id_int = int(company_id) if company_id.isdigit() else 0
+        decision = check_and_consume(tenant_id_int, provider)
+        if not decision.allowed:
+            logger.warning("webhook rate-limited tenant=%s provider=%s", company_id, provider)
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="tenant webhook quota exceeded",
+                headers={"Retry-After": str(decision.retry_after_seconds or 60)},
+            )
+    except HTTPException:
+        raise
+    except Exception:
+        logger.debug("webhook_rate_limit check skipped", exc_info=True)
+
     # PAY-F1: cheap pre-signature throttle (per caller IP + provider).
     client_ip = (
         request.headers.get("x-forwarded-for", "").split(",")[0].strip()
@@ -228,7 +260,7 @@ async def webhook(provider: str, company_id: str, request: Request):
 
     tenant_db = get_db_connection(company_id)
     try:
-        cfg = _load_gateway_config(tenant_db, provider)
+        cfg = _load_gateway_config(tenant_db, provider, tenant_id=company_id)
         gateway = get_gateway(provider, **cfg)
         verified = gateway.verify_webhook(headers, raw)
     except HTTPException:
@@ -337,7 +369,7 @@ def refund_charge(provider: str, charge_id: str, body: RefundRequest,
     """Refund Charge."""
     db = get_db_connection(current_user.company_id)
     try:
-        cfg = _load_gateway_config(db, provider)
+        cfg = _load_gateway_config(db, provider, tenant_id=current_user.company_id)
         gateway = get_gateway(provider, **cfg)
         result = gateway.refund(charge_id, amount=body.amount, reason=body.reason)
         db.execute(

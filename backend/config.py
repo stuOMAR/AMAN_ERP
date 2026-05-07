@@ -48,6 +48,12 @@ class Settings(BaseSettings):
     MAX_COMPANIES_PER_INSTANCE: int = 1000
     COMPANY_ID_LENGTH: int = 8
 
+    # Tenant database engine/pool caps.
+    # Defaults keep 50 warm tenant engines to about 250 DB connections.
+    DB_TENANT_ENGINE_CACHE_SIZE: int = 50
+    DB_TENANT_POOL_SIZE: int = 2
+    DB_TENANT_MAX_OVERFLOW: int = 3
+
     # ── Observability ──────────────────────────────────────────
     APP_ENV: str = "development"          # development | staging | production
     SENTRY_DSN: str = ""                  # Leave empty to disable Sentry
@@ -84,6 +90,13 @@ class Settings(BaseSettings):
     # failure the payload is enqueued in `einvoice_outbox` for relay.
     # Default OFF so production rollout is opt-in per environment.
     ZATCA_PHASE2_ENFORCE: bool = False
+
+    @field_validator("DB_TENANT_ENGINE_CACHE_SIZE", "DB_TENANT_POOL_SIZE", "DB_TENANT_MAX_OVERFLOW")
+    @classmethod
+    def validate_db_tenant_pool_caps(cls, v: int) -> int:
+        if v < 0:
+            raise ValueError("DB tenant pool settings must be non-negative")
+        return v
 
     # ── SEC-008: Validate SECRET_KEY strength ─────────────────
     @field_validator("SECRET_KEY")

@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_sensitive_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope
 from utils.audit import log_activity
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
@@ -23,6 +23,7 @@ from utils.accounting import (
 )
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
+from services.tax_engine import resolve_line_tax
 
 router = APIRouter(prefix="/sales/delivery-orders", tags=["Delivery Orders"])
 logger = logging.getLogger(__name__)
@@ -78,10 +79,12 @@ def list_delivery_orders(
     party_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة أوامر التسليم"""
     company_id = current_user.get("company_id")
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         query = """
             SELECT do.*, p.name as party_name, w.warehouse_name,
@@ -110,11 +113,7 @@ def list_delivery_orders(
             query += " AND do.delivery_date <= :td"
             params["td"] = to_date
 
-        # Branch filtering
-        allowed = current_user.get("allowed_branches")
-        if allowed and isinstance(allowed, list):
-            query += " AND (do.branch_id = ANY(:branches) OR do.branch_id IS NULL)"
-            params["branches"] = allowed
+        query += branch_scope_filter_from_scope(branch_scope, "do.branch_id", params)
 
         query += " ORDER BY do.id DESC"
 
@@ -394,16 +393,22 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
             inv_number = generate_sequential_number(db, f"SINV-{year}", "invoices", "invoice_number")
             base_currency = get_base_currency(db)
     
-            # Calculate totals (TASK-027: unified via compute_invoice_totals)
+            # Calculate totals (tax resolved via engine)
             from utils.accounting import compute_invoice_totals
+            _branch_id = order.branch_id
+            resolved_lines = []
+            for line in lines:
+                tax_info = resolve_line_tax(_branch_id, line.product_id, db, customer_id=order.party_id)
+                resolved_lines.append({"line": line, "tax_info": tax_info})
+            
             totals = compute_invoice_totals([
                 {
-                    "quantity": line.delivered_qty,
-                    "unit_price": line.selling_price or 0,
-                    "tax_rate": line.tax_rate or 0,
+                    "quantity": rl["line"].delivered_qty,
+                    "unit_price": rl["line"].selling_price or 0,
+                    "tax_rate": rl["tax_info"]["tax_rate"],
                     "discount": 0,
                 }
-                for line in lines
+                for rl in resolved_lines
             ])
             subtotal = totals["subtotal"]
             tax_total = totals["total_tax"]
@@ -430,20 +435,22 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
             })
             inv_id = inv.fetchone()[0]
     
-            # Create invoice lines
-            for line in lines:
+            # Create invoice lines (tax resolved via engine)
+            for rl in resolved_lines:
+                line = rl["line"]
+                tax_info = rl["tax_info"]
                 line_total = (_dec(line.delivered_qty) * _dec(line.selling_price or 0)).quantize(_D2, ROUND_HALF_UP)
-                line_tax = (line_total * _dec(line.tax_rate or 0) / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
+                line_tax = (line_total * _dec(tax_info["tax_rate"]) / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
                 db.execute(text("""
                     INSERT INTO invoice_lines (
                         invoice_id, product_id, description, quantity,
-                        unit_price, tax_rate, tax_amount, line_total
-                    ) VALUES (:iid, :pid, :desc, :qty, :up, :tr, :ta, :lt)
+                        unit_price, tax_rate, tax_rate_id, tax_amount, line_total
+                    ) VALUES (:iid, :pid, :desc, :qty, :up, :tr, :trid, :ta, :lt)
                 """), {
                     "iid": inv_id, "pid": line.product_id,
                     "desc": line.product_name, "qty": _dec(line.delivered_qty),
                     "up": _dec(line.selling_price or 0),
-                    "tr": _dec(line.tax_rate or 0),
+                    "tr": tax_info["tax_rate"], "trid": tax_info.get("tax_rate_id"),
                     "ta": line_tax, "lt": line_total + line_tax
                 })
     

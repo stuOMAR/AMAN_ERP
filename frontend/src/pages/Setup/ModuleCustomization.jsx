@@ -99,7 +99,8 @@ function ModuleCustomization() {
     <>
       <style>{`
         .mc2-layout {
-          min-height: 100vh;
+          height: 100vh;
+          overflow-y: auto;
           background: var(--bg-main, #f8fafc);
           display: flex;
           align-items: flex-start;

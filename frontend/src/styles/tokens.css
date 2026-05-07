@@ -1,0 +1,32 @@
+"""T233: Focus-visible ring styles for design-system primitives."""
+
+/* Button */
+button:focus-visible,
+.btn:focus-visible {
+  outline: 2px solid var(--ring-color, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 4px;
+}
+
+/* Input */
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible {
+  outline: 2px solid var(--ring-color, #3b82f6);
+  outline-offset: 1px;
+  border-radius: 4px;
+}
+
+/* Tab */
+[role="tab"]:focus-visible {
+  outline: 2px solid var(--ring-color, #3b82f6);
+  outline-offset: -2px;
+  border-radius: 4px;
+}
+
+/* Link */
+a:focus-visible {
+  outline: 2px solid var(--ring-color, #3b82f6);
+  outline-offset: 2px;
+  border-radius: 2px;
+}

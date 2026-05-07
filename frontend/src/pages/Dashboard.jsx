@@ -22,15 +22,15 @@ import { formatShortDate } from '../utils/dateUtils';
 /* ── Dashboard ───────────────────────────────────────── */
 const Dashboard = () => {
     const { t, i18n } = useTranslation();
-    const { currentBranch } = useBranch();
+    const { currentBranch, displayCurrency } = useBranch();
     const user = getUser();
     const isRTL = i18n.dir() === 'rtl';
-    const currency = user?.currency || '';
 
     const [stats, setStats]      = useState(null);
     const [finData, setFin]      = useState([]);
     const [prodData, setProds]   = useState([]);
     const [loading, setLoading]  = useState(true);
+    const currency = stats?.display_currency || displayCurrency?.currency || user?.currency || '';
 
     const fetchAll = useCallback(async () => {
         if (user?.role === 'system_admin') {

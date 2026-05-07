@@ -1,0 +1,162 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🛒 المشتريات" [ref=e32] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e34]: 🛒
+          - generic [ref=e35]: المشتريات
+        - link "🤝 إدارة العلاقات" [ref=e36] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e38]: 🤝
+          - generic [ref=e39]: إدارة العلاقات
+        - link "💸 المصروفات" [ref=e40] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e42]: 💸
+          - generic [ref=e43]: المصروفات
+        - link "🧾 الضرائب" [ref=e44] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e46]: 🧾
+          - generic [ref=e47]: الضرائب
+        - link "📈 التقارير" [ref=e48] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e50]: 📈
+          - generic [ref=e51]: التقارير
+    - generic [ref=e52]:
+      - banner [ref=e53]:
+        - generic [ref=e55] [cursor=pointer]:
+          - generic [ref=e56]:
+            - img [ref=e57]
+            - text: بحث...
+          - generic [ref=e60]: Ctrl+K
+        - generic [ref=e61]:
+          - button "EN" [ref=e62] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e63] [cursor=pointer]:
+            - img [ref=e64]
+          - button "🔔" [ref=e71] [cursor=pointer]
+          - generic [ref=e73] [cursor=pointer]:
+            - generic [ref=e74]:
+              - generic [ref=e75]: Ahmed Accountant
+              - generic [ref=e76]: "ID: e24bcd11"
+            - generic [ref=e77]: A
+      - main [ref=e79]:
+        - generic [ref=e80]:
+          - generic [ref=e82]:
+            - generic [ref=e83]:
+              - heading "لوحة التحكم" [level=1] [ref=e84]
+              - paragraph [ref=e85]: مساء النور, Ahmed Accountant.
+            - generic [ref=e86]:
+              - generic [ref=e87]:
+                - img [ref=e88]
+                - text: 2026/05/03
+              - button "تحديث" [disabled] [ref=e90] [cursor=pointer]:
+                - img [ref=e91]
+                - text: تحديث
+          - generic [ref=e102]:
+            - generic [ref=e103]:
+              - generic [ref=e104]: اليوم
+              - generic [ref=e105]:
+                - generic [ref=e106]:
+                  - generic [ref=e107]: اليوم
+                  - img [ref=e108]
+                - generic [ref=e112]: 0.00 SAR
+                - generic [ref=e113]:
+                  - generic [ref=e114]: 0 فاتورة
+                  - generic [ref=e115]: •
+                  - generic [ref=e116]:
+                    - img [ref=e117]
+                    - text: 0%
+            - generic [ref=e120]:
+              - generic [ref=e121]: هذا الأسبوع
+              - generic [ref=e122]:
+                - generic [ref=e123]:
+                  - generic [ref=e124]: هذا الأسبوع
+                  - img [ref=e125]
+                - generic [ref=e129]: 0.00 SAR
+                - generic [ref=e130]:
+                  - generic [ref=e131]: 0 فاتورة
+                  - generic [ref=e132]: •
+                  - generic [ref=e133]:
+                    - img [ref=e134]
+                    - text: 0%
+            - generic [ref=e137]:
+              - generic [ref=e138]: هذا الشهر
+              - generic [ref=e139]:
+                - generic [ref=e140]:
+                  - generic [ref=e141]: هذا الشهر
+                  - img [ref=e142]
+                - generic [ref=e146]: 0.00 SAR
+                - generic [ref=e147]:
+                  - generic [ref=e148]: 0 فاتورة
+                  - generic [ref=e149]: •
+                  - generic [ref=e150]:
+                    - img [ref=e151]
+                    - text: 0%
+          - generic [ref=e154]:
+            - generic [ref=e155]:
+              - generic [ref=e156]: الملخص المالي
+              - generic [ref=e157]:
+                - heading "📊 الملخص المالي" [level=3] [ref=e158]:
+                  - generic [ref=e159]: 📊
+                  - text: الملخص المالي
+                - generic [ref=e163]: جاري التحميل......
+            - generic [ref=e167]:
+              - generic [ref=e168]: الإجراءات السريعة
+              - generic [ref=e169]:
+                - button "المبيعات" [ref=e170] [cursor=pointer]:
+                  - img [ref=e172]
+                  - text: المبيعات
+                - button "المخزون" [ref=e175] [cursor=pointer]:
+                  - img [ref=e177]
+                  - text: المخزون
+                - button "المحاسبة" [ref=e181] [cursor=pointer]:
+                  - img [ref=e183]
+                  - text: المحاسبة
+                - button "الموارد البشرية" [ref=e186] [cursor=pointer]:
+                  - img [ref=e188]
+                  - text: الموارد البشرية
+          - generic [ref=e193]:
+            - generic [ref=e194]:
+              - generic [ref=e195]: أفضل المنتجات
+              - generic [ref=e196]:
+                - heading "🏆 أفضل المنتجات" [level=3] [ref=e197]:
+                  - generic [ref=e198]: 🏆
+                  - text: أفضل المنتجات
+                - generic [ref=e202]: جاري التحميل......
+            - generic [ref=e205]:
+              - generic [ref=e206]: المخزون المنخفض
+              - generic [ref=e207]:
+                - img [ref=e208]
+                - generic [ref=e212]: لا توجد منتجات منخفضة المخزون
+          - generic [ref=e215]: التدفق النقدي (آخر 30 يوم)
+          - generic [ref=e220]:
+            - generic [ref=e221]: المهام المعلقة
+            - generic [ref=e222]:
+              - img [ref=e223]
+              - generic [ref=e226]: لا توجد مهام معلقة

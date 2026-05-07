@@ -1,19 +1,28 @@
 
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { FileText, BarChart2, X, Trash2, AlertTriangle, PlayCircle, Lock, TrendingUp, TrendingDown } from 'lucide-react';
+import { FileText, BarChart2, X, Trash2, AlertTriangle, PlayCircle, Lock, TrendingUp, TrendingDown, Wallet, PieChart, Calendar, MoreVertical, Filter } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
-import { budgetsAPI } from '../../utils/api';
+import { budgetsAPI, costCentersAPI } from '../../utils/api';
+import { useBranch } from '../../context/BranchContext';
+import { useTheme } from '../../context/ThemeContext';
 import { formatNumber } from '../../utils/format';
 import { getCurrency } from '../../utils/auth';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
-import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
-import { PageLoading } from '../../components/common/LoadingStates'
+import { PageLoading } from '../../components/common/LoadingStates';
+import { formatDate } from '../../utils/dateUtils';
+
+const STATUS_BADGE = {
+    draft: { bg: '#f3f4f6', color: '#6b7280', icon: FileText },
+    active: { bg: '#dcfce7', color: '#16a34a', icon: PlayCircle },
+    closed: { bg: '#fef3c7', color: '#d97706', icon: Lock },
+};
 
 const Budgets = () => {
     const { t } = useTranslation();
+    const { darkMode } = useTheme();
     const navigate = useNavigate();
     const [budgets, setBudgets] = useState([]);
     const [loading, setLoading] = useState(true);
@@ -21,26 +30,50 @@ const Budgets = () => {
     const [actionLoading, setActionLoading] = useState(false);
     const [stats, setStats] = useState(null);
     const [alerts, setAlerts] = useState([]);
+    const [openMenu, setOpenMenu] = useState(null);
+    const [costCenters, setCostCenters] = useState([]);
+    const [selectedCC, setSelectedCC] = useState('');
     const currency = getCurrency() || '';
+    const { currentBranch } = useBranch();
 
     const [formData, setFormData] = useState({
         name: '',
-        start_date: '',
-        end_date: '',
-        description: ''
+        start_date: new Date().toISOString().split('T')[0],
+        end_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        description: '',
+        cost_center_id: ''
     });
 
     useEffect(() => {
+        fetchCostCenters();
+    }, [currentBranch]);
+
+    const fetchCostCenters = async () => {
+        try {
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const res = await costCentersAPI.list(params);
+            setCostCenters(res.data || []);
+        } catch (err) {
+            console.error(err);
+        }
+    };
+
+    useEffect(() => {
         fetchAll();
-    }, []);
+    }, [currentBranch, selectedCC]);
 
     const fetchAll = async () => {
         setLoading(true);
         try {
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            if (selectedCC) params.cost_center_id = selectedCC;
+            params.threshold = 80;
             const [budgetsRes, statsRes, alertsRes] = await Promise.all([
-                budgetsAPI.list(),
-                budgetsAPI.getStats().catch(() => ({ data: null })),
-                budgetsAPI.getOverrunAlerts(80).catch(() => ({ data: [] }))
+                budgetsAPI.list(params),
+                budgetsAPI.getStats(params).catch(() => ({ data: null })),
+                budgetsAPI.getOverrunAlerts(params).catch(() => ({ data: [] }))
             ]);
             setBudgets(budgetsRes.data || []);
             setStats(statsRes.data);
@@ -56,10 +89,14 @@ const Budgets = () => {
         e.preventDefault();
         setActionLoading(true);
         try {
-            await budgetsAPI.create(formData);
+            const payload = { ...formData };
+            if (currentBranch?.id) payload.branch_id = currentBranch.id;
+            if (payload.cost_center_id) payload.cost_center_id = parseInt(payload.cost_center_id);
+            else delete payload.cost_center_id;
+            await budgetsAPI.create(payload);
             toast.success(t('common.success'));
             setIsModalOpen(false);
-            setFormData({ name: '', start_date: '', end_date: '', description: '' });
+            setFormData({ name: '', start_date: new Date().toISOString().split('T')[0], end_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], description: '', cost_center_id: '' });
             fetchAll();
         } catch (error) {
             console.error(error);
@@ -76,7 +113,6 @@ const Budgets = () => {
             toast.success(t('common.success'));
             fetchAll();
         } catch (error) {
-            console.error(error);
             toast.error(t('common.error'));
         }
     };
@@ -102,20 +138,6 @@ const Budgets = () => {
         }
     };
 
-    const getStatusBadge = (status) => {
-        const styles = {
-            draft: { bg: '#f3f4f6', color: '#6b7280', icon: '📝' },
-            active: { bg: '#dcfce7', color: '#16a34a', icon: '✅' },
-            closed: { bg: '#fef3c7', color: '#d97706', icon: '🔒' }
-        };
-        const s = styles[status] || styles.draft;
-        return (
-            <span style={{ background: s.bg, color: s.color, padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '600' }}>
-                {s.icon} {t(`accounting.budgets.status_${status}`, status)}
-            </span>
-        );
-    };
-
     return (
         <div className="workspace fade-in">
             <div className="workspace-header">
@@ -134,250 +156,293 @@ const Budgets = () => {
                 </div>
             </div>
 
+            {/* Filters */}
+            <div style={{ display: 'flex', gap: '12px', marginBottom: '20px', alignItems: 'center' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <Filter size={16} style={{ color: 'var(--text-muted)' }} />
+                    <select
+                        className="form-input"
+                        value={selectedCC}
+                        onChange={(e) => setSelectedCC(e.target.value)}
+                        style={{ minWidth: '200px', padding: '8px 12px', fontSize: '13px' }}
+                    >
+                        <option value="">{t('accounting.budgets.all_cost_centers', 'جميع مراكز التكلفة')}</option>
+                        {costCenters.map(cc => (
+                            <option key={cc.id} value={cc.id}>{cc.center_name}</option>
+                        ))}
+                    </select>
+                </div>
+            </div>
+
             {/* Stats Cards */}
             {stats && (
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '24px' }}>
-                    <div className="card p-3 text-center">
-                        <BarChart2 size={24} className="text-primary mb-2" />
-                        <div className="small text-muted">{t('accounting.budgets.stats.total')}</div>
-                        <div className="fw-bold fs-4">{stats.total_budgets}</div>
-                        <div className="small text-muted">
-                            {t('accounting.budgets.stats.active')}: {stats.active_count} | {t('accounting.budgets.stats.draft')}: {stats.draft_count}
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '20px' }}>
+                    <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: '#eff6ff', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <PieChart size={20} style={{ color: '#2563eb' }} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('accounting.budgets.stats.total')}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-main)' }}>{stats.total_budgets}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>
+                                {t('accounting.budgets.stats.active')}: {stats.active_count} | {t('accounting.budgets.stats.draft')}: {stats.draft_count}
+                            </div>
                         </div>
                     </div>
-                    <div className="card p-3 text-center">
-                        <TrendingUp size={24} className="text-primary mb-2" />
-                        <div className="small text-muted">{t('accounting.budgets.stats.total_planned')}</div>
-                        <div className="fw-bold fs-4">{formatNumber(stats.total_planned)}</div>
-                        <div className="small text-muted">{currency}</div>
-                    </div>
-                    <div className="card p-3 text-center">
-                        <TrendingDown size={24} className="text-warning mb-2" />
-                        <div className="small text-muted">{t('accounting.budgets.stats.total_actual')}</div>
-                        <div className="fw-bold fs-4">{formatNumber(stats.total_actual)}</div>
-                        <div className="small text-muted">{currency} • {stats.overall_usage_pct}%</div>
-                    </div>
-                    <div className="card p-3 text-center">
-                        <AlertTriangle size={24} className={stats.overrun_items_count > 0 ? 'text-danger mb-2' : 'text-success mb-2'} />
-                        <div className="small text-muted">{t('accounting.budgets.stats.overruns')}</div>
-                        <div className={`fw-bold fs-4 ${stats.overrun_items_count > 0 ? 'text-danger' : 'text-success'}`}>
-                            {stats.overrun_items_count}
+                    <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <TrendingUp size={20} style={{ color: '#16a34a' }} />
                         </div>
-                        <div className="small text-muted">{stats.overrun_items_count > 0 ? `⚠️ ${t('common.warning')}` : `✅ ${t('common.good')}`}</div>
+                        <div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('accounting.budgets.stats.total_planned')}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-main)' }}>{formatNumber(stats.total_planned)}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{currency}</div>
+                        </div>
+                    </div>
+                    <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: '#fffbeb', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <TrendingDown size={20} style={{ color: '#d97706' }} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('accounting.budgets.stats.total_actual')}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: 'var(--text-main)' }}>{formatNumber(stats.total_actual)}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{currency} • {stats.overall_usage_pct}%</div>
+                        </div>
+                    </div>
+                    <div className="card" style={{ padding: '16px', display: 'flex', alignItems: 'center', gap: '14px' }}>
+                        <div style={{ width: '42px', height: '42px', borderRadius: '10px', background: stats.overrun_items_count > 0 ? '#fef2f2' : '#f0fdf4', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                            <AlertTriangle size={20} style={{ color: stats.overrun_items_count > 0 ? '#ef4444' : '#16a34a' }} />
+                        </div>
+                        <div>
+                            <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('accounting.budgets.stats.overruns')}</div>
+                            <div style={{ fontSize: '20px', fontWeight: 700, color: stats.overrun_items_count > 0 ? '#ef4444' : '#16a34a' }}>{stats.overrun_items_count}</div>
+                            <div style={{ fontSize: '11px', color: 'var(--text-muted)' }}>{stats.overrun_items_count > 0 ? t('common.warning') : t('common.good')}</div>
+                        </div>
                     </div>
                 </div>
             )}
 
             {/* Overrun Alerts */}
             {alerts.length > 0 && (
-                <div className="card card-compact mb-4" style={{ borderLeft: '4px solid #dc2626' }}>
-                    <div >
-                        <h6 className="fw-bold mb-3 d-flex align-items-center gap-2">
-                            <AlertTriangle size={18} className="text-danger" />
-                            {t('accounting.budgets.overrun_alerts')}
-                            <span className="badge bg-danger rounded-pill">{alerts.length}</span>
-                        </h6>
-                        <div className="table-responsive" style={{ maxHeight: '200px', overflowY: 'auto' }}>
-                            <table className="data-table" style={{ fontSize: '13px' }}>
-                                <thead>
-                                    <tr>
-                                        <th>{t('accounting.budgets.budget_name')}</th>
-                                        <th>{t('accounting.account_name')}</th>
-                                        <th className="text-center">{t('reports.budget_vs_actual.planned')}</th>
-                                        <th className="text-center">{t('reports.budget_vs_actual.actual')}</th>
-                                        <th className="text-center">{t('accounting.budgets.usage')}</th>
-                                        <th className="text-center">{t('common.status_title')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {alerts.slice(0, 10).map((alert, idx) => (
-                                        <tr key={idx}>
-                                            <td className="fw-medium">{alert.budget_name}</td>
-                                            <td>
-                                                <span className="text-primary me-1">{alert.account_number}</span>
-                                                {alert.account_name}
-                                            </td>
-                                            <td className="text-center">{formatNumber(alert.planned)}</td>
-                                            <td className="text-center">{formatNumber(alert.actual)}</td>
-                                            <td className="text-center">
-                                                <div className="d-flex align-items-center gap-1 justify-content-center">
-                                                    <div style={{ width: '60px', height: '5px', background: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
-                                                        <div style={{
-                                                            height: '100%',
-                                                            width: `${Math.min(alert.usage_percentage, 100)}%`,
-                                                            background: alert.severity === 'critical' ? '#dc2626' : alert.severity === 'danger' ? '#f97316' : '#f59e0b',
-                                                            borderRadius: '3px'
-                                                        }} />
-                                                    </div>
-                                                    <span style={{ fontSize: '11px', fontWeight: '600' }}>{alert.usage_percentage}%</span>
+                <div className="card card-flush" style={{ marginBottom: '20px', borderLeft: '4px solid #ef4444' }}>
+                    <div style={{ padding: '16px 20px', display: 'flex', alignItems: 'center', gap: '10px', borderBottom: '1px solid var(--border-color)' }}>
+                        <AlertTriangle size={18} style={{ color: '#ef4444' }} />
+                        <span style={{ fontSize: '14px', fontWeight: 700, color: 'var(--text-main)' }}>{t('accounting.budgets.overrun_alerts')}</span>
+                        <span style={{ background: '#fef2f2', color: '#ef4444', padding: '2px 8px', borderRadius: '10px', fontSize: '11px', fontWeight: 700 }}>{alerts.length}</span>
+                    </div>
+                    <div style={{ overflowX: 'auto' }}>
+                        <table className="data-table" style={{ fontSize: '13px' }}>
+                            <thead>
+                                <tr>
+                                    <th>{t('accounting.budgets.budget_name')}</th>
+                                    <th>{t('accounting.account_name')}</th>
+                                    <th style={{ textAlign: 'center' }}>{t('reports.budget_vs_actual.planned')}</th>
+                                    <th style={{ textAlign: 'center' }}>{t('reports.budget_vs_actual.actual')}</th>
+                                    <th style={{ textAlign: 'center' }}>{t('accounting.budgets.usage')}</th>
+                                    <th style={{ textAlign: 'center' }}>{t('common.status_title')}</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {alerts.slice(0, 10).map((alert, idx) => (
+                                    <tr key={idx}>
+                                        <td style={{ fontWeight: 600 }}>{alert.budget_name}</td>
+                                        <td>
+                                            <span style={{ color: 'var(--primary)', marginRight: '6px' }}>{alert.account_number}</span>
+                                            {alert.account_name}
+                                        </td>
+                                        <td style={{ textAlign: 'center' }}>{formatNumber(alert.planned)}</td>
+                                        <td style={{ textAlign: 'center' }}>{formatNumber(alert.actual)}</td>
+                                        <td style={{ textAlign: 'center' }}>
+                                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', justifyContent: 'center' }}>
+                                                <div style={{ width: '50px', height: '4px', background: '#f3f4f6', borderRadius: '2px', overflow: 'hidden' }}>
+                                                    <div style={{
+                                                        height: '100%',
+                                                        width: `${Math.min(alert.usage_percentage, 100)}%`,
+                                                        background: alert.severity === 'critical' ? '#dc2626' : alert.severity === 'danger' ? '#f97316' : '#f59e0b',
+                                                        borderRadius: '2px',
+                                                    }} />
                                                 </div>
-                                            </td>
-                                            <td className="text-center">
-                                                <span className={`badge ${alert.severity === 'critical' ? 'bg-danger' : 'bg-warning text-dark'}`} style={{ fontSize: '11px' }}>
-                                                    {alert.severity === 'critical' ? '🔴 ' + t('accounting.budgets.over_budget') :
-                                                     alert.severity === 'danger' ? '🟠 ' + t('accounting.budgets.near_limit') :
-                                                     '🟡 ' + t('accounting.budgets.warning_label')}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                                                <span style={{ fontSize: '11px', fontWeight: 700 }}>{alert.usage_percentage}%</span>
+                                            </div>
+                                        </td>
+                                        <td style={{ textAlign: 'center' }}>
+                                            <span style={{
+                                                padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 600,
+                                                background: alert.severity === 'critical' ? '#fef2f2' : '#fffbeb',
+                                                color: alert.severity === 'critical' ? '#dc2626' : '#d97706',
+                                            }}>
+                                                {alert.severity === 'critical' ? t('accounting.budgets.over_budget') :
+                                                 alert.severity === 'danger' ? t('accounting.budgets.near_limit') :
+                                                 t('accounting.budgets.warning_label')}
+                                            </span>
+                                        </td>
+                                    </tr>
+                                ))}
+                            </tbody>
+                        </table>
                     </div>
                 </div>
             )}
 
             {/* Budget Cards */}
-            <div className="row g-4">
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(300px, 1fr))', gap: '16px' }}>
                 {loading ? (
-                    <div className="col-12 text-center p-5">
+                    <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 20px' }}>
                         <PageLoading />
                     </div>
                 ) : budgets.length === 0 ? (
-                    <div className="col-12 text-center p-5">
-                        <div style={{ fontSize: '48px', marginBottom: '16px' }}>📊</div>
-                        <h3 className="h5 text-muted">{t('common.no_data')}</h3>
+                    <div style={{ gridColumn: '1 / -1', textAlign: 'center', padding: '40px 20px' }}>
+                        <Wallet size={40} style={{ color: 'var(--text-muted)', marginBottom: '12px' }} />
+                        <h3 style={{ fontSize: '16px', fontWeight: 600, color: 'var(--text-muted)', margin: 0 }}>{t('common.no_data')}</h3>
                     </div>
                 ) : (
-                    budgets.map((budget) => (
-                        <div key={budget.id} className="col-md-6 col-lg-4">
-                            <div className="card h-100" style={{ transition: 'transform 0.2s' }}>
-                                <div >
-                                    <div className="d-flex justify-content-between align-items-start mb-3">
-                                        <h5 className="fw-bold mb-0" style={{ color: 'var(--text-primary)' }}>{budget.name}</h5>
-                                        {getStatusBadge(budget.status)}
+                    budgets.map((budget) => {
+                        const status = budget.status || 'draft';
+                        const badge = STATUS_BADGE[status] || STATUS_BADGE.draft;
+                        const StatusIcon = badge.icon;
+
+                        return (
+                            <div key={budget.id} className="card" style={{ padding: '20px', position: 'relative' }}>
+                                {/* Header */}
+                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: '12px' }}>
+                                    <div style={{ flex: 1, minWidth: 0 }}>
+                                        <h3 style={{ fontSize: '15px', fontWeight: 700, color: 'var(--text-main)', margin: '0 0 6px 0', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                            {budget.name}
+                                        </h3>
+                                        <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px', padding: '3px 10px', borderRadius: '20px', fontSize: '11px', fontWeight: 600, background: badge.bg, color: badge.color }}>
+                                            <StatusIcon size={12} />
+                                            {t(`accounting.budgets.status_${status}`, status)}
+                                        </span>
                                     </div>
-
-                                    {budget.description && (
-                                        <p className="text-muted small mb-3">{budget.description}</p>
-                                    )}
-
-                                    <div className="row g-2 mb-3">
-                                        <div className="col-6">
-                                            <div className="text-muted small mb-1">{t('common.start_date')}</div>
-                                            <div className="fw-semibold small" style={{ color: 'var(--text-primary)' }}>{formatDate(budget.start_date)}</div>
-                                        </div>
-                                        <div className="col-6">
-                                            <div className="text-muted small mb-1">{t('common.end_date')}</div>
-                                            <div className="fw-semibold small" style={{ color: 'var(--text-primary)' }}>{formatDate(budget.end_date)}</div>
-                                        </div>
-                                    </div>
-
-                                    <div className="d-flex gap-2 mb-2">
+                                    <div style={{ position: 'relative' }}>
                                         <button
-                                            className="btn btn-outline-primary btn-sm flex-grow-1"
-                                            onClick={() => navigate(`/accounting/budgets/${budget.id}/items`)}
-                                            style={{ borderRadius: '8px' }}
+                                            onClick={() => setOpenMenu(openMenu === budget.id ? null : budget.id)}
+                                            style={{ width: '28px', height: '28px', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'transparent', border: 'none', borderRadius: '6px', cursor: 'pointer', color: 'var(--text-muted)' }}
                                         >
-                                            <FileText size={14} className="me-1" />
-                                            {t('accounting.budgets.items')}
+                                            <MoreVertical size={14} />
                                         </button>
-                                        <button
-                                            className="btn btn-primary btn-sm flex-grow-1"
-                                            onClick={() => navigate(`/accounting/budgets/${budget.id}/report`)}
-                                            style={{ borderRadius: '8px' }}
-                                        >
-                                            <BarChart2 size={14} className="me-1" />
-                                            {t('accounting.budgets.report')}
-                                        </button>
-                                    </div>
-
-                                    <div className="d-flex gap-2 align-items-center mt-2">
-                                        {budget.status === 'draft' && (
-                                            <button
-                                                className="btn btn-outline-success btn-sm flex-grow-1"
-                                                onClick={() => handleActivate(budget.id)}
-                                                style={{ borderRadius: '8px', fontSize: '12px' }}
-                                            >
-                                                <PlayCircle size={14} className="me-1" />
-                                                {t('accounting.budgets.activate')}
-                                            </button>
-                                        )}
-                                        {budget.status === 'active' && (
-                                            <button
-                                                className="btn btn-outline-warning btn-sm flex-grow-1"
-                                                onClick={() => handleClose(budget.id)}
-                                                style={{ borderRadius: '8px', fontSize: '12px' }}
-                                            >
-                                                <Lock size={14} className="me-1" />
-                                                {t('accounting.budgets.close_budget')}
-                                            </button>
-                                        )}
-                                        {budget.status !== 'active' && (
-                                            <button
-                                                onClick={() => handleDelete(budget.id)}
-                                                className="btn btn-outline-danger btn-sm"
-                                                style={{ borderRadius: '8px', fontSize: '12px' }}
-                                                title={t('common.delete')}
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
+                                        {openMenu === budget.id && (
+                                            <div style={{ position: 'absolute', top: '100%', left: 0, zIndex: 50, minWidth: '150px', background: darkMode ? 'var(--bg-card)' : '#fff', border: '1px solid var(--border-color)', borderRadius: '8px', boxShadow: '0 4px 12px rgba(0,0,0,0.1)', padding: '4px' }}>
+                                                {status === 'draft' && (
+                                                    <button onClick={() => { handleActivate(budget.id); setOpenMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '8px 10px', fontSize: '12px', fontWeight: 500, color: '#16a34a', background: 'transparent', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                    >
+                                                        <PlayCircle size={13} /> {t('accounting.budgets.activate')}
+                                                    </button>
+                                                )}
+                                                {status === 'active' && (
+                                                    <button onClick={() => { handleClose(budget.id); setOpenMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '8px 10px', fontSize: '12px', fontWeight: 500, color: '#d97706', background: 'transparent', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                    >
+                                                        <Lock size={13} /> {t('accounting.budgets.close_budget')}
+                                                    </button>
+                                                )}
+                                                {status !== 'active' && (
+                                                    <button onClick={() => { handleDelete(budget.id); setOpenMenu(null); }} style={{ display: 'flex', alignItems: 'center', gap: '8px', width: '100%', padding: '8px 10px', fontSize: '12px', fontWeight: 500, color: '#ef4444', background: 'transparent', border: 'none', borderRadius: '6px', cursor: 'pointer' }}
+                                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
+                                                        onMouseLeave={e => e.currentTarget.style.background = 'transparent'}
+                                                    >
+                                                        <Trash2 size={13} /> {t('common.delete')}
+                                                    </button>
+                                                )}
+                                            </div>
                                         )}
                                     </div>
                                 </div>
+
+                                {/* Description */}
+                                {budget.description && (
+                                    <p style={{ fontSize: '12px', color: 'var(--text-muted)', margin: '0 0 12px 0', lineHeight: 1.4, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        {budget.description}
+                                    </p>
+                                )}
+
+                                {/* Date range */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', padding: '8px 10px', background: darkMode ? 'var(--bg-secondary)' : '#f8fafc', borderRadius: '8px', marginBottom: '14px' }}>
+                                    <Calendar size={13} style={{ color: 'var(--primary)', flexShrink: 0 }} />
+                                    <div style={{ flex: 1, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        <div style={{ textAlign: 'center' }}>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500 }}>{t('common.start_date')}</div>
+                                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-main)' }}>{formatDate(budget.start_date)}</div>
+                                        </div>
+                                        <div style={{ width: '20px', height: '1px', background: 'var(--border-color)' }} />
+                                        <div style={{ textAlign: 'center' }}>
+                                            <div style={{ fontSize: '10px', color: 'var(--text-muted)', fontWeight: 500 }}>{t('common.end_date')}</div>
+                                            <div style={{ fontSize: '12px', fontWeight: 600, color: 'var(--text-main)' }}>{formatDate(budget.end_date)}</div>
+                                        </div>
+                                    </div>
+                                </div>
+
+                                {/* Action buttons */}
+                                <div style={{ display: 'flex', gap: '8px' }}>
+                                    <button
+                                        className="btn btn-outline-primary btn-sm"
+                                        onClick={() => navigate(`/accounting/budgets/${budget.id}/items`)}
+                                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', borderRadius: '8px', fontSize: '12px' }}
+                                    >
+                                        <FileText size={13} /> {t('accounting.budgets.items')}
+                                    </button>
+                                    <button
+                                        className="btn btn-primary btn-sm"
+                                        onClick={() => navigate(`/accounting/budgets/${budget.id}/report`)}
+                                        style={{ flex: 1, display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '4px', borderRadius: '8px', fontSize: '12px' }}
+                                    >
+                                        <BarChart2 size={13} /> {t('accounting.budgets.report')}
+                                    </button>
+                                </div>
                             </div>
-                        </div>
-                    ))
+                        );
+                    })
                 )}
             </div>
 
             {/* Create Modal */}
             {isModalOpen && (
                 <div className="modal-overlay">
-                    <div className="modal-content" style={{ maxWidth: '500px', borderRadius: '16px' }}>
-                        <div className="modal-header d-flex justify-content-between align-items-center" style={{ padding: '20px 24px', borderBottom: '1px solid #eee' }}>
-                            <h5 className="modal-title fw-bold" style={{ fontSize: '18px' }}>{t('accounting.budgets.new')}</h5>
-                            <button type="button" className="btn-icon bg-transparent" onClick={() => setIsModalOpen(false)}>
-                                <X size={20} className="text-muted" />
+                    <div className="modal-content" style={{ maxWidth: '500px' }}>
+                        <div className="modal-header">
+                            <h2 className="modal-title">{t('accounting.budgets.new')}</h2>
+                            <button type="button" className="btn-icon" style={{ background: 'transparent' }} onClick={() => setIsModalOpen(false)}>
+                                <X size={20} />
                             </button>
                         </div>
                         <form onSubmit={handleCreate}>
-                            <div className="modal-body p-4">
-                                <div className="form-group mb-4">
-                                    <label className="form-label mb-2">{t('common.name')}</label>
-                                    <input
-                                        type="text" className="form-input" required
-                                        value={formData.name}
-                                        onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                                        placeholder={t('accounting.budgets.name_placeholder')}
-                                    />
+                            <div className="modal-body">
+                                <div className="form-group">
+                                    <label className="form-label">{t('common.name')}</label>
+                                    <input type="text" className="form-input" required value={formData.name} onChange={(e) => setFormData({ ...formData, name: e.target.value })} placeholder={t('accounting.budgets.name_placeholder')} />
                                 </div>
-                                <div className="row g-3">
-                                    <div className="col-6 mb-4">
-                                        <CustomDatePicker
-                                            label={t('common.start_date')}
-                                            selected={formatDate(formData.start_date)}
-                                            onChange={(dateStr) => setFormData({ ...formData, start_date: dateStr })}
-                                            required
-                                        />
+                                <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '12px' }}>
+                                    <div className="form-group">
+                                        <CustomDatePicker label={t('common.start_date')} selected={formData.start_date ? new Date(formData.start_date + 'T00:00:00') : null} onChange={(dateStr) => setFormData({ ...formData, start_date: dateStr })} required />
                                     </div>
-                                    <div className="col-6 mb-4">
-                                        <CustomDatePicker
-                                            label={t('common.end_date')}
-                                            selected={formatDate(formData.end_date)}
-                                            onChange={(dateStr) => setFormData({ ...formData, end_date: dateStr })}
-                                            required
-                                        />
+                                    <div className="form-group">
+                                        <CustomDatePicker label={t('common.end_date')} selected={formData.end_date ? new Date(formData.end_date + 'T00:00:00') : null} onChange={(dateStr) => setFormData({ ...formData, end_date: dateStr })} required />
                                     </div>
                                 </div>
-                                <div className="form-group mb-0">
-                                    <label className="form-label mb-2">{t('common.description')}</label>
-                                    <textarea
-                                        className="form-input" rows="3"
-                                        value={formData.description}
-                                        onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                                        placeholder={t('common.notes')}
-                                    ></textarea>
+                                <div className="form-group">
+                                    <label className="form-label">{t('common.description')}</label>
+                                    <textarea className="form-input" rows="3" value={formData.description} onChange={(e) => setFormData({ ...formData, description: e.target.value })} placeholder={t('common.notes')}></textarea>
+                                </div>
+                                <div className="form-group">
+                                    <label className="form-label">{t('accounting.cost_center', 'مركز التكلفة')}</label>
+                                    <select
+                                        className="form-input"
+                                        value={formData.cost_center_id}
+                                        onChange={(e) => setFormData({ ...formData, cost_center_id: e.target.value })}
+                                    >
+                                        <option value="">{t('common.none', 'بدون')}</option>
+                                        {costCenters.map(cc => (
+                                            <option key={cc.id} value={cc.id}>{cc.center_name}</option>
+                                        ))}
+                                    </select>
                                 </div>
                             </div>
-                            <div className="modal-footer p-3 bg-light border-top-0 d-flex justify-content-end gap-2" style={{ borderRadius: '0 0 16px 16px' }}>
-                                <button type="button" className="btn btn-secondary" onClick={() => setIsModalOpen(false)}>
-                                    {t('common.cancel')}
-                                </button>
-                                <button type="submit" className="btn btn-primary px-4" disabled={actionLoading}>
-                                    {actionLoading ? t('common.saving') : t('common.save')}
-                                </button>
+                            <div className="modal-footer">
+                                <button type="button" className="btn" style={{ background: 'var(--bg-hover)' }} onClick={() => setIsModalOpen(false)}>{t('common.cancel')}</button>
+                                <button type="submit" className="btn btn-primary" disabled={actionLoading}>{actionLoading ? t('common.saving') : t('common.save')}</button>
                             </div>
                         </form>
                     </div>

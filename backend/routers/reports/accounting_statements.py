@@ -15,33 +15,59 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
 
-def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None) -> Decimal:
+
+def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None, branch_param="branch_id"):
+    if branch_scope is not None:
+        return branch_scope_filter_from_scope(branch_scope, column, params, branch_param=branch_param)
+    if branch_id:
+        params[branch_param] = branch_id
+        return f"AND {column} = :{branch_param}"
+    return ""
+
+def _get_rate_map(db):
+    """Get exchange rate map: currency_code -> rate to base currency."""
+    base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
+    base_currency = base_cur_row[0] if base_cur_row else "SAR"
+    rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
+    rate_map = {r[0]: float(r[1]) for r in rate_rows}
+    rate_map[base_currency] = 1.0
+    return rate_map, base_currency
+
+
+def _convert_amount(amount, currency, rate_map):
+    """Convert amount from account currency to base currency."""
+    rate = rate_map.get(currency, 1.0)
+    return float(Decimal(str(amount)) * Decimal(str(rate)))
+
+
+def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None, branch_scope=None) -> Decimal:
     """
     Single source of truth for net income = Revenue − Expense from journal_lines.
     Used by both the income statement and the balance sheet (retained earnings).
+    All amounts converted to base currency.
     """
-    branch_filter = ""
+    rate_map, base_currency = _get_rate_map(db)
+
     params: dict = {"as_of": end_date}
     if start_date:
         date_clause = "je.entry_date BETWEEN :start AND :as_of"
         params["start"] = start_date
     else:
         date_clause = "je.entry_date <= :as_of"
-    if branch_id:
-        branch_filter = "AND je.branch_id = :branch"
-        params["branch"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope, branch_param="branch")
 
-    row = db.execute(text(f"""
+    rows = db.execute(text(f"""
         SELECT
-            COALESCE(SUM(CASE WHEN a.account_type = 'revenue' THEN jl.credit - jl.debit ELSE 0 END), 0) -
-            COALESCE(SUM(CASE WHEN a.account_type = 'expense'  THEN jl.debit - jl.credit ELSE 0 END), 0) AS net_income
+            a.account_type, a.currency,
+            COALESCE(SUM(jl.credit), 0) as total_credit,
+            COALESCE(SUM(jl.debit), 0) as total_debit
         FROM journal_lines jl
         JOIN journal_entries je ON jl.journal_entry_id = je.id
         JOIN accounts a ON jl.account_id = a.id
@@ -49,8 +75,18 @@ def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None
           AND {date_clause}
           AND je.status = 'posted'
           {branch_filter}
-    """), params).fetchone()
-    return Decimal(str(row.net_income)) if row else Decimal("0")
+        GROUP BY a.account_type, a.currency
+    """), params).fetchall()
+
+    net_income = Decimal("0")
+    for row in rows:
+        # Amounts are already in base currency (SAR) — no FX conversion needed
+        if row.account_type == 'revenue':
+            net_income += Decimal(str(row.total_credit)) - Decimal(str(row.total_debit))
+        elif row.account_type == 'expense':
+            net_income -= Decimal(str(row.total_debit)) - Decimal(str(row.total_credit))
+
+    return net_income
 
 # --- Schemas ---
 class TrialBalanceItem(BaseModel):
@@ -87,19 +123,24 @@ class FinancialStatementResponse(BaseModel):
     data: List[FinancialStatementItem]
     total: Decimal
 
-def _get_trial_balance_data(db, start_date, end_date, branch_id=None):
+def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_scope=None):
     """Internal helper: returns trial balance data for programmatic use."""
     params = {"start": start_date, "end": end_date}
     
-    branch_filter = ""
-    if branch_id:
-        branch_filter = "AND je.branch_id = :branch_id"
-        params["branch_id"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
+
+    # Get base currency and exchange rates
+    base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
+    base_currency = base_cur_row[0] if base_cur_row else "SAR"
+    rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
+    rate_map = {r[0]: float(r[1]) for r in rate_rows}
+    rate_map[base_currency] = 1.0
 
     query = f"""
         WITH opening_bal AS (
             SELECT 
                 jl.account_id,
+                -- debit/credit are already in base currency (SAR)
                 SUM(jl.debit) as open_debit,
                 SUM(jl.credit) as open_credit
             FROM journal_lines jl
@@ -134,6 +175,7 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None):
         ORDER BY a.account_number
     """
     
+    params["base_cur"] = base_currency
     result = db.execute(text(query), params).fetchall()
     
     data = []
@@ -142,7 +184,7 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None):
     for row in result:
         acct_type = row.account_type
         
-        # Net opening balance by account type direction
+        # Amounts are already converted to base currency in the SQL query
         raw_open_dr = Decimal(str(row.open_debit))
         raw_open_cr = Decimal(str(row.open_credit))
         open_net = raw_open_dr - raw_open_cr  # positive = debit balance
@@ -153,22 +195,17 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None):
             o_dr = open_net if open_net > 0 else 0
             o_cr = abs(open_net) if open_net < 0 else 0
         else:
-            # For credit-normal accounts, flip: negative net means debit excess
-            o_cr = abs(open_net) if open_net < 0 else 0  # credit-normal: net < 0 means excess debit
+            o_cr = abs(open_net) if open_net < 0 else 0
             o_dr = open_net if open_net > 0 else 0
-            # Actually: credit-normal: positive credit balance = credit - debit > 0 → net < 0
-            # Recalculate: for credit-normal, opening = CR - DR (if positive → show in CR column)
             credit_net = raw_open_cr - raw_open_dr
             o_cr = credit_net if credit_net > 0 else 0
             o_dr = abs(credit_net) if credit_net < 0 else 0
         
-        # Period movement
+        # Period movement (already converted)
         p_dr = Decimal(str(row.period_debit))
         p_cr = Decimal(str(row.period_credit))
         
         # Closing
-        # Standard Accounting logic: (DR_open + DR_period) - (CR_open + CR_period)
-        # If positive -> Closing DR. If negative -> Closing CR.
         net_total = (o_dr + p_dr) - (o_cr + p_cr)
         
         c_dr = net_total if net_total > 0 else 0
@@ -217,48 +254,57 @@ def get_trial_balance(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب ميزان المراجعة لفترة محددة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
             start_date = date.today().replace(day=1, month=1) # Start of year
         if not end_date:
             end_date = date.today()
-        return _get_trial_balance_data(db, start_date, end_date, branch_id)
+        return _get_trial_balance_data(db, start_date, end_date, branch_scope=branch_scope)
     finally:
         db.close()
 
-def _get_profit_loss_data(db, start_date, end_date, branch_id=None):
-    """Internal helper to get profit loss data"""
+def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope=None):
+    """Internal helper to get profit loss data — amounts in base currency"""
+    rate_map, base_currency = _get_rate_map(db)
     params = {"start": start_date, "end": end_date}
-    branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
-    if branch_id: params["branch_id"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
 
-    # Fetch all accounts and their period balances
+    # Fetch all accounts and their period balances (with currency)
     query = f"""
         SELECT 
-            a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id,
-            COALESCE(SUM(CASE 
-                WHEN a.account_type = 'expense' THEN jl.debit - jl.credit
-                WHEN a.account_type = 'revenue' THEN jl.credit - jl.debit
-                ELSE 0 
-            END), 0) as balance
+            a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency,
+            COALESCE(SUM(jl.debit), 0) as total_debit,
+            COALESCE(SUM(jl.credit), 0) as total_credit
         FROM accounts a
         LEFT JOIN journal_lines jl ON a.id = jl.account_id
         LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
         WHERE a.account_type IN ('revenue', 'expense')
         AND (je.id IS NULL OR (je.entry_date BETWEEN :start AND :end AND je.status = 'posted' {branch_filter}))
-        GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id
+        GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency
         ORDER BY a.account_number
     """
     
-    accounts = [dict(row._mapping) for row in db.execute(text(query), params).fetchall()]
+    rows = db.execute(text(query), params).fetchall()
+    
+    accounts = []
+    for row in rows:
+        d = dict(row._mapping)
+        # Amounts are already in base currency (SAR) — no FX conversion needed
+        if d['account_type'] == 'expense':
+            d['balance'] = Decimal(str(d['total_debit'])) - Decimal(str(d['total_credit']))
+        else:  # revenue
+            d['balance'] = Decimal(str(d['total_credit'])) - Decimal(str(d['total_debit']))
+        d.pop('total_debit', None)
+        d.pop('total_credit', None)
+        d.pop('currency', None)
+        accounts.append(d)
     
     # Build hierarchy
     account_map = {a["id"]: {**a, "children": [], "level": 0} for a in accounts}
     roots = []
     
-    # First pass: map children and find roots
     for acc_id, acc in account_map.items():
         parent_id = acc["parent_id"]
         if parent_id and parent_id in account_map:
@@ -266,7 +312,6 @@ def _get_profit_loss_data(db, start_date, end_date, branch_id=None):
         else:
             roots.append(acc)
     
-    # Second pass: Roll up balances and set levels
     def rollup(node, level):
         node["level"] = level
         child_sum = 0
@@ -284,13 +329,13 @@ def _get_profit_loss_data(db, start_date, end_date, branch_id=None):
         elif root["account_type"] == 'expense':
             total_expense += bal
     
-    # Net Income = Revenue - Expenses (not Revenue + Expenses)
     net_income = total_revenue - total_expense
         
     return {
         "period": {"start": start_date, "end": end_date},
         "data": roots,
-        "total": net_income
+        "total": net_income,
+        "base_currency": base_currency
     }
 
 @router.get("/accounting/profit-loss", response_model=FinancialStatementResponse, dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))])
@@ -302,7 +347,7 @@ def get_profit_loss(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب قائمة الدخل (الأرباح والخسائر) الهيكلية"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
@@ -310,35 +355,46 @@ def get_profit_loss(
         if not end_date:
             end_date = date.today()
             
-        return _get_profit_loss_data(db, start_date, end_date, branch_id)
+        return _get_profit_loss_data(db, start_date, end_date, branch_scope=branch_scope)
     finally:
         db.close()
 
-def _get_balance_sheet_data(db, as_of_date, branch_id=None):
-    """Internal helper to get balance sheet data"""
-    branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
+def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None):
+    """Internal helper to get balance sheet data — amounts in base currency"""
+    rate_map, base_currency = _get_rate_map(db)
     params = {"as_of": as_of_date}
-    if branch_id: params["branch_id"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
 
     # Balance Sheet follows Assets = Liabilities + Equity
-    # We sum all transactions from the beginning of time up to as_of_date
     query = f"""
         SELECT 
-            a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id,
-            COALESCE(SUM(CASE 
-                WHEN a.account_type IN ('asset', 'expense') THEN jl.debit - jl.credit
-                ELSE jl.credit - jl.debit
-            END), 0) as balance
+            a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency,
+            COALESCE(SUM(jl.debit), 0) as total_debit,
+            COALESCE(SUM(jl.credit), 0) as total_credit
         FROM accounts a
         LEFT JOIN journal_lines jl ON a.id = jl.account_id
         LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
         WHERE a.account_type IN ('asset', 'liability', 'equity')
         AND (je.id IS NULL OR (je.entry_date <= :as_of AND je.status = 'posted' {branch_filter}))
-        GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id
+        GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency
         ORDER BY a.account_number
     """
     
-    accounts = [dict(row._mapping) for row in db.execute(text(query), params).fetchall()]
+    rows = db.execute(text(query), params).fetchall()
+    
+    accounts = []
+    for row in rows:
+        d = dict(row._mapping)
+        # Journal line amounts (debit/credit) are already in base currency (SAR).
+        # Do NOT multiply by exchange_rate — that would double-convert.
+        if d['account_type'] in ('asset', 'expense'):
+            d['balance'] = Decimal(str(d['total_debit'])) - Decimal(str(d['total_credit']))
+        else:  # liability, equity, revenue
+            d['balance'] = Decimal(str(d['total_credit'])) - Decimal(str(d['total_debit']))
+        d.pop('total_debit', None)
+        d.pop('total_credit', None)
+        d.pop('currency', None)
+        accounts.append(d)
     
     # Build hierarchy
     account_map = {a["id"]: {**a, "children": [], "level": 0} for a in accounts}
@@ -365,7 +421,7 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None):
     # Calculate Retained Earnings (Net Income) using the shared helper
     # This ensures Balance Sheet balances: Assets = Liabilities + Equity + Retained Earnings
     retained_earnings = _compute_net_income_from_gl(
-        db, end_date=as_of_date, branch_id=branch_id,
+        db, end_date=as_of_date, branch_id=branch_id, branch_scope=branch_scope,
     )
     
     # Add retained earnings as a virtual equity item
@@ -405,17 +461,17 @@ def get_balance_sheet(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب الميزانية العمومية الهيكلية"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not as_of_date:
             as_of_date = date.today()
             
-        return _get_balance_sheet_data(db, as_of_date, branch_id)
+        return _get_balance_sheet_data(db, as_of_date, branch_scope=branch_scope)
     finally:
         db.close()
 
-def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=None):
+def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=None, branch_scope=None):
     """Internal helper: returns general ledger data for programmatic use."""
     # ── Recursive CTE: collect selected account + all descendants ──
     tree_rows = db.execute(text("""
@@ -441,11 +497,8 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
     # Build safe IN clause (account_ids are integers from DB — safe)
     ids_in = ",".join(str(i) for i in account_ids)
 
-    branch_filter = ""
     params: dict = {"start": start_date, "end": end_date}
-    if branch_id:
-        branch_filter = "AND je.branch_id = :branch_id"
-        params["branch_id"] = branch_id
+    branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
 
     # Compute opening balance across all descendant accounts
     opening_query = f"""
@@ -530,14 +583,14 @@ def get_general_ledger(
     if not account_id:
         raise HTTPException(status_code=400, detail="يجب تحديد الحساب")
     
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not start_date:
             start_date = date.today().replace(day=1, month=1)
         if not end_date:
             end_date = date.today()
-        return _get_general_ledger_data(db, account_id, start_date, end_date, branch_id)
+        return _get_general_ledger_data(db, account_id, start_date, end_date, branch_scope=branch_scope)
     finally:
         db.close()
 

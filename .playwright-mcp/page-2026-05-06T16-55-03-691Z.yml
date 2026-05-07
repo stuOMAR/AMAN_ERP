@@ -1,0 +1,138 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e566]:
+    - navigation "القائمة الرئيسية" [ref=e567]:
+      - generic [ref=e568]:
+        - button "إغلاق القائمة" [expanded] [ref=e569] [cursor=pointer]:
+          - img [ref=e570]
+        - generic [ref=e572]: AMAN ERP
+      - navigation [ref=e573]:
+        - link "🏠 مساحة العمل" [ref=e574] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e576]: 🏠
+          - generic [ref=e577]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e578] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e580]: 📊
+          - generic [ref=e581]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e582] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e584]: 🏗️
+          - generic [ref=e585]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e586] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e588]: 🏦
+          - generic [ref=e589]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e590] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e592]: 💰
+          - generic [ref=e593]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e594] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e596]: 🏪
+          - generic [ref=e597]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e598] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e600]: 🛒
+          - generic [ref=e601]: المشتريات
+        - link "📦 المخزون" [ref=e602] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e604]: 📦
+          - generic [ref=e605]: المخزون
+        - link "🏭 التصنيع" [ref=e606] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e608]: 🏭
+          - generic [ref=e609]: التصنيع
+        - link "📐 المشاريع" [ref=e610] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e612]: 📐
+          - generic [ref=e613]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e614] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e616]: 🤝
+          - generic [ref=e617]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e618] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e620]: 🔧
+          - generic [ref=e621]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e622] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e624]: 💸
+          - generic [ref=e625]: المصروفات
+        - link "🧾 الضرائب" [ref=e626] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e628]: 🧾
+          - generic [ref=e629]: الضرائب
+        - link "✅ الاعتمادات" [ref=e630] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e632]: ✅
+          - generic [ref=e633]: الاعتمادات
+        - link "📈 التقارير" [ref=e634] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e636]: 📈
+          - generic [ref=e637]: التقارير
+        - link "👥 الموارد البشرية" [ref=e638] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e640]: 👥
+          - generic [ref=e641]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e642] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e644]: ⚙️
+          - generic [ref=e645]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e646] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e648]: 🎯
+          - generic [ref=e649]: إدارة المؤشرات
+    - generic [ref=e650]:
+      - banner [ref=e651]:
+        - generic [ref=e653] [cursor=pointer]:
+          - generic [ref=e654]:
+            - img [ref=e655]
+            - text: بحث...
+          - generic [ref=e658]: Ctrl+K
+        - generic [ref=e659]:
+          - button "EN" [ref=e660] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e661] [cursor=pointer]:
+            - img [ref=e662]
+          - button "🏢 مصر - فرع القاهرة EGP ▼" [ref=e669] [cursor=pointer]:
+            - generic [ref=e670]:
+              - text: 🏢
+              - generic [ref=e671]: مصر - فرع القاهرة
+            - generic [ref=e672]: EGP
+            - generic [ref=e673]: ▼
+          - button "🔔" [ref=e675] [cursor=pointer]
+          - generic [ref=e677] [cursor=pointer]:
+            - generic [ref=e678]:
+              - generic [ref=e679]: omar
+              - generic [ref=e680]: "ID: 1a134155"
+            - generic [ref=e681]: O
+      - main [ref=e683]:
+        - generic [ref=e684]:
+          - generic [ref=e685]:
+            - button "العودة" [ref=e686] [cursor=pointer]:
+              - img [ref=e687]
+            - generic [ref=e689]:
+              - generic [ref=e690]:
+                - heading "شجرة مجموعة الكيانات" [level=1] [ref=e691]
+                - paragraph [ref=e692]: إدارة التسلسل الهرمي للكيانات بين الشركات
+              - button "إضافة كيان" [ref=e724] [cursor=pointer]
+          - generic [ref=e726]:
+            - generic [ref=e728]:
+              - generic [ref=e729]:
+                - strong [ref=e730]: الفرع الرئيسي - الرياض
+                - generic [ref=e731]: المستوى 0
+                - text: SAR
+              - generic [ref=e732]: 1a134155-ruh
+            - generic [ref=e735]:
+              - generic [ref=e736]:
+                - strong [ref=e737]: الإمارات - فرع دبي
+                - generic [ref=e738]: المستوى 1
+                - text: EGP
+              - generic [ref=e739]: 1a134155-dxb
+            - generic [ref=e742]:
+              - generic [ref=e743]:
+                - strong [ref=e744]: مصر - فرع القاهرة
+                - generic [ref=e745]: المستوى 1
+                - text: SAR
+              - generic [ref=e746]: 1a134155-cai

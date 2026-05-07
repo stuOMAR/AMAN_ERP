@@ -2,6 +2,8 @@ import React, { useState } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
+import { getCurrency } from '../../utils/auth'
 import { TrendingUp, TrendingDown, DollarSign, AlertTriangle } from 'lucide-react'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
@@ -9,6 +11,8 @@ import BackButton from '../../components/common/BackButton';
 export default function ClosingEntries() {
     const { t, i18n } = useTranslation()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
+    const currency = getCurrency()
 
     const now = new Date()
     const [startDate, setStartDate] = useState(`${now.getFullYear()}-01-01`)
@@ -23,7 +27,9 @@ export default function ClosingEntries() {
         setLoading(true)
         setResult(null)
         try {
-            const res = await accountingAPI.previewClosingEntries({ start_date: startDate, end_date: endDate })
+            const params = { start_date: startDate, end_date: endDate };
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const res = await accountingAPI.previewClosingEntries(params)
             setPreview(res.data)
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
@@ -45,6 +51,7 @@ export default function ClosingEntries() {
                 income_summary_account_id: preview?.income_summary_account?.id,
                 retained_earnings_account_id: preview?.retained_earnings_account?.id,
             }
+            if (currentBranch?.id) payload.branch_id = currentBranch.id;
             const res = await accountingAPI.generateClosingEntries(payload)
             setResult(res.data)
             showToast(res.data.message || (t('closing.generated')), 'success')
@@ -119,16 +126,16 @@ export default function ClosingEntries() {
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '16px', marginBottom: '16px' }}>
                             <div className="p-3 bg-light rounded text-center">
                                 <div className="small text-muted">{t('closing.total_revenue')}</div>
-                                <div className="fw-bold text-success fs-5">{formatNum(result.total_revenue)}</div>
+                                <div className="fw-bold text-success fs-5">{formatNum(result.total_revenue)} <small>{currency}</small></div>
                             </div>
                             <div className="p-3 bg-light rounded text-center">
                                 <div className="small text-muted">{t('closing.total_expenses')}</div>
-                                <div className="fw-bold text-danger fs-5">{formatNum(result.total_expense)}</div>
+                                <div className="fw-bold text-danger fs-5">{formatNum(result.total_expense)} <small>{currency}</small></div>
                             </div>
                             <div className="p-3 bg-light rounded text-center">
                                 <div className="small text-muted">{t('closing.net_income')}</div>
                                 <div className={`fw-bold fs-5 ${result.net_income >= 0 ? 'text-success' : 'text-danger'}`}>
-                                    {formatNum(result.net_income)}
+                                    {formatNum(result.net_income)} <small>{currency}</small>
                                 </div>
                             </div>
                         </div>
@@ -148,20 +155,20 @@ export default function ClosingEntries() {
                         <div className="card p-3 text-center border-success">
                             <TrendingUp size={24} className="text-success mb-2" />
                             <div className="small text-muted">{t('closing.total_revenue')}</div>
-                            <div className="fw-bold fs-4 text-success">{formatNum(preview.total_revenue)}</div>
+                            <div className="fw-bold fs-4 text-success">{formatNum(preview.total_revenue)} <small>{currency}</small></div>
                             <div className="small text-muted">{preview.revenues.length} {t('closing.accounts_count')}</div>
                         </div>
                         <div className="card p-3 text-center border-danger">
                             <TrendingDown size={24} className="text-danger mb-2" />
                             <div className="small text-muted">{t('closing.total_expenses')}</div>
-                            <div className="fw-bold fs-4 text-danger">{formatNum(preview.total_expense)}</div>
+                            <div className="fw-bold fs-4 text-danger">{formatNum(preview.total_expense)} <small>{currency}</small></div>
                             <div className="small text-muted">{preview.expenses.length} {t('closing.accounts_count')}</div>
                         </div>
                         <div className={`card p-3 text-center border-${preview.net_income >= 0 ? 'success' : 'warning'}`}>
                             {preview.net_income >= 0 ? <DollarSign size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-warning mb-2" />}
                             <div className="small text-muted">{t('closing.net_income')}</div>
                             <div className={`fw-bold fs-4 ${preview.net_income >= 0 ? 'text-success' : 'text-warning'}`}>
-                                {formatNum(preview.net_income)}
+                                {formatNum(preview.net_income)} <small>{currency}</small>
                             </div>
                             <div className="small text-muted">
                                 {preview.net_income >= 0 ? (t('closing.profit')) : (t('closing.loss'))}

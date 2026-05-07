@@ -1,0 +1,257 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 مصر - فرع القاهرة EGP ▼" [ref=e110] [cursor=pointer]:
+            - generic [ref=e111]:
+              - text: 🏢
+              - generic [ref=e112]: مصر - فرع القاهرة
+            - generic [ref=e113]: EGP
+            - generic [ref=e114]: ▼
+          - button "🔔" [ref=e116] [cursor=pointer]
+          - generic [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]:
+              - generic [ref=e120]: omar
+              - generic [ref=e121]: "ID: 1a134155"
+            - generic [ref=e122]: O
+      - main [ref=e124]:
+        - generic [ref=e392]:
+          - generic [ref=e393]:
+            - generic [ref=e394]:
+              - button "العودة" [ref=e395] [cursor=pointer]:
+                - img [ref=e396]
+              - heading "بنود الميزانية" [level=1] [ref=e399]
+            - button "حفظ" [ref=e401] [cursor=pointer]:
+              - img [ref=e402]
+              - text: حفظ
+          - generic [ref=e406]:
+            - generic [ref=e409]:
+              - generic [ref=e410]:
+                - img
+              - textbox "بحث..." [ref=e411]
+            - table [ref=e414]:
+              - rowgroup [ref=e415]:
+                - row "رقم الحساب اسم الحساب نوع الحساب المبلغ الشهري (EGP) المبلغ السنوي (EGP)" [ref=e416]:
+                  - columnheader "رقم الحساب" [ref=e417]
+                  - columnheader "اسم الحساب" [ref=e418]
+                  - columnheader "نوع الحساب" [ref=e419]
+                  - columnheader "المبلغ الشهري (EGP)" [ref=e420]:
+                    - text: المبلغ الشهري
+                    - generic [ref=e421]: (EGP)
+                  - columnheader "المبلغ السنوي (EGP)" [ref=e422]:
+                    - text: المبلغ السنوي
+                    - generic [ref=e423]: (EGP)
+              - rowgroup [ref=e424]:
+                - row "1 الأصول أصول" [ref=e425]:
+                  - cell "1" [ref=e426]:
+                    - code [ref=e427]: "1"
+                  - cell "الأصول" [ref=e428]:
+                    - generic [ref=e429]: الأصول
+                  - cell "أصول" [ref=e430]
+                  - cell [ref=e431]:
+                    - spinbutton [ref=e433]
+                  - cell [ref=e434]:
+                    - spinbutton [ref=e436]
+                - row "11 أصول متداولة أصول" [ref=e437]:
+                  - cell "11" [ref=e438]:
+                    - code [ref=e439]: "11"
+                  - cell "أصول متداولة" [ref=e440]:
+                    - generic [ref=e441]: أصول متداولة
+                  - cell "أصول" [ref=e442]
+                  - cell [ref=e443]:
+                    - spinbutton [ref=e445]
+                  - cell [ref=e446]:
+                    - spinbutton [ref=e448]
+                - row "1101 النقد وما في حكمه أصول" [ref=e449]:
+                  - cell "1101" [ref=e450]:
+                    - code [ref=e451]: "1101"
+                  - cell "النقد وما في حكمه" [ref=e452]:
+                    - generic [ref=e453]: النقد وما في حكمه
+                  - cell "أصول" [ref=e454]
+                  - cell [ref=e455]:
+                    - spinbutton [ref=e457]
+                  - cell [ref=e458]:
+                    - spinbutton [ref=e460]
+                - row "11010102 صندوق القاهرة - EGP أصول" [ref=e461]:
+                  - cell "11010102" [ref=e462]:
+                    - code [ref=e463]: "11010102"
+                  - cell "صندوق القاهرة - EGP" [ref=e464]:
+                    - generic [ref=e465]: صندوق القاهرة - EGP
+                  - cell "أصول" [ref=e466]
+                  - cell [ref=e467]:
+                    - spinbutton [ref=e469]
+                  - cell [ref=e470]:
+                    - spinbutton [ref=e472]
+                - row "11010202 بنك القاهرة - EGP أصول" [ref=e473]:
+                  - cell "11010202" [ref=e474]:
+                    - code [ref=e475]: "11010202"
+                  - cell "بنك القاهرة - EGP" [ref=e476]:
+                    - generic [ref=e477]: بنك القاهرة - EGP
+                  - cell "أصول" [ref=e478]
+                  - cell [ref=e479]:
+                    - spinbutton [ref=e481]
+                  - cell [ref=e482]:
+                    - spinbutton [ref=e484]
+                - row "1102 العملاء والذمم المدينة أصول" [ref=e485]:
+                  - cell "1102" [ref=e486]:
+                    - code [ref=e487]: "1102"
+                  - cell "العملاء والذمم المدينة" [ref=e488]:
+                    - generic [ref=e489]: العملاء والذمم المدينة
+                  - cell "أصول" [ref=e490]
+                  - cell [ref=e491]:
+                    - spinbutton [ref=e493]
+                  - cell [ref=e494]:
+                    - spinbutton [ref=e496]
+                - row "1103 المخزون أصول" [ref=e497]:
+                  - cell "1103" [ref=e498]:
+                    - code [ref=e499]: "1103"
+                  - cell "المخزون" [ref=e500]:
+                    - generic [ref=e501]: المخزون
+                  - cell "أصول" [ref=e502]
+                  - cell [ref=e503]:
+                    - spinbutton [ref=e505]
+                  - cell [ref=e506]:
+                    - spinbutton [ref=e508]
+                - row "110301 مخزون المواد الأولية أصول" [ref=e509]:
+                  - cell "110301" [ref=e510]:
+                    - code [ref=e511]: "110301"
+                  - cell "مخزون المواد الأولية" [ref=e512]:
+                    - generic [ref=e513]: مخزون المواد الأولية
+                  - cell "أصول" [ref=e514]
+                  - cell [ref=e515]:
+                    - spinbutton [ref=e517]
+                  - cell [ref=e518]:
+                    - spinbutton [ref=e520]
+                - row "1107 ضريبة المدخلات أصول" [ref=e521]:
+                  - cell "1107" [ref=e522]:
+                    - code [ref=e523]: "1107"
+                  - cell "ضريبة المدخلات" [ref=e524]:
+                    - generic [ref=e525]: ضريبة المدخلات
+                  - cell "أصول" [ref=e526]
+                  - cell [ref=e527]:
+                    - spinbutton [ref=e529]
+                  - cell [ref=e530]:
+                    - spinbutton [ref=e532]
+                - row "4 الإيرادات إيرادات" [ref=e533]:
+                  - cell "4" [ref=e534]:
+                    - code [ref=e535]: "4"
+                  - cell "الإيرادات" [ref=e536]:
+                    - generic [ref=e537]: الإيرادات
+                  - cell "إيرادات" [ref=e538]
+                  - cell [ref=e539]:
+                    - spinbutton [ref=e541]
+                  - cell [ref=e542]:
+                    - spinbutton [ref=e544]
+                - row "41 إيرادات التشغيل إيرادات" [ref=e545]:
+                  - cell "41" [ref=e546]:
+                    - code [ref=e547]: "41"
+                  - cell "إيرادات التشغيل" [ref=e548]:
+                    - generic [ref=e549]: إيرادات التشغيل
+                  - cell "إيرادات" [ref=e550]
+                  - cell [ref=e551]:
+                    - spinbutton [ref=e553]
+                  - cell [ref=e554]:
+                    - spinbutton [ref=e556]
+                - row "4101 مبيعات البضائع إيرادات" [ref=e557]:
+                  - cell "4101" [ref=e558]:
+                    - code [ref=e559]: "4101"
+                  - cell "مبيعات البضائع" [ref=e560]:
+                    - generic [ref=e561]: مبيعات البضائع
+                  - cell "إيرادات" [ref=e562]
+                  - cell [ref=e563]:
+                    - spinbutton [ref=e565]
+                  - cell [ref=e566]:
+                    - spinbutton [ref=e568]

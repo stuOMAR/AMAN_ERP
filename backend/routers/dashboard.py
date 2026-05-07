@@ -5,12 +5,15 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 import logging
 from datetime import date, timedelta, datetime
+from decimal import Decimal, InvalidOperation
 import json
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, validate_branch_access, check_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
+from utils.accounting import get_base_currency
+from utils.currency_display import branch_amount_base_sql, document_amount_base_sql
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 import time
 
@@ -23,6 +26,118 @@ _system_stats_cache = {
     "last_updated": 0
 }
 CACHE_DURATION = 600 # 10 minutes for system-wide stats
+
+
+def _cash_status(cash, monthly_expenses) -> str:
+    """T10.2 #114 — burn-rate aware cash status.
+
+    Returns:
+      ``Critical``   if cash <= 0
+      ``Low``        if cash < 1× monthly_expenses (under one month runway)
+      ``Adequate``   if cash < 3× monthly_expenses
+      ``Healthy``    otherwise
+    """
+    try:
+        cash = Decimal(str(cash or 0))
+        monthly_expenses = Decimal(str(monthly_expenses or 0))
+    except (TypeError, ValueError, InvalidOperation):
+        return "Unknown"
+    if cash <= 0:
+        return "Critical"
+    if monthly_expenses <= 0:
+        return "Healthy"
+    if cash < monthly_expenses:
+        return "Low"
+    if cash < monthly_expenses * 3:
+        return "Adequate"
+    return "Healthy"
+
+
+def _dashboard_display_currency(db, branch_scope: dict) -> dict:
+    """Resolve the currency for branch-scoped dashboard values.
+
+    Aggregated dashboard numbers are computed in company base currency. For a
+    single-currency branch scope, convert those base amounts to that branch
+    currency. For mixed-currency scopes, keep base currency.
+    """
+    base_currency = (get_base_currency(db) or "SAR").upper()
+
+    branch_id = branch_scope.get("branch_id") if branch_scope else None
+    branch_ids = branch_scope.get("branch_ids") if branch_scope else None
+
+    currencies = []
+    if branch_id:
+        row = db.execute(text("SELECT default_currency FROM branches WHERE id = :id"), {"id": branch_id}).fetchone()
+        if row and row.default_currency:
+            currencies = [str(row.default_currency).upper()]
+    elif branch_ids is not None:
+        if branch_ids:
+            rows = db.execute(
+                text("SELECT DISTINCT COALESCE(default_currency, :base) AS currency FROM branches WHERE id = ANY(:ids)"),
+                {"ids": branch_ids, "base": base_currency},
+            ).fetchall()
+            currencies = [str(row.currency).upper() for row in rows if row.currency]
+    else:
+        rows = db.execute(
+            text("SELECT DISTINCT COALESCE(default_currency, :base) AS currency FROM branches WHERE is_active = TRUE"),
+            {"base": base_currency},
+        ).fetchall()
+        currencies = [str(row.currency).upper() for row in rows if row.currency]
+
+    unique = sorted(set(currencies))
+    display_currency = unique[0] if len(unique) == 1 else base_currency
+    if len(unique) > 1:
+        default_filter = ""
+        params = {"base": base_currency}
+        if branch_ids is not None:
+            if branch_ids:
+                default_filter = "AND id = ANY(:ids)"
+                params["ids"] = branch_ids
+            else:
+                default_filter = "AND 1=0"
+        row = db.execute(text(f"""
+            SELECT COALESCE(default_currency, :base) AS currency
+            FROM branches
+            WHERE is_active = TRUE {default_filter}
+            ORDER BY is_default DESC, id ASC
+            LIMIT 1
+        """), params).fetchone()
+        if row and row.currency:
+            display_currency = str(row.currency).upper()
+    rate = Decimal("1")
+    if display_currency != base_currency:
+        rate_row = db.execute(
+            text("SELECT NULLIF(current_rate, 0) AS rate FROM currencies WHERE code = :code LIMIT 1"),
+            {"code": display_currency},
+        ).fetchone()
+        try:
+            rate = Decimal(str(rate_row.rate if rate_row and rate_row.rate else 1))
+        except (InvalidOperation, TypeError, ValueError):
+            rate = Decimal("1")
+        if rate <= 0:
+            rate = Decimal("1")
+
+    return {
+        "currency": display_currency,
+        "base_currency": base_currency,
+        "rate": rate,
+        "is_multi_currency_scope": len(unique) > 1,
+    }
+
+
+def _base_to_display_amount(value, display_meta: dict) -> float:
+    amount = Decimal(str(value or 0))
+    rate = display_meta.get("rate") or Decimal("1")
+    if display_meta.get("currency") != display_meta.get("base_currency") and rate:
+        amount = amount / rate
+    return float(amount)
+
+
+def _convert_stats_from_base(stats: dict, display_meta: dict) -> dict:
+    converted = dict(stats)
+    for key in ("sales", "cogs", "expenses", "profit", "cash"):
+        converted[key] = _base_to_display_amount(converted.get(key), display_meta)
+    return converted
 
 
 def get_user_company_id(user):
@@ -40,8 +155,7 @@ def get_dashboard_stats(
     current_user: dict = Depends(get_current_user)
 ):
     """احصائيات رئيسية للوحة التحكم مع مقارنة بالفترة السابقة"""
-    # Enforce branch restriction
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     
     db = get_db_connection(get_user_company_id(current_user))
     try:
@@ -52,11 +166,8 @@ def get_dashboard_stats(
         prev_month_start = prev_month_end.replace(day=1)
         
         # Shared filters
-        branch_filter_cash = ""
         params_cash = {}
-        if branch_id:
-            branch_filter_cash = "AND branch_id = :branch_id"
-            params_cash["branch_id"] = branch_id
+        warehouse_branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params_cash)
 
         def calculate_period_stats(start_dt, end_dt=None):
             """Calculate sales/profit/cash for the period.
@@ -68,27 +179,32 @@ def get_dashboard_stats(
             """
             # Unified gross sales (T3.1)
             sales_data = get_sales_total(
-                db, start_date=start_dt, end_date=end_dt, branch_id=branch_id
+                db,
+                start_date=start_dt,
+                end_date=end_dt,
+                branch_id=branch_scope["branch_id"],
+                branch_ids=branch_scope["branch_ids"],
             )
             total_sales = float(sales_data["total_sales"])
 
             # GL-based profit breakdown
             gl = get_gl_profit_breakdown(
-                db, start_date=start_dt, end_date=end_dt, branch_id=branch_id
+                db,
+                start_date=start_dt,
+                end_date=end_dt,
+                branch_id=branch_scope["branch_id"],
+                branch_ids=branch_scope["branch_ids"],
             )
             total_expenses = float(gl["operating_expenses"])
             cogs = float(gl["cogs"])
             net_profit = float(gl["net_profit"])
 
-            # Cash balance: branch- and period-aware via journal lines, or
-            # cumulative via accounts.balance for the company-wide all-time
-            # view (kept fast for the dashboard summary card).
-            branch_filter_je = ""
+            # Cash balance follows treasury ownership. A branch-owned bank/cash
+            # account belongs to its treasury branch even if an old JE line was
+            # posted with a different journal branch.
             date_filter_je = ""
             params_gl: dict = {}
-            if branch_id:
-                branch_filter_je = "AND je.branch_id = :branch_id"
-                params_gl["branch_id"] = branch_id
+            branch_filter_treasury = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", params_gl)
             if start_dt:
                 date_filter_je += " AND je.entry_date >= :start_dt"
                 params_gl["start_dt"] = start_dt
@@ -96,29 +212,26 @@ def get_dashboard_stats(
                 date_filter_je += " AND je.entry_date <= :end_dt"
                 params_gl["end_dt"] = end_dt
 
-            treasury_ids = [row[0] for row in db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE is_active = true")).fetchall() if row[0]]
-            legacy_ids = [row[0] for row in db.execute(text("SELECT id FROM accounts WHERE account_code LIKE 'BOX%' OR account_code LIKE 'BNK%'")).fetchall()]
-            all_cash_ids = list(set(treasury_ids + legacy_ids))
-
-            cash_balance = 0
-            if all_cash_ids:
-                # SEC-003: parameterized IN clause
-                id_params = {f"cid_{i}": cid for i, cid in enumerate(all_cash_ids)}
-                id_placeholders = ", ".join(f":cid_{i}" for i in range(len(all_cash_ids)))
-                if branch_id or start_dt or end_dt:
-                    cash_balance = db.execute(text(f"""
-                        SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
-                        FROM journal_lines jl
-                        JOIN journal_entries je ON jl.journal_entry_id = je.id
-                        JOIN accounts a ON jl.account_id = a.id
-                        WHERE a.id IN ({id_placeholders})
-                        {branch_filter_je} {date_filter_je}
-                    """), {**params_gl, **id_params}).scalar() or 0
-                else:
-                    cash_balance = db.execute(text(f"""
-                        SELECT COALESCE(SUM(balance), 0) FROM accounts
-                        WHERE id IN ({id_placeholders})
-                    """), id_params).scalar() or 0
+            if start_dt or end_dt:
+                cash_balance = db.execute(text(f"""
+                    SELECT COALESCE(SUM(COALESCE(jl.debit, 0) - COALESCE(jl.credit, 0)), 0)
+                    FROM treasury_accounts ta
+                    JOIN journal_lines jl ON jl.account_id = ta.gl_account_id
+                    JOIN journal_entries je ON jl.journal_entry_id = je.id
+                    WHERE ta.is_active = TRUE
+                      AND ta.gl_account_id IS NOT NULL
+                      AND je.status = 'posted'
+                      {branch_filter_treasury} {date_filter_je}
+                """), params_gl).scalar() or 0
+            else:
+                cash_balance = db.execute(text(f"""
+                    SELECT COALESCE(SUM(COALESCE(a.balance, 0)), 0)
+                    FROM treasury_accounts ta
+                    JOIN accounts a ON a.id = ta.gl_account_id
+                    WHERE ta.is_active = TRUE
+                      AND ta.gl_account_id IS NOT NULL
+                      {branch_filter_treasury}
+                """), params_gl).scalar() or 0
 
             return {
                 "sales": total_sales,
@@ -133,39 +246,52 @@ def get_dashboard_stats(
         # Calculate current and previous period stats for trend comparison only
         current = calculate_period_stats(this_month_start)
         previous = calculate_period_stats(prev_month_start, prev_month_end)
+        display_meta = _dashboard_display_currency(db, branch_scope)
+        cumulative = _convert_stats_from_base(cumulative, display_meta)
+        current = _convert_stats_from_base(current, display_meta)
+        previous = _convert_stats_from_base(previous, display_meta)
         
         # Trends
+        # T10.2 #115: previously hard-clamped at ±999% so the dashboard
+        # silently hid catastrophic moves. We now keep ``change`` as the
+        # display-friendly clamp AND emit ``change_unbounded`` as the
+        # raw value so power users / alerts can detect outliers.
         def calc_change(curr, prev):
             if prev == 0:
                 return 0 if curr == 0 else 100
             pct = ((curr - prev) / abs(prev)) * 100
-            # Cap extreme percentages at ±999%
-            pct = max(-999, min(999, pct))
             return round(pct, 1)
 
-        # Cash on Hand (GL-linked snapshot)
-        cash_sql = f"""
-            SELECT COALESCE(SUM(a.balance), 0) 
-            FROM treasury_accounts ta
-            JOIN accounts a ON ta.gl_account_id = a.id
-            WHERE ta.is_active = TRUE {branch_filter_cash.replace('branch_id =', 'ta.branch_id =')}
-        """
-        cash = db.execute(text(cash_sql), params_cash).scalar() or 0
+        def calc_change_clamped(curr, prev):
+            pct = calc_change(curr, prev)
+            return max(-999.0, min(999.0, pct))
 
-        # Low Stock
+        # T10.2 #112 — a duplicate cash query lived here that summed
+        # ``a.balance`` directly from ``treasury_accounts JOIN accounts``.
+        # Its result was never used (the response below returns
+        # ``cumulative["cash"]``) and produced a different number than
+        # the GL-linked snapshot. Removed; the GL-linked value is the
+        # single source of truth.
+
+        # Low Stock — P1 #99: available stock = on-hand minus reserved.
+        # Reservations (sales orders, transfers, manufacturing) are not
+        # truly available, so they must be subtracted before comparing
+        # to the reorder level.
         low_stock_query = f"""
             SELECT COUNT(*) FROM (
                 SELECT p.id
                 FROM products p
                 LEFT JOIN (
-                    SELECT product_id, SUM(quantity) as total_qty 
+                    SELECT product_id,
+                           SUM(quantity) as total_qty,
+                           SUM(COALESCE(reserved_quantity, 0)) as reserved
                     FROM inventory inv
-                    {"JOIN warehouses w ON inv.warehouse_id = w.id" if branch_id else ""}
-                    {"WHERE w.branch_id = :branch_id" if branch_id else ""}
+                    {"JOIN warehouses w ON inv.warehouse_id = w.id" if warehouse_branch_filter else ""}
+                    {warehouse_branch_filter.replace('AND', 'WHERE', 1) if warehouse_branch_filter else ""}
                     GROUP BY product_id
-                ) inv_sum ON p.id = inv_sum.product_id
-                WHERE (COALESCE(inv_sum.total_qty, 0) <= p.reorder_level)
-                OR (p.reorder_level = 0 AND COALESCE(inv_sum.total_qty, 0) <= 5)
+                                ) inv_sum ON p.id = inv_sum.product_id
+                                WHERE p.reorder_level > 0
+                                    AND (COALESCE(inv_sum.total_qty, 0) - COALESCE(inv_sum.reserved, 0) <= p.reorder_level)
             ) as low_stock_items
         """
         low_stock = db.execute(text(low_stock_query), params_cash).scalar() or 0
@@ -175,26 +301,36 @@ def get_dashboard_stats(
             SELECT p.product_name, SUM(inv.reserved_quantity) as reserved_qty
             FROM inventory inv
             JOIN products p ON inv.product_id = p.id
-            {"JOIN warehouses w ON inv.warehouse_id = w.id" if branch_id else ""}
+            {"JOIN warehouses w ON inv.warehouse_id = w.id" if warehouse_branch_filter else ""}
             WHERE inv.reserved_quantity > 0
-            {"AND w.branch_id = :branch_id" if branch_id else ""}
+            {warehouse_branch_filter}
             GROUP BY p.product_name
         """
         reserved_stock_data = db.execute(text(reserved_stock_query), params_cash).fetchall()
         reserved_stock_list = [{"product": row.product_name, "quantity": int(row.reserved_qty)} for row in reserved_stock_data]
 
         return {
+            "display_currency": display_meta["currency"],
+            "base_currency": display_meta["base_currency"],
+            "is_multi_currency_scope": display_meta["is_multi_currency_scope"],
             "sales": cumulative["sales"],
-            "sales_change": calc_change(current["sales"], previous["sales"]),
+            "sales_change": calc_change_clamped(current["sales"], previous["sales"]),
+            "sales_change_unbounded": calc_change(current["sales"], previous["sales"]),
             "expenses": cumulative["expenses"],
-            "expenses_change": calc_change(current["expenses"], previous["expenses"]),
+            "expenses_change": calc_change_clamped(current["expenses"], previous["expenses"]),
+            "expenses_change_unbounded": calc_change(current["expenses"], previous["expenses"]),
             "cogs": cumulative.get("cogs", 0),
             "profit": cumulative["profit"],
             "net_profit": cumulative["profit"],
-            "profit_change": calc_change(current["profit"], previous["profit"]),
+            "profit_change": calc_change_clamped(current["profit"], previous["profit"]),
+            "profit_change_unbounded": calc_change(current["profit"], previous["profit"]),
             "cash": cumulative["cash"],
-            "cash_change": calc_change(current["cash"], previous["cash"]),
-            "cash_status": "Stable" if cumulative["cash"] > 0 else "Low",
+            "cash_change": calc_change_clamped(current["cash"], previous["cash"]),
+            # T10.2 #114: cash_status now reflects burn-rate, not just
+            # "any positive balance". Compares the cash balance against
+            # the most recent month's expenses to detect impending
+            # shortfalls (less than one month of runway = ``Low``).
+            "cash_status": _cash_status(cumulative["cash"], current["expenses"]),
             "low_stock": int(low_stock),
             "reserved_stock": reserved_stock_list
         }
@@ -212,15 +348,13 @@ def get_financial_chart(
     current_user: dict = Depends(get_current_user)
 ):
     """الرسم البياني المالي (مبيعات vs مصروفات)"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(get_user_company_id(current_user)) as db:
         start_date = date.today() - timedelta(days=days)
         params = {"start": start_date}
-        if branch_id:
-            params["branch_id"] = branch_id
-        
-        branch_cond_inv = "AND branch_id = :branch_id" if branch_id else ""
-        branch_cond_exp = "AND ta.branch_id = :branch_id" if branch_id else ""
+        branch_cond_inv = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
+        branch_cond_exp = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", params)
+        display_meta = _dashboard_display_currency(db, branch_scope)
 
         # Fetch Sales by Date
         sales_data = db.execute(text(f"""
@@ -238,7 +372,7 @@ def get_financial_chart(
             SELECT sale_date, SUM(total) as total
             FROM all_sales
             WHERE 1=1
-            {branch_cond_inv.replace('branch_id =', 'branch_id =')}
+            {branch_cond_inv}
             GROUP BY sale_date
         """), params).fetchall()
         sales_map = {}
@@ -271,11 +405,19 @@ def get_financial_chart(
             day_key = day.isoformat()
             s = sales_map.get(day_key, 0)
             e = expenses_map.get(day_key, 0)
+            # T10.2 #111: the daily series cannot compute true net profit
+            # (no daily COGS). Expose it as ``daily_pl`` (revenue minus
+            # expenses) instead of the misleading ``profit`` label and
+            # keep ``profit`` as a deprecated alias for client compat.
+            daily_pl = s - e
             result.append({
                 "date": day.isoformat(),
-                "sales": s,
-                "expenses": e,
-                "profit": s - e # Simplified (Revenue - Expense), neglecting COGS daily calc complexity for speed
+                "sales": _base_to_display_amount(s, display_meta),
+                "expenses": _base_to_display_amount(e, display_meta),
+                "daily_pl": _base_to_display_amount(daily_pl, display_meta),
+                "profit": _base_to_display_amount(daily_pl, display_meta),  # deprecated alias — do not use; see daily_pl
+                "display_currency": display_meta["currency"],
+                "base_currency": display_meta["base_currency"],
             })
             
         return result
@@ -287,13 +429,10 @@ def get_top_products(
     current_user: dict = Depends(get_current_user)
 ):
     """أكثر المنتجات مبيعاً"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(get_user_company_id(current_user)) as db:
         params = {"limit": limit}
-        branch_filter = ""
-        if branch_id:
-            params["branch_id"] = branch_id
-            branch_filter = "AND i.branch_id = :branch_id"
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "val.branch_id", params)
 
         result = db.execute(text(f"""
             WITH all_items AS (
@@ -321,7 +460,7 @@ def get_top_products(
             FROM all_items val
             JOIN products p ON val.product_id = p.id
             WHERE 1=1
-            {branch_filter.replace('i.branch_id', 'val.branch_id')}
+            {branch_filter}
             GROUP BY p.id, p.product_name
             ORDER BY value DESC
             LIMIT :limit
@@ -560,7 +699,7 @@ def widget_sales_summary(
     Widget المبيعات (اليوم / الأسبوع / الشهر)
     period: today, week, month, quarter, year
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
     try:
@@ -579,29 +718,30 @@ def widget_sales_summary(
         else:
             start_date = today
 
-        params = {"start": start_date, "end": today}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND branch_id = :bid"
-            params["bid"] = branch_id
+        display_meta = _dashboard_display_currency(db, branch_scope)
+        params = {"start": start_date, "end": today, "base_currency": display_meta["base_currency"]}
+        invoice_total_base_sql = document_amount_base_sql("i.total", "i")
+        pos_total_base_sql = branch_amount_base_sql("o.total_amount", "o.branch_id")
+        invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, branch_param="bid")
+        pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params, branch_param="pos_bid")
 
         # Total Sales
         sales = db.execute(text(f"""
-            SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as total,
+            SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total,
                    COUNT(*) as count
-            FROM invoices
-            WHERE invoice_type = 'sales' AND status != 'cancelled'
-            AND invoice_date >= :start AND invoice_date <= :end {branch_filter}
+            FROM invoices i
+            WHERE i.invoice_type = 'sales' AND i.status != 'cancelled'
+            AND i.invoice_date >= :start AND i.invoice_date <= :end {invoice_branch_filter}
         """), params).fetchone()
 
         # POS Sales
         pos = db.execute(text(f"""
-            SELECT COALESCE(SUM(total_amount), 0) as total,
+            SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total,
                    COUNT(*) as count
-            FROM pos_orders
-            WHERE status = 'paid'
-            AND CAST(order_date AS DATE) >= :start AND CAST(order_date AS DATE) <= :end
-            {branch_filter}
+            FROM pos_orders o
+            WHERE o.status = 'paid'
+            AND CAST(o.order_date AS DATE) >= :start AND CAST(o.order_date AS DATE) <= :end
+            {pos_branch_filter}
         """), params).fetchone()
 
         total_sales = float(sales.total or 0) + float(pos.total or 0)
@@ -611,34 +751,37 @@ def widget_sales_summary(
         period_days = (today - start_date).days + 1
         prev_start = start_date - timedelta(days=period_days)
         prev_end = start_date - timedelta(days=1)
-        params_prev = {"start": prev_start, "end": prev_end}
-        if branch_id:
-            params_prev["bid"] = branch_id
+        params_prev = {"start": prev_start, "end": prev_end, "base_currency": display_meta["base_currency"]}
+        invoice_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params_prev, branch_param="bid")
+        pos_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params_prev, branch_param="pos_bid")
 
         prev_sales = db.execute(text(f"""
-            SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as total
-            FROM invoices
-            WHERE invoice_type = 'sales' AND status != 'cancelled'
-            AND invoice_date >= :start AND invoice_date <= :end {branch_filter}
+            SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total
+            FROM invoices i
+            WHERE i.invoice_type = 'sales' AND i.status != 'cancelled'
+            AND i.invoice_date >= :start AND i.invoice_date <= :end {invoice_branch_filter_prev}
         """), params_prev).scalar() or 0
 
         prev_pos = db.execute(text(f"""
-            SELECT COALESCE(SUM(total_amount), 0) as total
-            FROM pos_orders
-            WHERE status = 'paid'
-            AND CAST(order_date AS DATE) >= :start AND CAST(order_date AS DATE) <= :end
-            {branch_filter}
+            SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total
+            FROM pos_orders o
+            WHERE o.status = 'paid'
+            AND CAST(o.order_date AS DATE) >= :start AND CAST(o.order_date AS DATE) <= :end
+            {pos_branch_filter_prev}
         """), params_prev).scalar() or 0
 
         prev_total = float(prev_sales) + float(prev_pos)
         change = round(((total_sales - prev_total) / prev_total * 100), 1) if prev_total > 0 else (100 if total_sales > 0 else 0)
 
         return {
+            "display_currency": display_meta["currency"],
+            "base_currency": display_meta["base_currency"],
+            "is_multi_currency_scope": display_meta["is_multi_currency_scope"],
             "period": period,
-            "total": total_sales,
+            "total": _base_to_display_amount(total_sales, display_meta),
             "count": total_count,
             "change_percent": change,
-            "previous_total": prev_total
+            "previous_total": _base_to_display_amount(prev_total, display_meta)
         }
     except Exception:
         logger.exception("Internal error")
@@ -655,7 +798,7 @@ def widget_top_products(
     current_user=Depends(get_current_user)
 ):
     """Widget أفضل المنتجات مبيعاً"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
     try:
@@ -669,16 +812,15 @@ def widget_top_products(
         else:
             start_date = today.replace(day=1)
 
-        params = {"start": start_date, "limit": limit}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND i.branch_id = :bid"
-            params["bid"] = branch_id
+        display_meta = _dashboard_display_currency(db, branch_scope)
+        params = {"start": start_date, "limit": limit, "base_currency": display_meta["base_currency"]}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, branch_param="bid")
+        line_total_base_sql = document_amount_base_sql("il.total", "i")
 
         result = db.execute(text(f"""
             SELECT p.product_name as name,
                    SUM(il.quantity) as qty,
-                   SUM(il.total * COALESCE(i.exchange_rate, 1)) as value
+                   SUM({line_total_base_sql}) as value
             FROM invoice_lines il
             JOIN invoices i ON il.invoice_id = i.id
             JOIN products p ON il.product_id = p.id
@@ -688,8 +830,8 @@ def widget_top_products(
             ORDER BY value DESC LIMIT :limit
         """), params).fetchall()
 
-        return {"products": [
-            {"name": r.name, "quantity": float(r.qty or 0), "value": float(r.value or 0)}
+        return {"display_currency": display_meta["currency"], "base_currency": display_meta["base_currency"], "products": [
+            {"name": r.name, "quantity": float(r.qty or 0), "value": _base_to_display_amount(r.value or 0, display_meta)}
             for r in result
         ]}
     except Exception:
@@ -706,32 +848,31 @@ def widget_low_stock(
     current_user=Depends(get_current_user)
 ):
     """Widget المخزون المنخفض"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
     try:
         params = {"limit": limit}
-        branch_join = ""
-        branch_filter = ""
-        if branch_id:
-            branch_join = "JOIN warehouses w ON inv.warehouse_id = w.id"
-            branch_filter = "AND w.branch_id = :bid"
-            params["bid"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params, branch_param="bid")
+        branch_join = "JOIN warehouses w ON inv.warehouse_id = w.id" if branch_filter else ""
 
         result = db.execute(text(f"""
             SELECT p.id, p.product_name, p.sku, p.reorder_level,
-                   COALESCE(inv_sum.total_qty, 0) as current_stock
+                   COALESCE(inv_sum.total_qty, 0) - COALESCE(inv_sum.reserved_qty, 0) as current_stock
             FROM products p
             LEFT JOIN (
-                SELECT inv.product_id, SUM(inv.quantity) as total_qty
+                SELECT inv.product_id,
+                       SUM(inv.quantity) as total_qty,
+                       SUM(COALESCE(inv.reserved_quantity, 0)) as reserved_qty
                 FROM inventory inv
                 {branch_join}
                 WHERE 1=1 {branch_filter}
                 GROUP BY inv.product_id
             ) inv_sum ON p.id = inv_sum.product_id
             WHERE p.is_active = TRUE
-            AND (COALESCE(inv_sum.total_qty, 0) <= GREATEST(p.reorder_level, 5))
-            ORDER BY COALESCE(inv_sum.total_qty, 0) ASC
+              AND p.reorder_level > 0
+              AND (COALESCE(inv_sum.total_qty, 0) - COALESCE(inv_sum.reserved_qty, 0) <= p.reorder_level)
+            ORDER BY current_stock ASC
             LIMIT :limit
         """), params).fetchall()
 
@@ -741,7 +882,8 @@ def widget_low_stock(
                 "product_name": r.product_name,
                 "sku": r.sku,
                 "current_stock": float(r.current_stock),
-                "reorder_level": float(r.reorder_level or 5)
+                "reorder_level": float(r.reorder_level or 0),
+                "shortage": max(float(r.reorder_level or 0) - float(r.current_stock), 0.0),
             }
             for r in result
         ]}
@@ -755,20 +897,34 @@ def widget_low_stock(
 @router.get("/widgets/pending-tasks", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def widget_pending_tasks(
     limit: int = 10,
+    branch_id: int = None,
     current_user=Depends(get_current_user)
 ):
-    """Widget المهام المعلقة (فواتير غير مدفوعة، طلبات معلقة، إلخ)"""
+    """Widget المهام المعلقة (فواتير غير مدفوعة، طلبات معلقة، إلخ).
+
+    P1 #10 fix: enforce branch scoping. ``branch_id`` is validated against
+    the caller's allowed branches. When omitted and the caller is not an
+    admin, results are restricted to ``current_user.allowed_branches``.
+    """
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
     try:
         tasks = []
 
-        # Unpaid invoices
+        scope_params: Dict[str, Any] = {}
+
+        def scope_clause(col):
+            return branch_scope_filter_from_scope(branch_scope, col, scope_params, branch_param="bid")
+
+        # Unpaid invoices (filter by branch_id)
         try:
-            unpaid = db.execute(text("""
+            unpaid = db.execute(text(f"""
                 SELECT COUNT(*) as cnt, COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as total
-                FROM invoices WHERE status IN ('pending', 'partially_paid') AND invoice_type = 'sales'
-            """)).fetchone()
+                FROM invoices WHERE status IN ('pending', 'partially_paid')
+                AND invoice_type = 'sales'
+                {scope_clause('branch_id')}
+            """), scope_params).fetchone()
             if unpaid and unpaid.cnt > 0:
                 tasks.append({
                     "type": "unpaid_invoices",
@@ -779,11 +935,13 @@ def widget_pending_tasks(
         except Exception:
             pass
 
-        # Pending purchase orders
+        # Pending purchase orders (filter by branch_id)
         try:
-            pending_po = db.execute(text("""
-                SELECT COUNT(*) as cnt FROM purchase_orders WHERE status = 'pending'
-            """)).scalar() or 0
+            pending_po = db.execute(text(f"""
+                SELECT COUNT(*) as cnt FROM purchase_orders
+                WHERE status = 'pending'
+                {scope_clause('branch_id')}
+            """), scope_params).scalar() or 0
             if pending_po > 0:
                 tasks.append({
                     "type": "pending_purchases",
@@ -793,11 +951,21 @@ def widget_pending_tasks(
         except Exception:
             pass
 
-        # Pending approvals
+        # Pending approvals — approval_requests has no branch_id; filter via
+        # the requesting user's employee branch when scope is constrained.
         try:
-            pending_approvals = db.execute(text("""
-                SELECT COUNT(*) FROM approval_requests WHERE status = 'pending'
-            """)).scalar() or 0
+            approval_scope = scope_clause('e.branch_id')
+            if approval_scope:
+                pending_approvals = db.execute(text(f"""
+                    SELECT COUNT(*) FROM approval_requests ar
+                    LEFT JOIN employees e ON e.user_id = ar.requested_by
+                    WHERE ar.status = 'pending'
+                    {approval_scope}
+                """), scope_params).scalar() or 0
+            else:
+                pending_approvals = db.execute(text(
+                    "SELECT COUNT(*) FROM approval_requests WHERE status = 'pending'"
+                )).scalar() or 0
             if pending_approvals > 0:
                 tasks.append({
                     "type": "pending_approvals",
@@ -807,11 +975,14 @@ def widget_pending_tasks(
         except Exception:
             pass
 
-        # Leave requests pending
+        # Leave requests pending — JOIN employees to honour branch scope.
         try:
-            pending_leaves = db.execute(text("""
-                SELECT COUNT(*) FROM leave_requests WHERE status = 'pending'
-            """)).scalar() or 0
+            pending_leaves = db.execute(text(f"""
+                SELECT COUNT(*) FROM leave_requests lr
+                JOIN employees e ON e.id = lr.employee_id
+                WHERE lr.status = 'pending'
+                {scope_clause('e.branch_id')}
+            """), scope_params).scalar() or 0
             if pending_leaves > 0:
                 tasks.append({
                     "type": "pending_leaves",
@@ -821,13 +992,14 @@ def widget_pending_tasks(
         except Exception:
             pass
 
-        # Overdue invoices
+        # Overdue invoices (filter by branch_id)
         try:
-            overdue = db.execute(text("""
+            overdue = db.execute(text(f"""
                 SELECT COUNT(*) as cnt FROM invoices
                 WHERE status IN ('pending', 'partially_paid')
                 AND due_date < CURRENT_DATE AND invoice_type = 'sales'
-            """)).scalar() or 0
+                {scope_clause('branch_id')}
+            """), scope_params).scalar() or 0
             if overdue > 0:
                 tasks.append({
                     "type": "overdue_invoices",
@@ -852,16 +1024,13 @@ def widget_cash_flow(
     current_user=Depends(get_current_user)
 ):
     """Widget التدفق النقدي"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
     try:
         start_date = date.today() - timedelta(days=days)
         params = {"start": start_date}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND ta.branch_id = :bid"
-            params["bid"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", params, branch_param="bid")
 
         # Cash inflows (receipts) by day
         inflows = db.execute(text(f"""
@@ -922,7 +1091,22 @@ def widget_cash_flow(
 @router.get("/widgets/available", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
 def get_available_widgets(current_user=Depends(get_current_user)):
     """قائمة الـ widgets المتاحة للإضافة"""
-    return {"widgets": [
+    widget_permissions = {
+        "sales_today": "sales.view",
+        "sales_week": "sales.view",
+        "sales_month": "sales.view",
+        "top_products": "sales.view",
+        "recent_invoices": "sales.view",
+        "receivables_aging": "sales.view",
+        "expenses_month": "reports.financial",
+        "cash_balance": "accounting.view",
+        "profit_month": "reports.financial",
+        "financial_chart": "reports.financial",
+        "cash_flow": "accounting.view",
+        "low_stock": "inventory.view",
+    }
+    user_perms = current_user.get("permissions", []) if isinstance(current_user, dict) else getattr(current_user, "permissions", []) or []
+    widgets = [
         {"id": "sales_today", "type": "stat", "title": "مبيعات اليوم", "default_w": 1, "default_h": 1},
         {"id": "sales_week", "type": "stat", "title": "مبيعات الأسبوع", "default_w": 1, "default_h": 1},
         {"id": "sales_month", "type": "stat", "title": "مبيعات الشهر", "default_w": 1, "default_h": 1},
@@ -936,7 +1120,13 @@ def get_available_widgets(current_user=Depends(get_current_user)):
         {"id": "pending_tasks", "type": "list", "title": "المهام المعلقة", "default_w": 2, "default_h": 1},
         {"id": "recent_invoices", "type": "table", "title": "آخر الفواتير", "default_w": 2, "default_h": 2},
         {"id": "receivables_aging", "type": "chart", "title": "أعمار الذمم المدينة", "default_w": 2, "default_h": 1},
-    ]}
+    ]
+    return {
+        "widgets": [
+            widget for widget in widgets
+            if not widget_permissions.get(widget["id"]) or check_permission(user_perms, widget_permissions[widget["id"]])
+        ]
+    }
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -970,7 +1160,7 @@ def _get_industry_widgets(industry_type: str, db) -> list:
                     (SELECT SUM(CASE WHEN a.account_number LIKE '510%' THEN jl.debit - jl.credit ELSE 0 END) /
                      NULLIF(SUM(CASE WHEN a.account_number LIKE '410%' THEN jl.credit - jl.debit ELSE 0 END), 0) * 100
                      FROM journal_lines jl JOIN accounts a ON jl.account_id = a.id
-                     JOIN journal_entries j ON jl.journal_entry_id = j.id
+                     JOIN journal_entries j ON jl.journal_entry_id = j.id AND j.status = 'posted'
                      WHERE j.entry_date >= date_trunc('month', CURRENT_DATE)), 0)
             """)).scalar() or 0
             widgets.append({"key": "food_cost_pct", "value": round(float(food_cost), 1), "label_ar": "نسبة تكلفة الطعام", "label_en": "Food Cost %", "icon": "🍽️", "target": 30})
@@ -981,6 +1171,7 @@ def _get_industry_widgets(industry_type: str, db) -> list:
                 SELECT COALESCE(SUM(
                     CASE WHEN a.account_number = '13010' THEN jl.debit - jl.credit ELSE 0 END
                 ), 0) FROM journal_lines jl JOIN accounts a ON jl.account_id = a.id
+                JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
             """)).scalar() or 0
             widgets.append({"key": "wip_value", "value": float(wip), "label_ar": "قيمة الإنتاج تحت التشغيل", "label_en": "WIP Value", "icon": "🏭"})
             
@@ -1002,8 +1193,8 @@ def _get_industry_widgets(industry_type: str, db) -> list:
         elif industry_type in ("retail", "ecommerce"):
             # Today's POS sales — uses invoices table
             today_sales = db.execute(text("""
-                SELECT COALESCE(SUM(total), 0) FROM invoices 
-                WHERE DATE(created_at) = CURRENT_DATE AND invoice_type = 'sale'
+                SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) FROM invoices 
+                WHERE DATE(created_at) = CURRENT_DATE AND invoice_type = 'sales'
             """)).scalar() or 0
             widgets.append({"key": "today_sales", "value": float(today_sales), "label_ar": "مبيعات اليوم", "label_en": "Today's Sales", "icon": "🛍️"})
             
@@ -1111,6 +1302,13 @@ def _query_widget_data(db, data_source: str, filters: dict = None):
     if filters and filters.get("branch_id"):
         conditions.append("branch_id = :branch_id")
         params["branch_id"] = filters["branch_id"]
+    elif filters and filters.get("branch_ids") is not None:
+        branch_ids = list(filters.get("branch_ids") or [])
+        if branch_ids:
+            conditions.append("branch_id = ANY(:branch_ids)")
+            params["branch_ids"] = branch_ids
+        else:
+            conditions.append("1=0")
 
     # Date filters apply to revenue/expenses views that have a period column
     if data_source in ("revenue", "expenses") and filters:
@@ -1182,7 +1380,7 @@ def list_analytics_dashboards(current_user: dict = Depends(get_current_user)):
 def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_user)):
     """Refresh data for a single widget."""
     company_id = get_user_company_id(current_user)
-    branch_id = validate_branch_access(current_user, None)
+    branch_scope = resolve_branch_scope(current_user, None)
     with transactional(company_id) as db:
         widget = db.execute(text("""
             SELECT id, widget_type, title, data_source, filters
@@ -1194,20 +1392,46 @@ def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_use
 
         wd = dict(widget._mapping)
         widget_filters = wd.get("filters") or {}
-        if branch_id:
-            widget_filters["branch_id"] = branch_id
+        if branch_scope["branch_id"] is not None:
+            widget_filters["branch_id"] = branch_scope["branch_id"]
+        elif branch_scope["branch_ids"] is not None:
+            widget_filters["branch_ids"] = branch_scope["branch_ids"]
 
         return {
             "widget_id": widget_id,
-            "data": _query_widget_data(db, wd["data_source"], widget_filters)
+            "data": _query_widget_data(db, wd["data_source"], widget_filters),
+            "freshness": _mv_freshness(db, wd["data_source"]),
         }
+
+
+def _mv_freshness(db, data_source: str) -> Dict[str, Any]:
+    """T10.1 P1 #11 — return MV last-refresh timestamp for the freshness badge."""
+    mv_name = MV_MAP.get(data_source)
+    if not mv_name:
+        return {"mv_name": None, "last_refreshed_at": None, "stale_minutes": None}
+    try:
+        row = db.execute(text("""
+            SELECT last_refreshed_at,
+                   EXTRACT(EPOCH FROM (NOW() - last_refreshed_at)) / 60.0 AS age_min
+              FROM analytics_mv_freshness
+             WHERE mv_name = :n
+        """), {"n": mv_name}).fetchone()
+        if not row:
+            return {"mv_name": mv_name, "last_refreshed_at": None, "stale_minutes": None}
+        return {
+            "mv_name": mv_name,
+            "last_refreshed_at": row.last_refreshed_at.isoformat() if row.last_refreshed_at else None,
+            "stale_minutes": int(row.age_min) if row.age_min is not None else None,
+        }
+    except Exception:
+        return {"mv_name": mv_name, "last_refreshed_at": None, "stale_minutes": None}
 
 
 @router.get("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
 def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_current_user)):
     """Get a dashboard with its widget data queried from materialized views."""
     company_id = get_user_company_id(current_user)
-    branch_id = validate_branch_access(current_user, None)
+    branch_scope = resolve_branch_scope(current_user, None)
     with transactional(company_id) as db:
         dashboard = db.execute(text("""
             SELECT id, name, description, is_system, access_roles, branch_scope,
@@ -1237,8 +1461,10 @@ def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_
         for w in widgets:
             wd = dict(w._mapping)
             widget_filters = wd.get("filters") or {}
-            if branch_id:
-                widget_filters["branch_id"] = branch_id
+            if branch_scope["branch_id"] is not None:
+                widget_filters["branch_id"] = branch_scope["branch_id"]
+            elif branch_scope["branch_ids"] is not None:
+                widget_filters["branch_ids"] = branch_scope["branch_ids"]
             wd["data"] = _query_widget_data(db, wd["data_source"], widget_filters)
             widget_list.append(wd)
 

@@ -28,10 +28,30 @@ router = APIRouter(prefix="/companies", tags=["Companies"])
 logger = logging.getLogger(__name__)
 
 
+def _cleanup_company_database(db_name: str, db_user: str) -> None:
+    from database import _ddl_engine
+
+    with _ddl_engine.connect() as ddl_conn:
+        ddl_conn.execute(
+            text("""
+                SELECT pg_terminate_backend(pid)
+                FROM pg_stat_activity
+                WHERE datname = :db_name
+                  AND pid <> pg_backend_pid()
+            """),
+            {"db_name": db_name},
+        )
+        ddl_conn.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
+        ddl_conn.execute(text(f'DROP USER IF EXISTS {db_user}'))
+
+
 from fastapi import Request
+from config import settings as _settings
+
+_REGISTER_RATE_LIMIT = "100/hour" if _settings.APP_ENV == "development" else "3/hour"
 
 @router.post("/register", response_model=CompanyCreateResponse, status_code=status.HTTP_201_CREATED)
-@limiter.limit("3/hour")
+@limiter.limit(_REGISTER_RATE_LIMIT)
 async def register_new_company(request_body: CompanyCreateRequest, request: Request):
     """
     تسجيل شركة جديدة - company_id يُنشأ تلقائياً
@@ -89,9 +109,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
             # Create all 91 tables
             success, message = create_company_tables(company_id, request_body.currency)
             if not success:
-                db.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
-                db.execute(text(f'DROP USER IF EXISTS {db_user}'))
-                db.commit()
+                _cleanup_company_database(db_name, db_user)
                 logger.error("Failed to create company tables: %s", message)
                 raise HTTPException(status_code=500, detail="فشل إنشاء الجداول")
             
@@ -215,9 +233,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
             # SEC-FIX-009/010: Don't write errors to file in web root, don't leak details to client
             db.rollback()
             try:
-                db.execute(text(f'DROP DATABASE IF EXISTS "{db_name}"'))
-                db.execute(text(f'DROP USER IF EXISTS {db_user}'))
-                db.commit()
+                _cleanup_company_database(db_name, db_user)
             except Exception as cleanup_err:
                 logger.error(f"Failed to cleanup after company creation failure: {cleanup_err}")
             raise HTTPException(status_code=500, detail="فشل إنشاء الشركة")

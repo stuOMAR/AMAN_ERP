@@ -1,0 +1,262 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 الفرع الرئيسي - الرياض SAR ▼" [ref=e110] [cursor=pointer]:
+            - generic [ref=e111]:
+              - text: 🏢
+              - generic [ref=e112]: الفرع الرئيسي - الرياض
+            - generic [ref=e113]: SAR
+            - generic [ref=e114]: ▼
+          - button "🔔" [ref=e116] [cursor=pointer]
+          - generic [ref=e118] [cursor=pointer]:
+            - generic [ref=e119]:
+              - generic [ref=e120]: omar
+              - generic [ref=e121]: "ID: 1a134155"
+            - generic [ref=e122]: O
+      - main [ref=e124]:
+        - generic [ref=e125]:
+          - generic [ref=e127]:
+            - generic [ref=e128]:
+              - button "العودة" [ref=e129] [cursor=pointer]:
+                - img [ref=e130]
+              - heading "🔄 القيود المتكررة" [level=2] [ref=e132]
+            - generic [ref=e133]:
+              - combobox [ref=e134]:
+                - option "الكل" [selected]
+                - option "نشط"
+                - option "متوقف"
+              - button "⚡ توليد المستحقة" [ref=e135] [cursor=pointer]
+              - button "+ قالب جديد" [ref=e136] [cursor=pointer]
+          - generic [ref=e137]: لا توجد قوالب متكررة
+          - generic [ref=e140]:
+            - generic [ref=e141]:
+              - heading "قالب متكرر جديد" [level=5] [ref=e142]
+              - button [ref=e143]
+            - generic [ref=e144]:
+              - generic [ref=e145]:
+                - generic [ref=e146]:
+                  - generic [ref=e147]: اسم القالب *
+                  - textbox [ref=e148]
+                - generic [ref=e149]:
+                  - generic [ref=e150]: المرجع
+                  - textbox [ref=e151]
+                - generic [ref=e152]:
+                  - generic [ref=e153]: التكرار *
+                  - combobox [ref=e154]:
+                    - option "يومي"
+                    - option "أسبوعي"
+                    - option "شهري" [selected]
+                    - option "ربع سنوي"
+                    - option "سنوي"
+              - generic [ref=e155]:
+                - generic [ref=e156]:
+                  - generic [ref=e157]: تاريخ البداية *
+                  - generic [ref=e158]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e161]
+                - generic [ref=e162]:
+                  - generic [ref=e163]: تاريخ النهاية
+                  - generic [ref=e164]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e167]
+                - generic [ref=e168]:
+                  - generic [ref=e169]: التنفيذ التالي
+                  - generic [ref=e170]:
+                    - generic:
+                      - img
+                    - textbox "YYYY/MM/DD" [ref=e173]
+                - generic [ref=e174]:
+                  - generic [ref=e175]: الحد الأقصى للتنفيذ
+                  - spinbutton [ref=e176]
+              - generic [ref=e177]:
+                - generic [ref=e178]:
+                  - generic [ref=e179]: الوصف
+                  - textbox [ref=e180]
+                - generic [ref=e183]:
+                  - checkbox "نشط" [checked] [ref=e184]
+                  - text: نشط
+                - generic [ref=e187]:
+                  - checkbox "ترحيل تلقائي" [ref=e188]
+                  - text: ترحيل تلقائي
+              - heading "بنود القيد" [level=6] [ref=e189]
+              - table [ref=e191]:
+                - rowgroup [ref=e192]:
+                  - row "الحساب مدين دائن البيان" [ref=e193]:
+                    - columnheader "الحساب" [ref=e194]
+                    - columnheader "مدين" [ref=e195]
+                    - columnheader "دائن" [ref=e196]
+                    - columnheader "البيان" [ref=e197]
+                    - columnheader [ref=e198]
+                - rowgroup [ref=e199]:
+                  - row "-- اختر -- ✕" [ref=e200]:
+                    - cell "-- اختر --" [ref=e201]:
+                      - combobox [active] [ref=e202]:
+                        - option "-- اختر --" [selected]
+                        - option "1 - الأصول"
+                        - option "11 - أصول متداولة"
+                        - option "1101 - النقد وما في حكمه"
+                        - option "11010101 - صندوق الرياض - SAR"
+                        - option "11010201 - بنك الرياض - SAR"
+                        - option "1102 - العملاء والذمم المدينة"
+                        - option "1103 - المخزون"
+                        - option "110301 - مخزون المواد الأولية"
+                        - option "1107 - ضريبة المدخلات"
+                        - option "1112 - مخزون في الطريق"
+                        - option "2 - الخصوم"
+                        - option "21 - خصوم متداولة"
+                        - option "2101 - الموردين والذمم الدائنة"
+                        - option "2103 - ضريبة القيمة المضافة"
+                        - option "210301 - ضريبة المخرجات"
+                        - option "3 - حقوق الملكية"
+                        - option "31 - رأس المال"
+                        - option "3101 - رأس المال - ريال سعودي"
+                        - option "4 - الإيرادات"
+                        - option "41 - إيرادات التشغيل"
+                        - option "4101 - مبيعات البضائع"
+                    - cell [ref=e203]:
+                      - spinbutton [ref=e204]
+                    - cell [ref=e205]:
+                      - spinbutton [ref=e206]
+                    - cell [ref=e207]:
+                      - textbox [ref=e208]
+                    - cell "✕" [ref=e209]:
+                      - button "✕" [disabled] [ref=e210]
+                  - row "-- اختر -- ✕" [ref=e211]:
+                    - cell "-- اختر --" [ref=e212]:
+                      - combobox [ref=e213]:
+                        - option "-- اختر --" [selected]
+                        - option "1 - الأصول"
+                        - option "11 - أصول متداولة"
+                        - option "1101 - النقد وما في حكمه"
+                        - option "11010101 - صندوق الرياض - SAR"
+                        - option "11010201 - بنك الرياض - SAR"
+                        - option "1102 - العملاء والذمم المدينة"
+                        - option "1103 - المخزون"
+                        - option "110301 - مخزون المواد الأولية"
+                        - option "1107 - ضريبة المدخلات"
+                        - option "1112 - مخزون في الطريق"
+                        - option "2 - الخصوم"
+                        - option "21 - خصوم متداولة"
+                        - option "2101 - الموردين والذمم الدائنة"
+                        - option "2103 - ضريبة القيمة المضافة"
+                        - option "210301 - ضريبة المخرجات"
+                        - option "3 - حقوق الملكية"
+                        - option "31 - رأس المال"
+                        - option "3101 - رأس المال - ريال سعودي"
+                        - option "4 - الإيرادات"
+                        - option "41 - إيرادات التشغيل"
+                        - option "4101 - مبيعات البضائع"
+                    - cell [ref=e214]:
+                      - spinbutton [ref=e215]
+                    - cell [ref=e216]:
+                      - spinbutton [ref=e217]
+                    - cell [ref=e218]:
+                      - textbox [ref=e219]
+                    - cell "✕" [ref=e220]:
+                      - button "✕" [disabled] [ref=e221]
+                - rowgroup [ref=e222]:
+                  - row "الإجمالي 0.00 0.00 + سطر" [ref=e223]:
+                    - cell "الإجمالي" [ref=e224]
+                    - cell "0.00" [ref=e225]
+                    - cell "0.00" [ref=e226]
+                    - cell "+ سطر" [ref=e227]:
+                      - button "+ سطر" [ref=e228] [cursor=pointer]
+            - generic [ref=e229]:
+              - button "إلغاء" [ref=e230] [cursor=pointer]
+              - button "إنشاء" [disabled] [ref=e231]

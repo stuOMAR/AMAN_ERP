@@ -9,7 +9,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, validate_treasury_account_access, require_module
 from utils.accounting import get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -66,9 +66,6 @@ def list_checks_receivable(
     current_user=Depends(get_current_user)
 ):
     """List all checks receivable with filters"""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as db:
         try:
             offset = (page - 1) * limit
@@ -81,9 +78,9 @@ def list_checks_receivable(
             if search:
                 conditions.append("(cr.check_number ILIKE :search OR cr.drawer_name ILIKE :search OR cr.bank_name ILIKE :search)")
                 params["search"] = f"%{search}%"
-            if branch_id:
-                conditions.append("cr.branch_id = :branch_id")
-                params["branch_id"] = branch_id
+            branch_clause = branch_scope_filter(current_user, branch_id, "cr.branch_id", params)
+            if branch_clause:
+                conditions.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
     
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     
@@ -126,13 +123,10 @@ def list_checks_receivable(
 @router.get("/receivable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def checks_receivable_stats(branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """Get summary stats for checks receivable"""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-
     with transactional(current_user.company_id) as db:
         try:
-            cond = "AND branch_id = :branch_id" if branch_id else ""
-            params = {"branch_id": branch_id} if branch_id else {}
+            params = {}
+            cond = branch_scope_filter(current_user, branch_id, "branch_id", params)
             stats = db.execute(text(f"""
                 SELECT
                     COUNT(*) FILTER (WHERE status = 'pending') as pending_count,
@@ -207,9 +201,9 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
     """
     with transactional(current_user.company_id) as db:
         try:
-            # Validate branch access
-            if data.get("branch_id"):
-                 validate_branch_access(current_user, data["branch_id"])
+            branch_id = validate_branch_access(current_user, data.get("branch_id"))
+            if data.get("treasury_account_id"):
+                validate_treasury_account_access(db, current_user, data.get("treasury_account_id"), branch_id)
     
             required = ["check_number", "amount", "due_date"]
             for f in required:
@@ -258,7 +252,7 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
                 description=f"استلام شيك رقم {data['check_number']} - {data.get('drawer_name', '')}",
                 lines=je_lines,
                 user_id=current_user.id,
-                branch_id=data.get("branch_id"),
+                branch_id=branch_id,
                 source="check_receivable"
             )
     
@@ -266,11 +260,11 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
                 INSERT INTO checks_receivable (
                     check_number, drawer_name, bank_name, branch_name, amount, currency,
                     issue_date, due_date, party_id, treasury_account_id, receipt_id,
-                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate
+                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate, party_site_id
                 ) VALUES (
                     :check_number, :drawer_name, :bank_name, :branch_name, :amount, :currency,
                     :issue_date, :due_date, :party_id, :treasury_id, :receipt_id,
-                    :je_id, 'pending', :notes, :branch_id, :user_id, :exchange_rate
+                    :je_id, 'pending', :notes, :branch_id, :user_id, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "check_number": data["check_number"],
@@ -286,9 +280,10 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
                 "receipt_id": data.get("receipt_id"),
                 "je_id": je_id,
                 "notes": data.get("notes", ""),
-                "branch_id": data.get("branch_id"),
+                "branch_id": branch_id,
                 "user_id": current_user.id,
                 "exchange_rate": float(_dec(data.get("exchange_rate", 1))),
+                "party_site_id": data.get("party_site_id"),
             }).fetchone()
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_receivable", str(result.id),
@@ -314,8 +309,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, check.branch_id)
+            branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status != 'pending':
                 raise HTTPException(400, "الشيك ليس في حالة معلق")
@@ -326,9 +320,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
             if not treasury_id:
                 raise HTTPException(**http_error(400, "treasury_or_bank_required"))
     
-            treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).fetchone()
-            if not treasury:
-                raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            treasury = validate_treasury_account_access(db, current_user, treasury_id, branch_id)
     
             checks_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1205' LIMIT 1")).fetchone()
             if not checks_account:
@@ -339,11 +331,10 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
             check_fiscal_period_open(db, collection_date)
             
             je_lines = [
-                {"account_id": treasury.gl_account_id, "debit": float(amount), "credit": 0, "description": f"تحصيل شيك {check.check_number}"},
+                {"account_id": treasury["gl_account_id"], "debit": float(amount), "credit": 0, "description": f"تحصيل شيك {check.check_number}"},
                 {"account_id": checks_account.id, "debit": 0, "credit": float(amount), "description": f"تحصيل شيك {check.check_number}"},
             ]
             
-            from services.gl_service import create_journal_entry as gl_create_journal_entry
             coll_je_id, _ = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -390,8 +381,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, check.branch_id)
+            branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status not in ('pending', 'collected'):
                 raise HTTPException(400, "لا يمكن ارتجاع هذا الشيك")
@@ -412,15 +402,15 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
             bounce_je_id = None
     
             if check.status == 'collected':
-                treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"),
-                                      {"id": check.treasury_account_id}).fetchone() if check.treasury_account_id else None
+                treasury = validate_treasury_account_access(
+                    db, current_user, check.treasury_account_id, branch_id
+                ) if check.treasury_account_id else None
                 if not treasury:
                     raise HTTPException(400, "حساب الخزينة غير مرتبط بالشيك المحصّل")
     
-                from services.gl_service import create_journal_entry as gl_create_journal_entry
                 je_lines = [
                     {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
-                    {"account_id": treasury.gl_account_id, "debit": 0, "credit": float(amount), "description": f"ارتجاع شيك {check.check_number}"},
+                    {"account_id": treasury["gl_account_id"], "debit": 0, "credit": float(amount), "description": f"ارتجاع شيك {check.check_number}"},
                 ]
                 bounce_je_id, _ = gl_create_journal_entry(
                     db=db,
@@ -441,7 +431,6 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
                 if not checks_account:
                     raise HTTPException(500, "حساب الشيكات تحت التحصيل (1205) غير موجود")
     
-                from services.gl_service import create_journal_entry as gl_create_journal_entry
                 je_lines = [
                     {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
                     {"account_id": checks_account.id, "debit": 0, "credit": float(amount), "description": f"ارتجاع شيك {check.check_number}"},
@@ -558,9 +547,6 @@ def list_checks_payable(
     current_user=Depends(get_current_user)
 ):
     """List all checks payable with filters"""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-
     with transactional(current_user.company_id) as db:
         try:
             offset = (page - 1) * limit
@@ -573,9 +559,9 @@ def list_checks_payable(
             if search:
                 conditions.append("(cp.check_number ILIKE :search OR cp.beneficiary_name ILIKE :search OR cp.bank_name ILIKE :search)")
                 params["search"] = f"%{search}%"
-            if branch_id:
-                conditions.append("cp.branch_id = :branch_id")
-                params["branch_id"] = branch_id
+            branch_clause = branch_scope_filter(current_user, branch_id, "cp.branch_id", params)
+            if branch_clause:
+                conditions.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
     
             where = f"WHERE {' AND '.join(conditions)}" if conditions else ""
     
@@ -618,13 +604,10 @@ def list_checks_payable(
 @router.get("/payable/summary/stats", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def checks_payable_stats(branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """Get summary stats for checks payable"""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-
     with transactional(current_user.company_id) as db:
         try:
-            cond = "AND branch_id = :branch_id" if branch_id else ""
-            params = {"branch_id": branch_id} if branch_id else {}
+            params = {}
+            cond = branch_scope_filter(current_user, branch_id, "branch_id", params)
             stats = db.execute(text(f"""
                 SELECT
                     COUNT(*) FILTER (WHERE status = 'issued') as issued_count,
@@ -699,9 +682,9 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
     """
     with transactional(current_user.company_id) as db:
         try:
-            # Validate branch access
-            if data.get("branch_id"):
-                 validate_branch_access(current_user, data["branch_id"])
+            branch_id = validate_branch_access(current_user, data.get("branch_id"))
+            if data.get("treasury_account_id"):
+                validate_treasury_account_access(db, current_user, data.get("treasury_account_id"), branch_id)
     
             required = ["check_number", "amount", "due_date", "issue_date"]
             for f in required:
@@ -746,7 +729,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
                 description=f"إصدار شيك رقم {data['check_number']} - {data.get('beneficiary_name', '')}",
                 lines=je_lines,
                 user_id=current_user.id,
-                branch_id=data.get("branch_id"),
+                branch_id=branch_id,
                 source="check_payable"
             )
     
@@ -754,11 +737,11 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
                 INSERT INTO checks_payable (
                     check_number, beneficiary_name, bank_name, branch_name, amount, currency,
                     issue_date, due_date, party_id, treasury_account_id, payment_voucher_id,
-                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate
+                    journal_entry_id, status, notes, branch_id, created_by, exchange_rate, party_site_id
                 ) VALUES (
                     :check_number, :beneficiary_name, :bank_name, :branch_name, :amount, :currency,
                     :issue_date, :due_date, :party_id, :treasury_id, :payment_voucher_id,
-                    :je_id, 'issued', :notes, :branch_id, :user_id, :exchange_rate
+                    :je_id, 'issued', :notes, :branch_id, :user_id, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "check_number": data["check_number"],
@@ -774,9 +757,10 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
                 "payment_voucher_id": data.get("payment_voucher_id"),
                 "je_id": je_id,
                 "notes": data.get("notes", ""),
-                "branch_id": data.get("branch_id"),
+                "branch_id": branch_id,
                 "user_id": current_user.id,
                 "exchange_rate": float(_dec(data.get("exchange_rate", 1))),
+                "party_site_id": data.get("party_site_id"),
             }).fetchone()
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_payable", str(result.id),
@@ -802,8 +786,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, check.branch_id)
+            branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status != 'issued':
                 raise HTTPException(400, "الشيك ليس في حالة صادر")
@@ -814,9 +797,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
             if not treasury_id:
                 raise HTTPException(**http_error(400, "treasury_or_bank_required"))
     
-            treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).fetchone()
-            if not treasury:
-                raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            treasury = validate_treasury_account_access(db, current_user, treasury_id, branch_id)
     
             checks_pay_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2105' LIMIT 1")).fetchone()
             if not checks_pay_account:
@@ -833,7 +814,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
                     "description": f"صرف شيك {check.check_number}"
                 },
                 {
-                    "account_id": treasury.gl_account_id,
+                    "account_id": treasury["gl_account_id"],
                     "debit": 0,
                     "credit": float(amount),
                     "description": f"صرف شيك {check.check_number}"
@@ -885,8 +866,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
                 
-            # Validate branch access
-            validate_branch_access(current_user, check.branch_id)
+            branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status not in ('issued', 'cleared'):
                 raise HTTPException(400, "لا يمكن ارتجاع هذا الشيك")
@@ -909,14 +889,15 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
             if check.status == 'cleared':
                 # Cleared check bounced: reverse both issuance + clearance
                 # Net reversal: Dr. Bank / Cr. AP
-                treasury = db.execute(text("SELECT gl_account_id FROM treasury_accounts WHERE id = :id"),
-                                      {"id": check.treasury_account_id}).fetchone() if check.treasury_account_id else None
+                treasury = validate_treasury_account_access(
+                    db, current_user, check.treasury_account_id, branch_id
+                ) if check.treasury_account_id else None
                 if not treasury:
                     raise HTTPException(400, "حساب الخزينة غير مرتبط بالشيك")
     
                 je_lines = [
                     {
-                        "account_id": treasury.gl_account_id,
+                        "account_id": treasury["gl_account_id"],
                         "debit": float(amount),
                         "credit": 0,
                         "description": f"ارتجاع شيك مصروف {check.check_number}"
@@ -1073,10 +1054,8 @@ def get_due_checks_alerts(days_ahead: int = Query(7, ge=1, le=90), branch_id: Op
     """Get checks due within the next N days"""
     with transactional(current_user.company_id) as db:
         try:
-            cond = "AND branch_id = :branch_id" if branch_id else ""
             params = {"days": days_ahead}
-            if branch_id:
-                params["branch_id"] = branch_id
+            cond = branch_scope_filter(current_user, branch_id, "branch_id", params)
     
             receivable = db.execute(text(f"""
                 SELECT id, check_number, drawer_name as party, amount, due_date, 'receivable' as type
@@ -1125,10 +1104,8 @@ def checks_aging_report(
     """تقرير أعمار الشيكات — تصنيف حسب تاريخ الاستحقاق (0-30, 31-60, 61-90, 90+)"""
     with transactional(current_user.company_id) as db:
         try:
-            cond = "AND branch_id = :branch_id" if branch_id else ""
             params = {}
-            if branch_id:
-                params["branch_id"] = branch_id
+            cond = branch_scope_filter(current_user, branch_id, "branch_id", params)
     
             results = []
     

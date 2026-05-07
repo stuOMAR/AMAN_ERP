@@ -7,22 +7,29 @@ import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { formatNumber } from '../../utils/format';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { useToast } from '../../context/ToastContext'
 
 
 function SalesQuotationDetails() {
     const { t } = useTranslation()
     const { id } = useParams()
     const navigate = useNavigate()
+    const { showToast } = useToast()
     const currency = getCurrency()
     const [quotation, setQuotation] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [actionLoading, setActionLoading] = useState(null)
     const [error, setError] = useState(null)
+
+    const refreshQuotation = async () => {
+        const response = await salesAPI.getQuotation(id)
+        setQuotation(response.data)
+    }
 
     useEffect(() => {
         const fetchQuotation = async () => {
             try {
-                const response = await salesAPI.getQuotation(id)
-                setQuotation(response.data)
+                await refreshQuotation()
             } catch (err) {
                 setError(t('sales.quotations.form.errors.fetch_failed'))
             } finally {
@@ -31,6 +38,32 @@ function SalesQuotationDetails() {
         }
         fetchQuotation()
     }, [id])
+
+    const handleSendEmail = async () => {
+        setActionLoading('send')
+        try {
+            const response = await salesAPI.sendQuotation(id)
+            showToast(response.data?.message || 'تم إرسال عرض السعر بنجاح', 'success')
+            await refreshQuotation()
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.error'), 'error')
+        } finally {
+            setActionLoading(null)
+        }
+    }
+
+    const handleConvertToOrder = async () => {
+        setActionLoading('convert')
+        try {
+            const response = await salesAPI.convertQuotation(id)
+            showToast(response.data?.message || 'تم تحويل عرض السعر إلى أمر بيع', 'success')
+            navigate(`/sales/orders/${response.data.order_id}`)
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.error'), 'error')
+        } finally {
+            setActionLoading(null)
+        }
+    }
 
     if (loading) return <PageLoading />
     if (error) return <div className="alert alert-error m-4">{error}</div>
@@ -53,12 +86,24 @@ function SalesQuotationDetails() {
                     <p className="workspace-subtitle">{t('sales.quotations.details.date')}: {formatShortDate(quotation.quotation_date)}</p>
                 </div>
                 <div className="header-actions">
-                    <button
-                        className="btn btn-primary"
-                        onClick={() => navigate('/sales/orders/new', { state: { fromQuotation: quotation } })}
-                    >
-                        📝 {t('sales.quotations.details.convert')}
-                    </button>
+                    {quotation.status !== 'converted' && quotation.status !== 'cancelled' && (
+                        <button
+                            className="btn btn-secondary"
+                            onClick={handleSendEmail}
+                            disabled={actionLoading !== null}
+                        >
+                            {actionLoading === 'send' ? t('common.loading', '...') : `✉️ ${t('sales.quotations.details.send_email', 'إرسال بالبريد')}`}
+                        </button>
+                    )}
+                    {quotation.status !== 'converted' && quotation.status !== 'cancelled' && quotation.status !== 'expired' && (
+                        <button
+                            className="btn btn-primary"
+                            onClick={handleConvertToOrder}
+                            disabled={actionLoading !== null}
+                        >
+                            {actionLoading === 'convert' ? t('common.loading', '...') : `📝 ${t('sales.quotations.details.convert')}`}
+                        </button>
+                    )}
                     <button className="btn btn-secondary" onClick={() => window.print()}>
                         🖨️ {t('sales.quotations.details.print')}
                     </button>
@@ -97,7 +142,7 @@ function SalesQuotationDetails() {
                         <tbody>
                             {quotation.items.map((item, index) => (
                                 <tr key={index}>
-                                    <td className="font-medium">{item.product_name}</td>
+                                    <td className="font-medium">{item.product_code ? `${item.product_code} - ` : ''}{item.product_name}</td>
                                     <td className="text-secondary">{item.description}</td>
                                     <td style={{ textAlign: 'center' }}>{formatNumber(item.quantity)}</td>
                                     <td style={{ textAlign: 'left' }}>{formatNumber(item.unit_price)} <small>{quotation.currency || currency}</small></td>

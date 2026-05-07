@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from datetime import datetime
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
@@ -70,10 +71,11 @@ def create_stock_transfer(
             FOR UPDATE
         """), {"pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
 
-        source_qty = float(source_inv.quantity) if source_inv else 0
-        source_cost = float(source_inv.average_cost) if source_inv else 0
+        transfer_qty = Decimal(str(transfer.quantity))
+        source_qty = Decimal(str(source_inv.quantity)) if source_inv else Decimal("0")
+        source_cost = Decimal(str(source_inv.average_cost or 0)) if source_inv else Decimal("0")
 
-        if source_qty < transfer.quantity:
+        if source_qty < transfer_qty:
             raise HTTPException(
                 status_code=400,
                 detail=f"الكمية المتوفرة ({source_qty}) أقل من المطلوب ({transfer.quantity})"
@@ -86,8 +88,8 @@ def create_stock_transfer(
             FOR UPDATE
         """), {"pid": transfer.product_id, "wh": transfer.destination_warehouse_id}).fetchone()
 
-        dest_qty_before = float(dest_inv.quantity) if dest_inv else 0
-        dest_cost_before = float(dest_inv.average_cost) if dest_inv else 0
+        dest_qty_before = Decimal(str(dest_inv.quantity)) if dest_inv else Decimal("0")
+        dest_cost_before = Decimal(str(dest_inv.average_cost or 0)) if dest_inv else Decimal("0")
 
         # 6. Update source inventory (decrease)
         db.execute(text("""
@@ -98,9 +100,9 @@ def create_stock_transfer(
         # 7. Update destination inventory (increase with WAC calculation)
         if dest_inv:
             # Calculate new weighted average cost
-            new_total_qty = dest_qty_before + transfer.quantity
+            new_total_qty = dest_qty_before + transfer_qty
             if new_total_qty > 0:
-                new_avg_cost = ((dest_qty_before * dest_cost_before) + (transfer.quantity * source_cost)) / new_total_qty
+                new_avg_cost = ((dest_qty_before * dest_cost_before) + (transfer_qty * source_cost)) / new_total_qty
             else:
                 new_avg_cost = source_cost
 
@@ -109,8 +111,8 @@ def create_stock_transfer(
                 SET quantity = :qty, average_cost = :cost, updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
             """), {
-                "qty": new_total_qty,
-                "cost": new_avg_cost,
+                "qty": float(new_total_qty),
+                "cost": float(new_avg_cost),
                 "pid": transfer.product_id,
                 "wh": transfer.destination_warehouse_id
             })
@@ -123,7 +125,7 @@ def create_stock_transfer(
                 "pid": transfer.product_id,
                 "wh": transfer.destination_warehouse_id,
                 "qty": transfer.quantity,
-                "cost": source_cost
+                "cost": float(source_cost)
             })
             new_avg_cost = source_cost
 
@@ -163,17 +165,17 @@ def create_stock_transfer(
             "fwh": transfer.source_warehouse_id,
             "twh": transfer.destination_warehouse_id,
             "qty": transfer.quantity,
-            "tcost": source_cost,
-            "fcast": source_cost,
-            "tcast_b": dest_cost_before,
-            "tcast_a": new_avg_cost
+            "tcost": float(source_cost),
+            "fcast": float(source_cost),
+            "tcast_b": float(dest_cost_before),
+            "tcast_a": float(new_avg_cost)
         })
 
         # 9b. Create GL Journal Entry for warehouse transfer via GL service
         src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
         dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
 
-        transfer_value = float(transfer.quantity) * float(source_cost)
+        transfer_value = float(transfer_qty * source_cost)
         if transfer_value > 0.01:
             from utils.accounting import get_mapped_account_id
 
@@ -221,8 +223,8 @@ def create_stock_transfer(
                 "quantity": transfer.quantity,
                 "source_warehouse": src_wh.warehouse_name,
                 "destination_warehouse": dst_wh.warehouse_name,
-                "transfer_cost": source_cost,
-                "new_destination_avg_cost": new_avg_cost
+                "transfer_cost": float(source_cost),
+                "new_destination_avg_cost": float(new_avg_cost)
             }
         }
 

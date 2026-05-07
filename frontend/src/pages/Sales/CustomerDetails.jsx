@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { salesAPI } from '../../utils/api'
-import { FileText, Banknote, Calendar, CreditCard, Building } from 'lucide-react'
+import { FileText, Banknote, Calendar, CreditCard, Building, Globe } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
@@ -88,11 +88,44 @@ export default function CustomerDetails() {
                             direction: 'ltr',
                             display: 'block'
                         }}>
-                            {formatNumber(data.customer?.balance)} {currency}
+                            {formatNumber(data.customer?.balance)} {data.customer?.balance_currency || currency}
                         </span>
                     </div>
                 </div>
             </div>
+
+            {/* Party Sites */}
+            {data.customer?.party_sites && data.customer.party_sites.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Globe size={16} />
+                        {t('sales.customer_details.party_sites', 'Sites & Currencies')}
+                    </h3>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        {data.customer.party_sites.map(site => (
+                            <div key={site.id} style={{
+                                padding: '12px 16px',
+                                background: site.is_default ? 'var(--primary-light)' : 'var(--bg-secondary)',
+                                borderRadius: 'var(--radius)',
+                                border: `1px solid ${site.is_default ? 'var(--primary)' : 'var(--border)'}`,
+                                minWidth: '180px'
+                            }}>
+                                <div style={{ fontWeight: '600', fontSize: '14px' }}>{site.site_name}</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                    {site.currency}
+                                    {site.is_default && ' ★'}
+                                </div>
+                                <div style={{
+                                    fontSize: '16px', fontWeight: '700', marginTop: '8px',
+                                    color: site.site_balance > 0 ? 'var(--error)' : 'var(--success)'
+                                }}>
+                                    {formatNumber(site.site_balance)} {site.currency}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Tabs */}
             <div style={{ borderBottom: '1px solid var(--border)', marginBottom: '24px', display: 'flex', gap: '24px' }}>
@@ -159,8 +192,8 @@ export default function CustomerDetails() {
                                             {formatShortDate(inv.date)}
                                         </div>
                                     </td>
-                                    <td style={{ fontWeight: '600' }}>{formatNumber(inv.total)} {currency}</td>
-                                    <td style={{ color: 'var(--success)' }}>{formatNumber(inv.paid)} {currency}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatNumber(inv.total)} {inv.currency || currency}</td>
+                                    <td style={{ color: 'var(--success)' }}>{formatNumber(inv.paid_amount || 0)} {inv.currency || currency}</td>
                                     <td>
                                         <span className={`badge ${inv.status === 'paid' ? 'badge-success' :
                                             inv.status === 'partial' ? 'badge-warning' :

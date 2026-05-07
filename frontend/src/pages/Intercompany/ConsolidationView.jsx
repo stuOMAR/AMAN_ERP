@@ -88,10 +88,10 @@ function ConsolidationView() {
                         <DataTable
                             data={result.elimination_lines}
                             columns={[
-                                { key: 'source_entity_id', header: t('intercompany.source_entity') },
-                                { key: 'target_entity_id', header: t('intercompany.target_entity') },
-                                { key: 'amount', header: t('intercompany.source_amount'), render: (_, line) => <>{formatNumber(line.amount)} {line.currency}</> },
-                                { key: 'elimination_je_id', header: t('intercompany.elimination_journal'), render: (v) => v || '-' },
+                                { key: 'source_entity_name', label: t('intercompany.source_entity'), render: (value, line) => value || line.source_entity_id },
+                                { key: 'target_entity_name', label: t('intercompany.target_entity'), render: (value, line) => value || line.target_entity_id },
+                                { key: 'amount', label: t('intercompany.source_amount'), render: (value, line) => <>{formatNumber(value)} {line.currency}</> },
+                                { key: 'elimination_je_id', label: t('intercompany.elimination_journal'), render: (value) => value || '-' },
                             ]}
                             paginate={false}
                         />
@@ -110,10 +110,10 @@ function ConsolidationView() {
                     <DataTable
                         data={balances}
                         columns={[
-                            { key: 'source_entity_name', header: t('intercompany.source_entity'), render: (_, b) => b.source_entity_name || b.source_entity_id },
-                            { key: 'target_entity_name', header: t('intercompany.target_entity'), render: (_, b) => b.target_entity_name || b.target_entity_id },
-                            { key: 'pending_count', header: t('intercompany.pending_count') },
-                            { key: 'net_amount', header: t('intercompany.net_amount'), render: (_, b) => formatNumber(b.net_amount) },
+                            { key: 'source_entity_name', label: t('intercompany.source_entity'), render: (value, row) => value || row.source_entity_id },
+                            { key: 'target_entity_name', label: t('intercompany.target_entity'), render: (value, row) => value || row.target_entity_id },
+                            { key: 'pending_count', label: t('intercompany.pending_count') },
+                            { key: 'net_amount', label: t('intercompany.net_amount'), render: (value) => formatNumber(value) },
                         ]}
                         paginate={false}
                     />

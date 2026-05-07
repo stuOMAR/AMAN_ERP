@@ -38,6 +38,7 @@ from .core import _D2, _D4, _dec
 @router.get("/leases", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_lease_contracts(
     status: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """عقود الإيجار IFRS 16"""
@@ -52,6 +53,9 @@ def list_lease_contracts(
         if status:
             q += " AND lc.status = :st"
             params["st"] = status
+        if branch_id:
+            q += " AND a.branch_id = :branch_id"
+            params["branch_id"] = branch_id
         q += " ORDER BY lc.end_date ASC"
         rows = conn.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]

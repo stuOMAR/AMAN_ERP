@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access, validate_treasury_account_access, require_module
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
     get_base_currency, compute_line_amounts, compute_invoice_totals
@@ -225,6 +225,7 @@ async def create_project_expense(
         project = db.execute(text("SELECT * FROM projects WHERE id = :id"), {"id": project_id}).fetchone()
         if not project:
             raise HTTPException(**http_error(404, "project_not_found"))
+        branch_id = validate_branch_access(current_user, project._mapping.get('branch_id'))
 
         base_currency = get_base_currency(db)
         amount = _dec(expense.amount).quantize(_D2, ROUND_HALF_UP)
@@ -253,10 +254,10 @@ async def create_project_expense(
 
         # Cash/treasury account
         cash_acc = None
+        selected_treasury = None
         if expense.treasury_id:
-            cash_acc = db.execute(text(
-                "SELECT gl_account_id FROM treasury_accounts WHERE id = :id"
-            ), {"id": expense.treasury_id}).scalar()
+            selected_treasury = validate_treasury_account_access(db, current_user, expense.treasury_id, branch_id)
+            cash_acc = selected_treasury.get("gl_account_id")
         if not cash_acc:
             cash_acc = get_mapped_account_id(db, "acc_map_cash_main")
         if not cash_acc:
@@ -306,7 +307,7 @@ async def create_project_expense(
                 }
             ],
             user_id=current_user.id,
-            branch_id=project._mapping.get('branch_id'),
+            branch_id=branch_id,
             source="project_expense",
             source_id=exp_id
         )

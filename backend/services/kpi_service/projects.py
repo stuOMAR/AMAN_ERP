@@ -8,11 +8,13 @@ logger = logging.getLogger(__name__)
 from .common import (
     kpi_item, ratio_status, _count_table
 )
+from utils.accounting import get_base_currency
 
 
 def get_projects_kpis(db, start_date: date, end_date: date,
                       branch_id: Optional[int] = None) -> dict:
     """KPIs for Project Manager."""
+    base_currency = get_base_currency(db) or "SAR"
 
     # Active projects
     active_projects = _count_table(db, "projects", extra_where="status = 'active'")
@@ -101,7 +103,7 @@ def get_projects_kpis(db, start_date: date, end_date: date,
         kpi_item("spi", "Schedule Performance Index", "مؤشر أداء الجدول", avg_spi, "x",
                  benchmark=1.0, benchmark_source="PMI PMBOK",
                  status=ratio_status(avg_spi, 1.0, 0.8)),
-        kpi_item("change_orders", "Change Orders Value", "قيمة أوامر التغيير", change_orders_value, "SAR"),
+        kpi_item("change_orders", "Change Orders Value", "قيمة أوامر التغيير", change_orders_value, base_currency),
         kpi_item("high_risks", "High Risks", "مخاطر عالية", risks["high"], "",
                  status="danger" if risks["high"] > 0 else "good"),
         kpi_item("resource_utilization", "Resource Utilization", "استخدام الموارد", resource_util, "%",

@@ -116,7 +116,8 @@ class CircuitBreaker:
                 return False
             return True
 
-    def record_success(self, db=None) -> None:
+    def record_success(self, db=None, tenant_id: int | None = None,
+                       credential_id: int | None = None) -> None:
         with self._state.lock:
             if self._state.state in ("open", "half_open"):
                 logger.info("[CB] %s/%s closing (success)", self.integration_type, self.provider)
@@ -126,8 +127,16 @@ class CircuitBreaker:
             self._state.opens_until = None
             self._state.last_error = None
         self._persist(db, success=True)
+        # Feature 022: reset credential failure counter on success
+        if tenant_id is not None and credential_id is not None:
+            try:
+                from services.credentials_vault import record_success as vault_record_success
+                vault_record_success(tenant_id, credential_id)
+            except Exception:
+                logger.debug("[CB] credentials_vault.record_success skipped", exc_info=True)
 
-    def record_failure(self, error: str = "", db=None) -> None:
+    def record_failure(self, error: str = "", db=None, tenant_id: int | None = None,
+                       credential_id: int | None = None) -> None:
         with self._state.lock:
             self._state.failure_count += 1
             self._state.last_failure_at = self._now()
@@ -145,6 +154,13 @@ class CircuitBreaker:
                     self._state.last_error,
                 )
         self._persist(db, success=False)
+        # Feature 022: notify credential vault of failure (for alerting)
+        if tenant_id is not None and credential_id is not None:
+            try:
+                from services.credentials_vault import record_failure as vault_record_failure
+                vault_record_failure(tenant_id, credential_id)
+            except Exception:
+                logger.debug("[CB] credentials_vault.record_failure skipped", exc_info=True)
 
     # ─── persistence ───────────────────────────────────────────────────
 

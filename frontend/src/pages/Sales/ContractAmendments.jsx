@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { contractsAPI } from '../../utils/api';
+import { getCurrency } from '../../utils/auth';
+import { useBranch } from '../../context/BranchContext';
 import { useToast } from '../../context/ToastContext';
 import { FileText, Plus, Save, X, BarChart3, Calendar, DollarSign, TrendingUp } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
@@ -12,6 +14,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 const ContractAmendments = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
+    const { currentBranch } = useBranch();
     const [activeTab, setActiveTab] = useState('amendments');
     const [contracts, setContracts] = useState([]);
     const [selectedContract, setSelectedContract] = useState('');
@@ -24,12 +27,12 @@ const ContractAmendments = () => {
         old_value: '', new_value: '', effective_date: '', approved_by: ''
     });
 
-    useEffect(() => { fetchContracts(); }, []);
+    useEffect(() => { fetchContracts(); }, [currentBranch]);
     useEffect(() => { if (selectedContract) fetchData(); }, [selectedContract, activeTab]);
 
     const fetchContracts = async () => {
         try {
-            const res = await contractsAPI.list();
+            const res = await contractsAPI.listContracts({ branch_id: currentBranch?.id });
             const list = res.data?.contracts || res.data || [];
             setContracts(list);
             if (list.length > 0) setSelectedContract(list[0].id);
@@ -72,7 +75,7 @@ const ContractAmendments = () => {
 
     const formatCurrency = (val) => {
         if (!val && val !== 0) return '—';
-        return new Intl.NumberFormat(t('sales.ensa'), { style: 'currency', currency: 'SAR', maximumFractionDigits: 0 }).format(val);
+        return new Intl.NumberFormat(t('sales.ensa'), { style: 'currency', currency: getCurrency() || 'SAR', maximumFractionDigits: 0 }).format(val);
     };
 
     return (

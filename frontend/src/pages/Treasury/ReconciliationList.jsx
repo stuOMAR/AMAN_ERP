@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, Landmark, Trash2, CheckCircle, Clock } from 'lucide-react';
 import { treasuryAPI, reconciliationAPI } from '../../utils/api';
 import { useBranch } from '../../context/BranchContext';
+import { getCurrency } from '../../utils/auth';
 import { toastEmitter } from '../../utils/toastEmitter';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
@@ -13,6 +14,7 @@ const ReconciliationList = () => {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const { currentBranch } = useBranch();
+    const currency = getCurrency();
 
     const [accounts, setAccounts] = useState([]);
     const [selectedAccount, setSelectedAccount] = useState('');
@@ -131,12 +133,12 @@ const ReconciliationList = () => {
         {
             key: 'start_balance',
             label: t('treasury.reconciliation.start_bal'),
-            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })}</span>,
+            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })} <small>{currency}</small></span>,
         },
         {
             key: 'end_balance',
             label: t('treasury.reconciliation.end_bal'),
-            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })}</span>,
+            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })} <small>{currency}</small></span>,
         },
         {
             key: 'matched_count',

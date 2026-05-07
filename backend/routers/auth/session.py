@@ -30,7 +30,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import LogoutRequest, RefreshTokenRequest, add_token_to_blacklist, check_rate_limit, clear_failed_attempts, create_access_token, create_refresh_token, is_token_blacklisted, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
+from .core import LogoutRequest, RefreshTokenRequest, _get_client_ip, _hash_token, _is_user_tokens_invalidated, add_token_to_blacklist, check_rate_limit, clear_failed_attempts, create_access_token, create_refresh_token, is_token_blacklisted, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
 
 @router.post("/login", response_model=Token)
 @limiter.limit("10/minute")  # SEC-FIX: Production rate limit (reverted from 1000 testing value)
@@ -444,6 +444,19 @@ async def login(
                     company_conn.commit()
                 except Exception as sess_err:
                     logger.warning(f"Failed to create user_session: {sess_err}")
+
+                # Feature 022: Device fingerprint + geo event for login risk
+                try:
+                    from services.login_risk import evaluate_login_risk
+                    evaluate_login_risk(
+                        company_conn, tenant_id=int(company_id),
+                        user_id=result[0],
+                        user_agent=request.headers.get("user-agent", ""),
+                        ip_address=_get_client_ip(request),
+                    )
+                    company_conn.commit()
+                except Exception:
+                    logger.debug("login_risk evaluation skipped", exc_info=True)
 
                 # TASK-030: set HttpOnly refresh cookie + CSRF cookie.
                 set_auth_cookies(response, refresh_token, request)

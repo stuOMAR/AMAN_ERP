@@ -12,7 +12,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from sqlalchemy import text
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, require_module
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
     get_base_currency
@@ -64,6 +64,117 @@ def get_expense_account_by_type(db, expense_type: str) -> Optional[int]:
     return db.execute(text(
         "SELECT id FROM accounts WHERE account_type = 'expense' AND is_active = true LIMIT 1"
     )).scalar()
+
+
+def _resolve_expense_department_id(db, *, department_id: Optional[int] = None, cost_center_id: Optional[int] = None) -> Optional[int]:
+    if department_id:
+        return department_id
+    if not cost_center_id:
+        return None
+    return db.execute(text(
+        "SELECT department_id FROM cost_centers WHERE id = :id"
+    ), {"id": cost_center_id}).scalar()
+
+
+def _get_applicable_expense_policies(db, *, expense_type: Optional[str], department_id: Optional[int]) -> List[Dict[str, Any]]:
+    rows = db.execute(text("""
+        SELECT * FROM expense_policies
+        WHERE is_active = TRUE AND is_deleted = false
+          AND (expense_type IS NULL OR expense_type = '' OR expense_type = :expense_type)
+          AND (department_id IS NULL OR department_id = :department_id)
+        ORDER BY
+          CASE WHEN expense_type = :expense_type THEN 0 ELSE 1 END,
+          CASE WHEN department_id = :department_id THEN 0 ELSE 1 END
+    """), {"expense_type": expense_type, "department_id": department_id}).fetchall()
+    return [dict(row._mapping) for row in rows]
+
+
+def _evaluate_expense_policy(
+    db,
+    *,
+    expense_type: Optional[str],
+    amount: Decimal,
+    current_user_id: int,
+    expense_date: date,
+    department_id: Optional[int] = None,
+    cost_center_id: Optional[int] = None,
+    has_receipt: bool = False,
+) -> Dict[str, Any]:
+    resolved_department_id = _resolve_expense_department_id(
+        db, department_id=department_id, cost_center_id=cost_center_id
+    )
+    policies = _get_applicable_expense_policies(
+        db, expense_type=expense_type, department_id=resolved_department_id
+    )
+    amount_value = Decimal(str(amount or 0))
+    violations: List[str] = []
+    auto_approve = True
+    applied_policy_id = policies[0]["id"] if policies else None
+
+    for policy in policies:
+        policy_name = policy.get("name") or policy.get("id")
+
+        if policy.get("daily_limit") and amount_value > Decimal(str(policy["daily_limit"])):
+            violations.append(f"Amount exceeds daily limit of {policy['daily_limit']} for policy '{policy_name}'")
+
+        if policy.get("requires_receipt") and not has_receipt:
+            violations.append(f"Policy '{policy_name}' requires a receipt")
+
+        if policy.get("auto_approve_below") and amount_value >= Decimal(str(policy["auto_approve_below"])):
+            auto_approve = False
+        if policy.get("requires_approval"):
+            auto_approve = False
+
+        period_filters = [
+            "e.expense_type = :expense_type",
+            "e.is_deleted = false",
+            "e.approval_status != 'rejected'",
+        ]
+        params = {
+            "expense_type": expense_type,
+            "user_id": current_user_id,
+            "expense_date": expense_date,
+            "policy_department_id": policy.get("department_id"),
+        }
+        join_cost_centers = ""
+        if policy.get("department_id"):
+            join_cost_centers = "LEFT JOIN cost_centers cc ON cc.id = e.cost_center_id"
+            period_filters.append("cc.department_id = :policy_department_id")
+        else:
+            period_filters.append("e.created_by = :user_id")
+
+        if policy.get("monthly_limit"):
+            monthly_total = db.execute(text(f"""
+                SELECT COALESCE(SUM(e.amount), 0)
+                FROM expenses e
+                {join_cost_centers}
+                WHERE {' AND '.join(period_filters)}
+                  AND DATE_TRUNC('month', e.expense_date) = DATE_TRUNC('month', CAST(:expense_date AS date))
+            """), params).scalar()
+            if Decimal(str(monthly_total or 0)) + amount_value > Decimal(str(policy["monthly_limit"])):
+                scope = "department" if policy.get("department_id") else "user"
+                violations.append(f"Total would exceed {scope} monthly limit of {policy['monthly_limit']} for policy '{policy_name}'")
+
+        if policy.get("annual_limit"):
+            annual_total = db.execute(text(f"""
+                SELECT COALESCE(SUM(e.amount), 0)
+                FROM expenses e
+                {join_cost_centers}
+                WHERE {' AND '.join(period_filters)}
+                  AND EXTRACT(YEAR FROM e.expense_date) = EXTRACT(YEAR FROM CAST(:expense_date AS date))
+            """), params).scalar()
+            if Decimal(str(annual_total or 0)) + amount_value > Decimal(str(policy["annual_limit"])):
+                scope = "department" if policy.get("department_id") else "user"
+                violations.append(f"Total would exceed {scope} annual limit of {policy['annual_limit']} for policy '{policy_name}'")
+
+    return {
+        "valid": len(violations) == 0,
+        "auto_approve": auto_approve and len(violations) == 0,
+        "violations": violations,
+        "policies_checked": len(policies),
+        "policy_id": applied_policy_id,
+        "department_id": resolved_department_id,
+    }
 
 
 def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_currency: str, *, je_status: str = "posted"):
@@ -132,14 +243,14 @@ async def list_expenses(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة المصاريف مع الفلاتر"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {"company_id": current_user.company_id}
         filters = ["e.is_deleted = false"]
         
-        if branch_id:
-            filters.append("e.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params, prefix="").strip()
+        if branch_condition:
+            filters.append(branch_condition)
         if start_date:
             filters.append("e.expense_date >= :start_date")
             params["start_date"] = start_date
@@ -192,14 +303,14 @@ async def get_expenses_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """إحصائيات المصاريف"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {}
         filters = ["is_deleted = false"]
         
-        if branch_id:
-            filters.append("branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "branch_id", params, prefix="").strip()
+        if branch_condition:
+            filters.append(branch_condition)
         if start_date:
             filters.append("expense_date >= :start_date")
             params["start_date"] = start_date
@@ -318,35 +429,15 @@ def delete_expense_policy(policy_id: int, current_user=Depends(get_current_user)
 def validate_expense_against_policy(expense: ExpenseValidation, current_user=Depends(get_current_user)):
     """التحقق من المصروف ضد السياسات"""
     with transactional(current_user.company_id) as db:
-        amount = expense.amount
-        exp_type = expense.expense_type
-        dept_id = expense.department_id
-
-        policies = db.execute(text("""
-            SELECT * FROM expense_policies
-            WHERE is_active = TRUE AND is_deleted = false
-              AND (expense_type IS NULL OR expense_type = :et)
-              AND (department_id IS NULL OR department_id = :did)
-        """), {"et": exp_type, "did": dept_id}).fetchall()
-
-        violations = []
-        auto_approve = True
-        for p in policies:
-            pol = dict(p._mapping)
-            if pol.get("daily_limit") and amount > Decimal(str(pol["daily_limit"])):
-                violations.append(f"يتجاوز الحد اليومي ({pol['daily_limit']})")
-            if pol.get("auto_approve_below") and amount >= Decimal(str(pol["auto_approve_below"])):
-                auto_approve = False
-            if pol.get("requires_receipt"):
-                if not expense.has_receipt:
-                    violations.append("يتطلب إيصال")
-
-        return {
-            "valid": len(violations) == 0,
-            "auto_approve": auto_approve and len(violations) == 0,
-            "violations": violations,
-            "policies_checked": len(policies)
-        }
+        return _evaluate_expense_policy(
+            db,
+            expense_type=expense.expense_type,
+            amount=expense.amount,
+            current_user_id=current_user.id,
+            expense_date=date.today(),
+            department_id=expense.department_id,
+            has_receipt=expense.has_receipt,
+        )
 
 
 @router.get("/{expense_id}", dependencies=[Depends(require_permission("expenses.view"))], response_model=Dict[str, Any])
@@ -409,35 +500,29 @@ async def create_expense(
             # Validate expense type
             if expense.expense_type and expense.expense_type not in EXPENSE_TYPES:
                 raise HTTPException(status_code=400, detail=f"Invalid expense type. Must be one of: {', '.join(EXPENSE_TYPES)}")
+
+            require_cost_center = db.execute(text("""
+                SELECT LOWER(setting_value) IN ('1', 'true', 'yes', 'on')
+                FROM company_settings
+                WHERE setting_key = 'expenses_require_cost_center'
+            """)).scalar() or False
+            if require_cost_center and not expense.cost_center_id:
+                raise HTTPException(status_code=400, detail="cost_center_required")
             
-            # Policy enforcement: check if expense exceeds policy limits
-            policy = db.execute(text("""
-                SELECT * FROM expense_policies
-                WHERE is_active = true AND is_deleted = false
-                  AND (expense_type = :etype OR expense_type IS NULL OR expense_type = '')
-                  AND (department_id = :dept OR department_id IS NULL)
-                ORDER BY
-                  CASE WHEN expense_type = :etype THEN 0 ELSE 1 END,
-                  CASE WHEN department_id = :dept THEN 0 ELSE 1 END
-                LIMIT 1
-            """), {"etype": expense.expense_type, "dept": getattr(expense, 'department_id', None)}).fetchone()
-            
-            policy_warning = None
-            if policy:
-                amount_val = Decimal(str(expense.amount))
-                if policy.daily_limit and amount_val > Decimal(str(policy.daily_limit)):
-                    policy_warning = f"Amount exceeds daily limit of {policy.daily_limit} for policy '{policy.name}'"
-                if policy.monthly_limit:
-                    # Check monthly total for this type
-                    month_total = db.execute(text("""
-                        SELECT COALESCE(SUM(amount), 0) FROM expenses
-                        WHERE expense_type = :etype AND created_by = :uid
-                          AND EXTRACT(MONTH FROM expense_date) = EXTRACT(MONTH FROM CURRENT_DATE)
-                          AND EXTRACT(YEAR FROM expense_date) = EXTRACT(YEAR FROM CURRENT_DATE)
-                          AND is_deleted = false AND approval_status != 'rejected'
-                    """), {"etype": expense.expense_type, "uid": current_user.id}).scalar()
-                    if (Decimal(str(month_total)) + amount_val) > Decimal(str(policy.monthly_limit)):
-                        policy_warning = f"Total would exceed monthly limit of {policy.monthly_limit} for policy '{policy.name}'"
+            policy_result = _evaluate_expense_policy(
+                db,
+                expense_type=expense.expense_type,
+                amount=expense.amount,
+                current_user_id=current_user.id,
+                expense_date=expense.expense_date,
+                cost_center_id=expense.cost_center_id,
+                has_receipt=bool(expense.receipt_number),
+            )
+            if not policy_result["valid"]:
+                raise HTTPException(status_code=400, detail={
+                    "code": "expense_policy_violation",
+                    "violations": policy_result["violations"],
+                })
             
             base_currency = get_base_currency(db)
             
@@ -452,9 +537,10 @@ async def create_expense(
             # Determine cash/bank account
             cash_account_id = None
             if expense.treasury_id:
-                cash_account_id = db.execute(text(
-                    "SELECT gl_account_id FROM treasury_accounts WHERE id = :id"
-                ), {"id": expense.treasury_id}).scalar()
+                treasury_row = validate_treasury_account_access(
+                    db, current_user, expense.treasury_id, expense.branch_id
+                )
+                cash_account_id = treasury_row["gl_account_id"]
             
             if not cash_account_id:
                 cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
@@ -466,19 +552,20 @@ async def create_expense(
             expense_number = generate_sequential_number(db, "EXP", "expenses", "expense_number")
             
             # Initial approval status
-            approval_status = "pending" if expense.requires_approval else "approved"
+            requires_policy_approval = not policy_result["auto_approve"]
+            approval_status = "pending" if expense.requires_approval or requires_policy_approval else "approved"
             
             # Insert expense record
             expense_id = db.execute(text("""
                 INSERT INTO expenses (
                     expense_number, expense_date, expense_type, amount, description,
                     category, payment_method, treasury_id, expense_account_id,
-                    cost_center_id, project_id, branch_id, approval_status,
+                    cost_center_id, project_id, branch_id, policy_id, approval_status,
                     receipt_number, vendor_name, created_by
                 ) VALUES (
                     :num, :date, :type, :amt, :desc,
                     :cat, :pm, :tid, :eaid,
-                    :ccid, :pid, :bid, :status,
+                    :ccid, :pid, :bid, :policy_id, :status,
                     :receipt, :vendor, :uid
                 ) RETURNING id
             """), {
@@ -487,7 +574,7 @@ async def create_expense(
                 "cat": expense.category, "pm": expense.payment_method, "tid": expense.treasury_id,
                 "eaid": expense_account_id,
                 "ccid": expense.cost_center_id, "pid": expense.project_id, "bid": expense.branch_id,
-                "status": approval_status,
+                "policy_id": policy_result["policy_id"], "status": approval_status,
                 "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id
             }).scalar()
             
@@ -577,7 +664,7 @@ async def create_expense(
                 "expense_number": expense_number,
                 "approval_status": approval_status,
                 "message": "تم إنشاء المصروف بنجاح" if approval_status == "approved" else "تم إنشاء المصروف - في انتظار الاعتماد",
-                "policy_warning": policy_warning,
+                "policy": policy_result,
             }
     
             # Notify about expense submission
@@ -738,6 +825,11 @@ async def approve_expense(
     
                 # Determine cash account
                 cash_account_id = expense["cash_account_id"]
+                if expense["treasury_id"]:
+                    treasury_row = validate_treasury_account_access(
+                        db, current_user, expense["treasury_id"], expense.get("branch_id")
+                    )
+                    cash_account_id = treasury_row["gl_account_id"]
                 if not cash_account_id:
                     cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
     
@@ -1011,14 +1103,14 @@ async def get_expenses_by_type(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير المصاريف حسب النوع"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {}
         filters = ["approval_status = 'approved'", "is_deleted = false"]
         
-        if branch_id:
-            filters.append("branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "branch_id", params, prefix="").strip()
+        if branch_condition:
+            filters.append(branch_condition)
         if start_date:
             filters.append("expense_date >= :start_date")
             params["start_date"] = start_date
@@ -1053,14 +1145,14 @@ async def get_expenses_by_cost_center(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير المصاريف حسب مركز التكلفة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         params = {}
         filters = ["e.approval_status = 'approved'", "e.is_deleted = false"]
         
-        if branch_id:
-            filters.append("e.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params, prefix="").strip()
+        if branch_condition:
+            filters.append(branch_condition)
         if start_date:
             filters.append("e.expense_date >= :start_date")
             params["start_date"] = start_date
@@ -1092,7 +1184,7 @@ async def get_monthly_expenses(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير المصاريف الشهري"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         from datetime import datetime
         current_year = year or datetime.now().year
@@ -1100,9 +1192,9 @@ async def get_monthly_expenses(
         params = {"year": current_year}
         filters = ["approval_status = 'approved'", "is_deleted = false", "EXTRACT(YEAR FROM expense_date) = :year"]
         
-        if branch_id:
-            filters.append("branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "branch_id", params, prefix="").strip()
+        if branch_condition:
+            filters.append(branch_condition)
         
         where_clause = " AND ".join(filters)
         

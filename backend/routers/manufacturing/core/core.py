@@ -111,7 +111,7 @@ def calculate_production_cost(conn, bom_id: int, order_quantity: float, order_id
 
 
 # ---- Helper: Check Inventory Sufficiency ----
-def check_inventory_sufficiency(conn, bom_id: int, order_quantity: float, warehouse_id: int = None):
+def check_inventory_sufficiency(conn, bom_id: int, order_quantity: float, warehouse_id: int = None, *, lock_rows: bool = False):
     """
     Check if enough raw materials are available in inventory for a production order.
     Returns (is_sufficient: bool, shortages: list).
@@ -135,9 +135,11 @@ def check_inventory_sufficiency(conn, bom_id: int, order_quantity: float, wareho
         
         # Check available quantity
         if warehouse_id:
-            inv = conn.execute(text("""
+            lock_clause = "FOR UPDATE" if lock_rows else ""
+            inv = conn.execute(text(f"""
                 SELECT COALESCE(quantity, 0) as qty FROM inventory 
                 WHERE product_id = :pid AND warehouse_id = :whid
+                {lock_clause}
             """), {"pid": comp.component_product_id, "whid": warehouse_id}).fetchone()
         else:
             inv = conn.execute(text("""

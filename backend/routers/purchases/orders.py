@@ -16,10 +16,11 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
@@ -46,8 +47,7 @@ def list_purchase_orders(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض أوامر الشراء"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
@@ -60,9 +60,7 @@ def list_purchase_orders(
         """
         params = {"limit": limit, "skip": skip}
         
-        if branch_id:
-            query_str += " AND po.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         
         query_str += " ORDER BY po.created_at DESC LIMIT :limit OFFSET :skip"
         
@@ -117,7 +115,7 @@ def get_purchase_order(
             SELECT je.id, je.entry_number, je.entry_date, je.description,
                    COALESCE((SELECT SUM(jl.debit) FROM journal_lines jl WHERE jl.journal_entry_id = je.id), 0) as total_debit
             FROM journal_entries je
-            WHERE je.reference = :ref OR je.description LIKE :desc_ref
+            WHERE je.status = 'posted' AND (je.reference = :ref OR je.description LIKE :desc_ref)
             ORDER BY je.entry_date DESC
         """), {"ref": po.po_number, "desc_ref": f"%{po.po_number}%"}).fetchall()
         
@@ -210,26 +208,39 @@ def create_purchase_order(
                 if line_discount > line_total_gross:
                     raise HTTPException(status_code=400, detail=f"الخصم ({line_discount}) يتجاوز إجمالي السطر ({line_total_gross}): {item.description}")
     
-                la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, item.discount)
+                tax_info = resolve_line_tax(po.branch_id, item.product_id, db, po.order_date)
+                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
                 lines_data.append({
                     "product_id": item.product_id,
                     "description": item.description,
                     "quantity": item.quantity,
                     "unit_price": item.unit_price,
-                    "tax_rate": item.tax_rate,
+                    "tax_rate": tax_info["tax_rate"],
+                    "tax_rate_id": tax_info["tax_rate_id"],
                     "discount": item.discount,
                     "total": str(la["line_total"]),
                 })
     
+            header_discount_pct = (
+                _dec(po.effect_percentage)
+                if getattr(po, "effect_type", "discount") == "discount"
+                else Decimal("0")
+            )
+            markup_amount = (
+                _dec(po.markup_amount)
+                if getattr(po, "effect_type", "discount") == "markup"
+                else Decimal("0")
+            )
+
             totals = compute_invoice_totals([
                 {
-                    "quantity": item.quantity,
-                    "unit_price": item.unit_price,
-                    "tax_rate": item.tax_rate,
-                    "discount": item.discount,
+                    "quantity": it["quantity"],
+                    "unit_price": it["unit_price"],
+                    "tax_rate": it["tax_rate"],
+                    "discount": it["discount"],
                 }
-                for item in po.items
-            ])
+                for it in lines_data
+            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount)
             subtotal = totals["subtotal"]
             total_tax = totals["total_tax"]
             total_discount = totals["total_discount"]
@@ -240,11 +251,11 @@ def create_purchase_order(
                 INSERT INTO purchase_orders (
                     po_number, party_id, branch_id, order_date, expected_date,
                     subtotal, tax_amount, discount, total, status, notes, created_by,
-                    currency, exchange_rate
+                    currency, exchange_rate, party_site_id
                 ) VALUES (
                     :num, :supp, :bid, :date, :exp,
                     :sub, :tax, :disc, :total, 'draft', :notes, :user,
-                    :currency, :exchange_rate
+                    :currency, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "num": po_num,
@@ -259,7 +270,8 @@ def create_purchase_order(
                 "notes": po.notes,
                 "user": current_user.get("id") if isinstance(current_user, dict) else current_user.id,
                 "currency": po.currency,
-                "exchange_rate": po.exchange_rate
+                "exchange_rate": po.exchange_rate,
+                "party_site_id": po.party_site_id,
             }).fetchone()
             
             po_id = result[0]
@@ -269,9 +281,9 @@ def create_purchase_order(
                 db.execute(text("""
                     INSERT INTO purchase_order_lines (
                         po_id, product_id, description, quantity, unit_price, 
-                        tax_rate, discount, total
+                        tax_rate, tax_rate_id, discount, total
                     ) VALUES (
-                        :po_id, :pid, :desc, :qty, :price, :tax_rate, :disc, :total
+                        :po_id, :pid, :desc, :qty, :price, :tax_rate, :tax_rate_id, :disc, :total
                     )
                 """), {
                     "po_id": po_id,
@@ -280,6 +292,7 @@ def create_purchase_order(
                     "qty": line["quantity"],
                     "price": line["unit_price"],
                     "tax_rate": line["tax_rate"],
+                    "tax_rate_id": line.get("tax_rate_id"),
                     "disc": line["discount"],
                     "total": line["total"]
                 })
@@ -625,7 +638,7 @@ def receive_purchase_order(
                         user_id=int(current_user.get("id") if isinstance(current_user, dict) else current_user.id),
                         branch_id=po.branch_id,
                         currency=po.currency,
-                        exchange_rate=exchange_rate,
+                        exchange_rate=1.0,  # amounts already in base currency
                         source="purchase_order_receipt",
                         source_id=id
                     )
@@ -684,7 +697,16 @@ def get_purchases_summary(
             """), {"bid": branch_id}).scalar() or 0
         else:
             supplier_count = db.execute(text("SELECT COUNT(*) FROM parties WHERE is_supplier = TRUE")).scalar() or 0
-            total_balance = db.execute(text("SELECT COALESCE(SUM(current_balance), 0) FROM parties WHERE is_supplier = TRUE AND current_balance < 0")).scalar() or 0
+            # Use party_site_balances for per-branch, per-currency balances
+            total_balance = db.execute(text("""
+                SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0)
+                FROM party_site_balances psb
+                JOIN party_sites ps ON psb.party_site_id = ps.id
+                JOIN parties p ON ps.party_id = p.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                WHERE (p.is_supplier = TRUE OR p.party_type = 'supplier')
+                AND psb.balance < 0
+            """)).scalar() or 0
             total_payables = abs(total_balance)
         
         # 3. Monthly Purchases (Total of invoices - returns in current month)

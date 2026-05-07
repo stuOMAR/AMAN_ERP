@@ -8,6 +8,7 @@ import { useToast } from '../../context/ToastContext'
 import { getStep } from '../../utils/format'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import ProductTaxSelector from '../../components/Tax/ProductTaxSelector';
 
 const formatApiError = (detail, fallback) => {
     if (!detail) return fallback
@@ -57,7 +58,6 @@ function ProductForm() {
         unit: t('stock.products.unit_piece'),
         selling_price: '',
         buying_price: '',
-        tax_rate: 15,
         description: '',
         category_id: '',
         has_batch_tracking: false,
@@ -65,6 +65,14 @@ function ProductForm() {
         has_expiry_tracking: false,
         shelf_life_days: '',
         expiry_alert_days: 30
+    })
+    const [taxMode, setTaxMode] = useState({
+        mode: 'inherit',
+        tax_rate_id: null,
+        tax_rate: null,
+        tax_name: null,
+        tax_group_id: null,
+        is_exempt: false,
     })
     const [categories, setCategories] = useState([])
 
@@ -81,7 +89,10 @@ function ProductForm() {
             selling_price: normalizeOptionalNumber(formData.selling_price, 0),
             buying_price: normalizeOptionalNumber(formData.buying_price, 0),
             last_buying_price: normalizeOptionalNumber(formData.last_buying_price ?? formData.buying_price, 0),
-            tax_rate: normalizeOptionalNumber(formData.tax_rate, 15),
+            tax_rate: null, // Resolved by tax engine
+            tax_rate_id: taxMode.tax_rate_id,
+            tax_group_id: taxMode.tax_group_id,
+            is_exempt: taxMode.is_exempt,
             description: formData.description?.trim() || null,
             category_id: formData.category_id === '' ? null : normalizeOptionalInteger(formData.category_id, 0),
             is_active: formData.is_active ?? true,
@@ -102,14 +113,7 @@ function ProductForm() {
 
                 // If new product, fetch default tax rate from settings
                 if (!id) {
-                    try {
-                        const settingsRes = await settingsAPI.get()
-                        if (settingsRes.data && settingsRes.data.vat_rate) {
-                            setFormData(prev => ({ ...prev, tax_rate: Number(settingsRes.data.vat_rate) }))
-                        }
-                    } catch (err) {
-                        console.warn("Failed to load settings", err)
-                    }
+                    // Default to inherit mode — no need to set anything
                 }
             } catch (err) {
                 showToast(t('stock.products.validation.error_load_data'), 'error')
@@ -126,8 +130,46 @@ function ProductForm() {
                     setFormData({
                         ...data,
                         category_id: data.category_id || '',
-                        tax_rate: data.tax_rate ?? 15
+                        product_name: data.product_name || '',
+                        product_name_en: data.product_name_en || '',
+                        product_code: data.product_code || '',
+                        description: data.description || '',
+                        barcode: data.barcode || '',
+                        brand: data.brand || '',
+                        manufacturer: data.manufacturer || '',
+                        sku: data.sku || '',
+                        cost_price: data.cost_price ?? 0,
+                        selling_price: data.selling_price ?? 0,
+                        wholesale_price: data.wholesale_price ?? 0,
+                        min_price: data.min_price ?? 0,
+                        max_price: data.max_price ?? 0,
+                        reorder_level: data.reorder_level ?? 0,
+                        reorder_quantity: data.reorder_quantity ?? 0,
                     })
+                    // Set tax mode based on product data
+                    if (data.is_exempt) {
+                        setTaxMode({ mode: 'exempt', tax_rate_id: null, tax_rate: 0, tax_name: null, tax_group_id: null, is_exempt: true })
+                    } else if (data.tax_group_id) {
+                        setTaxMode({
+                            mode: 'group',
+                            tax_rate_id: null,
+                            tax_rate: null,
+                            tax_name: data.tax_group_name || null,
+                            tax_group_id: data.tax_group_id,
+                            is_exempt: false,
+                        })
+                    } else if (data.tax_rate_id) {
+                        setTaxMode({
+                            mode: 'custom',
+                            tax_rate_id: data.tax_rate_id,
+                            tax_rate: data.tax_rate,
+                            tax_name: data.tax_name || null,
+                            tax_group_id: null,
+                            is_exempt: false,
+                        })
+                    } else {
+                        setTaxMode({ mode: 'inherit', tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, is_exempt: false })
+                    }
                 } catch (err) {
                     setError(t('stock.products.validation.error_load_data'))
                     showToast(t('stock.products.validation.error_load_data'), 'error')
@@ -264,9 +306,10 @@ function ProductForm() {
                                 />
                             </FormField>
                             <FormField label={t('stock.products.form.tax_rate')}>
-                                <input
-                                    type="number" name="tax_rate" className="form-input" min="0" max="100"
-                                    value={formData.tax_rate} onChange={handleChange}
+                                <ProductTaxSelector
+                                    branchId={currentBranch?.id}
+                                    value={taxMode}
+                                    onChange={setTaxMode}
                                 />
                             </FormField>
                         </div>

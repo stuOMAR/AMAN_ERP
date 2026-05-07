@@ -13,10 +13,11 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.currency_display import base_to_display_amount, display_currency_fields, document_amount_base_sql, resolve_display_currency
 from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
@@ -26,6 +27,10 @@ _D4 = Decimal('0.0001')
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _display_dec(value: Any, display_meta: dict) -> Decimal:
+    return _dec(base_to_display_amount(value, display_meta)).quantize(_D2, ROUND_HALF_UP)
 
 router = APIRouter()
 
@@ -39,22 +44,23 @@ def get_vat_report(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب تقرير ضريبة القيمة المضافة للفترة المحددة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         if not start_date:
             start_date = date.today().replace(day=1)
         if not end_date:
             end_date = date.today()
 
-        params = {"start": start_date, "end": end_date}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        display_meta = resolve_display_currency(db, branch_scope)
+        params = {"start": start_date, "end": end_date, "base_currency": display_meta["base_currency"]}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
+        taxable_base_sql = document_amount_base_sql("(il.quantity * il.unit_price - COALESCE(il.discount, 0))", "i")
+        vat_base_sql = document_amount_base_sql("((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * (il.tax_rate / 100))", "i")
 
         output_vat = db.execute(text(  # noqa: sql-lint
             f"""
-            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat_amount
+            SELECT COALESCE(SUM({taxable_base_sql}), 0) as taxable_amount,
+                   COALESCE(SUM({vat_base_sql}), 0) as vat_amount
             FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
             WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
@@ -62,8 +68,8 @@ def get_vat_report(
 
         input_vat = db.execute(text(  # noqa: sql-lint
             f"""
-            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat_amount
+             SELECT COALESCE(SUM({taxable_base_sql}), 0) as taxable_amount,
+                 COALESCE(SUM({vat_base_sql}), 0) as vat_amount
             FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
             WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
@@ -71,8 +77,8 @@ def get_vat_report(
 
         output_vat_returns = db.execute(text(  # noqa: sql-lint
             f"""
-            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat_amount
+             SELECT COALESCE(SUM({taxable_base_sql}), 0) as taxable_amount,
+                 COALESCE(SUM({vat_base_sql}), 0) as vat_amount
             FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
             WHERE i.invoice_type = 'sales_return' AND i.status NOT IN ('draft', 'cancelled')
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
@@ -80,8 +86,8 @@ def get_vat_report(
 
         input_vat_returns = db.execute(text(  # noqa: sql-lint
             f"""
-            SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat_amount
+             SELECT COALESCE(SUM({taxable_base_sql}), 0) as taxable_amount,
+                 COALESCE(SUM({vat_base_sql}), 0) as vat_amount
             FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
             WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft', 'cancelled')
             AND i.invoice_date BETWEEN :start AND :end {branch_filter}
@@ -94,10 +100,11 @@ def get_vat_report(
         net_vat_payable = (net_output_vat - net_input_vat).quantize(_D2, ROUND_HALF_UP)
 
         return {
+            **display_currency_fields(display_meta),
             "period": {"start": start_date, "end": end_date},
-            "output_vat": {"taxable": str(net_output_taxable), "vat": str(net_output_vat)},
-            "input_vat": {"taxable": str(net_input_taxable), "vat": str(net_input_vat)},
-            "net_vat_payable": str(net_vat_payable)
+            "output_vat": {"taxable": str(_display_dec(net_output_taxable, display_meta)), "vat": str(_display_dec(net_output_vat, display_meta))},
+            "input_vat": {"taxable": str(_display_dec(net_input_taxable, display_meta)), "vat": str(_display_dec(net_input_vat, display_meta))},
+            "net_vat_payable": str(_display_dec(net_vat_payable, display_meta))
         }
 
 
@@ -111,7 +118,7 @@ def get_tax_audit(
     current_user: dict = Depends(get_current_user)
 ):
     """تقرير تدقيق ضريبي مفصل لكل معاملة خاضعة للضريبة بالفترة"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         if not start_date:
             start_date = date.today().replace(day=1)
@@ -119,9 +126,7 @@ def get_tax_audit(
             end_date = date.today()
 
         params = {"start": start_date, "end": end_date}
-        branch_filter = "AND i.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
         results = db.execute(text(  # noqa: sql-lint
             f"""
@@ -158,8 +163,10 @@ def get_tax_summary(
     current_user: dict = Depends(get_current_user)
 ):
     """ملخص وحدة الضرائب (لوحة تحكم) مع فلترة حسب الفرع"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    branch_id = branch_scope["branch_id"]
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         # ── Branch/country aware rates count ──
         rate_where = "WHERE is_active = TRUE"
         rate_params = {}
@@ -174,9 +181,7 @@ def get_tax_summary(
         # ── Returns stats with branch filter ──
         ret_where = "WHERE status != 'cancelled'"
         ret_params = {}
-        if branch_id:
-            ret_where += " AND branch_id = :branch_id"
-            ret_params["branch_id"] = branch_id
+        ret_where += " " + branch_scope_filter_from_scope(branch_scope, "branch_id", ret_params)
         if year:
             ret_where += " AND tax_period LIKE :yp"
             ret_params["yp"] = f"{year}%"
@@ -194,17 +199,15 @@ def get_tax_summary(
 
         today = date.today()
         first_of_month = today.replace(day=1)
-        vat_params = {"start": first_of_month, "end": today}
-        vat_branch_filter = ""
-        if branch_id:
-            vat_branch_filter = "AND i.branch_id = :branch_id"
-            vat_params["branch_id"] = branch_id
+        vat_params = {"start": first_of_month, "end": today, "base_currency": display_meta["base_currency"]}
+        vat_branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", vat_params)
+        vat_base_sql = document_amount_base_sql("((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * (il.tax_rate / 100))", "i")
 
         current_vat = db.execute(text(  # noqa: sql-lint
             f"""
             SELECT
-                COALESCE(SUM(CASE WHEN i.invoice_type = 'sales' THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100) ELSE 0 END), 0) as output_vat,
-                COALESCE(SUM(CASE WHEN i.invoice_type = 'purchase' THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100) ELSE 0 END), 0) as input_vat
+                COALESCE(SUM(CASE WHEN i.invoice_type = 'sales' THEN {vat_base_sql} ELSE 0 END), 0) as output_vat,
+                COALESCE(SUM(CASE WHEN i.invoice_type = 'purchase' THEN {vat_base_sql} ELSE 0 END), 0) as input_vat
             FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
             WHERE i.invoice_date >= :start AND i.invoice_date <= :end
             AND i.status NOT IN ('draft', 'cancelled') AND il.tax_rate > 0
@@ -213,9 +216,7 @@ def get_tax_summary(
 
         overdue_where = "WHERE status = 'filed' AND due_date < CURRENT_DATE"
         overdue_params = {}
-        if branch_id:
-            overdue_where += " AND branch_id = :branch_id"
-            overdue_params["branch_id"] = branch_id
+        overdue_where += " " + branch_scope_filter_from_scope(branch_scope, "branch_id", overdue_params)
         overdue = db.execute(text(f"SELECT COUNT(*) FROM tax_returns {overdue_where}"), overdue_params).scalar() or 0  # noqa: sql-lint
 
         # ── Employee tax summary (withholding from payroll) ──
@@ -223,9 +224,7 @@ def get_tax_summary(
         try:
             emp_where = ""
             emp_params = {}
-            if branch_id:
-                emp_where = "AND e.branch_id = :branch_id"
-                emp_params["branch_id"] = branch_id
+            emp_where = branch_scope_filter_from_scope(branch_scope, "e.branch_id", emp_params)
             emp_row = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT COUNT(DISTINCT pe.employee_id) as total_employees,
@@ -242,17 +241,18 @@ def get_tax_summary(
             pass  # payroll tables may not exist yet
 
         return {
+            **display_currency_fields(display_meta),
             "active_rates": rates_count,
             "returns": {
                 "total": returns_stats.total or 0, "draft": returns_stats.draft or 0,
                 "filed": returns_stats.filed or 0, "paid": returns_stats.paid or 0,
-                "pending_amount": str(_dec(returns_stats.pending_amount or 0).quantize(_D2, ROUND_HALF_UP)),
-                "paid_amount": str(_dec(returns_stats.paid_amount or 0).quantize(_D2, ROUND_HALF_UP))
+                "pending_amount": str(_display_dec(returns_stats.pending_amount or 0, display_meta)),
+                "paid_amount": str(_display_dec(returns_stats.paid_amount or 0, display_meta))
             },
             "current_period": {
-                "output_vat": str(_dec(current_vat.output_vat or 0).quantize(_D2, ROUND_HALF_UP)),
-                "input_vat": str(_dec(current_vat.input_vat or 0).quantize(_D2, ROUND_HALF_UP)),
-                "net_vat": str((_dec(current_vat.output_vat) - _dec(current_vat.input_vat)).quantize(_D2, ROUND_HALF_UP))
+                "output_vat": str(_display_dec(current_vat.output_vat or 0, display_meta)),
+                "input_vat": str(_display_dec(current_vat.input_vat or 0, display_meta)),
+                "net_vat": str(_display_dec(_dec(current_vat.output_vat) - _dec(current_vat.input_vat), display_meta))
             },
             "overdue_returns": overdue,
             "employee_taxes": emp_tax,
@@ -273,33 +273,33 @@ def get_branch_tax_analysis(
     تحليل ضريبي مفصل حسب الفرع — يعرض VAT مقسم لكل فرع
     يستخدم هذا التقرير لمعرفة حجم الالتزامات الضريبية لكل فرع
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         if not start_date:
             start_date = date.today().replace(month=1, day=1)
         if not end_date:
             end_date = date.today()
 
-        params = {"start": start_date, "end": end_date}
-        branch_filter = ""
-        if branch_id:
-            branch_filter = "AND i.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        params = {"start": start_date, "end": end_date, "base_currency": display_meta["base_currency"]}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
+        taxable_base_sql = document_amount_base_sql("(il.quantity * il.unit_price - COALESCE(il.discount, 0))", "i")
+        vat_base_sql = document_amount_base_sql("((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * (il.tax_rate / 100))", "i")
 
         rows = db.execute(text(  # noqa: sql-lint
             f"""
 
             SELECT 
                 b.id as branch_id, b.branch_name, b.branch_name_en,
-                b.country_code as jurisdiction,
+                b.country_code as jurisdiction, COALESCE(b.default_currency, :base_currency) as branch_currency,
                 COALESCE(SUM(CASE WHEN i.invoice_type = 'sales'
-                    THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100) ELSE 0 END), 0) as output_vat,
+                    THEN {vat_base_sql} ELSE 0 END), 0) as output_vat,
                 COALESCE(SUM(CASE WHEN i.invoice_type = 'purchase'
-                    THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100) ELSE 0 END), 0) as input_vat,
+                    THEN {vat_base_sql} ELSE 0 END), 0) as input_vat,
                 COALESCE(SUM(CASE WHEN i.invoice_type = 'sales'
-                    THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate ELSE 0 END), 0) as taxable_sales,
+                    THEN {taxable_base_sql} ELSE 0 END), 0) as taxable_sales,
                 COALESCE(SUM(CASE WHEN i.invoice_type = 'purchase'
-                    THEN (il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate ELSE 0 END), 0) as taxable_purchases,
+                    THEN {taxable_base_sql} ELSE 0 END), 0) as taxable_purchases,
                 COUNT(DISTINCT i.id) as invoice_count
             FROM invoices i
             JOIN invoice_lines il ON i.id = il.invoice_id
@@ -308,16 +308,13 @@ def get_branch_tax_analysis(
               AND i.status NOT IN ('draft', 'cancelled')
               AND il.tax_rate > 0
               {branch_filter}
-            GROUP BY b.id, b.branch_name, b.branch_name_en, b.country_code
+                        GROUP BY b.id, b.branch_name, b.branch_name_en, b.country_code, b.default_currency
             ORDER BY output_vat DESC
         """), params).fetchall()
 
         # Get return stats per branch
         ret_params = {"year_prefix": str(start_date.year) + "%"}
-        ret_branch_filter = ""
-        if branch_id:
-            ret_branch_filter = "AND tr.branch_id = :branch_id"
-            ret_params["branch_id"] = branch_id
+        ret_branch_filter = branch_scope_filter_from_scope(branch_scope, "tr.branch_id", ret_params)
 
         returns_by_branch = db.execute(text(  # noqa: sql-lint
             f"""
@@ -354,11 +351,13 @@ def get_branch_tax_analysis(
                 "branch_name": r.branch_name,
                 "branch_name_en": r.branch_name_en,
                 "jurisdiction": r.jurisdiction or "SA",
-                "output_vat": float(out),
-                "input_vat": float(inp),
-                "net_vat": float(net),
-                "taxable_sales": float(r.taxable_sales or 0),
-                "taxable_purchases": float(r.taxable_purchases or 0),
+                "currency": display_meta["currency"],
+                "branch_currency": str(r.branch_currency or display_meta["base_currency"]).upper(),
+                "output_vat": float(_display_dec(out, display_meta)),
+                "input_vat": float(_display_dec(inp, display_meta)),
+                "net_vat": float(_display_dec(net, display_meta)),
+                "taxable_sales": float(_display_dec(r.taxable_sales or 0, display_meta)),
+                "taxable_purchases": float(_display_dec(r.taxable_purchases or 0, display_meta)),
                 "invoice_count": r.invoice_count,
                 "returns_count": ret_info.get("returns_count", 0),
                 "returns_filed": ret_info.get("filed", 0),
@@ -367,12 +366,13 @@ def get_branch_tax_analysis(
             })
 
         return {
+            **display_currency_fields(display_meta),
             "period": {"start": start_date, "end": end_date},
             "branches": result,
             "totals": {
-                "output_vat": float(grand_output.quantize(_D2, ROUND_HALF_UP)),
-                "input_vat": float(grand_input.quantize(_D2, ROUND_HALF_UP)),
-                "net_vat": float((grand_output - grand_input).quantize(_D2, ROUND_HALF_UP)),
+                "output_vat": float(_display_dec(grand_output, display_meta)),
+                "input_vat": float(_display_dec(grand_input, display_meta)),
+                "net_vat": float(_display_dec(grand_output - grand_input, display_meta)),
                 "branch_count": len(result)
             }
         }
@@ -393,7 +393,7 @@ def get_employee_tax_obligations(
     يشمل: ضريبة الدخل على الرواتب، التأمينات الاجتماعية (GOSI)، استقطاع ضريبي
     يمكن الفلترة حسب الفرع، القسم، الموظف، والسنة
     """
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         if not year:
@@ -401,9 +401,9 @@ def get_employee_tax_obligations(
 
         where_parts = ["pe.status IN ('approved', 'paid')"]
         params = {"year": year}
-        if branch_id:
-            where_parts.append("e.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params, prefix="").strip()
+        if branch_condition:
+            where_parts.append(branch_condition)
         if department_id:
             where_parts.append("e.department_id = :department_id")
             params["department_id"] = department_id
@@ -500,7 +500,7 @@ def get_employee_tax_obligations(
 
         return {
             "year": year,
-            "branch_id": branch_id,
+            "branch_id": branch_scope["branch_id"],
             "employees": employee_list,
             "summary": {
                 "total_employees": len(employee_list),

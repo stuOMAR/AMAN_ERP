@@ -85,6 +85,10 @@ def create_bad_debt_provision(request: Request, req: ProvisionRequest, current_u
             source="bad_debt_provision",
         )
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="accounting.provision.bad_debt",
+                     resource_type="provision", resource_id=str(je_num),
+                     details={"amount": float(req.amount)})
         trans.commit()
         return {"success": True, "journal_entry": je_num, "amount": req.amount}
     except HTTPException:
@@ -150,6 +154,10 @@ def create_leave_provision(request: Request, req: ProvisionRequest, current_user
             source="leave_provision",
         )
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="accounting.provision.leave",
+                     resource_type="provision", resource_id=str(je_num),
+                     details={"amount": float(req.amount)})
         trans.commit()
         return {"success": True, "journal_entry": je_num, "amount": req.amount}
     except HTTPException:

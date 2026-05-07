@@ -48,37 +48,65 @@ const Branches = () => {
         is_active: true
     });
     const [currencies, setCurrencies] = useState([]);
+    const [saving, setSaving] = useState(false);
+    const canManageBranches = hasPermission('branches.manage');
+
+    const refreshCurrencies = () => {
+        currenciesAPI.list().then(res => setCurrencies(res.data || [])).catch(() => {});
+    };
 
     useEffect(() => {
         refreshBranches();
-        currenciesAPI.list().then(res => setCurrencies(res.data || [])).catch(() => {});
+        refreshCurrencies();
     }, []);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
+        if (!canManageBranches) {
+            toastEmitter.emit(t('branches.no_manage_permission', 'ليس لديك صلاحية لإدارة الفروع'), 'warning');
+            return;
+        }
+        setSaving(true);
         try {
             if (isEditing) {
                 await branchesAPI.update(formData.id, formData);
+                toastEmitter.emit(t('branches.update_success', 'تم تحديث الفرع بنجاح'), 'success');
             } else {
                 await branchesAPI.create(formData);
+                toastEmitter.emit(t('branches.create_success', 'تم إنشاء الفرع بنجاح'), 'success');
             }
             setShowModal(false);
             refreshBranches();
+            refreshCurrencies();
             resetForm();
         } catch (error) {
             console.error('Error saving branch:', error);
-            toastEmitter.emit(t('common.error_occurred'), 'error');
+            const detail = error.response?.data?.detail;
+            const message = typeof detail === 'string'
+                ? detail
+                : Array.isArray(detail)
+                    ? detail.map(item => item.msg).join(', ')
+                    : t('branches.save_error', 'تعذر حفظ الفرع. راجع البيانات والصلاحيات.');
+            toastEmitter.emit(message, 'error');
+        } finally {
+            setSaving(false);
         }
     };
 
     const handleDelete = async (id) => {
+        if (!canManageBranches) {
+            toastEmitter.emit(t('branches.no_manage_permission', 'ليس لديك صلاحية لإدارة الفروع'), 'warning');
+            return;
+        }
         if (!window.confirm(t('common.confirm_delete'))) return;
         try {
             await branchesAPI.delete(id);
+            toastEmitter.emit(t('branches.delete_success', 'تم حذف الفرع بنجاح'), 'success');
             refreshBranches();
         } catch (error) {
             console.error('Error deleting branch:', error);
-            toastEmitter.emit(t('common.error_occurred'), 'error');
+            // The global api interceptor in apiClient.js will handle showing the toast for 400 and 500 errors
+            // So we don't emit another one here to avoid duplicates.
         }
     };
 
@@ -131,10 +159,12 @@ const Branches = () => {
                     <p className="workspace-subtitle">{t('branches.subtitle')}</p>
                 </div>
                 <div className="header-actions">
-                    <button className="btn btn-primary" onClick={() => { resetForm(); setShowModal(true); }}>
-                        <Plus size={16} className="ms-2" />
-                        {t('branches.add_new')}
-                    </button>
+                    {canManageBranches && (
+                        <button className="btn btn-primary" onClick={() => { resetForm(); setShowModal(true); }}>
+                            <Plus size={16} className="ms-2" />
+                            {t('branches.add_new')}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -208,14 +238,17 @@ const Branches = () => {
                                     </td>
                                     <td>
                                         <div className="action-buttons">
-                                            <button className="btn-icon" onClick={() => openEdit(branch)} title={t('common.edit')}>
-                                                <Edit size={16} />
-                                            </button>
-                                            {!branch.is_default && (
+                                            {canManageBranches && (
+                                                <button className="btn-icon" onClick={() => openEdit(branch)} title={t('common.edit')}>
+                                                    <Edit size={16} />
+                                                </button>
+                                            )}
+                                            {canManageBranches && !branch.is_default && (
                                                 <button className="btn-icon text-danger" onClick={() => handleDelete(branch.id)} title={t('common.delete')}>
                                                     <Trash size={16} />
                                                 </button>
                                             )}
+                                            {!canManageBranches && '-'}
                                         </div>
                                     </td>
                                 </tr>
@@ -251,8 +284,8 @@ const Branches = () => {
                             onChange={e => setFormData({ ...formData, branch_name_en: e.target.value })}
                         />
                     </div>
-                    <div className="row">
-                        <div className="col-md-4 mb-3">
+                    <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                        <div className="form-group">
                             <label className="form-label">{t('branches.code')}</label>
                             <input
                                 type="text"
@@ -261,7 +294,7 @@ const Branches = () => {
                                 onChange={e => setFormData({ ...formData, branch_code: e.target.value })}
                             />
                         </div>
-                        <div className="col-md-4 mb-3">
+                        <div className="form-group">
                             <label className="form-label">{t('branches.country')} *</label>
                             <select
                                 className="form-input"
@@ -275,7 +308,7 @@ const Branches = () => {
                                 ))}
                             </select>
                         </div>
-                        <div className="col-md-4 mb-3">
+                        <div className="form-group">
                             <label className="form-label">{t('branches.currency')}</label>
                             <select
                                 className="form-input"
@@ -283,7 +316,6 @@ const Branches = () => {
                                 onChange={e => setFormData({ ...formData, default_currency: e.target.value })}
                             >
                                 <option value="">{t('common.select')}</option>
-                                {/* Always include all country currencies + extras from API */}
                                 {[
                                     ...ALL_CURRENCIES,
                                     ...currencies.filter(c => !ALL_CURRENCIES.find(x => x.code === c.code))
@@ -294,8 +326,8 @@ const Branches = () => {
                             </select>
                         </div>
                     </div>
-                    <div className="row">
-                        <div className="col-md-4 mb-3">
+                    <div className="form-row" style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: '16px' }}>
+                        <div className="form-group">
                             <label className="form-label">{t('branches.city')}</label>
                             <input
                                 type="text"
@@ -304,7 +336,7 @@ const Branches = () => {
                                 onChange={e => setFormData({ ...formData, city: e.target.value })}
                             />
                         </div>
-                        <div className="col-md-4 mb-3">
+                        <div className="form-group">
                             <label className="form-label">{t('branches.phone')}</label>
                             <input
                                 type="text"
@@ -313,7 +345,7 @@ const Branches = () => {
                                 onChange={e => setFormData({ ...formData, phone: e.target.value })}
                             />
                         </div>
-                        <div className="col-md-4 mb-3">
+                        <div className="form-group">
                             <label className="form-label">{t('branches.email')}</label>
                             <input
                                 type="email"
@@ -333,19 +365,22 @@ const Branches = () => {
                         />
                     </div>
 
-                    <div className="form-check mb-4">
+                    <div className="form-group" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                         <input
                             type="checkbox"
                             checked={formData.is_active}
                             onChange={e => setFormData({ ...formData, is_active: e.target.checked })}
                             id="isActive"
+                            className="checkbox checkbox-primary"
                         />
-                        <label htmlFor="isActive" className="ms-2">{t('common.active')}</label>
+                        <label htmlFor="isActive" style={{ marginBottom: 0 }}>{t('common.active')}</label>
                     </div>
 
                     <div className="modal-footer">
-                        <button type="button" className="btn btn-outline-secondary" onClick={() => setShowModal(false)}>{t('common.cancel')}</button>
-                        <button type="submit" className="btn btn-primary">{t('common.save')}</button>
+                        <button type="button" className="btn btn-outline" onClick={() => setShowModal(false)} disabled={saving}>{t('common.cancel')}</button>
+                        <button type="submit" className="btn btn-primary" disabled={saving}>
+                            {saving ? t('common.saving', 'جاري الحفظ...') : t('common.save')}
+                        </button>
                     </div>
                 </form>
             </SimpleModal>

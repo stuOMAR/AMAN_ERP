@@ -34,7 +34,7 @@ def _u(current_user, key, default=None):
 
 router = APIRouter()
 
-from .core import FiscalPeriodLockRequest, ZakatCalculateRequest
+from .core import FiscalPeriodLockRequest, ZakatCalculateRequest, _zakat_balance_query, _zakat_account_breakdown
 
 @router.post("/accounting/zakat/calculate", dependencies=[Depends(require_permission("accounting.manage"))],
              tags=["Zakat"], response_model=Dict[str, Any])
@@ -63,10 +63,10 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
     
                 # ── النقد (أصل الأصول المالية في الزكاة بالإجماع) ──
                 cash_filter = """
-                        a.account_code LIKE '1101%%'
-                        OR a.account_code LIKE '11001%%'
-                        OR a.account_code LIKE '11010%%'
-                        OR a.account_code LIKE '11020%%'
+                        a.account_number LIKE '1101%%'
+                        OR a.account_number LIKE '11001%%'
+                        OR a.account_number LIKE '11010%%'
+                        OR a.account_number LIKE '11020%%'
                         OR a.name LIKE '%%نقد%%' OR a.name LIKE '%%صندوق%%'
                         OR a.name LIKE '%%بنك%%' OR a.name LIKE '%%كاش%%'
                         OR a.name_en LIKE '%%cash%%' OR a.name_en LIKE '%%bank%%'
@@ -95,9 +95,9 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
     
                 # ── عروض التجارة (كل مال أُعِد للبيع في سوقه خلال السنة) ──
                 trade_filter = """
-                        a.account_code LIKE '1103%%'
-                        OR a.account_code LIKE '13001%%'
-                        OR a.account_code LIKE '13010%%'
+                        a.account_number LIKE '1103%%'
+                        OR a.account_number LIKE '13001%%'
+                        OR a.account_number LIKE '13010%%'
                         OR a.name LIKE '%%مخزون%%' OR a.name LIKE '%%بضاع%%'
                         OR a.name LIKE '%%عروض%%تجار%%'
                         OR a.name_en LIKE '%%inventory%%' OR a.name_en LIKE '%%stock%%'
@@ -130,10 +130,10 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
     
                 # ── المدينون المرجوون ──
                 recv_filter = """
-                        a.account_code LIKE '1102%%' OR a.account_code LIKE '1108%%'
-                        OR a.account_code LIKE '1109%%'
-                        OR a.account_code LIKE '12001%%' OR a.account_code LIKE '12010%%'
-                        OR a.account_code LIKE '12020%%'
+                        a.account_number LIKE '1102%%' OR a.account_number LIKE '1108%%'
+                        OR a.account_number LIKE '1109%%'
+                        OR a.account_number LIKE '12001%%' OR a.account_number LIKE '12010%%'
+                        OR a.account_number LIKE '12020%%'
                         OR a.name LIKE '%%عملاء%%' OR a.name LIKE '%%مدين%%'
                         OR a.name_en LIKE '%%receivable%%'
                 """
@@ -160,7 +160,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
     
                 # ── الالتزامات المتداولة (تُخصم من الوعاء) ──
                 cl_filter = """
-                        a.account_code LIKE '21%%'
+                        a.account_number LIKE '21%%'
                         OR a.name LIKE '%%دائن%%' OR a.name LIKE '%%مورد%%'
                         OR a.name LIKE '%%مستحق%%' OR a.name LIKE '%%مصروف%%مستحق%%'
                         OR a.name LIKE '%%قرض%%قصير%%'
@@ -174,8 +174,8 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
     
                 # ── الأصول المستبعدة (للعرض فقط) ──
                 fa_filter = """
-                        a.account_code LIKE '12%%' OR a.account_code LIKE '15%%'
-                        OR a.account_code LIKE '16%%'
+                        a.account_number LIKE '12%%' OR a.account_number LIKE '15%%'
+                        OR a.account_number LIKE '16%%'
                         OR a.name LIKE '%%أصول ثابتة%%' OR a.name LIKE '%%معدات%%'
                         OR a.name LIKE '%%مباني%%' OR a.name LIKE '%%سيارات%%'
                         OR a.name LIKE '%%أثاث%%' OR a.name LIKE '%%أراضي%%'
@@ -188,7 +188,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                 fixed_assets = db.execute(text(fa_sql), fa_params).scalar() or 0
     
                 intang_filter = """
-                        a.account_code LIKE '13%%' OR a.account_code LIKE '18%%'
+                        a.account_number LIKE '13%%' OR a.account_number LIKE '18%%'
                         OR a.name LIKE '%%شهرة%%' OR a.name LIKE '%%براءة%%'
                         OR a.name LIKE '%%علامة تجارية%%' OR a.name LIKE '%%رخصة%%'
                         OR a.name LIKE '%%غير ملموس%%'
@@ -199,7 +199,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                 intangible_assets = db.execute(text(intang_sql), intang_params).scalar() or 0
     
                 wip_filter = """
-                        a.account_code LIKE '1110%%'
+                        a.account_number LIKE '1110%%'
                         OR a.name LIKE '%%تحت الإنشاء%%' OR a.name LIKE '%%تحت التصنيع%%'
                         OR a.name LIKE '%%مواد خام%%' OR a.name LIKE '%%قطع غيار%%'
                         OR a.name_en LIKE '%%work in progress%%' OR a.name_en LIKE '%%under construction%%'
@@ -277,7 +277,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                 # 2. Long-term liabilities
                 lt_filter = """
                         a.name LIKE '%%طويل%%' OR a.name_en LIKE '%%long%%term%%'
-                        OR a.account_code LIKE '22%%'
+                        OR a.account_number LIKE '22%%'
                 """
                 lt_sql, lt_params = _zakat_balance_query(lt_filter, ['long_term_liability', 'liability'], branch_id, sign="credit")
                 lt_liabilities = db.execute(text(lt_sql), lt_params).scalar() or 0
@@ -308,8 +308,8 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                         OR a.name_en LIKE '%%machine%%' OR a.name_en LIKE '%%building%%'
                         OR a.name_en LIKE '%%vehicle%%' OR a.name_en LIKE '%%furniture%%'
                         OR a.name_en LIKE '%%depreciation%%'
-                        OR a.account_code LIKE '12%%' OR a.account_code LIKE '15%%'
-                        OR a.account_code LIKE '16%%'
+                        OR a.account_number LIKE '12%%' OR a.account_number LIKE '15%%'
+                        OR a.account_number LIKE '16%%'
                 """
                 zatca_fa_sql, zatca_fa_params = _zakat_balance_query(zatca_fa_filter, ['asset'], branch_id)
                 fixed_assets = db.execute(text(zatca_fa_sql), zatca_fa_params).scalar() or 0
@@ -318,7 +318,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                 zatca_inv_filter = """
                         a.name LIKE '%%استثمار%%طويل%%'
                         OR a.name_en LIKE '%%long%%invest%%'
-                        OR a.account_code LIKE '14%%'
+                        OR a.account_number LIKE '14%%'
                 """
                 zatca_inv_sql, zatca_inv_params = _zakat_balance_query(zatca_inv_filter, ['asset'], branch_id)
                 lt_investments = db.execute(text(zatca_inv_sql), zatca_inv_params).scalar() or 0
@@ -332,9 +332,9 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                         OR a.name LIKE '%%غير ملموس%%' OR a.name LIKE '%%أصول معنوية%%'
                         OR a.name_en LIKE '%%intangible%%' OR a.name_en LIKE '%%goodwill%%'
                         OR a.name_en LIKE '%%patent%%' OR a.name_en LIKE '%%trademark%%'
-                        OR a.account_code LIKE '1301%%' OR a.account_code LIKE '1302%%'
-                        OR a.account_code LIKE '1303%%' OR a.account_code LIKE '1304%%'
-                        OR a.account_code LIKE '1305%%' OR a.account_code LIKE '18%%'
+                        OR a.account_number LIKE '1301%%' OR a.account_number LIKE '1302%%'
+                        OR a.account_number LIKE '1303%%' OR a.account_number LIKE '1304%%'
+                        OR a.account_number LIKE '1305%%' OR a.account_number LIKE '18%%'
                 """
                 zatca_intang_sql, zatca_intang_params = _zakat_balance_query(zatca_intang_filter, ['asset'], branch_id)
                 intangible_assets = db.execute(text(zatca_intang_sql), zatca_intang_params).scalar() or 0
@@ -344,7 +344,7 @@ def calculate_zakat(body: ZakatCalculateRequest, current_user: dict = Depends(ge
                         a.name LIKE '%%تحت الإنشاء%%' OR a.name LIKE '%%تحت التنفيذ%%'
                         OR a.name LIKE '%%مشروعات تحت%%'
                         OR a.name_en LIKE '%%under construction%%' OR a.name_en LIKE '%%work in progress%%'
-                        OR a.account_code LIKE '17%%'
+                        OR a.account_number LIKE '17%%'
                 """
                 zatca_wip_sql, zatca_wip_params = _zakat_balance_query(zatca_wip_filter, ['asset'], branch_id)
                 wip = db.execute(text(zatca_wip_sql), zatca_wip_params).scalar() or 0

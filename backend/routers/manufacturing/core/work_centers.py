@@ -11,7 +11,7 @@ from utils.i18n import http_error
 from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from database import get_db_connection
 from utils.tx import transactional
 from utils.accounting import get_base_currency
@@ -40,15 +40,11 @@ def list_work_centers(
     current_user: UserResponse = Depends(get_current_user)
 ):
     """List Work Centers."""
-    from utils.permissions import validate_branch_access
-    validated_branch = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     conn = get_db_connection(current_user.company_id)
     try:
         query = "SELECT * FROM work_centers WHERE is_deleted = false"
         params = {}
-        if validated_branch:
-            query += " AND branch_id = :branch_id"
-            params["branch_id"] = validated_branch
         query += " ORDER BY name"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]

@@ -15,7 +15,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -35,48 +35,53 @@ router = APIRouter()
 
 from .core import _D2, _D4, _dec
 
-@router.get("/fiscal-years", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
+@router.get("/fiscal-years", dependencies=[Depends(require_permission("accounting.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_fiscal_years(request: Request, current_user: dict = Depends(get_current_user)):
     """قائمة السنوات المالية"""
     with transactional(current_user.company_id) as db:
-        rows = db.execute(text("""
-            SELECT fy.*,
-                   cu_closed.username AS closed_by_name,
-                   cu_reopened.username AS reopened_by_name,
-                   a.name AS retained_earnings_account_name,
-                   a.account_number AS retained_earnings_account_number,
-                   (SELECT COUNT(*) FROM fiscal_periods fp WHERE fp.fiscal_year = fy.year) AS period_count,
-                   (SELECT COUNT(*) FROM fiscal_periods fp WHERE fp.fiscal_year = fy.year AND fp.is_closed = TRUE) AS closed_period_count
-            FROM fiscal_years fy
-            LEFT JOIN company_users cu_closed ON fy.closed_by = cu_closed.id
-            LEFT JOIN company_users cu_reopened ON fy.reopened_by = cu_reopened.id
-            LEFT JOIN accounts a ON fy.retained_earnings_account_id = a.id
-            ORDER BY fy.year DESC
-        """)).fetchall()
+        try:
+            rows = db.execute(text("""
+                SELECT fy.*,
+                       cu_closed.username AS closed_by_name,
+                       cu_reopened.username AS reopened_by_name,
+                       a.name AS retained_earnings_account_name,
+                       a.account_number AS retained_earnings_account_number,
+                       (SELECT COUNT(*) FROM fiscal_periods fp WHERE fp.fiscal_year = fy.year) AS period_count,
+                       (SELECT COUNT(*) FROM fiscal_periods fp WHERE fp.fiscal_year = fy.year AND fp.is_closed = TRUE) AS closed_period_count
+                FROM fiscal_years fy
+                LEFT JOIN company_users cu_closed ON fy.closed_by = cu_closed.id
+                LEFT JOIN company_users cu_reopened ON fy.reopened_by = cu_reopened.id
+                LEFT JOIN accounts a ON fy.retained_earnings_account_id = a.id
+                ORDER BY fy.year DESC
+            """)).fetchall()
 
-        result = []
-        for r in rows:
-            result.append({
-                "id": r.id,
-                "year": r.year,
-                "start_date": str(r.start_date),
-                "end_date": str(r.end_date),
-                "status": r.status,
-                "retained_earnings_account_id": r.retained_earnings_account_id,
-                "retained_earnings_account_name": r.retained_earnings_account_name,
-                "retained_earnings_account_number": r.retained_earnings_account_number,
-                "closing_entry_id": r.closing_entry_id,
-                "closed_by": r.closed_by,
-                "closed_by_name": r.closed_by_name,
-                "closed_at": str(r.closed_at) if r.closed_at else None,
-                "reopened_by": r.reopened_by,
-                "reopened_by_name": r.reopened_by_name,
-                "reopened_at": str(r.reopened_at) if r.reopened_at else None,
-                "period_count": r.period_count,
-                "closed_period_count": r.closed_period_count,
-            })
-        return result
+            result = []
+            for r in rows:
+                result.append({
+                    "id": r.id,
+                    "year": r.year,
+                    "start_date": str(r.start_date),
+                    "end_date": str(r.end_date),
+                    "status": r.status,
+                    "retained_earnings_account_id": r.retained_earnings_account_id,
+                    "retained_earnings_account_name": r.retained_earnings_account_name,
+                    "retained_earnings_account_number": r.retained_earnings_account_number,
+                    "closing_entry_id": r.closing_entry_id,
+                    "closed_by": r.closed_by,
+                    "closed_by_name": r.closed_by_name,
+                    "closed_at": str(r.closed_at) if r.closed_at else None,
+                    "reopened_by": r.reopened_by,
+                    "reopened_by_name": r.reopened_by_name,
+                    "reopened_at": str(r.reopened_at) if r.reopened_at else None,
+                    "period_count": r.period_count,
+                    "closed_period_count": r.closed_period_count,
+                })
+            return result
+        except Exception as e:
+            logger.error(f"Error fetching fiscal years: {str(e)}")
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/fiscal-years", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def create_fiscal_year(
@@ -152,7 +157,6 @@ def create_fiscal_year(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error creating fiscal year: {e}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -362,6 +366,39 @@ def close_fiscal_year(
                     SET is_closed = TRUE, closed_by = :user, closed_at = NOW()
                     WHERE fiscal_year = :year AND is_closed = FALSE
                 """), {"year": year, "user": current_user.id}).rowcount
+                db.execute(text("""
+                    UPDATE fiscal_period_locks fpl
+                    SET is_locked = TRUE,
+                        locked_at = COALESCE(fpl.locked_at, NOW()),
+                        locked_by = COALESCE(fpl.locked_by, :user),
+                        reason = COALESCE(fpl.reason, :reason)
+                    FROM fiscal_periods fp
+                    WHERE fp.fiscal_year = :year
+                      AND fpl.period_start = fp.start_date
+                      AND fpl.period_end = fp.end_date
+                """), {
+                    "year": year,
+                    "user": current_user.id,
+                    "reason": f"Fiscal year close {year}",
+                })
+                db.execute(text("""
+                    INSERT INTO fiscal_period_locks
+                        (period_name, period_start, period_end, is_locked,
+                         locked_at, locked_by, reason)
+                    SELECT fp.name, fp.start_date, fp.end_date, TRUE,
+                           NOW(), :user, :reason
+                    FROM fiscal_periods fp
+                    WHERE fp.fiscal_year = :year
+                      AND NOT EXISTS (
+                          SELECT 1 FROM fiscal_period_locks fpl
+                          WHERE fpl.period_start = fp.start_date
+                            AND fpl.period_end = fp.end_date
+                      )
+                """), {
+                    "year": year,
+                    "user": current_user.id,
+                    "reason": f"Fiscal year close {year}",
+                })
     
             # 7. Mark fiscal year as closed
             db.execute(text("""
@@ -390,16 +427,15 @@ def close_fiscal_year(
                 "message": f"تم إقفال السنة المالية {year} بنجاح",
                 "closing_entry_id": entry_id,
                 "closing_entry_number": entry_num,
-                "total_revenue": total_revenue,
-                "total_expenses": total_expenses,
-                "net_income": net_income,
+                "total_revenue": float(total_revenue),
+                "total_expenses": float(total_expenses),
+                "net_income": float(net_income),
                 "result_type": "profit" if net_income >= 0 else "loss",
                 "closed_periods": closed_periods
             }
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error closing fiscal year {year}: {e}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -443,10 +479,13 @@ def reopen_fiscal_year(
                         "description": f"عكس إقفال {year}",
                     })
     
+                reversal_date = str(date.today())
+                check_fiscal_period_open(db, reversal_date)
+    
                 rev_id, _ = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
-                    date=str(fy.end_date),
+                    date=reversal_date,
                     description=f"عكس قيد إقفال السنة المالية {year}" + (f" - {data.reason}" if data.reason else ""),
                     lines=rev_lines,
                     user_id=current_user.id,
@@ -460,7 +499,7 @@ def reopen_fiscal_year(
     
                 # Mark original closing entry as voided
                 db.execute(text("""
-                    UPDATE journal_entries SET status = 'voided' WHERE id = :id
+                    UPDATE journal_entries SET status = 'void' WHERE id = :id
                 """), {"id": fy.closing_entry_id})
     
             # 3. Reopen fiscal periods
@@ -469,6 +508,17 @@ def reopen_fiscal_year(
                 SET is_closed = FALSE, closed_by = NULL, closed_at = NULL
                 WHERE fiscal_year = :year
             """), {"year": year})
+            db.execute(text("""
+                UPDATE fiscal_period_locks fpl
+                SET is_locked = FALSE,
+                    unlocked_at = NOW(),
+                    unlocked_by = :user
+                FROM fiscal_periods fp
+                WHERE fp.fiscal_year = :year
+                  AND fpl.period_start = fp.start_date
+                  AND fpl.period_end = fp.end_date
+                  AND fpl.is_locked = TRUE
+            """), {"year": year, "user": current_user.id})
     
             # 4. Update fiscal year status
             db.execute(text("""
@@ -494,7 +544,6 @@ def reopen_fiscal_year(
         except HTTPException:
             raise
         except Exception as e:
-            pass
             logger.error(f"Error reopening fiscal year {year}: {e}")
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
@@ -562,6 +611,23 @@ def toggle_fiscal_period(
                 WHERE id = :id
             """), {"closed": new_status, "user": current_user.id, "id": period_id})
     
+            # Sync fiscal_period_locks table
+            if new_status:
+                # Closing: ensure a lock row exists
+                db.execute(text("""
+                    INSERT INTO fiscal_period_locks (period_name, period_start, period_end, is_locked, locked_at, locked_by, reason)
+                    VALUES (:name, :start, :end, TRUE, NOW(), :user, 'Manual close')
+                    ON CONFLICT (period_start, period_end) DO UPDATE SET
+                        is_locked = TRUE, locked_at = NOW(), locked_by = :user
+                """), {"name": period.name, "start": period.start_date, "end": period.end_date, "user": current_user.id})
+            else:
+                # Opening: unlock the matching row
+                db.execute(text("""
+                    UPDATE fiscal_period_locks
+                    SET is_locked = FALSE, unlocked_at = NOW(), unlocked_by = :user
+                    WHERE period_start = :start AND period_end = :end
+                """), {"start": period.start_date, "end": period.end_date, "user": current_user.id})
+    
             action = "إغلاق" if new_status else "فتح"
     
             # Audit log for fiscal period lock/unlock (FR-024)
@@ -579,7 +645,6 @@ def toggle_fiscal_period(
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # ==================== ACC-003: Recurring Journal Templates ====================
@@ -594,7 +659,7 @@ def preview_closing_entries(
     current_user: dict = Depends(get_current_user)
 ):
     """معاينة قيود الإقفال التلقائي للإيرادات والمصاريف"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         if not start_date:
             start_date = date.today().replace(month=1, day=1)
@@ -602,9 +667,7 @@ def preview_closing_entries(
             end_date = date.today()
 
         params = {"start": start_date, "end": end_date}
-        branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
-        if branch_id:
-            params["branch_id"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
         revenues = db.execute(text(  # noqa: sql-lint
             f"""
@@ -640,11 +703,11 @@ def preview_closing_entries(
             "SELECT id, account_number, name FROM accounts WHERE account_number = '3200' OR name LIKE '%ملخص الدخل%' LIMIT 1"
         )).fetchone()
         retained_earnings = db.execute(text(
-            "SELECT id, account_number, name FROM accounts WHERE account_number IN ('RET', '3100') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
+            "SELECT id, account_number, name FROM accounts WHERE account_number IN ('RET', '3100', '32') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
         )).fetchone()
 
-        total_revenue = sum(_dec(r.balance) for r in revenues)
-        total_expense = sum(_dec(r.balance) for r in expenses)
+        total_revenue = sum((_dec(r.balance) for r in revenues), Decimal('0'))
+        total_expense = sum((_dec(r.balance) for r in expenses), Decimal('0'))
         net_income = (total_revenue - total_expense).quantize(_D4, ROUND_HALF_UP)
 
         return {
@@ -682,7 +745,7 @@ def generate_closing_entries(
     
             if not retained_earnings_id:
                 ret = db.execute(text(
-                    "SELECT id FROM accounts WHERE account_number IN ('RET', '3100') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
+                    "SELECT id FROM accounts WHERE account_number IN ('RET', '3100', '32') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
                 )).fetchone()
                 if not ret:
                     raise HTTPException(status_code=400, detail="لم يتم العثور على حساب الأرباح المبقاة")
@@ -842,20 +905,19 @@ def generate_closing_entries(
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="accounting.closing_entries.generate",
                          resource_type="closing_entries", resource_id=str(len(created_entries)),
-                         details={"entries_count": len(created_entries), "net_income": net_income})
+                         details={"entries_count": len(created_entries), "net_income": float(net_income)})
     
             return {
                 "success": True,
                 "entries": created_entries,
-                "total_revenue": total_revenue,
-                "total_expense": total_expense,
-                "net_income": net_income,
+                "total_revenue": float(total_revenue),
+                "total_expense": float(total_expense),
+                "net_income": float(net_income),
                 "message": f"تم توليد {len(created_entries)} قيد إقفال بنجاح",
             }
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # ═══════════════════════════════════════════════════════════

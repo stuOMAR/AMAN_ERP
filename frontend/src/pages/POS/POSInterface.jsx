@@ -10,6 +10,7 @@ import HeldOrders from './components/HeldOrders';
 import POSReturns from './components/POSReturns';
 import LazyImage from '../../components/common/LazyImage';
 import { savePendingOrder } from './POSOfflineManager';
+import { generateReceiptText } from './ThermalPrintSettings';
 import {
     Search, RefreshCcw, Home, LogOut,
     ShoppingCart, Plus, Minus,
@@ -18,7 +19,7 @@ import {
     UserCircle, Printer,
     Clock, LayoutGrid, ArrowRightLeft, Smartphone, Package, RotateCcw
 } from 'lucide-react';
-import { formatShortDate, formatDateTime } from '../../utils/dateUtils';
+import { formatShortDate } from '../../utils/dateUtils';
 import { formatNumber } from '../../utils/format';
 
 const POSInterface = () => {
@@ -106,10 +107,11 @@ const POSInterface = () => {
         cart.forEach(item => {
             const itemTotal = item.price * item.quantity;
             subtotal += itemTotal;
-            const itemTax = itemTotal * (item.tax_rate / 100);
+            const itemTax = 0; // Tax resolved by backend engine
             totalTax += itemTax;
         });
 
+        // Display total: just sum + tax - discount (for display only)
         const total = Math.max(0, subtotal + totalTax - globalDiscount);
         return { subtotal, discount: globalDiscount, tax: totalTax, total };
     }, [cart, globalDiscount]);
@@ -180,7 +182,7 @@ const POSInterface = () => {
             if (existing) {
                 return prev.map(item => item.id === product.id ? { ...item, quantity: item.quantity + 1 } : item);
             } else {
-                return [...prev, { ...product, quantity: 1, discount: 0, tax_rate: (product.tax_rate !== undefined && product.tax_rate !== null) ? product.tax_rate : 15 }];
+                return [...prev, { ...product, quantity: 1, discount: 0 }];
             }
         });
     };
@@ -234,7 +236,6 @@ const POSInterface = () => {
                     product_id: item.id,
                     quantity: item.quantity,
                     unit_price: item.price,
-                    tax_rate: (item.tax_rate !== undefined && item.tax_rate !== null) ? item.tax_rate : 15
                 })),
                 discount_amount: globalDiscount,
                 paid_amount: status === 'paid' ? totalPaid : 0,
@@ -366,7 +367,7 @@ const POSInterface = () => {
                         <div className="info-content">
                             <span className="info-label">{t('pos.invoice_date')}</span>
                             <span className="info-value">
-                                {formatShortDate(currentTime)} {formatDateTime(currentTime)}
+                                {formatShortDate(currentTime)}
                             </span>
                         </div>
                     </div>
@@ -673,7 +674,38 @@ const POSInterface = () => {
                             </button>
                             <button
                                 disabled={!cart.length}
-                                onClick={() => window.print()}
+                                onClick={() => {
+                                    const receiptOrder = {
+                                        order_number: session?.session_code ? `${session.session_code}-${(session.order_count || 0) + 1}` : 'NEW',
+                                        order_date: new Date().toISOString(),
+                                        customer_name: selectedCustomer?.name,
+                                        items: cart.map(item => ({
+                                            product_name: item.name,
+                                            quantity: item.quantity,
+                                            unit_price: item.price,
+                                            total: item.price * item.quantity,
+                                        })),
+                                        subtotal: cartTotals.subtotal,
+                                        tax_amount: cartTotals.tax,
+                                        discount: cartTotals.discount,
+                                        total: cartTotals.total,
+                                    };
+                                    const text = generateReceiptText(receiptOrder, { currency });
+                                    const cleanText = text.replace(/[\x1B\x1D][\x00-\xFF]/g, '').replace(/[\x00-\x09\x0B\x0C\x0E-\x1F]/g, '');
+                                    const win = window.open('', '_blank', 'width=400,height=600');
+                                    if (win) {
+                                        win.document.open();
+                                        win.document.write(
+                                            `<!DOCTYPE html><html dir="rtl"><head><title>Receipt</title>` +
+                                            `<style>body { font-family: 'Courier New', monospace; font-size: 12px; ` +
+                                            `width: 300px; margin: auto; padding: 10px; white-space: pre-wrap; }</style>` +
+                                            `</head><body></body></html>`
+                                        );
+                                        win.document.close();
+                                        win.document.body.textContent = cleanText;
+                                        setTimeout(() => { win.print(); }, 300);
+                                    }
+                                }}
                                 className="secondary-btn print"
                             >
                                 <Printer size={18} />
@@ -801,7 +833,6 @@ const POSInterface = () => {
                             quantity: item.quantity,
                             code: item.code,
                             barcode: item.barcode,
-                            tax_rate: item.tax_percent ?? item.tax_rate ?? 15
                         })));
                         setShowHeldOrders(false);
                     }}

@@ -16,10 +16,11 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.party_balance import update_party_site_balance
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
@@ -48,8 +49,7 @@ def list_purchase_returns(
     """عرض مردودات المشتريات"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
-        from utils.permissions import validate_branch_access
-        branch_id = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query_str = """
             SELECT i.id, i.invoice_number, p.name as supplier_name, 
@@ -60,9 +60,7 @@ def list_purchase_returns(
         """
         params = {"limit": limit, "skip": skip}
         
-        if branch_id:
-            query_str += " AND i.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
             
         query_str += " ORDER BY i.created_at DESC LIMIT :limit OFFSET :skip"
         
@@ -217,12 +215,12 @@ def create_purchase_return(
                     invoice_number, party_id, invoice_date, due_date,
                     subtotal, tax_amount, total, paid_amount,
                     status, invoice_type, notes, created_by, related_invoice_id, branch_id,
-                    currency, exchange_rate
+                    currency, exchange_rate, party_site_id
                 ) VALUES (
                     :num, :pid, :date, :due,
                     :sub, :tax, :total, :paid,
                     :status, 'purchase_return', :notes, :uid, :rel_id, :bid,
-                    :currency, :exchange_rate
+                    :currency, :exchange_rate, :party_site_id
                 ) RETURNING id
             """), {
                 "num": return_number, "pid": invoice.supplier_id, "date": invoice.invoice_date,
@@ -230,7 +228,8 @@ def create_purchase_return(
                 "paid": invoice.paid_amount or 0,
                 "status": return_status, "notes": invoice.notes, "uid": user_id,
                 "rel_id": invoice.original_invoice_id, "bid": branch_id,
-                "currency": invoice.currency or base_currency, "exchange_rate": invoice.exchange_rate or 1.0
+                "currency": invoice.currency or base_currency, "exchange_rate": invoice.exchange_rate or 1.0,
+                "party_site_id": invoice.party_site_id,
             }).fetchone()[0]
     
             # 4. Add Items & Update Stock (DEDUCT)
@@ -307,11 +306,9 @@ def create_purchase_return(
             gl_subtotal = to_base(subtotal)
             gl_tax = to_base(tax_total)
     
-            db.execute(text("""
-                UPDATE parties 
-                SET current_balance = COALESCE(current_balance, 0) + :amount 
-                WHERE id = :id
-            """), {"amount": gl_total, "id": invoice.supplier_id})
+            # Update supplier balance via party_site_balances
+            update_party_site_balance(db, party_id=invoice.supplier_id, branch_id=branch_id,
+                                      currency=invoice.currency or base_currency, amount=-float(gl_total))
     
             # 6. Accounting Entries (Return Itself)
             # FISCAL-LOCK: Reject if accounting period is closed
@@ -347,7 +344,7 @@ def create_purchase_return(
                     user_id=user_id,
                     branch_id=invoice.branch_id,
                     currency=invoice.currency or base_currency,
-                    exchange_rate=exchange_rate,
+                    exchange_rate=1.0,  # amounts already in base currency
                     source="purchase_return",
                     source_id=new_invoice_id
                 )
@@ -383,12 +380,9 @@ def create_purchase_return(
                     VALUES (:vid, :iid, :amt)
                 """), {"vid": vid, "iid": new_invoice_id, "amt": invoice.paid_amount})
     
-                # Update Supplier Balance (Refund INCREASES balance: Debit Cash, Credit AP)
-                db.execute(text("""
-                    UPDATE parties
-                    SET current_balance = COALESCE(current_balance, 0) - :amt
-                    WHERE id = :sid
-                """), {"amt": gl_paid, "sid": invoice.supplier_id})
+                # Update Supplier Balance via party_site_balances (Refund INCREASES balance: Debit Cash, Credit AP)
+                update_party_site_balance(db, party_id=invoice.supplier_id, branch_id=branch_id,
+                                          currency=invoice.currency or base_currency, amount=-float(gl_paid))
     
                 # GL for Refund
                 cash_acc = get_mapped_account_id(db, "acc_map_cash_main")
@@ -411,7 +405,7 @@ def create_purchase_return(
                         user_id=user_id,
                         branch_id=invoice.branch_id,
                         currency=invoice.currency or base_currency,
-                        exchange_rate=exchange_rate,
+                        exchange_rate=1.0,  # amounts already in base currency
                         source="payment_voucher",
                         source_id=vid
                     )

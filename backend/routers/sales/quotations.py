@@ -5,12 +5,14 @@ from sqlalchemy import text
 from typing import List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+import html
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
+from services.tax_engine import resolve_line_tax
 from .schemas import QuotationCreate
 
 quotations_router = APIRouter()
@@ -23,11 +25,14 @@ def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 
+def _format_money(value) -> str:
+    return f"{_dec(value).quantize(_D2, ROUND_HALF_UP):,.2f}"
+
+
 @quotations_router.get("/quotations", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_quotations(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """List all sales quotations"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
 
     db = get_db_connection(current_user.company_id)
     try:
@@ -39,9 +44,7 @@ def list_quotations(branch_id: Optional[int] = None, current_user: dict = Depend
             WHERE 1=1
         """
         params = {}
-        if branch_id:
-            query_str += " AND q.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "q.branch_id", params)
 
         query_str += " ORDER BY q.created_at DESC"
 
@@ -79,14 +82,17 @@ def get_quotation(id: int, current_user: dict = Depends(get_current_user)):
 
         # Get Items
         items = db.execute(text("""
-            SELECT l.*, p.product_name
+            SELECT l.*, p.product_name, p.product_code, p.sku
             FROM sales_quotation_lines l
             LEFT JOIN products p ON l.product_id = p.id
             WHERE l.sq_id = :id
         """), {"id": id}).fetchall()
 
+        data = dict(quotation._mapping)
+        data["customer_id"] = data.get("party_id") or data.get("customer_id")
+
         return {
-            **dict(quotation._mapping),
+            **data,
             "items": [dict(row._mapping) for row in items]
         }
     except HTTPException:
@@ -104,6 +110,14 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
     """Create a new sales quotation"""
     db = get_db_connection(current_user.company_id)
     try:
+        customer = db.execute(text("""
+            SELECT id, name, email, branch_id
+            FROM parties
+            WHERE id = :id AND (party_type = 'customer' OR is_customer = TRUE)
+        """), {"id": quotation.customer_id}).fetchone()
+        if not customer:
+            raise HTTPException(status_code=404, detail="العميل المحدد غير موجود أو ليس عميلاً")
+
         # Generate SQ Number (SQ-YYYY-XXXX)
         year = datetime.now().year
         last_sq = db.execute(text(
@@ -123,11 +137,26 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
         total_tax = Decimal('0')
         total_discount = Decimal('0')
         items_to_save = []
+        _branch_id = quotation.branch_id or customer.branch_id
 
         for item in quotation.items:
+            product = db.execute(text("""
+                SELECT id, product_name, product_code, selling_price, tax_rate, is_active
+                FROM products
+                WHERE id = :id
+            """), {"id": item.product_id}).fetchone()
+            if not product:
+                raise HTTPException(status_code=400, detail="لا يمكن حفظ عرض السعر: أحد الأصناف غير موجود في المخزون")
+            if product.is_active is False:
+                raise HTTPException(status_code=400, detail=f"الصنف {product.product_code or product.product_name} غير نشط ولا يمكن إضافته لعرض السعر")
+
+            tax_info = resolve_line_tax(_branch_id, item.product_id, db, quotation.quotation_date, customer_id=quotation.customer_id)
+
             line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
             taxable = line_subtotal - _dec(item.discount)
-            line_tax = taxable * (_dec(item.tax_rate) / Decimal('100'))
+            if taxable < 0:
+                raise HTTPException(status_code=400, detail="لا يمكن أن يكون الخصم أكبر من قيمة السطر")
+            line_tax = taxable * (tax_info["tax_rate"] / Decimal('100'))
             line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
 
             subtotal += line_subtotal
@@ -136,6 +165,8 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
 
             items_to_save.append({
                 **item.model_dump(),
+                "tax_rate": tax_info["tax_rate"],
+                "tax_rate_id": tax_info.get("tax_rate_id"),
                 "total": line_total
             })
 
@@ -146,19 +177,20 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             INSERT INTO sales_quotations (
                 sq_number, party_id, quotation_date, expiry_date,
                 subtotal, tax_amount, discount, total, status, notes, terms_conditions, created_by, branch_id,
-                currency, exchange_rate
+                currency, exchange_rate, party_site_id
             ) VALUES (
                 :num, :cust, :qdate, :expdate,
                 :sub, :tax, :disc, :total, 'draft', :notes, :terms, :user, :bid,
-                :currency, :exchange_rate
+                :currency, :exchange_rate, :party_site_id
             ) RETURNING id
         """), {
             "num": sq_num, "cust": quotation.customer_id, "qdate": quotation.quotation_date,
             "expdate": quotation.expiry_date, "sub": subtotal, "tax": total_tax,
             "disc": total_discount, "total": grand_total, "notes": quotation.notes,
             "terms": quotation.terms_conditions, "user": current_user.id,
-            "bid": quotation.branch_id, "currency": quotation.currency,
-            "exchange_rate": quotation.exchange_rate
+            "bid": quotation.branch_id or customer.branch_id, "currency": quotation.currency,
+            "exchange_rate": quotation.exchange_rate,
+            "party_site_id": quotation.party_site_id,
         }).fetchone()
 
         sq_id = res[0]
@@ -167,13 +199,14 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
         for line in items_to_save:
             db.execute(text("""
                 INSERT INTO sales_quotation_lines (
-                    sq_id, product_id, description, quantity, unit_price, tax_rate, discount, total
+                    sq_id, product_id, description, quantity, unit_price, tax_rate, tax_rate_id, discount, total
                 ) VALUES (
-                    :sq_id, :pid, :desc, :qty, :price, :tax_rate, :disc, :total
+                    :sq_id, :pid, :desc, :qty, :price, :tax_rate, :tax_rate_id, :disc, :total
                 )
             """), {
                 "sq_id": sq_id, "pid": line["product_id"], "desc": line["description"],
-                "qty": line["quantity"], "price": line["unit_price"], "tax_rate": line["tax_rate"],
+                "qty": line["quantity"], "price": line["unit_price"],
+                "tax_rate": line["tax_rate"], "tax_rate_id": line.get("tax_rate_id"),
                 "disc": line["discount"], "total": line["total"]
             })
 
@@ -192,9 +225,111 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             request=request
         )
         return {"id": sq_id, "sq_number": sq_num}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating Quotation: {str(e)}")
+        logger.exception("Internal error")
+        raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
+@quotations_router.post("/quotations/{id}/send-email", response_model=dict, dependencies=[Depends(require_permission("sales.create"))])
+def send_quotation_email(id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    """Send a quotation to the customer email and mark it as sent."""
+    db = get_db_connection(current_user.company_id)
+    try:
+        quotation = db.execute(text("""
+            SELECT q.*, p.name AS customer_name, p.email AS customer_email
+            FROM sales_quotations q
+            JOIN parties p ON q.party_id = p.id
+            WHERE q.id = :id
+        """), {"id": id}).fetchone()
+        if not quotation:
+            raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
+        if quotation.status in ('converted', 'cancelled', 'expired'):
+            raise HTTPException(status_code=400, detail=f"لا يمكن إرسال عرض السعر بالحالة الحالية: {quotation.status}")
+        if not quotation.customer_email:
+            raise HTTPException(status_code=400, detail="لا يوجد بريد إلكتروني مسجل للعميل")
+
+        items = db.execute(text("""
+            SELECT l.*, p.product_name, p.product_code
+            FROM sales_quotation_lines l
+            LEFT JOIN products p ON l.product_id = p.id
+            WHERE l.sq_id = :id
+            ORDER BY l.id
+        """), {"id": id}).fetchall()
+        if not items:
+            raise HTTPException(status_code=400, detail="لا يمكن إرسال عرض سعر بدون أصناف")
+
+        rows_html = "".join(
+            "<tr>"
+            f"<td>{html.escape(str(item.product_code or ''))}</td>"
+            f"<td>{html.escape(str(item.product_name or item.description or ''))}</td>"
+            f"<td>{_format_money(item.quantity)}</td>"
+            f"<td>{_format_money(item.unit_price)}</td>"
+            f"<td>{_format_money(item.total)}</td>"
+            "</tr>"
+            for item in items
+        )
+        content = f"""
+            <h2>عرض سعر {html.escape(str(quotation.sq_number))}</h2>
+            <p>عميلنا العزيز {html.escape(str(quotation.customer_name or ''))}،</p>
+            <p>مرفق أدناه تفاصيل عرض السعر الصادر من نظام AMAN ERP.</p>
+            <div class="info-box">
+                <p><strong>تاريخ العرض:</strong> {html.escape(str(quotation.quotation_date))}</p>
+                <p><strong>تاريخ الانتهاء:</strong> {html.escape(str(quotation.expiry_date or '-'))}</p>
+                <p><strong>الإجمالي:</strong> <span class="amount">{_format_money(quotation.total)} {html.escape(str(quotation.currency or 'SAR'))}</span></p>
+            </div>
+            <table style="width:100%; border-collapse:collapse" border="1" cellpadding="8">
+                <thead>
+                    <tr><th>الكود</th><th>الصنف</th><th>الكمية</th><th>السعر</th><th>الإجمالي</th></tr>
+                </thead>
+                <tbody>{rows_html}</tbody>
+            </table>
+        """
+
+        from services.email_service import get_base_template, get_email_service_from_settings
+        service = get_email_service_from_settings(db, tenant_id=str(current_user.company_id))
+        if not service:
+            raise HTTPException(status_code=400, detail="إعدادات البريد الإلكتروني غير مكتملة. الرجاء ضبط SMTP قبل إرسال عروض الأسعار.")
+
+        sent = service.send(
+            quotation.customer_email,
+            f"عرض سعر {quotation.sq_number}",
+            get_base_template(content),
+        )
+        if not sent:
+            raise HTTPException(status_code=500, detail="تعذر إرسال البريد الإلكتروني. تحقق من إعدادات SMTP وحاول مرة أخرى.")
+
+        db.execute(text("""
+            UPDATE sales_quotations
+            SET status = 'sent', updated_at = NOW(), updated_by = :user
+            WHERE id = :id
+        """), {"id": id, "user": current_user.username})
+
+        log_activity(
+            db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="sales.quotation.send_email",
+            resource_type="sales_quotation",
+            resource_id=str(id),
+            details={"sq_number": quotation.sq_number, "recipient": quotation.customer_email},
+            request=request,
+            branch_id=quotation.branch_id,
+        )
+        db.commit()
+        return {"success": True, "message": "تم إرسال عرض السعر بالبريد بنجاح", "status": "sent", "recipient": quotation.customer_email}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error sending quotation email: {str(e)}")
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:

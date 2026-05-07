@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { assetsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
+import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { AlertTriangle, Play, DollarSign, TrendingDown, FileText } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
@@ -11,6 +12,7 @@ const ImpairmentTest = () => {
     const { t, i18n } = useTranslation();
     const { showToast } = useToast();
     const currency = getCurrency();
+    const { currentBranch } = useBranch();
     const [assets, setAssets] = useState([]);
     const [selectedAsset, setSelectedAsset] = useState('');
     const [impairments, setImpairments] = useState([]);
@@ -25,12 +27,14 @@ const ImpairmentTest = () => {
         notes: ''
     });
 
-    useEffect(() => { fetchAssets(); }, []);
+    useEffect(() => { fetchAssets(); }, [currentBranch]);
     useEffect(() => { if (selectedAsset) fetchImpairments(); }, [selectedAsset]);
 
     const fetchAssets = async () => {
         try {
-            const res = await assetsAPI.list();
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const res = await assetsAPI.list(params);
             const list = res.data?.assets || res.data || [];
             setAssets(list);
             if (list.length > 0) setSelectedAsset(list[0].id);

@@ -3,6 +3,7 @@ from decimal import Decimal
 from pydantic import BaseModel, field_validator
 from typing import List, Optional
 from datetime import datetime
+from uuid import UUID
 
 
 class SessionCreate(BaseModel):
@@ -122,7 +123,9 @@ class OrderPaymentCreate(BaseModel):
 
 class OrderCreate(BaseModel):
     session_id: int
+    client_order_id: Optional[str] = None
     customer_id: Optional[int] = None
+    party_site_id: Optional[int] = None
     walk_in_customer_name: Optional[str] = None
     warehouse_id: Optional[int] = None
     branch_id: Optional[int] = None
@@ -146,6 +149,13 @@ class OrderCreate(BaseModel):
         if v > 1_000_000_000_000:
             raise ValueError("المبلغ يتجاوز الحد الأقصى المسموح")
         return v
+
+    @field_validator("client_order_id")
+    @classmethod
+    def client_order_id_must_be_uuid(cls, v):
+        if v is None:
+            return v
+        return str(UUID(str(v)))
 
 
 class OrderResponse(BaseModel):

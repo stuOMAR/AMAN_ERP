@@ -14,6 +14,8 @@ function Sidebar({ isOpen, isMobile, onClose, onToggle }) {
 
     if (user?.role === 'system_admin') {
         navItems.push({ path: '/admin/companies', label: t('nav.companies'), icon: '🏢' })
+        navItems.push({ path: '/admin/ops/scheduler', label: t('nav.ops_scheduler', 'جدولة العمليات'), icon: '⚡' })
+        navItems.push({ path: '/health/detailed', label: t('nav.health', 'صحة النظام'), icon: '🏥' })
     } else {
         const enabledModules = user?.enabled_modules || []
         const isSystemAdmin = user?.role === 'system_admin'
@@ -94,6 +96,9 @@ function Sidebar({ isOpen, isMobile, onClose, onToggle }) {
         }
         if (hasPermission('settings.view')) {
             navItems.push({ path: '/settings', label: t('nav.settings'), icon: '⚙️' })
+        }
+        if (hasPermission('admin.roles')) {
+            navItems.push({ path: '/reports/kpi-admin', label: t('nav.kpi_admin', 'إدارة المؤشرات'), icon: '🎯' })
         }
     }
 

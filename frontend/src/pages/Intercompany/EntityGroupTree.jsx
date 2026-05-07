@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import { accountingAPI } from '../../utils/api'
+import { accountingAPI, currenciesAPI } from '../../utils/api'
+import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import FormField from '../../components/common/FormField'
 import { useToast } from '../../context/ToastContext'
@@ -10,11 +11,19 @@ function EntityGroupTree() {
     const { t } = useTranslation()
     const { showToast } = useToast()
     const [entities, setEntities] = useState([])
+    const [currencies, setCurrencies] = useState([])
     const [loading, setLoading] = useState(true)
     const [showForm, setShowForm] = useState(false)
-    const [form, setForm] = useState({ name: '', parent_id: '', company_id: '', group_currency: 'SAR' })
+    const [form, setForm] = useState({ name: '', parent_id: '', company_id: '', group_currency: getCurrency() || 'SAR' })
+    const [editingId, setEditingId] = useState(null)
+    const [editingCurrency, setEditingCurrency] = useState('SAR')
 
-    useEffect(() => { fetchEntities() }, [])
+    useEffect(() => {
+        fetchEntities()
+        currenciesAPI.list()
+            .then(res => setCurrencies(Array.isArray(res.data) ? res.data : []))
+            .catch(() => {})
+    }, [])
 
     const fetchEntities = async () => {
         try {
@@ -33,14 +42,33 @@ function EntityGroupTree() {
         try {
             await accountingAPI.createEntityGroup({
                 ...form,
+                group_currency: String(form.group_currency || 'SAR').toUpperCase(),
                 parent_id: form.parent_id ? parseInt(form.parent_id) : null,
             })
             showToast(t('intercompany.entity_created'), 'success')
             setShowForm(false)
-            setForm({ name: '', parent_id: '', company_id: '', group_currency: 'SAR' })
+            setForm({ name: '', parent_id: '', company_id: '', group_currency: getCurrency() || 'SAR' })
             fetchEntities()
         } catch (e) {
             showToast(e.response?.data?.detail || t('intercompany.create_error'), 'error')
+        }
+    }
+
+    const startEditCurrency = (node) => {
+        setEditingId(node.id)
+        setEditingCurrency(String(node.group_currency || 'SAR').toUpperCase())
+    }
+
+    const saveCurrency = async (id) => {
+        try {
+            await accountingAPI.updateEntityGroup(id, {
+                group_currency: String(editingCurrency || 'SAR').toUpperCase(),
+            })
+            showToast(t('intercompany.entity_updated', 'تم تحديث الكيان'), 'success')
+            setEditingId(null)
+            fetchEntities()
+        } catch (e) {
+            showToast(e.response?.data?.detail || t('intercompany.update_error', 'تعذر تحديث الكيان'), 'error')
         }
     }
 
@@ -56,13 +84,37 @@ function EntityGroupTree() {
     const renderNode = (node, depth = 0) => (
         <div key={node.id} style={{ marginInlineStart: depth * 24 + 'px' }}>
             <div className="card" style={{ marginBottom: 8, padding: '12px 16px' }}>
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 8 }}>
                     <div>
                         <strong>{node.name}</strong>
                         <span className="badge" style={{ marginInlineStart: 8, marginInlineEnd: 8 }}>
                             {t('intercompany.level')} {node.consolidation_level}
                         </span>
-                        <small className="text-muted">{node.group_currency}</small>
+                        {editingId === node.id ? (
+                            <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
+                                <select
+                                    className="form-input"
+                                    style={{ width: 120, padding: '2px 6px' }}
+                                    value={editingCurrency}
+                                    onChange={e => setEditingCurrency(e.target.value)}
+                                >
+                                    {currencies.length === 0 && <option value={editingCurrency}>{editingCurrency}</option>}
+                                    {currencies.map(c => (
+                                        <option key={c.code} value={c.code}>{c.code}</option>
+                                    ))}
+                                </select>
+                                <button type="button" className="btn btn-success btn-sm" onClick={() => saveCurrency(node.id)}>
+                                    {t('common.save')}
+                                </button>
+                                <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditingId(null)}>
+                                    {t('common.cancel')}
+                                </button>
+                            </span>
+                        ) : (
+                            <small className="text-muted" style={{ cursor: 'pointer' }} onClick={() => startEditCurrency(node)}>
+                                {node.group_currency} ✎
+                            </small>
+                        )}
                     </div>
                     <small className="text-muted">{node.company_id}</small>
                 </div>
@@ -100,8 +152,13 @@ function EntityGroupTree() {
                                 onChange={e => setForm({ ...form, company_id: e.target.value })} />
                         </FormField>
                         <FormField label={t('intercompany.group_currency')}>
-                            <input type="text" className="form-input" value={form.group_currency}
-                                onChange={e => setForm({ ...form, group_currency: e.target.value })} />
+                            <select className="form-input" value={form.group_currency}
+                                onChange={e => setForm({ ...form, group_currency: e.target.value })}>
+                                {currencies.length === 0 && <option value={form.group_currency}>{form.group_currency}</option>}
+                                {currencies.map(c => (
+                                    <option key={c.code} value={c.code}>{c.code} — {c.name || c.name_en || c.code}</option>
+                                ))}
+                            </select>
                         </FormField>
                         <FormField label={t('intercompany.parent_entity')}>
                             <select className="form-input" value={form.parent_id} onChange={e => setForm({ ...form, parent_id: e.target.value })}>

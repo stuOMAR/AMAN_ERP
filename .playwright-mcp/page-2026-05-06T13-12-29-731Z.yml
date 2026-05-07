@@ -1,0 +1,172 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e32] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e34]: 🏪
+          - generic [ref=e35]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e36] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e38]: 🛒
+          - generic [ref=e39]: المشتريات
+        - link "📦 المخزون" [ref=e40] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e42]: 📦
+          - generic [ref=e43]: المخزون
+        - link "🏭 التصنيع" [ref=e44] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e46]: 🏭
+          - generic [ref=e47]: التصنيع
+        - link "📐 المشاريع" [ref=e48] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e50]: 📐
+          - generic [ref=e51]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e52] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e54]: 🤝
+          - generic [ref=e55]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e56] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e58]: 🔧
+          - generic [ref=e59]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e60] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e62]: 💸
+          - generic [ref=e63]: المصروفات
+        - link "🧾 الضرائب" [ref=e64] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e66]: 🧾
+          - generic [ref=e67]: الضرائب
+        - link "✅ الاعتمادات" [ref=e68] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e70]: ✅
+          - generic [ref=e71]: الاعتمادات
+        - link "📈 التقارير" [ref=e72] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e74]: 📈
+          - generic [ref=e75]: التقارير
+        - link "👥 الموارد البشرية" [ref=e76] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e78]: 👥
+          - generic [ref=e79]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e80] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e82]: ⚙️
+          - generic [ref=e83]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e84] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e86]: 🎯
+          - generic [ref=e87]: إدارة المؤشرات
+    - generic [ref=e88]:
+      - banner [ref=e89]:
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]:
+            - img [ref=e93]
+            - text: بحث...
+          - generic [ref=e96]: Ctrl+K
+        - generic [ref=e97]:
+          - button "EN" [ref=e98] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+          - generic [ref=e106]:
+            - button "🏢 مصر - فرع القاهرة EGP ▼" [active] [ref=e107] [cursor=pointer]:
+              - generic [ref=e108]:
+                - text: 🏢
+                - generic [ref=e109]: مصر - فرع القاهرة
+              - generic [ref=e110]: EGP
+              - generic [ref=e111]: ▼
+            - generic [ref=e165]:
+              - generic [ref=e166] [cursor=pointer]:
+                - generic [ref=e167]: 🌐 كل الفروع
+                - generic [ref=e168]: EGP
+              - generic [ref=e170] [cursor=pointer]:
+                - generic [ref=e171]: الفرع الرئيسي - الرياض
+                - generic [ref=e172]:
+                  - generic [ref=e173]: SAR
+                  - generic [ref=e174]: افتراضي
+              - generic [ref=e175] [cursor=pointer]:
+                - generic [ref=e176]: مصر - فرع القاهرة
+                - generic [ref=e178]: EGP
+              - generic [ref=e179] [cursor=pointer]:
+                - generic [ref=e180]: الإمارات - فرع دبي
+                - generic [ref=e182]: AED
+              - generic [ref=e183] [cursor=pointer]:
+                - generic [ref=e184]: لندن - فرع بريطانيا
+                - generic [ref=e186]: GBP
+          - button "🔔" [ref=e113] [cursor=pointer]
+          - generic [ref=e115] [cursor=pointer]:
+            - generic [ref=e116]:
+              - generic [ref=e117]: omar
+              - generic [ref=e118]: "ID: 1a134155"
+            - generic [ref=e119]: O
+      - main [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e124]:
+            - generic [ref=e125]:
+              - button "العودة" [ref=e126] [cursor=pointer]:
+                - img [ref=e127]
+              - heading "🔄 القيود المتكررة" [level=1] [ref=e130]
+            - generic [ref=e131]:
+              - combobox [ref=e132]:
+                - option "الكل" [selected]
+                - option "نشط"
+                - option "متوقف"
+              - button "⚡ توليد المستحقة" [ref=e133] [cursor=pointer]
+              - button "+ قالب جديد" [ref=e134] [cursor=pointer]
+          - table [ref=e136]:
+            - rowgroup [ref=e137]:
+              - row "# الاسم التكرار التنفيذ التالي آخر تنفيذ التنفيذ ترحيل تلقائي الحالة إجراءات" [ref=e138]:
+                - columnheader "#" [ref=e139]
+                - columnheader "الاسم" [ref=e140]
+                - columnheader "التكرار" [ref=e141]
+                - columnheader "التنفيذ التالي" [ref=e142]
+                - columnheader "آخر تنفيذ" [ref=e143]
+                - columnheader "التنفيذ" [ref=e144]
+                - columnheader "ترحيل تلقائي" [ref=e145]
+                - columnheader "الحالة" [ref=e146]
+                - columnheader "إجراءات" [ref=e147]
+            - rowgroup [ref=e148]:
+              - row "1 رواتب القاهرة SAL-CAI شهري 2026-01-01 - 0 ❌ نشط ⚡ ✏️ 🗑" [ref=e149]:
+                - cell "1" [ref=e150]
+                - cell "رواتب القاهرة SAL-CAI" [ref=e151]:
+                  - link "رواتب القاهرة" [ref=e152] [cursor=pointer]:
+                    - /url: "#"
+                  - generic [ref=e153]: SAL-CAI
+                - cell "شهري" [ref=e154]
+                - cell "2026-01-01" [ref=e155]
+                - cell "-" [ref=e156]
+                - cell "0" [ref=e157]
+                - cell "❌" [ref=e158]
+                - cell "نشط" [ref=e159]
+                - cell "⚡ ✏️ 🗑" [ref=e160]:
+                  - generic [ref=e161]:
+                    - button "⚡" [ref=e162] [cursor=pointer]
+                    - button "✏️" [ref=e163] [cursor=pointer]
+                    - button "🗑" [ref=e164] [cursor=pointer]

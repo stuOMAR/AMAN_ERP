@@ -1,13 +1,15 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
+import { purchasesAPI, inventoryAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
-import { inventoryAPI, purchasesAPI } from '../../utils/api'
+import { formatNumber } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
+import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
-import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function BuyingOrderForm() {
     const { t } = useTranslation()
@@ -23,6 +25,7 @@ function BuyingOrderForm() {
 
     const [formData, setFormData] = useState({
         supplier_id: '',
+        party_site_id: '',
         order_date: new Date().toISOString().split('T')[0],
         expected_date: '',
         notes: ''
@@ -69,7 +72,7 @@ function BuyingOrderForm() {
                         // Use last_buying_price if available, otherwise fall back to buying_price
                         updatedItem.unit_price = product.last_buying_price || product.buying_price || 0
                         // Auto-fill tax rate from product data
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        updatedItem.tax_rate = null // Resolved by backend engine
 
                         // Try applying item-level effect from group
                         const supplier = suppliers.find(s => s.id === parseInt(formData.supplier_id));
@@ -123,7 +126,20 @@ function BuyingOrderForm() {
         setItems(newItems)
     }
 
+    // Backend-powered calculations
+    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+
     const calculateTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return {
+                subtotal: backendTotals.subtotal,
+                discount: backendTotals.totalDiscount,
+                tax: backendTotals.totalTax,
+                total: backendTotals.grandTotal,
+            }
+        }
+        // Fallback to local calculation
         let subtotal = 0;
         let discount = 0;
         let tax = 0;
@@ -192,6 +208,21 @@ function BuyingOrderForm() {
         };
     }
 
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: Number(i.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
+
     const handleSubmit = async (e) => {
         e.preventDefault()
 
@@ -214,6 +245,7 @@ function BuyingOrderForm() {
             const totals = calculateTotals();
             const payload = {
                 supplier_id: parseInt(formData.supplier_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 branch_id: currentBranch?.id,
                 order_date: formData.order_date,
                 expected_date: formData.expected_date || null,

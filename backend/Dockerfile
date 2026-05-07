@@ -38,6 +38,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libpq5 \
     curl \
     gosu \
+    libmagic1 \
+    clamav-freshclam \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy installed packages from builder

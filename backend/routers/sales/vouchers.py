@@ -6,13 +6,14 @@ from typing import List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from utils.cache import invalidate_company_cache
+from utils.cache import invalidate_company_cache, invalidate_aggregates
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id
+from utils.party_balance import update_party_site_balance
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from .schemas import CustomerReceiptCreate, CustomerPaymentCreate
 
@@ -31,6 +32,15 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
         base_currency = get_base_currency(db)
+        branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+        selected_treasury_id = getattr(data, 'treasury_id', None) or data.bank_account_id
+        selected_treasury = None
+        if selected_treasury_id:
+            selected_treasury = validate_treasury_account_access(db, current_user, selected_treasury_id, branch_id)
+            if branch_id is None and selected_treasury.get("branch_id") is not None:
+                branch_id = int(selected_treasury["branch_id"])
+        branch_id = validate_branch_access(current_user, branch_id)
+
         voucher_num = generate_sequential_number(db, f"RCV-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
         # SLS-011: Prevent posting receipts to closed fiscal periods
@@ -60,10 +70,10 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         """), {
             "vnum": voucher_num, "vdate": data.voucher_date, "cust": data.customer_id,
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
-            "treasury": getattr(data, 'treasury_id', None) or data.bank_account_id,
+            "treasury": selected_treasury_id,
             "check_num": data.check_number, "check_date": data.check_date,
             "ref": data.reference, "notes": data.notes, "user": current_user.id,
-            "bid": data.branch_id,
+            "bid": branch_id,
             "curr": currency, "rate": exchange_rate
         }).fetchone()
 
@@ -115,34 +125,24 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         if total_allocated > (_dec(data.amount) + _D2):
             raise HTTPException(**http_error(400, "allocations_exceed_voucher_amount"))
 
-        # 3. Update Customer Balance (reduce receivables in Base Currency)
-        db.execute(text("""
-            UPDATE parties
-            SET current_balance = current_balance - :amt
-            WHERE id = :cid
-        """), {"amt": amount_base, "cid": data.customer_id})
-
-        # Also update balance_currency for FC receipts
-        if currency and currency != base_currency:
-            db.execute(text("""
-                UPDATE parties
-                SET balance_currency = COALESCE(balance_currency, 0) - :amt
-                WHERE id = :cid
-            """), {"amt": data.amount, "cid": data.customer_id})
+        # 3. Update Customer Balance via party_site_balances (reduce receivables)
+        update_party_site_balance(db, party_id=data.customer_id, branch_id=branch_id,
+                           currency=currency, amount=-float(data.amount))
 
         # 4. Create GL Entry (TASK-015: centralized)
         acc_ar = get_mapped_account_id(db, "acc_map_ar")
         acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
         acc_bank = get_mapped_account_id(db, "acc_map_bank")
+        selected_gl_id = selected_treasury.get("gl_account_id") if selected_treasury else None
 
         je_lines = []
         # Debit: Cash/Bank
-        if data.payment_method == "cash" and acc_cash:
-            je_lines.append({"account_id": acc_cash, "debit": amount_base, "credit": 0,
+        if data.payment_method == "cash" and (selected_gl_id or acc_cash):
+            je_lines.append({"account_id": selected_gl_id or acc_cash, "debit": amount_base, "credit": 0,
                              "description": f"Cash Receipt - {voucher_num}",
                              "amount_currency": data.amount, "currency": currency})
-        elif data.payment_method in ["bank", "check"] and acc_bank:
-            je_lines.append({"account_id": acc_bank, "debit": amount_base, "credit": 0,
+        elif data.payment_method in ["bank", "check"] and (selected_gl_id or acc_bank):
+            je_lines.append({"account_id": selected_gl_id or acc_bank, "debit": amount_base, "credit": 0,
                              "description": f"Bank Receipt - {voucher_num}",
                              "amount_currency": data.amount, "currency": currency})
 
@@ -162,11 +162,11 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             description=f"Customer Receipt {voucher_num} ({currency})",
             lines=je_lines,
             user_id=current_user.id,
-            branch_id=data.branch_id,
+            branch_id=branch_id,
             reference=voucher_num,
             status="posted",
             currency=currency,
-            exchange_rate=float(exchange_rate) if exchange_rate else 1.0,
+            exchange_rate=1.0,  # amounts already in base currency
             source="CustomerReceipt",
             source_id=voucher_id,
             username=getattr(current_user, "username", None),
@@ -174,12 +174,15 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         )
 
         # 5. Update Treasury Balance — T1.3a idempotent recompute
-        if hasattr(data, 'treasury_id') and data.treasury_id:
+        if selected_treasury_id:
             from utils.treasury_balance import recalc_treasury_from_gl
-            recalc_treasury_from_gl(db, data.treasury_id)
+            recalc_treasury_from_gl(db, selected_treasury_id)
 
         db.commit()
-        invalidate_company_cache(str(current_user.company_id))
+        # T12 — scoped invalidation: receipt voucher hits treasury + AR + reports.
+        invalidate_aggregates(str(current_user.company_id),
+                              "treasury", "invoices", "sales_kpi",
+                              "reports", "dashboard")
         
 
         cust_name = db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": data.customer_id}).scalar()
@@ -193,7 +196,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             resource_id=str(voucher_id),
             details={"voucher_number": voucher_num, "amount": data.amount, "customer_id": data.customer_id, "customer_name": cust_name},
             request=request,
-            branch_id=data.branch_id
+            branch_id=branch_id
         )
 
         # Notify finance team
@@ -210,11 +213,13 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                 "link": f"/sales/receipts/{voucher_id}",
                 "current_uid": current_user.id
             })
-            db.commit()
         except Exception:
-            pass
+            logger.warning("Failed to send receipt notification", exc_info=True)
 
         return {"id": voucher_id, "voucher_number": voucher_num}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating receipt: {str(e)}")
@@ -229,6 +234,15 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
         base_currency = get_base_currency(db)
+        branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+        selected_treasury_id = data.bank_account_id
+        selected_treasury = None
+        if selected_treasury_id:
+            selected_treasury = validate_treasury_account_access(db, current_user, selected_treasury_id, branch_id)
+            if branch_id is None and selected_treasury.get("branch_id") is not None:
+                branch_id = int(selected_treasury["branch_id"])
+        branch_id = validate_branch_access(current_user, branch_id)
+
         voucher_num = generate_sequential_number(db, f"PAY-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
         # SLS-011: Prevent posting payments to closed fiscal periods
@@ -258,10 +272,10 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
         """), {
             "vnum": voucher_num, "vdate": data.voucher_date, "cust": data.customer_id,
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
-            "treasury": getattr(data, 'treasury_id', None) or data.bank_account_id,
+            "treasury": selected_treasury_id,
             "check_num": data.check_number, "check_date": data.check_date,
             "ref": data.reference, "notes": data.notes, "user": current_user.id,
-            "bid": data.branch_id,
+            "bid": branch_id,
             "curr": currency, "rate": exchange_rate
         }).fetchone()
 
@@ -316,26 +330,16 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
         if total_allocated > (_dec(data.amount) + _D2):
             raise HTTPException(**http_error(400, "allocations_exceed_voucher_amount"))
 
-        # 2. Update Customer Balance (increase because we're paying them)
-        db.execute(text("""
-            UPDATE parties
-            SET current_balance = current_balance + :amt
-            WHERE id = :cid
-        """), {"amt": amount_base, "cid": data.customer_id})
-
-        # Also update balance_currency for FC payments
-        if currency and currency != base_currency:
-            db.execute(text("""
-                UPDATE parties
-                SET balance_currency = COALESCE(balance_currency, 0) + :amt
-                WHERE id = :cid
-            """), {"amt": data.amount, "cid": data.customer_id})
+        # 2. Update Customer Balance via party_site_balances (increase because we're paying them)
+        update_party_site_balance(db, party_id=data.customer_id, branch_id=branch_id,
+                           currency=currency, amount=float(data.amount))
 
         # 3. Create GL Entry (TASK-015: centralized)
         from utils.accounting import get_mapped_account_id, prepare_je_lines
         acc_ar = get_mapped_account_id(db, "acc_map_ar")
         acc_cash = get_mapped_account_id(db, "acc_map_cash")
         acc_bank = get_mapped_account_id(db, "acc_map_bank") or get_mapped_account_id(db, "acc_map_cash")
+        selected_gl_id = selected_treasury.get("gl_account_id") if selected_treasury else None
 
         je_lines = []
         # Debit: AR (reduce customer credit)
@@ -345,12 +349,12 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
                              "amount_currency": data.amount, "currency": currency})
 
         # Credit: Cash/Bank (money out)
-        if data.payment_method == "cash" and acc_cash:
-            je_lines.append({"account_id": acc_cash, "debit": 0, "credit": amount_base,
+        if data.payment_method == "cash" and (selected_gl_id or acc_cash):
+            je_lines.append({"account_id": selected_gl_id or acc_cash, "debit": 0, "credit": amount_base,
                              "description": f"Cash Payment - {voucher_num}",
                              "amount_currency": data.amount, "currency": currency})
-        elif data.payment_method in ["bank", "check"] and acc_bank:
-            je_lines.append({"account_id": acc_bank, "debit": 0, "credit": amount_base,
+        elif data.payment_method in ["bank", "check"] and (selected_gl_id or acc_bank):
+            je_lines.append({"account_id": selected_gl_id or acc_bank, "debit": 0, "credit": amount_base,
                              "description": f"Bank Payment - {voucher_num}",
                              "amount_currency": data.amount, "currency": currency})
 
@@ -364,19 +368,26 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             description=f"Customer Payment {voucher_num} ({currency})",
             lines=valid_lines,
             user_id=current_user.id,
-            branch_id=data.branch_id,
+            branch_id=branch_id,
             reference=voucher_num,
             status="posted",
             currency=currency,
-            exchange_rate=float(exchange_rate) if exchange_rate else 1.0,
+            exchange_rate=1.0,  # amounts already in base currency
             source="CustomerPayment",
             source_id=voucher_id,
             username=getattr(current_user, "username", None),
             idempotency_key=f"pay-{voucher_num}",
         )
 
+        if selected_treasury_id:
+            from utils.treasury_balance import recalc_treasury_from_gl
+            recalc_treasury_from_gl(db, selected_treasury_id)
+
         db.commit()
-        invalidate_company_cache(str(current_user.company_id))
+        # T12 — scoped invalidation (payment voucher)
+        invalidate_aggregates(str(current_user.company_id),
+                              "treasury", "invoices", "sales_kpi",
+                              "reports", "dashboard")
         
 
         cust_name = db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": data.customer_id}).scalar()
@@ -390,9 +401,12 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             resource_id=str(voucher_id),
             details={"voucher_number": voucher_num, "amount": data.amount, "customer_id": data.customer_id, "customer_name": cust_name},
             request=request,
-            branch_id=data.branch_id
+            branch_id=branch_id
         )
         return {"id": voucher_id, "voucher_number": voucher_num}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating receipt: {str(e)}")
@@ -403,8 +417,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
 @vouchers_router.get("/receipts", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_customer_receipts(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """قائمة سندات القبض"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
 
     db = get_db_connection(current_user.company_id)
     try:
@@ -416,9 +429,7 @@ def list_customer_receipts(branch_id: Optional[int] = None, current_user: dict =
             WHERE pv.voucher_type = 'receipt' AND pv.party_type = 'customer'
         """
         params = {}
-        if branch_id:
-            query_str += " AND pv.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "pv.branch_id", params)
 
         query_str += " ORDER BY pv.created_at DESC"
 
@@ -433,8 +444,7 @@ def list_customer_receipts(branch_id: Optional[int] = None, current_user: dict =
 @vouchers_router.get("/payments", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_customer_payments(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """قائمة سندات الصرف (العملاء)"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
 
     db = get_db_connection(current_user.company_id)
     try:
@@ -446,9 +456,7 @@ def list_customer_payments(branch_id: Optional[int] = None, current_user: dict =
             WHERE pv.voucher_type = 'payment' AND pv.party_type = 'customer'
         """
         params = {}
-        if branch_id:
-            query_str += " AND pv.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "pv.branch_id", params)
 
         query_str += " ORDER BY pv.created_at DESC"
 
@@ -558,8 +566,8 @@ def auto_match_receipt(
             text(
                 """
                 SELECT id, party_id, amount
-                FROM vouchers
-                WHERE id = :id AND type = 'customer_receipt'
+                FROM payment_vouchers
+                WHERE id = :id AND voucher_type = 'customer_receipt'
                 FOR UPDATE
                 """
             ),

@@ -72,6 +72,8 @@ class TaxRate(ModelBase):
     description: Mapped[str | None] = mapped_column(Text)
     effective_from: Mapped[Date | None] = mapped_column(Date)
     effective_to: Mapped[Date | None] = mapped_column(Date)
+    is_default: Mapped[bool | None] = mapped_column(Boolean, default=False)
+    legal_entity_id: Mapped[int | None] = mapped_column(Integer)
     is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
     created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())

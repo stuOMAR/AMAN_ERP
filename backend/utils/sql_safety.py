@@ -106,6 +106,7 @@ def validate_password_strength(password: str) -> None:
 MAX_DOCUMENT_SIZE = 50 * 1024 * 1024  # 50 MB
 MAX_IMPORT_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
 MAX_LOGO_SIZE = 5 * 1024 * 1024  # 5 MB
+MAX_FILENAME_BYTES = 255
 
 BLOCKED_FILE_EXTENSIONS = {
     '.exe', '.bat', '.cmd', '.sh', '.php', '.jsp', '.py', '.rb',
@@ -187,9 +188,28 @@ def validate_file_extension(filename: str, allowed: set = None, label: str = "ا
     
     if not filename:
         raise HTTPException(400, f"اسم {label} مطلوب")
+
+    safe_name = os.path.basename(filename)
+    if len(safe_name.encode("utf-8")) > MAX_FILENAME_BYTES:
+        raise HTTPException(400, f"اسم {label} يتجاوز {MAX_FILENAME_BYTES} بايت")
     
     ext = os.path.splitext(filename)[1].lower()
-    
+
+    # T10.2 #166 — Double-extension protection. ``os.path.splitext`` only
+    # returns the LAST extension, so ``shell.php.pdf`` would slip past as
+    # ``.pdf``. Apache/nginx mishandling can still execute the inner
+    # ``.php``. Defense: scan ALL dot-segments of the filename for any
+    # blocked extension.
+    base = os.path.basename(filename).lower()
+    parts = base.split(".")
+    if len(parts) > 2:  # at least one inner segment besides name + final ext
+        for seg in parts[1:-1]:
+            if f".{seg}" in BLOCKED_FILE_EXTENSIONS:
+                raise HTTPException(
+                    400,
+                    f"اسم {label} يحتوي امتدادًا داخليًا غير مسموح (.{seg})",
+                )
+
     # Always block dangerous extensions
     if ext in BLOCKED_FILE_EXTENSIONS:
         raise HTTPException(400, f"نوع {label} غير مسموح ({ext})")

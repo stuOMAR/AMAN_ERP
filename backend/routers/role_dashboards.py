@@ -12,8 +12,9 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope
 from utils.cache import cached
+from utils.currency_display import convert_dashboard_payload_to_display, resolve_display_currency
 from services.kpi_service import (
     resolve_period, get_executive_kpis, get_financial_kpis,
     get_sales_kpis, get_procurement_kpis, get_warehouse_kpis,
@@ -42,6 +43,15 @@ def _get_user_role(user) -> str:
     return str(role or "viewer")
 
 
+def _dashboard_branch_arg(current_user, branch_id):
+    scope = resolve_branch_scope(current_user, branch_id)
+    return scope["branch_id"] if scope["branch_id"] is not None else scope["branch_ids"]
+
+
+def _branch_arg_from_scope(scope: dict):
+    return scope["branch_id"] if scope["branch_id"] is not None else scope["branch_ids"]
+
+
 # ═══════════════════════════════════════════════════════════════════════════════
 # Auto-Route: Returns the appropriate dashboard for the current user's role
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -50,8 +60,19 @@ ROLE_DASHBOARD_MAP = {
     "admin": "executive",
     "system_admin": "executive",
     "superuser": "executive",
+    "ceo": "executive",
     "manager": "executive",
+    "finance_manager": "financial",
+    "chief_accountant": "financial",
     "accountant": "financial",
+    "branch_accountant": "financial",
+    "accounts_receivable": "sales",
+    "accounts_payable": "procurement",
+    "treasury_officer": "financial",
+    "tax_accountant": "financial",
+    "cost_accountant": "financial",
+    "auditor": "financial",
+    "branch_manager": "executive",
     "sales": "sales",
     "purchasing": "procurement",
     "inventory": "warehouse",
@@ -117,7 +138,7 @@ def get_executive_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المدير التنفيذي — مؤشرات أداء شاملة للإدارة العليا"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "ceo", "manager", "branch_manager"])
     return _execute_dashboard(get_executive_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -138,7 +159,11 @@ def get_financial_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المدير المالي — نسب مالية وسيولة وميزانيات"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "accountant"])
+    _require_roles(current_user, [
+        "admin", "superuser", "system_admin", "ceo", "manager", "finance_manager",
+        "chief_accountant", "accountant", "branch_accountant", "treasury_officer",
+        "tax_accountant", "cost_accountant", "auditor",
+    ])
     return _execute_dashboard(get_financial_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -159,7 +184,7 @@ def get_sales_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المبيعات — إيرادات وتحويل ومتأخرات"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "sales"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "sales", "accounts_receivable"])
     return _execute_dashboard(get_sales_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -180,7 +205,7 @@ def get_procurement_dashboard(
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المشتريات — أوامر شراء وموردين"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "purchasing"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "purchasing", "accounts_payable"])
     return _execute_dashboard(get_procurement_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -328,14 +353,16 @@ def get_industry_dashboard(
 ):
     """لوحة مؤشرات القطاع — تُكتشف تلقائياً حسب نوع الشركة"""
     company_id = _get_company_id(current_user)
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    branch_id = _branch_arg_from_scope(branch_scope)
     s, e = resolve_period(period, start_date, end_date)
 
     db = get_db_connection(company_id)
     try:
+        display_meta = resolve_display_currency(db, branch_scope)
         result = get_industry_kpis(db, company_id, s, e, branch_id)
         result["period"] = {"type": period, "start": str(s), "end": str(e)}
-        return result
+        return convert_dashboard_payload_to_display(result, display_meta)
     except Exception as ex:
         logger.error(f"Industry dashboard error: {ex}")
         raise HTTPException(status_code=500, detail="Error loading industry dashboard")
@@ -366,7 +393,8 @@ def get_combined_dashboard(
     company_id = _get_company_id(current_user)
     role = _get_user_role(current_user)
     dashboard_type = ROLE_DASHBOARD_MAP.get(role, "executive")
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    branch_id = _branch_arg_from_scope(branch_scope)
     s, e = resolve_period(period, start_date, end_date)
 
     handlers = {
@@ -384,6 +412,7 @@ def get_combined_dashboard(
 
     db = get_db_connection(company_id)
     try:
+        display_meta = resolve_display_currency(db, branch_scope)
         # Role KPIs
         handler = handlers.get(dashboard_type, get_executive_kpis)
         role_data = handler(db, s, e, branch_id)
@@ -391,7 +420,7 @@ def get_combined_dashboard(
         # Industry KPIs
         industry_data = get_industry_kpis(db, company_id, s, e, branch_id)
 
-        return {
+        return convert_dashboard_payload_to_display({
             "role": role_data.get("role", dashboard_type),
             "industry": industry_data.get("industry", "general"),
             "period": {"type": period, "start": str(s), "end": str(e)},
@@ -401,7 +430,7 @@ def get_combined_dashboard(
             "industry_kpis": industry_data.get("kpis", []),
             "industry_charts": industry_data.get("charts", []),
             "industry_alerts": industry_data.get("alerts", []),
-        }
+        }, display_meta)
     except Exception as ex:
         logger.error(f"Combined dashboard error: {ex}")
         raise HTTPException(status_code=500, detail="Error loading combined dashboard")
@@ -432,16 +461,19 @@ def get_available_dashboards(
 
     dashboards = []
 
-    if has_all or role in ("admin", "superuser", "system_admin", "manager"):
+    if has_all or role in ("admin", "superuser", "system_admin", "ceo", "manager", "branch_manager"):
         dashboards.append({"key": "executive", "label": "Executive Dashboard",
                             "label_ar": "لوحة المدير التنفيذي", "icon": "Crown", "path": "/dashboard/role/executive"})
-    if has_all or "accounting.view" in permissions or "accounting.*" in permissions or role == "accountant":
+    if has_all or "dashboard.financial" in permissions or "accounting.view" in permissions or "accounting.*" in permissions or role in {
+        "finance_manager", "chief_accountant", "accountant", "branch_accountant",
+        "treasury_officer", "tax_accountant", "cost_accountant", "auditor",
+    }:
         dashboards.append({"key": "financial", "label": "Financial Dashboard",
                             "label_ar": "لوحة المدير المالي", "icon": "Calculator", "path": "/dashboard/role/financial"})
-    if has_all or "sales.view" in permissions or "sales.*" in permissions or role == "sales":
+    if has_all or "sales.view" in permissions or "sales.*" in permissions or role in {"sales", "accounts_receivable", "branch_manager"}:
         dashboards.append({"key": "sales", "label": "Sales Dashboard",
                             "label_ar": "لوحة المبيعات", "icon": "TrendingUp", "path": "/dashboard/role/sales"})
-    if has_all or "buying.view" in permissions or "buying.*" in permissions or role == "purchasing":
+    if has_all or "buying.view" in permissions or "buying.*" in permissions or role in {"purchasing", "accounts_payable", "branch_manager"}:
         dashboards.append({"key": "procurement", "label": "Procurement Dashboard",
                             "label_ar": "لوحة المشتريات", "icon": "ShoppingCart", "path": "/dashboard/role/procurement"})
     if has_all or "stock.view" in permissions or "inventory.*" in permissions or role == "inventory":
@@ -505,14 +537,16 @@ def _execute_dashboard(handler, current_user, period: str,
                        start_date, end_date, branch_id):
     """Execute a dashboard handler with proper DB lifecycle."""
     company_id = _get_company_id(current_user)
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    branch_id = _branch_arg_from_scope(branch_scope)
     s, e = resolve_period(period, start_date, end_date)
 
     db = get_db_connection(company_id)
     try:
+        display_meta = resolve_display_currency(db, branch_scope)
         result = handler(db, s, e, branch_id)
         result["period"] = {"type": period, "start": str(s), "end": str(e)}
-        return result
+        return convert_dashboard_payload_to_display(result, display_meta)
     except HTTPException:
         raise
     except Exception as ex:

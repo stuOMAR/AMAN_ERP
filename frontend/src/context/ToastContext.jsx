@@ -5,6 +5,26 @@ import './Toast.css';
 
 const ToastContext = createContext(null);
 
+const normalizeToastMessage = (message) => {
+    if (message === null || message === undefined) return '';
+    if (typeof message === 'string' || typeof message === 'number' || typeof message === 'boolean') {
+        return String(message);
+    }
+    if (Array.isArray(message)) {
+        return message
+            .map(item => normalizeToastMessage(item))
+            .filter(Boolean)
+            .join(', ');
+    }
+    if (message instanceof Error) {
+        return message.message;
+    }
+    if (typeof message === 'object') {
+        return normalizeToastMessage(message.detail || message.message || message.msg) || JSON.stringify(message);
+    }
+    return String(message);
+};
+
 export const useToast = () => {
     const context = useContext(ToastContext);
     if (!context) {
@@ -37,7 +57,7 @@ export const ToastProvider = ({ children }) => {
 
     const showToast = useCallback((message, type = 'info', duration = 5000) => {
         const id = `${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-        setToasts(prev => [...prev, { id, message, type }]);
+        setToasts(prev => [...prev, { id, message: normalizeToastMessage(message), type }]);
 
         if (duration > 0) {
             setTimeout(() => {

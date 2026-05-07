@@ -20,7 +20,7 @@ from integrations.bank_feeds import (
     parse_mt940, parse_csv_statement, CSVStatementConfig, parse_camt053,
 )
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import require_permission, validate_treasury_account_access, _is_branch_privileged
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/finance/bank-feeds", tags=["bank-feeds"])
@@ -44,11 +44,32 @@ async def import_statement(
     csv_config: Optional[str] = Form(None),  # JSON override for CSVStatementConfig
     current_user=Depends(get_current_user),
 ):
-    """Import Statement."""
-    raw = await file.read()
+    """Import Statement.
+
+    P1 #60 fix: validate uploaded statement size + extension before
+    parsing. Without these guards a hostile or accidental upload could
+    DoS the worker (full-file read into memory) or smuggle disguised
+    binaries through the parser.
+    """
+    from utils.sql_safety import (
+        validate_file_size, validate_file_extension,
+        MAX_IMPORT_FILE_SIZE,
+    )
     fmt = (source_format or "").lower().strip()
+    raw = await file.read()
+    # P1 #60 — size + extension guard. MT940 ships as .sta/.txt; CAMT.053
+    # as .xml; CSV as .csv. Allow this wider set explicitly.
+    validate_file_size(raw, MAX_IMPORT_FILE_SIZE, "كشف البنك")
+    _BANKFEED_EXTS = {".csv", ".txt", ".sta", ".mt940", ".xml", ".camt", ".camt053"}
+    if file.filename:
+        validate_file_extension(file.filename.lower(), _BANKFEED_EXTS, "كشف البنك")
     db = get_db_connection(current_user.company_id)
     try:
+        if bank_account_id:
+            validate_treasury_account_access(db, current_user, bank_account_id)
+        elif not _is_branch_privileged(current_user):
+            raise HTTPException(status_code=400, detail="يرجى تحديد حساب بنكي مرتبط بفرعك قبل استيراد كشف البنك")
+
         created: List[int] = []
         if fmt == "mt940":
             text_raw = raw.decode("utf-8", errors="replace") if isinstance(raw, (bytes, bytearray)) else raw
@@ -194,8 +215,16 @@ def list_statements(limit: int = 50, current_user=Depends(get_current_user)):
                       FROM bank_statements ORDER BY id DESC LIMIT :n"""),
             {"n": limit},
         ).fetchall()
-        return [
-            {
+        items = []
+        for r in rows:
+            if r[1]:
+                try:
+                    validate_treasury_account_access(db, current_user, r[1])
+                except HTTPException:
+                    continue
+            elif not _is_branch_privileged(current_user):
+                continue
+            items.append({
                 "id": r[0], "bank_account_id": r[1], "iban": r[2],
                 "statement_number": r[3], "currency": r[4],
                 "opening_balance": str(r[5]) if r[5] is not None else None,
@@ -204,9 +233,8 @@ def list_statements(limit: int = 50, current_user=Depends(get_current_user)):
                 "period_end": r[8].isoformat() if r[8] else None,
                 "source_format": r[9], "source_filename": r[10],
                 "created_at": r[11].isoformat() if r[11] else None,
-            }
-            for r in rows
-        ]
+            })
+        return items
     finally:
         _close(db)
 
@@ -219,6 +247,17 @@ def list_lines(statement_id: int, current_user=Depends(get_current_user)):
     """List Lines."""
     db = get_db_connection(current_user.company_id)
     try:
+        statement = db.execute(
+            text("SELECT bank_account_id FROM bank_statements WHERE id = :sid"),
+            {"sid": statement_id},
+        ).fetchone()
+        if not statement:
+            raise HTTPException(status_code=404, detail="كشف البنك غير موجود")
+        if statement.bank_account_id:
+            validate_treasury_account_access(db, current_user, statement.bank_account_id)
+        elif not _is_branch_privileged(current_user):
+            raise HTTPException(status_code=403, detail="ليس لديك صلاحية للوصول إلى كشف غير مرتبط بفرع")
+
         rows = db.execute(
             text("""SELECT id, line_no, value_date, posting_date, amount,
                            currency, tx_type, reference, bank_reference,

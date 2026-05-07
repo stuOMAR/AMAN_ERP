@@ -1,0 +1,110 @@
+# Sensitive route coverage list.
+# Pattern: "METHOD /path/glob" → required permission scope.
+# The startup discovery hook compares this against registered FastAPI routes.
+# Unmatched patterns cause SystemExit(1) in production.
+
+# Finance posting
+"POST /api/finance/**": "finance.post"
+"PUT /api/finance/**": "finance.post"
+"PATCH /api/finance/**": "finance.post"
+
+# Reconciliation finalize
+"POST /api/finance/reconciliations/*/finalize": "finance.reconciliation.finalize"
+
+# Financial reports
+"GET /api/reports/finance/**": "reports.finance.view"
+"GET /api/reports/kpi/**": "reports.finance.view"
+
+# Admin credentials
+"GET /api/admin/credentials/**": "admin.credentials"
+"POST /api/admin/credentials/**": "admin.credentials"
+"PUT /api/admin/credentials/**": "admin.credentials"
+"DELETE /api/admin/credentials/**": "admin.credentials"
+
+# HR PII
+"GET /api/hr/employees/*/salary": "hr.pii"
+"GET /api/hr/employees/*/iban": "hr.pii"
+"GET /api/hr/employees/*/national_id": "hr.pii"
+"POST /api/hr/payroll/**": "hr.payroll"
+
+# Admin settings
+"GET /api/admin/settings/**": "admin.settings"
+"POST /api/admin/settings/**": "admin.settings"
+"PUT /api/admin/settings/**": "admin.settings"
+
+# Account classifications
+"GET /api/admin/account-classifications/**": "admin.account_classifications"
+"POST /api/admin/account-classifications/**": "admin.account_classifications"
+"PUT /api/admin/account-classifications/**": "admin.account_classifications"
+
+# ── Feature 023: Sales/POS/CRM/ZATCA + Manufacturing ──────────
+
+# Sales invoice operations
+"POST /api/sales/orders/*/invoice": "sales.invoice.create"
+"POST /api/sales/invoices/*/cancel": "sales.invoice.cancel"
+
+# Returns
+"POST /api/returns": "returns.create"
+"POST /api/returns/*/post": "returns.post"
+"POST /api/returns/*/cancel": "returns.cancel"
+
+# POS offline admin
+"POST /api/pos/offline/batches/*/retry": "pos.offline.admin"
+
+# POS cancellation
+"POST /api/pos/sales/*/cancel": "pos.sale.cancel"
+
+# ZATCA outbox admin
+"GET /api/einvoicing/outbox": "einvoicing.outbox.view"
+"POST /api/einvoicing/outbox/*/reprocess": "einvoicing.outbox.reprocess"
+
+# Manufacturing
+"POST /api/manufacturing/mrp/run": "manufacturing.mrp.run"
+"POST /api/manufacturing/mrp/recommendations/*/accept": "manufacturing.mrp.accept"
+"POST /api/manufacturing/orders/*/complete": "manufacturing.order.complete"
+"POST /api/manufacturing/orders/*/approve": "manufacturing.order.approve"
+"POST /api/manufacturing/orders/*/qc/pass": "manufacturing.qc.pass"
+"POST /api/manufacturing/orders/*/qc/fail": "manufacturing.qc.fail"
+
+# Inventory archival
+"POST /api/inventory/archival/run": "inventory.archival.run"
+
+# ── Feature 024: HR/PII + Payroll + FSM + DMS + Notifications ────────
+
+# HR PII admin
+"GET /api/hr/employees/*/pii": "hr.pii"
+"PATCH /api/hr/employees/*/pii": "hr.pii"
+"GET /api/hr/employees/*/salary-history": "hr.pii"
+
+# HR salary write
+"POST /api/hr/salary-increment": "hr.salary.write"
+"PATCH /api/hr/employees/*/salary": "hr.salary.write"
+
+# Payroll reverse
+"POST /api/payroll/periods/*/reverse": "payroll.reverse"
+"POST /api/payroll/runs/*/reverse": "payroll.reverse"
+
+# Payroll backdated
+"POST /api/payroll/periods/*/backdate": "payroll.allow_backdated"
+
+# Contract renewal
+"POST /api/fsm/contracts/*/renew": "contract.renew"
+
+# DMS admin
+"GET /api/dms/admin/quarantine": "dms.audit_admin"
+"POST /api/dms/admin/quarantine/*/release": "dms.audit_admin"
+"GET /api/dms/admin/scan-stats": "dms.audit_admin"
+"POST /api/dms/admin/storage/recalculate": "dms.audit_admin"
+
+# Email templates admin
+"GET /api/notifications/templates": "email_templates.admin"
+"POST /api/notifications/templates": "email_templates.admin"
+"PUT /api/notifications/templates/*": "email_templates.admin"
+"DELETE /api/notifications/templates/*": "email_templates.admin"
+
+# Notifications admin
+"GET /api/notifications/queue": "notifications.admin"
+"POST /api/notifications/queue/*/retry": "notifications.admin"
+"POST /api/notifications/queue/*/cancel": "notifications.admin"
+"GET /api/notifications/dlq": "notifications.admin"
+"POST /api/notifications/dlq/*/requeue": "notifications.admin"

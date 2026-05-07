@@ -19,7 +19,7 @@ export { authAPI } from '../services/auth'
 export { companiesAPI } from '../services/companies'
 
 // Accounting & Finance
-export { accountingAPI, costCentersAPI, budgetsAPI, budgetImprovementsAPI, currenciesAPI, zakatAPI, fiscalLocksAPI, consolidationAPI, fxReportAPI } from '../services/accounting'
+export { accountingAPI, costCentersAPI, budgetsAPI, currenciesAPI, zakatAPI, fiscalLocksAPI, consolidationAPI, fxReportAPI } from '../services/accounting'
 
 // Reports
 export { reportsAPI, customReportsAPI, scheduledReportsAPI, detailedReportsAPI, reportSharingAPI } from '../services/reports'

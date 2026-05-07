@@ -18,6 +18,7 @@ Usage:
 
 import html
 import logging
+import time
 from datetime import datetime, timezone
 from typing import Optional
 
@@ -29,6 +30,8 @@ logger = logging.getLogger("aman.notification_service")
 _CHANNEL_IN_APP = "in_app"
 _CHANNEL_EMAIL = "email"
 _CHANNEL_PUSH = "push"
+_PREF_CACHE_TTL_SECONDS = 300
+_preference_cache: dict[tuple[str, int, str], tuple[float, list[str]]] = {}
 
 
 class NotificationService:
@@ -59,7 +62,18 @@ class NotificationService:
                 recipient_id, event_type,
             )
             return
-        channels = self._get_enabled_channels(db, recipient_id, event_type)
+        # T10.1 P1 #91 — per-user-per-hour notification rate limit, so a
+        # runaway producer (e.g. a bad scheduler loop) cannot flood a
+        # single user. Limit is read from ``company_settings`` key
+        # ``notification_rate_per_hour`` (default 50). Setting to 0
+        # disables the cap.
+        if not self._rate_limit_ok(db, company_id, recipient_id):
+            logger.warning(
+                "Notification rate limit exceeded for user %s in company %s — dropping %s",
+                recipient_id, company_id, event_type,
+            )
+            return
+        channels = self._get_enabled_channels(db, company_id, recipient_id, event_type)
         for channel in channels:
             try:
                 await self._dispatch_channel(
@@ -87,11 +101,46 @@ class NotificationService:
     # Internal helpers
     # ------------------------------------------------------------------
 
-    def _get_enabled_channels(self, db, user_id: int, event_type: str) -> list[str]:
+    def _rate_limit_ok(self, db, company_id: str, recipient_id: int) -> bool:
+        """Return False when the user has exceeded their hourly cap.
+
+        Reads ``notification_rate_per_hour`` from ``company_settings``;
+        default 50, ``0`` disables. Counts rows in ``notifications``
+        sent to ``recipient_id`` in the last 60 minutes.
+        """
+        try:
+            limit_row = db.execute(text(
+                "SELECT setting_value FROM company_settings "
+                "WHERE setting_key = 'notification_rate_per_hour'"
+            )).scalar()
+            try:
+                limit = int(limit_row) if limit_row not in (None, "") else 50
+            except (ValueError, TypeError):
+                limit = 50
+            if limit <= 0:
+                return True
+            recent = db.execute(text(
+                "SELECT COUNT(*) FROM notifications "
+                "WHERE recipient_id = :uid "
+                "  AND created_at >= NOW() - INTERVAL '1 hour'"
+            ), {"uid": recipient_id}).scalar() or 0
+            return int(recent) < limit
+        except Exception:
+            # Fail open — never block business flow on a metering bug.
+            logger.exception("notification rate-limit check failed; allowing dispatch")
+            return True
+
+    def _get_enabled_channels(self, db, company_id: str, user_id: int, event_type: str) -> list[str]:
         """Return list of channels enabled for this user+event_type.
 
         Defaults to all three channels when no preference row is found.
         """
+        cache_key = (str(company_id), int(user_id), event_type)
+        cached = _preference_cache.get(cache_key)
+        now = time.time()
+        if cached and cached[0] > now:
+            return list(cached[1])
+
         row = db.execute(
             text(
                 "SELECT email_enabled, in_app_enabled, push_enabled "
@@ -103,7 +152,9 @@ class NotificationService:
         ).fetchone()
 
         if row is None:
-            return [_CHANNEL_IN_APP, _CHANNEL_EMAIL, _CHANNEL_PUSH]
+            channels = [_CHANNEL_IN_APP, _CHANNEL_EMAIL, _CHANNEL_PUSH]
+            _preference_cache[cache_key] = (now + _PREF_CACHE_TTL_SECONDS, channels)
+            return channels
 
         enabled = []
         if row.in_app_enabled:
@@ -112,6 +163,7 @@ class NotificationService:
             enabled.append(_CHANNEL_EMAIL)
         if row.push_enabled:
             enabled.append(_CHANNEL_PUSH)
+        _preference_cache[cache_key] = (now + _PREF_CACHE_TTL_SECONDS, enabled)
         return enabled
 
     async def _dispatch_channel(
@@ -222,8 +274,9 @@ class NotificationService:
         try:
             from services.email_service import send_notification_email
 
-            html_body = f"<p>{body}</p>"
-            send_notification_email(db, recipient_id, title, html_body, tenant_id=tenant_id)
+            html_body = f"<p>{html.escape(str(body or ''))}</p>"
+            subject = html.escape(str(title or "Notification"))
+            send_notification_email(db, recipient_id, subject, html_body, tenant_id=tenant_id)
         except Exception as exc:
             logger.warning("Email notification failed for user %s: %s", recipient_id, exc)
 

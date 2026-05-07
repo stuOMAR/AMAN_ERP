@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
@@ -36,12 +36,15 @@ from .core import _D2, _D4, get_db
 @router.get("/promotions", dependencies=[Depends(require_permission("pos.view"))], response_model=List[Dict[str, Any]])
 def list_promotions(
     active_only: bool = True,
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
 ):
     """List Promotions."""
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     q = "SELECT * FROM pos_promotions WHERE 1=1"
     params = {}
+    q += f" {branch_scope_filter_from_scope(branch_scope, 'branch_id', params)}"
     if active_only:
         q += " AND is_active = true AND (end_date IS NULL OR end_date > NOW())"
     q += " ORDER BY created_at DESC"

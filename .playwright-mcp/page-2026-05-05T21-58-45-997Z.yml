@@ -1,0 +1,214 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 مصر - فرع القاهرة EGP ▼" [ref=e110] [cursor=pointer]:
+            - generic [ref=e111]:
+              - text: 🏢
+              - generic [ref=e112]: مصر - فرع القاهرة
+            - generic [ref=e113]: EGP
+            - generic [ref=e114]: ▼
+          - button "🔔 1" [ref=e116] [cursor=pointer]:
+            - text: 🔔
+            - generic [ref=e117]: "1"
+          - generic [ref=e119] [cursor=pointer]:
+            - generic [ref=e120]:
+              - generic [ref=e121]: omar
+              - generic [ref=e122]: "ID: 1a134155"
+            - generic [ref=e123]: O
+      - main [ref=e125]:
+        - generic [ref=e126]:
+          - generic [ref=e127]:
+            - button "العودة" [ref=e128] [cursor=pointer]:
+              - img [ref=e129]
+            - generic [ref=e131]:
+              - heading "📊 أرصدة المخزون" [level=1] [ref=e132]
+              - paragraph [ref=e133]: توزيع الكميات على المستودعات
+          - generic [ref=e134]:
+            - generic [ref=e135] [cursor=pointer]:
+              - heading "📈 مؤشرات أداء المخازن" [level=3] [ref=e138]
+              - generic [ref=e139]:
+                - button [ref=e140]:
+                  - img [ref=e141]
+                - img [ref=e146]
+            - generic [ref=e148]:
+              - generic [ref=e150]:
+                - button "اليوم" [ref=e151] [cursor=pointer]:
+                  - img [ref=e152]
+                  - text: اليوم
+                - button "الأسبوع" [ref=e155] [cursor=pointer]:
+                  - img [ref=e156]
+                  - text: الأسبوع
+                - button "الشهر" [ref=e158] [cursor=pointer]:
+                  - img [ref=e159]
+                  - text: الشهر
+                - button "الربع" [ref=e161] [cursor=pointer]:
+                  - img [ref=e162]
+                  - text: الربع
+                - button "السنة" [ref=e164] [cursor=pointer]:
+                  - img [ref=e165]
+                  - text: السنة
+                - button "مخصص" [ref=e167] [cursor=pointer]:
+                  - img [ref=e168]
+                  - text: مخصص
+              - generic [ref=e171]:
+                - generic [ref=e172]:
+                  - generic [ref=e174]: قيمة المخزون بالتكلفة
+                  - generic [ref=e175]:
+                    - generic [ref=e176]: 51,585.00
+                    - generic [ref=e177]: EGP
+                - generic [ref=e178]:
+                  - generic [ref=e180]: قيمة المخزون بسعر البيع
+                  - generic [ref=e181]:
+                    - generic [ref=e182]: 220,394.74
+                    - generic [ref=e183]: EGP
+                - generic [ref=e184]:
+                  - generic [ref=e186]: الربح المحتمل
+                  - generic [ref=e187]:
+                    - generic [ref=e188]: 168,809.74
+                    - generic [ref=e189]: EGP
+                - generic [ref=e190]:
+                  - generic [ref=e192]: معدل دوران المخزون
+                  - generic [ref=e193]:
+                    - generic [ref=e194]: "0.00"
+                    - generic [ref=e195]: x
+                - generic [ref=e196]:
+                  - generic [ref=e198]: أيام دوران المخزون
+                  - generic [ref=e199]:
+                    - generic [ref=e200]: "0.00"
+                    - generic [ref=e201]: days
+                - generic [ref=e202]:
+                  - generic [ref=e204]: المنتجات النشطة
+                  - generic [ref=e206]: "3.00"
+                - generic [ref=e207]:
+                  - generic [ref=e209]: منتجات تحت حد الطلب
+                  - generic [ref=e211]: "0.00"
+                - generic [ref=e212]:
+                  - generic [ref=e214]: المنتجات بطيئة الحركة
+                  - generic [ref=e215]:
+                    - generic [ref=e216]: "33.33"
+                    - generic [ref=e217]: "%"
+                - generic [ref=e218]:
+                  - generic [ref=e220]: منتجات نفدت
+                  - generic [ref=e222]: "0.00"
+          - textbox "بحث باسم الصنف، الكود، أو المستودع..." [ref=e224]
+          - generic [ref=e226]:
+            - generic [ref=e227]:
+              - heading "📍 مستودع القاهرة" [level=3] [ref=e228]:
+                - generic [ref=e229]: 📍
+                - text: مستودع القاهرة
+              - generic [ref=e230]: 2 صنف
+            - table [ref=e232]:
+              - rowgroup [ref=e233]:
+                - row "الكود الصنف الوحدة الكمية الحالة" [ref=e234]:
+                  - columnheader "الكود" [ref=e235]
+                  - columnheader "الصنف" [ref=e236]
+                  - columnheader "الوحدة" [ref=e237]
+                  - columnheader "الكمية" [ref=e238]
+                  - columnheader "الحالة" [ref=e239]
+              - rowgroup [ref=e240]:
+                - row "GH-TAB-10 جهاز لوحي 10 بوصة قطعة 45.00 توفر جيد" [ref=e241]:
+                  - cell "GH-TAB-10" [ref=e242]
+                  - cell "جهاز لوحي 10 بوصة" [ref=e243]
+                  - cell "قطعة" [ref=e244]
+                  - cell "45.00" [ref=e245]
+                  - cell "توفر جيد" [ref=e246]
+                - row "GH-SCN-01 قارئ باركود 2.00 منخفض" [ref=e247]:
+                  - cell "GH-SCN-01" [ref=e248]
+                  - cell "قارئ باركود" [ref=e249]
+                  - cell [ref=e250]
+                  - cell "2.00" [ref=e251]
+                  - cell "منخفض" [ref=e252]

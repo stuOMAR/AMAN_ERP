@@ -15,7 +15,7 @@ from routers.auth import get_current_user
 from utils.permissions import require_permission
 from utils.limiter import limiter
 from schemas.intercompany import (
-    EntityGroupCreate, IntercompanyTransactionCreate,
+    EntityGroupCreate, EntityGroupUpdate, IntercompanyTransactionCreate,
     ConsolidationRequest, AccountMappingCreate,
 )
 from services import intercompany_service
@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 # Entity Group CRUD
 # ---------------------------------------------------------------------------
 
-@router.get("/entities", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=Dict[str, Any])
+@router.get("/entities", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_entities(request: Request, current_user=Depends(get_current_user)):
     """Return entity group tree."""
@@ -45,6 +45,34 @@ def create_entity(request: Request, data: EntityGroupCreate, current_user=Depend
     return intercompany_service.create_entity_group(data.model_dump(), str(company_id), user_id)
 
 
+@router.patch(
+    "/entities/{entity_id}",
+    dependencies=[Depends(require_permission(["intercompany.manage", "accounting.edit"]))],
+    response_model=Dict[str, Any],
+)
+@limiter.limit("100/minute")
+def update_entity(
+    request: Request,
+    entity_id: int,
+    data: EntityGroupUpdate,
+    current_user=Depends(get_current_user),
+):
+    """Patch an entity group — typically used to set the correct
+    ``group_currency`` (functional currency) on a branch that was created
+    with the SAR default."""
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+    try:
+        return intercompany_service.update_entity_group(
+            entity_id,
+            data.model_dump(exclude_unset=True),
+            str(company_id),
+            user_id,
+        )
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+
 # ---------------------------------------------------------------------------
 # Intercompany Transactions
 # ---------------------------------------------------------------------------
@@ -57,22 +85,27 @@ def create_transaction(request: Request, data: IntercompanyTransactionCreate, cu
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     try:
         return intercompany_service.create_transaction(data.model_dump(), str(company_id), user_id)
-    except ValueError:
+    except ValueError as e:
+        logger.exception("Validation error")
+        raise HTTPException(status_code=400, detail=str(e))
+    except Exception as e:
         logger.exception("Internal error")
-        raise HTTPException(**http_error(400, "invalid_data"))
+        raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.get("/transactions", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=Dict[str, Any])
+@router.get("/transactions", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_transactions(
     request: Request,
+    status: Optional[str] = None,
     status_filter: Optional[str] = None,
     entity_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
     current_user=Depends(get_current_user),
 ):
     """List intercompany transactions (v2 tables)."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    return intercompany_service.get_transactions(str(company_id), status_filter, entity_id)
+    return intercompany_service.get_transactions(str(company_id), status_filter or status, entity_id, branch_id)
 
 
 @router.get("/transactions/{txn_id}", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=Dict[str, Any])
@@ -84,6 +117,18 @@ def get_transaction(request: Request, txn_id: int, current_user=Depends(get_curr
     if not result:
         raise HTTPException(status_code=404, detail="Transaction not found")
     return result
+
+
+@router.post("/transactions/{txn_id}/process", dependencies=[Depends(require_permission(["intercompany.manage", "accounting.edit"]))], response_model=Dict[str, Any])
+@limiter.limit("100/minute")
+def process_transaction(request: Request, txn_id: int, current_user=Depends(get_current_user)):
+    """Process/complete an intercompany transaction."""
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+    try:
+        return intercompany_service.process_transaction(txn_id, str(company_id), user_id)
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=str(e))
 
 
 # ---------------------------------------------------------------------------
@@ -124,7 +169,7 @@ def get_balances(request: Request, current_user=Depends(get_current_user)):
 # Account Mappings
 # ---------------------------------------------------------------------------
 
-@router.get("/mappings", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=Dict[str, Any])
+@router.get("/mappings", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def list_mappings(request: Request, current_user=Depends(get_current_user)):
     """List intercompany account mappings."""

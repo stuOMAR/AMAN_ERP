@@ -13,7 +13,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
@@ -42,7 +42,7 @@ def list_tax_returns(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب الإقرارات الضريبية مع فلترة حسب الفرع والمستخدم والسنة والنوع"""
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         where = "WHERE 1=1"
         params = {}
@@ -52,9 +52,7 @@ def list_tax_returns(
         if tax_type:
             where += " AND tr.tax_type = :tax_type"
             params["tax_type"] = tax_type
-        if branch_id:
-            where += " AND tr.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        where += f" {branch_scope_filter_from_scope(branch_scope, 'tr.branch_id', params)}"
         if jurisdiction_code:
             where += " AND tr.jurisdiction_code = :jc"
             params["jc"] = jurisdiction_code.upper()

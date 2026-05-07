@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
-import { accountingAPI, companiesAPI, api } from '../../utils/api'
+import { reportsAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton';
@@ -13,78 +13,60 @@ function TrialBalance() {
     const [accounts, setAccounts] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
-    const [currency, setCurrency] = useState('')
     const [totals, setTotals] = useState({ debit: 0, credit: 0, balance: 0 })
-    const [isCompareMode, setIsCompareMode] = useState(false)
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1))
     const [endDate, setEndDate] = useState(new Date())
-    const [compareStartDate, setCompareStartDate] = useState(new Date(new Date().getFullYear() - 1, 0, 1))
-    const [compareEndDate, setCompareEndDate] = useState(new Date(new Date().getFullYear() - 1, 11, 31))
     const [showExport, setShowExport] = useState(false)
+    const [currency, setCurrency] = useState('SAR')
 
     useEffect(() => {
         const fetchData = async () => {
             try {
                 setLoading(true)
-                const userStr = localStorage.getItem('user')
-                const user = userStr ? JSON.parse(userStr) : null
-                const companyId = user?.company_id || localStorage.getItem('company_id')
+                const startStr = startDate.toISOString().split('T')[0]
+                const endStr = endDate.toISOString().split('T')[0]
+                
+                const params = {
+                    start_date: startStr,
+                    end_date: endStr,
+                }
+                if (currentBranch?.id) params.branch_id = currentBranch.id
 
-                const [accountsRes, companyRes] = await Promise.all([
-                    accountingAPI.list({ branch_id: currentBranch?.id }),
-                    companyId ? companiesAPI.getCurrentCompany(companyId) : Promise.resolve({ data: { currency: '' } })
-                ])
+                const response = await reportsAPI.getTrialBalance(params)
+                const result = response.data || {}
+                const data = result.data || result.items || []
+                
+                setAccounts(Array.isArray(data) ? data : [])
+                setCurrency(result.currency || currentBranch?.default_currency || 'SAR')
 
-                const accData = accountsRes.data
-                setAccounts(accData)
-
-                // Calculate Totals
-                let totalDebit = 0
-                let totalCredit = 0
-
-                // For Trial Balance, we usually just list balances. 
-                // Positive Balance = Debit (Asset/Expense)
-                // Negative Balance (if stored that way) or Credit Nature accounts = Credit.
-                // However, our system stores 'balance' as a single number.
-                // We need to interpret it based on Account Type.
-
-                // Asset/Expense: Positive means Debit Balance.
-                // Liability/Equity/Revenue: Positive means Credit Balance.
-
+                // Calculate Totals from closing balances
                 let debSum = 0
                 let credSum = 0
 
-                accData.forEach(acc => {
-                    const bal = parseFloat(acc.balance || 0)
-                    if (['asset', 'expense'].includes(acc.account_type)) {
-                        // Normal Debit balance
-                        if (bal >= 0) debSum += bal
-                        else credSum += Math.abs(bal) // Negative asset is credit
-                    } else {
-                        // Normal Credit balance
-                        if (bal >= 0) credSum += bal
-                        else debSum += Math.abs(bal) // Negative liab is debit
-                    }
-                })
-
-                setTotals({
-                    debit: debSum,
-                    credit: credSum,
-                    balance: debSum - credSum
-                })
-
-                if (companyRes.data && companyRes.data.currency) {
-                    setCurrency(companyRes.data.currency)
+                if (Array.isArray(data)) {
+                    data.forEach(acc => {
+                        const debit = parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
+                        const credit = parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
+                        debSum += debit
+                        credSum += credit
+                    })
                 }
+
+                if (result.totals) {
+                    debSum = parseFloat(result.totals.closing_debit || result.totals.period_debit || 0)
+                    credSum = parseFloat(result.totals.closing_credit || result.totals.period_credit || 0)
+                }
+
+                setTotals({ debit: debSum, credit: credSum, balance: debSum - credSum })
             } catch (err) {
-                console.error(err)
-                setError(t('accounting.trial_balance.error_loading'))
+                console.error('Trial balance error:', err)
+                setError(t('common.error'))
             } finally {
                 setLoading(false)
             }
         }
         fetchData()
-    }, [currentBranch, t])
+    }, [currentBranch, startDate, endDate])
 
     if (loading) return <PageLoading />
 
@@ -136,7 +118,7 @@ function TrialBalance() {
                 </div>
             </div>
 
-            {/* Date Filters & Compare Mode */}
+            {/* Date Filters */}
             <div className="card mb-4 mt-4">
                 <div className="card-body">
                     <div className="display-flex gap-4 align-end flex-wrap">
@@ -148,25 +130,6 @@ function TrialBalance() {
                             <label className="form-label">{t('common.end_date', 'إلى تاريخ')}</label>
                             <CustomDatePicker selected={endDate} onChange={date => setEndDate(date)} className="form-input" />
                         </div>
-                        <div className="form-check" style={{ marginBottom: '10px', marginLeft: '20px' }}>
-                            <input type="checkbox" className="form-check-input" id="compareModeTrialBalance"
-                                checked={isCompareMode} onChange={e => setIsCompareMode(e.target.checked)} />
-                            <label className="form-check-label" htmlFor="compareModeTrialBalance">
-                                {t('accounting.reports.compare_periods', 'مقارنة فترات')}
-                            </label>
-                        </div>
-                        {isCompareMode && (
-                            <>
-                                <div style={{ width: '200px' }}>
-                                    <label className="form-label">{t('common.start_date', 'من تاريخ')} (2)</label>
-                                    <CustomDatePicker selected={compareStartDate} onChange={date => setCompareStartDate(date)} className="form-input" />
-                                </div>
-                                <div style={{ width: '200px' }}>
-                                    <label className="form-label">{t('common.end_date', 'إلى تاريخ')} (2)</label>
-                                    <CustomDatePicker selected={compareEndDate} onChange={date => setCompareEndDate(date)} className="form-input" />
-                                </div>
-                            </>
-                        )}
                     </div>
                 </div>
             </div>
@@ -208,14 +171,8 @@ function TrialBalance() {
                             let groupDebit = 0
                             let groupCredit = 0
                             typeAccounts.forEach(acc => {
-                                const bal = parseFloat(acc.balance || 0)
-                                if (['asset', 'expense'].includes(acc.account_type)) {
-                                    if (bal >= 0) groupDebit += bal
-                                    else groupCredit += Math.abs(bal)
-                                } else {
-                                    if (bal >= 0) groupCredit += bal
-                                    else groupDebit += Math.abs(bal)
-                                }
+                                groupDebit += parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
+                                groupCredit += parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
                             })
 
                             const typeLabels = {
@@ -234,20 +191,11 @@ function TrialBalance() {
                                         </td>
                                     </tr>
                                     {typeAccounts.map(acc => {
-                                        const bal = parseFloat(acc.balance || 0)
-                                        let debit = 0
-                                        let credit = 0
-
-                                        if (['asset', 'expense'].includes(acc.account_type)) {
-                                            if (bal >= 0) debit = bal
-                                            else credit = Math.abs(bal)
-                                        } else {
-                                            if (bal >= 0) credit = bal
-                                            else debit = Math.abs(bal)
-                                        }
+                                        const debit = parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
+                                        const credit = parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
 
                                         return (
-                                            <tr key={acc.id} className="hover-row">
+                                            <tr key={acc.account_id || acc.id} className="hover-row">
                                                 <td className="font-mono" style={{ paddingLeft: '24px' }}>{acc.account_number}</td>
                                                 <td className="font-medium">
                                                     {acc.parent_id ? <span style={{ marginRight: '8px', color: 'var(--text-secondary)' }}>↳</span> : ''}

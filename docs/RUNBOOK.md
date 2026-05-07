@@ -603,6 +603,201 @@ export AMAN_PRODUCT_ID=1
 2. نجاح smoke regression بدون أعطال حرجة.
 3. تثبيت أن CI يمر عبر secret-scan gate.
 
+### 11.4 إعدادات DNS للبريد الصادر
+
+قبل تفعيل SMTP إنتاجي لأي نطاق مرسل، يجب توثيق وتأكيد سجلات DNS التالية مع مزود البريد:
+
+| السجل | القيمة المطلوبة |
+|-------|-----------------|
+| SPF | سجل TXT على النطاق المرسل يصرح بخوادم SMTP الفعلية، مثل `v=spf1 include:<provider> -all`. |
+| DKIM | مفتاح DKIM عام لكل selector مستخدم، مع تدوير عند تغيير مزود البريد أو مفتاح التوقيع. |
+| DMARC | سجل TXT يبدأ بسياسة مراقبة `p=none` ثم ينتقل إلى `quarantine` أو `reject` بعد مراجعة التقارير. |
+
+تحقق التشغيل: أرسل رسالة اختبار إلى صندوق خارجي، ثم راجع headers للتأكد من `spf=pass`, `dkim=pass`, `dmarc=pass`. عند فشل أي سجل، أوقف إرسال الحملات bulk حتى يتم تصحيح DNS.
+
+## 12. Audit Outbox Worker Recovery (022)
+
+The audit outbox pattern writes audit events to `audit_outbox` within the
+same transaction as the business operation. A dedicated worker flushes
+rows to `audit_logs` asynchronously.
+
+### If the worker stops
+
+```bash
+# 1. Check worker process
+docker compose ps worker
+
+# 2. Check outbox lag
+psql -U aman -d aman_<company_id> -c "
+  SELECT COUNT(*) AS pending, 
+         EXTRACT(EPOCH FROM NOW() - MIN(created_at))::int AS oldest_age_sec
+  FROM audit_outbox WHERE flushed_at IS NULL;"
+
+# 3. Restart worker
+docker compose restart worker
+
+# 4. If backlog is large (>10k rows), increase batch size temporarily
+# Set AUDIT_OUTBOX_BATCH=500 in worker env, restart, then reset to default.
+```
+
+### If outbox table grows unbounded
+
+```bash
+# Check table size
+psql -U aman -d aman_<company_id> -c "
+  SELECT pg_size_pretty(pg_total_relation_size('audit_outbox'));"
+
+# Purge flushed rows older than 7 days
+psql -U aman -d aman_<company_id> -c "
+  DELETE FROM audit_outbox WHERE flushed_at < NOW() - INTERVAL '7 days';"
+```
+
+---
+
+## 13. Reconciliation Drift Report Interpretation (022)
+
+When `POST /reconciliation/{id}/finalize` returns **HTTP 409**, the response
+body contains a structured drift report:
+
+```json
+{
+  "error": "reconciliation_drift",
+  "gl_total": 150000.00,
+  "bank_total": 149500.00,
+  "difference": 500.00,
+  "tolerance": 1.00,
+  "unmatched_lines": [
+    {"id": 42, "description": "Wire transfer", "amount": 500.00}
+  ]
+}
+```
+
+### Interpretation
+
+| Field | Meaning |
+|-------|---------|
+| `gl_total` | Sum of reconciled lines (credits - debits) + opening balance |
+| `bank_total` | The end balance entered from the bank statement |
+| `difference` | `abs(gl_total - bank_total)` |
+| `tolerance` | Max allowed difference from `company_settings.reconciliation_tolerance` |
+| `unmatched_lines` | Statement lines not yet matched to GL entries |
+
+### Resolution steps
+
+1. **Difference > tolerance**: Check `unmatched_lines` — likely a missing match.
+2. **Difference within tolerance but still 409**: Tolerance setting may be too tight.
+   Update via `PUT /api/settings` with key `reconciliation_tolerance`.
+3. **Force finalize**: If management approves, use the force-override button in the
+   admin UI (requires `finance.reconciliation.finalize` sensitive permission).
+
+---
+
+## 14. Credential Rotation Playbook (022)
+
+Integration credentials are stored in `integration_credentials` with envelope
+encryption. Rotation is triggered via admin UI or API.
+
+### Rotate a credential
+
+```bash
+# Via API
+curl -X POST http://localhost:8000/api/admin/credentials/{id}/rotate \
+  -H "Authorization: Bearer $ADMIN_TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"new_secret": "new-value-here"}'
+```
+
+### Check credential health
+
+```bash
+psql -U aman -d aman_<company_id> -c "
+  SELECT id, integration, name, status, consecutive_failures, 
+         last_rotated_at, expires_at
+  FROM integration_credentials 
+  WHERE status != 'soft_deleted'
+  ORDER BY consecutive_failures DESC;"
+```
+
+### Alert on failures
+
+Credentials with `consecutive_failures >= 3` trigger a notification.
+Check `notifications` table for `credential_failure` type alerts.
+
+### Soft-delete vs hard-delete
+
+- **Soft-delete**: Sets `status='soft_deleted'`, preserves encrypted secret for audit.
+- **Restore**: `POST /api/admin/credentials/{id}/restore` reactivates.
+- **Hard-delete**: Only via direct DB after compliance review. Not exposed in API.
+
+---
+
+## 15. Treasury Trigger Bypass for Migrations (022)
+
+A DB trigger on `treasury_accounts` blocks direct `UPDATE current_balance`
+unless the session has `aman.gl_context = 'on'` GUC set.
+
+### Legitimate bypass paths
+
+- `gl_service.create_journal_entry()` — sets GUC automatically
+- `utils/treasury_balance.py` — sets GUC before UPDATE
+- `scripts/reconcile_balances.py` — sets GUC in fix path
+
+### If a migration needs to update balances
+
+```sql
+-- Set the GUC before your UPDATE
+SELECT set_config('aman.gl_context', 'on', true);
+
+UPDATE treasury_accounts SET current_balance = :new_balance WHERE id = :id;
+```
+
+### If the trigger blocks a legitimate operation
+
+Check if the caller sets the GUC:
+```bash
+grep -rn "aman.gl_context" backend/
+```
+
+If missing, add `db.execute(text("SELECT set_config('aman.gl_context', 'on', true)"))`
+before the UPDATE statement.
+
+---
+
+## 16. Sensitive Permission Discovery (022)
+
+The `require_sensitive_permission` decorator enforces critical permissions on
+finance/PII endpoints. A discovery script audits coverage.
+
+### Run discovery
+
+```bash
+cd /home/omar/Desktop/aman/backend
+python -m scripts.permissions_discover --strict
+```
+
+### Output interpretation
+
+- **OK**: All routes with `require_sensitive_permission` have matching permission
+  definitions in the role system.
+- **FAIL**: Some routes reference permissions not in the role definitions. 
+  Add the missing permissions to `backend/data/default_roles.json` or the
+  permission seed migration.
+
+### Adding a new sensitive endpoint
+
+```python
+from services.permissions.sensitive import require_sensitive_permission
+
+@router.post("/my-endpoint", dependencies=[
+    Depends(require_sensitive_permission("module.action", critical=True))
+])
+```
+
+The `critical=True` flag ensures the action is logged even if the outbox
+worker is delayed.
+
+---
+
 ## ملحق: أوامر مفيدة
 
 ```bash
@@ -838,3 +1033,68 @@ request. Backend `AcceptLanguageMiddleware` stores the value on
 
 1. Add to BOTH `errors.en.json` and `errors.ar.json`.
 2. Use `raise HTTPException(**http_error(404, "my_key", lang=request.state.lang))`.
+
+---
+
+## Feature 023 — Worker Operations
+
+### ZATCA Outbox Worker (`worker.zatca_outbox`)
+
+- **Interval**: 5 seconds, batch size 25
+- **Health**: Check `zatca_outbox` table for rows stuck in `processing` state > 5 minutes
+- **Dead letter**: Rows with `state='dead_letter'` need manual reprocess via `POST /einvoicing/outbox/{id}/reprocess`
+- **Expected lag**: < 30 seconds from invoice post to ZATCA submission
+- **Alert**: > 100 rows in `pending` state for > 5 minutes
+
+### POS Offline Reconciler (`worker.pos_offline_reconciler`)
+
+- **Interval**: 10 seconds, batch size 50
+- **Health**: Check `pos_offline_batches` for rows in `reconciling` state > 2 minutes
+- **Manual review**: Rows with `state='manual_review'` need human triage
+- **Failure codes**: `out_of_stock`, `closed_period`, `state_machine_violation`, `pricing_mismatch`, `stale_batch`
+
+### Auto-Reorder (`worker.auto_reorder`)
+
+- **Interval**: 60 minutes (configurable via `inventory.auto_reorder_interval_minutes`)
+- **Health**: Check `mrp_recommendations` for `source='auto_reorder'` rows created in last run
+- **Lock**: Per-tenant advisory lock prevents concurrent runs
+- **Performance target**: 5000 pairs ≤ 30 seconds
+
+### Inventory Archiver (`worker.inventory_archiver`)
+
+- **Schedule**: Daily at 03:00 UTC
+- **Health**: Check `inventory_transactions_archive` row count growth
+- **Retention**: Configurable via `inventory.retention_days` (default 365)
+- **Performance**: Batches of 5000, brief pause between batches
+- **Alert**: If `inventory_transactions` grows beyond 10M rows
+
+### MRP Scheduler (`worker.mrp`)
+
+- **Interval**: Configurable via `mfg.mrp_interval_minutes` (default 60)
+- **Health**: Check `mrp_recommendations` for recent `run_id`
+- **Lock**: Per-tenant advisory lock prevents concurrent runs
+- **Performance target**: 10000 items ≤ 5 minutes
+- **Cycle detection**: BOM cycles raise `BomCycleError` with path
+
+---
+
+## Feature 023 — Troubleshooting
+
+### Invoice State Machine
+
+- **StaleInvoiceState**: Concurrent modification detected. Retry the operation.
+- **InvalidInvoiceTransition**: State transition not allowed. Check `LEGAL_TRANSITIONS` in `invoice_state.py`.
+
+### POS Stock Lock
+
+- **PosLockTimeout**: Could not acquire lock within 5 seconds. Check Redis connectivity.
+- **Fallback**: If Redis unavailable, falls back to `pg_advisory_xact_lock`.
+
+### ZATCA Signing
+
+- **SignerCredentialsMissing**: ZATCA credentials not configured in vault for this tenant.
+- **SignerCryptoError**: Certificate/key mismatch or expiration. Check vault entries.
+
+### MRP Cycles
+
+- **BomCycleError**: BOM has circular dependency. Fix BOM structure before re-running MRP.

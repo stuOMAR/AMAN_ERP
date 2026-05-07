@@ -25,23 +25,49 @@ def _json_default(obj: Any) -> Any:
     raise TypeError(f"Object of type {type(obj)} is not JSON serializable")
 
 class MemoryCache:
-    def __init__(self):
-        self._cache = {}
-        self._expiry = {}
+    # T10.2 #146: bound the in-memory fallback cache so a Redis outage
+    # cannot drive workers to OOM. When Redis is up this code path is
+    # only used by tests / single-process dev runs, so a fixed cap is
+    # plenty. Values are expired+LRU-evicted; oldest entry drops first.
+    _DEFAULT_MAX_ENTRIES = 50_000
+
+    def __init__(self, max_entries: int = _DEFAULT_MAX_ENTRIES):
+        from collections import OrderedDict
+        self._cache: "OrderedDict[str, Any]" = OrderedDict()
+        self._expiry: dict = {}
         import time
         self._time = time
-        
+        self._max_entries = max(100, int(max_entries))
+
+    def _evict_if_needed(self):
+        # Drop expired entries first; if still over cap, drop LRU.
+        now = self._time.time()
+        for k in list(self._expiry.keys()):
+            if self._expiry[k] <= now:
+                self._cache.pop(k, None)
+                del self._expiry[k]
+        while len(self._cache) > self._max_entries:
+            k, _ = self._cache.popitem(last=False)
+            self._expiry.pop(k, None)
+
     def get(self, key: str) -> Optional[Any]:
         if key in self._expiry:
             if self._time.time() > self._expiry[key]:
-                del self._cache[key]
+                self._cache.pop(key, None)
                 del self._expiry[key]
                 return None
-        return self._cache.get(key)
-        
+        if key in self._cache:
+            # LRU touch
+            self._cache.move_to_end(key)
+            return self._cache[key]
+        return None
+
     def set(self, key: str, value: Any, expire: int = 300):
         self._cache[key] = value
+        self._cache.move_to_end(key)
         self._expiry[key] = self._time.time() + expire
+        if len(self._cache) > self._max_entries:
+            self._evict_if_needed()
         
     def delete(self, key: str):
         if key in self._cache:
@@ -288,6 +314,74 @@ def invalidate_company_cache(company_id: str, module: str = ""):
     """Invalidate all cache for a specific company and optional module"""
     pattern = f"{module}:{company_id}" if module else str(company_id)
     cache.delete_pattern(pattern)
+
+
+# ---------------------------------------------------------------------------
+# T12 P1 #33/#36 — Scoped, aggregate-level invalidation helpers.
+#
+# The wholesale ``invalidate_company_cache`` was being called after every
+# accounting/sales mutation, wiping reports + dashboard + every other
+# tenant key — so the cache was effectively useless under realistic load
+# (50+ entries/day = 50 wipes/day). The helpers below let callers
+# invalidate ONLY the aggregates they actually changed.
+#
+# Convention: cache keys use the tenant_key() prefix scheme
+# ``t:<company>:<aggregate>:...`` (see :func:`tenant_key`). The *aggregate*
+# is the second segment — e.g. ``invoices``, ``reports``, ``dashboard``.
+# Helpers here take aggregate names and emit pattern deletes that match
+# only those scopes.
+# ---------------------------------------------------------------------------
+
+# Map module → list of aggregate prefixes the module owns. Used by
+# :func:`invalidate_aggregates` so callers don't have to memorise scope
+# names. Add new modules here when they introduce new cache aggregates.
+_MODULE_AGGREGATES: dict = {
+    "accounting":   ("reports", "dashboard", "trial_balance", "chart_of_accounts"),
+    "sales":        ("invoices", "dashboard", "reports", "sales_kpi"),
+    "purchases":    ("purchases", "dashboard", "reports"),
+    "inventory":    ("inventory", "products", "dashboard"),
+    "treasury":     ("treasury", "dashboard"),
+    "hr":           ("hr", "payroll"),
+    "crm":          ("crm",),
+}
+
+
+def invalidate_aggregates(company_id: str, *aggregates: str) -> int:
+    """Invalidate one or more aggregate caches for a tenant.
+
+    Example::
+
+        # Posting an invoice should NOT wipe the entire tenant cache —
+        # it should only invalidate the aggregates that actually changed.
+        invalidate_aggregates(company_id, "invoices", "dashboard", "reports")
+
+    Returns the number of patterns issued (informational only).
+    """
+    if not company_id or not aggregates:
+        return 0
+    issued = 0
+    for ag in aggregates:
+        if not ag:
+            continue
+        # Match both the tenant_key() shape (``t:<cid>:<ag>``) and the
+        # legacy ``<prefix>:<func>:<cid>`` shape used by ``cached()``.
+        cache.delete_pattern(f"t:{company_id}:{ag}")
+        cache.delete_pattern(f"{ag}:")  # tighter than wholesale wipe
+        issued += 1
+    return issued
+
+
+def invalidate_module(company_id: str, module: str) -> int:
+    """Invalidate all aggregates owned by a logical module.
+
+    Looks the module up in :data:`_MODULE_AGGREGATES`. Unknown modules
+    fall back to ``invalidate_aggregates(company_id, module)`` so callers
+    can register modules incrementally without breaking existing call
+    sites.
+    """
+    aggregates = _MODULE_AGGREGATES.get(module, (module,))
+    return invalidate_aggregates(company_id, *aggregates)
+
 
 
 # ---------------------------------------------------------------------------

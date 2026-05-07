@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react'
-import { accountingAPI, companiesAPI } from '../../utils/api'
+import { accountingAPI } from '../../utils/api'
 import { hasPermission, getUser } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { Plus, Edit2, Trash2, ChevronRight, ChevronDown, Folder, FileText, AlertCircle, Save, X } from 'lucide-react'
@@ -23,7 +23,7 @@ const MODULE_TAG_LABELS = {
 
 function ChartOfAccounts() {
     const { t, i18n } = useTranslation()
-    const { currentBranch, loading: branchLoading } = useBranch()
+    const { currentBranch, loading: branchLoading, displayCurrency } = useBranch()
     const [accounts, setAccounts] = useState([])
     const [loading, setLoading] = useState(true)
     const [error, setError] = useState('')
@@ -46,19 +46,10 @@ function ChartOfAccounts() {
 
         try {
             setLoading(true)
-            const userStr = localStorage.getItem('user')
-            const user = userStr ? JSON.parse(userStr) : null
-            const companyId = user?.company_id || localStorage.getItem('company_id')
-
-            const [accountsRes, companyRes] = await Promise.all([
-                accountingAPI.list({ branch_id: currentBranch?.id }),
-                companyId ? companiesAPI.getCurrentCompany(companyId) : Promise.resolve({ data: { currency: '' } })
-            ])
-
-            setAccounts(accountsRes.data)
-            if (companyRes.data && companyRes.data.currency) {
-                setCurrency(companyRes.data.currency)
-            }
+            const accountsRes = await accountingAPI.list({ branch_id: currentBranch?.id })
+            const accountRows = Array.isArray(accountsRes.data) ? accountsRes.data : (accountsRes.data?.data || [])
+            setAccounts(accountRows)
+            setCurrency(accountRows[0]?.display_currency || displayCurrency?.currency || '')
         } catch (err) {
             setError(t('accounting.coa.errors.fetch_failed'))
         } finally {
@@ -102,6 +93,7 @@ function ChartOfAccounts() {
     }
 
     const handleOpenModal = (type, node = null) => {
+        const defaultCurrency = node?.currency || node?.display_currency || currency || displayCurrency?.currency || ''
         if (type === 'create') {
             setForm({
                 name: '',
@@ -110,7 +102,7 @@ function ChartOfAccounts() {
                 account_code: '',
                 account_type: node ? node.account_type : 'asset',
                 parent_id: node ? node.id : null,
-                currency: node?.currency || currency
+                currency: defaultCurrency
             })
         } else if (type === 'edit') {
             setForm({
@@ -120,7 +112,7 @@ function ChartOfAccounts() {
                 account_code: node.account_code || '',
                 account_type: node.account_type,
                 parent_id: node.parent_id,
-                currency: node.currency || currency
+                currency: defaultCurrency
             })
         }
         setModal({ open: true, type, node })
@@ -174,6 +166,10 @@ function ChartOfAccounts() {
     const AccountNode = ({ node, level = 0 }) => {
         const [expanded, setExpanded] = useState(true)
         const hasChildren = node.is_header || (node.children && node.children.length > 0)
+        const rowCurrency = node.display_currency || currency || displayCurrency?.currency || ''
+        const accountCurrency = node.currency || ''
+        const showSecondaryCurrency = accountCurrency && accountCurrency !== rowCurrency && Math.abs(Number(node.balance_currency || 0)) >= 0.005
+        const isAggregateBalance = Boolean(node.is_aggregated_balance || node.balance_origin === 'aggregate' || node.is_header)
 
         return (
             <div className="account-node-wrapper">
@@ -186,7 +182,7 @@ function ChartOfAccounts() {
                         <span className="type-icon">
                             {hasChildren ? <Folder size={16} className="text-primary" /> : <FileText size={16} className="text-secondary" />}
                         </span>
-                        <span className="node-number">{node.account_number}</span>
+                        <span className={`node-number ${isAggregateBalance ? 'number-aggregate' : 'number-own'}`}>{node.account_number}</span>
                         <span className="node-name">{node.name}</span>
                         {node.module_tag && MODULE_TAG_LABELS[node.module_tag] && (
                             <span style={{
@@ -209,15 +205,16 @@ function ChartOfAccounts() {
                         <span className="node-type-badge">{t(`accounting.coa.types.${node.account_type}`)}</span>
                     </div>
 
-                    <div className="row-balance">
+                    <div className={`row-balance ${isAggregateBalance ? 'aggregate-balance' : 'own-balance'}`}>
                         <div className="balance-main">
                             <span className="balance-amount">{formatNumber(node.balance)}</span>
-                            <span className="balance-currency">{currency}</span>
+                            <span className="balance-currency">{rowCurrency}</span>
                         </div>
-                        {node.currency && node.currency !== currency && (
+
+                        {showSecondaryCurrency && (
                             <div className="balance-subtext" title="Original Currency Balance">
                                 <span className="sub-amount">{formatNumber(node.balance_currency || 0)}</span>
-                                <span className="sub-currency">{node.currency}</span>
+                                <span className="sub-currency">{accountCurrency}</span>
                             </div>
                         )}
                     </div>
@@ -251,12 +248,12 @@ function ChartOfAccounts() {
         )
     }
 
-    if (loading && accounts.length === 0) return <PageLoading />
-
     // MODULE-001: Filter out accounts belonging to disabled modules
     const user = getUser()
     const enabledModules = user?.enabled_modules || []
     const isRTL = i18n?.language === 'ar' || i18n?.dir?.() === 'rtl'
+
+    if (loading && accounts.length === 0) return <PageLoading />
 
     const filteredAccounts = enabledModules.length > 0
         ? accounts.filter(acc => {
@@ -462,10 +459,15 @@ function ChartOfAccounts() {
                     margin: 0 8px;
                 }
                 .node-number {
-                    color: var(--primary);
                     font-family: monospace;
                     margin-left: 12px;
                     font-weight: 600;
+                }
+                .node-number.number-aggregate {
+                    color: #3b82f6;
+                }
+                .node-number.number-own {
+                    color: #22c55e;
                 }
                 .node-name {
                     flex: 1;
@@ -475,10 +477,11 @@ function ChartOfAccounts() {
                 }
                 .node-type-badge {
                     font-size: 11px;
-                    background: #f1f5f9;
+                    background: var(--bg-hover, rgba(128,128,128,0.15));
                     padding: 2px 8px;
                     border-radius: 4px;
-                    color: var(--text-secondary);
+                    color: var(--text-primary);
+                    border: 1px solid var(--border-color, rgba(128,128,128,0.2));
                 }
                 .row-balance {
                     display: flex;
@@ -486,6 +489,7 @@ function ChartOfAccounts() {
                     align-items: flex-end;
                     justify-content: center;
                     gap: 0;
+                    padding-inline-end: 8px;
                 }
                 .balance-main {
                     display: flex;
@@ -493,13 +497,25 @@ function ChartOfAccounts() {
                     gap: 4px;
                     font-weight: bold;
                 }
+                .aggregate-balance .balance-main {
+                    color: #3b82f6;
+                }
+                .own-balance .balance-main {
+                    color: #22c55e;
+                }
                 .balance-currency {
                     font-size: 10px;
                     color: var(--text-secondary);
                 }
+                .balance-origin-label {
+                    font-size: 10px;
+                    line-height: 1.2;
+                    color: var(--text-secondary);
+                    white-space: nowrap;
+                }
                 .balance-subtext {
                     font-size: 11px;
-                    color: #059669; /* Greenish for clarity */
+                    color: #2dd4bf;
                     font-weight: 500;
                     display: flex;
                     align-items: baseline;

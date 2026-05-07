@@ -9,6 +9,7 @@ class ReconciliationCreate(BaseModel):
     statement_date: date
     start_balance: float
     end_balance: float
+    tolerance_amount: Optional[float] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
 

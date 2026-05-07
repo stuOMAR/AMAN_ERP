@@ -10,7 +10,7 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter, require_permission
 
 reports_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -26,29 +26,13 @@ def get_inventory_summary(
     try:
         # 1. Total Products
         prod_count_params = {}
-        if branch_id:
-            prod_count_query = """
-                SELECT COUNT(DISTINCT p.id) FROM products p
-                JOIN inventory i ON p.id = i.product_id
-                JOIN warehouses w ON i.warehouse_id = w.id
-                WHERE w.branch_id = :branch_id AND i.quantity > 0
-            """
-            prod_count_params["branch_id"] = branch_id
-        else:
-            # INV-R01: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                prod_count_query = f"""
-                    SELECT COUNT(DISTINCT p.id) FROM products p
-                    JOIN inventory i ON p.id = i.product_id
-                    JOIN warehouses w ON i.warehouse_id = w.id
-                    WHERE w.branch_id IN ({branch_placeholders}) AND i.quantity > 0
-                """
-                for i, bid in enumerate(allowed):
-                    prod_count_params[f"_ab_{i}"] = bid
-            else:
-                prod_count_query = "SELECT COUNT(*) FROM products"
+        prod_count_filter = branch_scope_filter(current_user, branch_id, "w.branch_id", prod_count_params, branch_param="bid")
+        prod_count_query = f"""
+            SELECT COUNT(DISTINCT p.id) FROM products p
+            JOIN inventory i ON p.id = i.product_id
+            JOIN warehouses w ON i.warehouse_id = w.id
+            WHERE i.quantity > 0 {prod_count_filter}
+        """
 
         product_count = db.execute(text(prod_count_query), prod_count_params).scalar() or 0
 
@@ -57,23 +41,20 @@ def get_inventory_summary(
             SELECT COALESCE(SUM(p.cost_price * i.quantity), 0)
             FROM products p
             JOIN inventory i ON p.id = i.product_id
+            JOIN warehouses w ON i.warehouse_id = w.id
+            WHERE 1=1
         """
         val_params = {}
 
         # 3. Low Stock Items
-        low_query_join = "LEFT JOIN inventory i ON p.id = i.product_id"
-        low_where = ""
+        low_query_join = """
+            LEFT JOIN inventory i ON p.id = i.product_id
+            LEFT JOIN warehouses w ON i.warehouse_id = w.id
+        """
         low_params = {}
+        low_where = branch_scope_filter(current_user, branch_id, "w.branch_id", low_params, branch_param="bid")
 
-        if branch_id:
-            val_query += " JOIN warehouses w ON i.warehouse_id = w.id WHERE w.branch_id = :bid"
-            val_params["bid"] = branch_id
-
-            low_query_join = """
-                LEFT JOIN inventory i ON p.id = i.product_id 
-                AND i.warehouse_id IN (SELECT id FROM warehouses WHERE branch_id = :bid)
-            """
-            low_params["bid"] = branch_id
+        val_query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", val_params, branch_param="bid")
 
         inventory_value = db.execute(text(val_query), val_params).scalar() or 0
 
@@ -82,6 +63,7 @@ def get_inventory_summary(
                 SELECT p.id
                 FROM products p
                 {low_query_join}
+                WHERE 1=1 {low_where}
                 GROUP BY p.id
                 HAVING COALESCE(SUM(i.quantity), 0) < COALESCE(MAX(p.reorder_level), 0)
             ) AS subquery
@@ -94,27 +76,44 @@ def get_inventory_summary(
             SELECT p.product_name, SUM(i.reserved_quantity) as reserved_qty
             FROM inventory i
             JOIN products p ON i.product_id = p.id
+            JOIN warehouses w ON i.warehouse_id = w.id
+            WHERE i.reserved_quantity > 0
         """
         reserved_params = {}
-        if branch_id:
-            reserved_query += """ 
-                JOIN warehouses w ON i.warehouse_id = w.id
-                WHERE i.reserved_quantity > 0 AND w.branch_id = :bid
-            """
-            reserved_params["bid"] = branch_id
-        else:
-            reserved_query += " WHERE i.reserved_quantity > 0"
+        reserved_query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", reserved_params, branch_param="bid")
 
         reserved_query += " GROUP BY p.product_name"
 
         reserved_data = db.execute(text(reserved_query), reserved_params).fetchall()
         reserved_stock = [{"product": row.product_name, "quantity": int(row.reserved_qty)} for row in reserved_data]
 
+        # Get base currency and convert to branch currency
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        display_cur = base_cur
+        convert_rate = 1.0
+
+        if branch_id:
+            branch_cur = db.execute(text(
+                "SELECT default_currency FROM branches WHERE id = :bid"
+            ), {"bid": branch_id}).scalar()
+            if branch_cur and branch_cur != base_cur:
+                rate_val = db.execute(text(
+                    "SELECT current_rate FROM currencies WHERE code = :c"
+                ), {"c": branch_cur}).scalar()
+                if rate_val and rate_val > 0:
+                    display_cur = branch_cur
+                    convert_rate = float(rate_val)
+
+        # Convert inventory value to display currency
+        if convert_rate != 1.0:
+            inventory_value = float(inventory_value) / convert_rate
+
         return {
             "product_count": product_count,
-            "inventory_value": inventory_value,
+            "inventory_value": round(inventory_value, 2),
             "low_stock_count": low_stock_count,
-            "reserved_stock": reserved_stock
+            "reserved_stock": reserved_stock,
+            "currency": display_cur
         }
     finally:
         db.close()
@@ -142,17 +141,7 @@ def get_warehouse_stock(
             WHERE 1=1
         """
         params = {}
-        if branch_id:
-            query += " AND w.branch_id = :branch_id"
-            params['branch_id'] = branch_id
-        else:
-            # INV-R01: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND w.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params)
 
         query += " ORDER BY w.warehouse_name, p.product_name"
 
@@ -192,18 +181,7 @@ def get_stock_movements(
             WHERE 1=1
         """
         params = {}
-
-        if branch_id:
-            query += " AND w.branch_id = :branch_id"
-            params['branch_id'] = branch_id
-        else:
-            # INV-R01: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND w.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params)
 
         if item_name:
             query += " AND (p.product_name ILIKE :item OR p.product_code ILIKE :item)"
@@ -276,17 +254,7 @@ def get_valuation_report(
         """
 
         params = {}
-        if branch_id:
-            query += " AND w.branch_id = :bid"
-            params["bid"] = branch_id
-        else:
-            # INV-R01: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND w.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params, branch_param="bid")
         if warehouse_id:
             query += " AND w.id = :wid"
             params["wid"] = warehouse_id

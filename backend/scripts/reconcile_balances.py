@@ -4,7 +4,7 @@ Balance Reconciliation Script
 Verifies that cached balances match their source-of-truth sub-ledgers:
   1. accounts.balance == SUM(debit-credit) FROM journal_lines WHERE status='posted'
   2. treasury_accounts.current_balance == linked accounts.balance (converted to treasury currency)
-  3. parties.current_balance == SUM(debit-credit) FROM party_transactions
+  3. party_site_balances == SUM(debit-credit) FROM party_transactions (per site/branch/currency)
 """
 import sys
 import os
@@ -125,6 +125,8 @@ def check_treasury_balances(conn, fix=False):
         print(f"    Treasury '{r.name}' ({r.currency}): cached={r.cached_balance}, GL={r.gl_balance}")
 
     if fix:
+        # Set GL context GUC so the treasury balance trigger allows this sanctioned path
+        conn.execute(text("SELECT set_config('aman.gl_context', 'on', true)"))
         conn.execute(text("""
             UPDATE treasury_accounts ta
             SET current_balance = CAST(CASE
@@ -153,45 +155,111 @@ def check_treasury_balances(conn, fix=False):
 
 
 def check_party_balances(conn, fix=False):
-    """Check parties.current_balance vs SUM from party_transactions"""
+    """Check party_site_balances vs SUM from party_transactions (per site/branch/currency)"""
+    # Check if party_site_balances table exists
+    table_exists = conn.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'party_site_balances')"
+    )).scalar()
+    
+    if not table_exists:
+        print("  ⚠ party_site_balances table not found, skipping")
+        return 0
+    
     rows = conn.execute(text("""
-        SELECT p.id, p.name, p.party_type,
-               COALESCE(p.current_balance, 0) AS cached_balance,
+        SELECT ps.id as site_id, ps.site_name, p.name as party_name, p.party_type,
+               psb.company_branch_id, psb.currency, psb.account_type,
+               COALESCE(psb.balance, 0) AS cached_balance,
                COALESCE(pt.computed, 0) AS computed_balance
-        FROM parties p
+        FROM party_site_balances psb
+        JOIN party_sites ps ON psb.party_site_id = ps.id
+        JOIN parties p ON ps.party_id = p.id
         LEFT JOIN (
-            SELECT party_id,
+            SELECT party_id, branch_id, currency, account_type,
                    SUM(debit - credit) AS computed
             FROM party_transactions
-            GROUP BY party_id
-        ) pt ON pt.party_id = p.id
-        WHERE ABS(COALESCE(p.current_balance, 0) - COALESCE(pt.computed, 0)) > 0.01
-        ORDER BY ABS(COALESCE(p.current_balance, 0) - COALESCE(pt.computed, 0)) DESC
+            GROUP BY party_id, branch_id, currency, account_type
+        ) pt ON pt.party_id = p.id 
+            AND pt.branch_id = psb.company_branch_id 
+            AND pt.currency = psb.currency
+            AND pt.account_type = psb.account_type
+        WHERE ABS(COALESCE(psb.balance, 0) - COALESCE(pt.computed, 0)) > 0.01
+        ORDER BY ABS(COALESCE(psb.balance, 0) - COALESCE(pt.computed, 0)) DESC
     """)).fetchall()
 
     if not rows:
-        print("  ✓ All party balances match party_transactions")
+        print("  ✓ All party_site_balances match party_transactions")
         return 0
 
-    print(f"  ✗ {len(rows)} party balance mismatches:")
+    print(f"  ✗ {len(rows)} party_site_balance mismatches:")
     for r in rows:
         diff = float(r.cached_balance) - float(r.computed_balance)
-        print(f"    Party '{r.name}' ({r.party_type}): cached={r.cached_balance}, tx_sum={r.computed_balance}, diff={diff:+.2f}")
+        print(f"    Party '{r.party_name}' ({r.party_type}) Site '{r.site_name}' Branch {r.company_branch_id} {r.currency}: cached={r.cached_balance}, tx_sum={r.computed_balance}, diff={diff:+.2f}")
 
     if fix:
         conn.execute(text("""
-            UPDATE parties p SET current_balance = CAST(COALESCE(sub.computed, 0) AS NUMERIC(18,4))
+            UPDATE party_site_balances psb 
+            SET balance = CAST(COALESCE(sub.computed, 0) AS NUMERIC(18,4)),
+                updated_at = NOW()
             FROM (
-                SELECT party_id,
-                       CAST(SUM(debit - credit) AS NUMERIC(18,4)) AS computed
-                FROM party_transactions
-                GROUP BY party_id
+                SELECT pt.party_id, pt.branch_id, pt.currency, pt.account_type,
+                       CAST(SUM(pt.debit - pt.credit) AS NUMERIC(18,4)) AS computed
+                FROM party_transactions pt
+                GROUP BY pt.party_id, pt.branch_id, pt.currency, pt.account_type
             ) sub
-            WHERE sub.party_id = p.id
-              AND ABS(COALESCE(p.current_balance, 0) - COALESCE(sub.computed, 0)) > 0.01
+            JOIN party_sites ps ON ps.party_id = sub.party_id
+            WHERE psb.party_site_id = ps.id
+              AND psb.company_branch_id = sub.branch_id
+              AND psb.currency = sub.currency
+              AND psb.account_type = sub.account_type
+              AND ABS(COALESCE(psb.balance, 0) - COALESCE(sub.computed, 0)) > 0.01
         """))
         conn.commit()
-        print(f"    → Fixed {len(rows)} party balances")
+        print(f"    → Fixed {len(rows)} party_site_balances")
+
+    return len(rows)
+
+
+def check_party_balance_totals(conn, fix=False):
+    """Verify total party balance (sum of all sites) matches expected total from transactions"""
+    table_exists = conn.execute(text(
+        "SELECT EXISTS (SELECT 1 FROM information_schema.tables WHERE table_name = 'party_site_balances')"
+    )).scalar()
+    
+    if not table_exists:
+        return 0
+    
+    # Compare party_site_balances total (converted to SAR) vs party_transactions total
+    rows = conn.execute(text("""
+        SELECT p.id, p.name, p.party_type,
+               COALESCE(psb_total.total_sar, 0) AS sites_total_sar,
+               COALESCE(pt_total.total_sar, 0) AS tx_total_sar
+        FROM parties p
+        LEFT JOIN (
+            SELECT ps.party_id,
+                   SUM(psb.balance * COALESCE(c.current_rate, 1)) as total_sar
+            FROM party_site_balances psb
+            JOIN party_sites ps ON psb.party_site_id = ps.id
+            LEFT JOIN currencies c ON psb.currency = c.code
+            GROUP BY ps.party_id
+        ) psb_total ON psb_total.party_id = p.id
+        LEFT JOIN (
+            SELECT party_id,
+                   SUM(debit - credit) as total_sar
+            FROM party_transactions
+            GROUP BY party_id
+        ) pt_total ON pt_total.party_id = p.id
+        WHERE ABS(COALESCE(psb_total.total_sar, 0) - COALESCE(pt_total.total_sar, 0)) > 0.01
+        ORDER BY ABS(COALESCE(psb_total.total_sar, 0) - COALESCE(pt_total.total_sar, 0)) DESC
+    """)).fetchall()
+
+    if not rows:
+        print("  ✓ All party totals (SAR) match between sites and transactions")
+        return 0
+
+    print(f"  ✗ {len(rows)} party total mismatches (SAR):")
+    for r in rows:
+        diff = float(r.sites_total_sar) - float(r.tx_total_sar)
+        print(f"    Party '{r.name}' ({r.party_type}): sites_total={r.sites_total_sar:.2f}, tx_total={r.tx_total_sar:.2f}, diff={diff:+.2f}")
 
     return len(rows)
 
@@ -217,6 +285,7 @@ def main():
             total_issues += check_account_balances(conn, fix)
             total_issues += check_treasury_balances(conn, fix)
             total_issues += check_party_balances(conn, fix)
+            total_issues += check_party_balance_totals(conn, fix)
         engine.dispose()
         print()
 

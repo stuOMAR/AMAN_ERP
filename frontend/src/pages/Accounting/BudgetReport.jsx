@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react'
-
+import { useParams } from 'react-router-dom'
 import { budgetsAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
@@ -11,6 +11,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 
 function BudgetReport() {
     const { t } = useTranslation()
+    const { id: urlBudgetId } = useParams()
     const { currentBranch } = useBranch()
     const [budgets, setBudgets] = useState([])
     const [selectedBudgetId, setSelectedBudgetId] = useState('')
@@ -24,9 +25,13 @@ function BudgetReport() {
     useEffect(() => {
         const fetchBudgets = async () => {
             try {
-                const response = await budgetsAPI.list()
+                const params = {};
+                if (currentBranch?.id) params.branch_id = currentBranch.id;
+                const response = await budgetsAPI.list(params)
                 setBudgets(response.data)
-                if (response.data.length > 0) {
+                if (urlBudgetId) {
+                    setSelectedBudgetId(parseInt(urlBudgetId))
+                } else if (response.data.length > 0) {
                     setSelectedBudgetId(response.data[0].id)
                 }
             } catch (err) {
@@ -34,7 +39,7 @@ function BudgetReport() {
             }
         }
         fetchBudgets()
-    }, [])
+    }, [currentBranch, urlBudgetId])
 
     const fetchData = async () => {
         if (!selectedBudgetId) return
@@ -45,6 +50,7 @@ function BudgetReport() {
             const params = {}
             if (fromDate) params.from_date = fromDate
             if (toDate) params.to_date = toDate
+            if (currentBranch?.id) params.branch_id = currentBranch.id
 
             const response = await budgetsAPI.getReport(selectedBudgetId, params)
             setData(response.data)
@@ -130,10 +136,6 @@ function BudgetReport() {
                         </thead>
                         <tbody>
                             {data.map((item, idx) => {
-                                const isOverBudget = item.actual > item.planned;
-                                const variancePct = item.planned > 0 ? ((item.actual - item.planned) / item.planned) * 100 : 0;
-                                const performancePct = item.actual > 0 && item.planned > 0 ? (item.actual / item.planned) * 100 : 0;
-
                                 return (
                                     <tr key={idx}>
                                         <td>
@@ -147,12 +149,12 @@ function BudgetReport() {
                                         <td className="text-center">{formatNumber(item.planned)}</td>
                                         <td className="text-center">{formatNumber(item.actual)}</td>
                                         <td className="text-center" style={{ fontWeight: '600' }}>
-                                            <span style={{ color: isOverBudget ? '#dc2626' : '#059669' }}>
-                                                {variancePct > 0 ? '+' : ''}{Math.round(variancePct)}%
+                                            <span style={{ color: item.is_over_budget ? '#dc2626' : '#059669' }}>
+                                                {item.variance_percentage > 0 ? '+' : ''}{Math.round(item.variance_percentage)}%
                                             </span>
                                         </td>
                                         <td className="text-center">
-                                            {isOverBudget ? (
+                                            {item.is_over_budget ? (
                                                 <span className="badge badge-danger">
                                                     ⚠️ {t('accounting.budgets.over_budget')}
                                                 </span>
@@ -167,13 +169,13 @@ function BudgetReport() {
                                                 <div style={{ flex: 1, height: '6px', background: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
                                                     <div style={{
                                                         height: '100%',
-                                                        width: `${Math.min(performancePct, 100)}%`,
-                                                        background: isOverBudget ? '#dc2626' : '#10b981',
+                                                        width: `${Math.min(item.usage_percentage, 100)}%`,
+                                                        background: item.is_over_budget ? '#dc2626' : '#10b981',
                                                         borderRadius: '3px'
                                                     }} />
                                                 </div>
                                                 <span style={{ fontSize: '12px', opacity: 0.7, minWidth: '40px', textAlign: 'right' }}>
-                                                    {Math.round(performancePct)}%
+                                                    {Math.round(item.usage_percentage)}%
                                                 </span>
                                             </div>
                                         </td>

@@ -135,12 +135,13 @@ def get_account_id_legacy(db, account_code: str) -> Optional[int]:
 def get_base_currency(db) -> str:
     """
     Resolve the company's base currency dynamically.
-    Checks currencies table first, then company_settings, falls back to 'SYP'.
+    Checks currencies table first, then company_settings, falls back to 'SAR'
+    (T10.2 #124: aligned with default COA seed; was 'SYP' historically).
     """
     row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
     if not row:
         row = db.execute(text("SELECT setting_value AS code FROM company_settings WHERE setting_key = 'default_currency'")).fetchone()
-    return row[0] if row else "SYP"
+    return row[0] if row else "SAR"
 
 def update_account_balance(db, account_id: int, debit_base, credit_base, debit_curr=0, credit_curr=0, currency: str = None):
     """
@@ -184,11 +185,14 @@ def update_account_balance(db, account_id: int, debit_base, credit_base, debit_c
 
 
 def compute_line_amounts(
-    quantity, unit_price, tax_rate=0, discount=0
+    quantity, unit_price, tax_rate=0, discount=0, discount_is_percent=True
 ) -> Dict[str, Decimal]:
     """
     Compute amounts for a single invoice/contract line using Decimal arithmetic.
     Returns dict with: subtotal, discount_amount, taxable, tax_amount, line_total.
+    
+    discount_is_percent: if True, discount is a percentage (0-100).
+                         if False, discount is a fixed amount.
     """
     qty = _to_decimal(quantity)
     price = _to_decimal(unit_price)
@@ -196,7 +200,16 @@ def compute_line_amounts(
     disc = _to_decimal(discount)
 
     subtotal = (qty * price).quantize(_D2, ROUND_HALF_UP)
-    discount_amount = (subtotal * disc / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+
+    if discount_is_percent:
+        discount_amount = (subtotal * disc / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+    else:
+        discount_amount = disc.quantize(_D2, ROUND_HALF_UP)
+
+    # Discount cannot exceed subtotal
+    if discount_amount > subtotal:
+        discount_amount = subtotal
+
     taxable = subtotal - discount_amount
     tax_amount = (taxable * tax_r / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
     line_total = (taxable + tax_amount).quantize(_D2, ROUND_HALF_UP)
@@ -211,12 +224,13 @@ def compute_line_amounts(
 
 
 def compute_invoice_totals(
-    lines: List[Dict], header_discount_pct=0, markup_amount=0
+    lines: List[Dict], header_discount_pct=0, markup_amount=0, discount_is_percent=True
 ) -> Dict[str, Decimal]:
     """
     Aggregate line-level amounts into invoice totals using Decimal arithmetic.
     Each line dict must have: quantity, unit_price, tax_rate; optional: discount.
     header_discount_pct reduces tax proportionally (ZATCA-compliant).
+    discount_is_percent: if True, line discount is percentage; if False, fixed amount.
     """
     subtotal = Decimal("0")
     total_discount = Decimal("0")
@@ -228,6 +242,7 @@ def compute_invoice_totals(
             ln.get("unit_price", 0),
             ln.get("tax_rate", 0),
             ln.get("discount", 0),
+            discount_is_percent=discount_is_percent,
         )
         subtotal += la["subtotal"]
         total_discount += la["discount_amount"]

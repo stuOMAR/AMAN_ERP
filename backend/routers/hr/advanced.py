@@ -12,7 +12,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, require_module
 from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
 import logging
@@ -247,8 +247,6 @@ def get_overtime_rates(
 def list_overtime_requests(employee_id: Optional[int] = None, status: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Overtime Requests."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         query = """
             SELECT o.*, e.first_name || ' ' || e.last_name as employee_name
             FROM overtime_requests o
@@ -262,9 +260,7 @@ def list_overtime_requests(employee_id: Optional[int] = None, status: Optional[s
         if status:
             query += " AND o.status = :status"
             params["status"] = status
-        if branch_id:
-            query += " AND e.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY o.created_at DESC"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -359,8 +355,6 @@ def save_gosi_settings(data: GOSISettingsCreate, request: Request, current_user:
 def calculate_gosi(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Calculate GOSI."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         # Get active settings (Saudi rates default per GOSI 2024:
         #   Saudi: 9.75% employee + 11.75% employer (12.00% from Jul-2025 if configured)
         #   Non-Saudi: 0% employee + 2% employer occupational hazard only)
@@ -376,9 +370,7 @@ def calculate_gosi(branch_id: Optional[int] = None, current_user: UserResponse =
             FROM employees WHERE status = 'active'
         """
         gosi_params = {}
-        if branch_id:
-            gosi_query += " AND branch_id = :bid"
-            gosi_params["bid"] = branch_id
+        gosi_query += " " + branch_scope_filter(current_user, branch_id, "branch_id", gosi_params, branch_param="bid")
         employees = conn.execute(text(gosi_query), gosi_params).fetchall()
 
         results = []
@@ -422,8 +414,6 @@ def export_gosi(
     Export GOSI contribution file for submission to Saudi GOSI system
     """
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         # Get active settings
         settings = conn.execute(text("SELECT * FROM gosi_settings WHERE is_active = TRUE ORDER BY id DESC LIMIT 1")).fetchone()
         emp_pct = _dec(settings.employee_share_percentage) if settings else Decimal('9.75')
@@ -441,9 +431,7 @@ def export_gosi(
             WHERE e.status = 'active'
         """
         gosi_exp_params = {}
-        if branch_id:
-            gosi_exp_query += " AND e.branch_id = :bid"
-            gosi_exp_params["bid"] = branch_id
+        gosi_exp_query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", gosi_exp_params, branch_param="bid")
         gosi_exp_query += " ORDER BY d.department_name, e.first_name"
         employees = conn.execute(text(gosi_exp_query), gosi_exp_params).fetchall()
 
@@ -540,8 +528,6 @@ def export_gosi(
 def list_documents(employee_id: Optional[int] = None, expiring_soon: Optional[bool] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Documents."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         query = """
             SELECT d.*, e.first_name || ' ' || e.last_name as employee_name
             FROM employee_documents d
@@ -554,9 +540,7 @@ def list_documents(employee_id: Optional[int] = None, expiring_soon: Optional[bo
             params["eid"] = employee_id
         if expiring_soon:
             query += " AND d.expiry_date IS NOT NULL AND d.expiry_date <= CURRENT_DATE + d.alert_days * INTERVAL '1 day'"
-        if branch_id:
-            query += " AND e.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY d.expiry_date ASC NULLS LAST"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -634,8 +618,6 @@ def delete_document(doc_id: int, request: Request, current_user: UserResponse = 
 def list_performance_reviews(employee_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Performance Reviews."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         query = """
             SELECT pr.*, 
                 e.first_name || ' ' || e.last_name as employee_name,
@@ -649,9 +631,7 @@ def list_performance_reviews(employee_id: Optional[int] = None, branch_id: Optio
         if employee_id:
             query += " AND pr.employee_id = :eid"
             params["eid"] = employee_id
-        if branch_id:
-            query += " AND e.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY pr.review_date DESC"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -828,8 +808,6 @@ def update_training_participant(participant_id: int, data: TrainingParticipantUp
 def list_violations(employee_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Violations."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         query = """
             SELECT v.*, e.first_name || ' ' || e.last_name as employee_name
             FROM employee_violations v
@@ -840,9 +818,7 @@ def list_violations(employee_id: Optional[int] = None, branch_id: Optional[int] 
         if employee_id:
             query += " AND v.employee_id = :eid"
             params["eid"] = employee_id
-        if branch_id:
-            query += " AND e.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY v.violation_date DESC"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -901,8 +877,6 @@ def update_violation(violation_id: int, data: ViolationUpdate, request: Request,
 def list_custody(employee_id: Optional[int] = None, status_filter: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Custody."""
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
         query = """
             SELECT c.*, e.first_name || ' ' || e.last_name as employee_name
             FROM employee_custody c
@@ -916,9 +890,7 @@ def list_custody(employee_id: Optional[int] = None, status_filter: Optional[str]
         if status_filter:
             query += " AND c.status = :status"
             params["status"] = status_filter
-        if branch_id:
-            query += " AND e.branch_id = :bid"
-            params["bid"] = branch_id
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY c.assigned_date DESC"
         rows = conn.execute(text(query), params).fetchall()
         return [dict(r._mapping) for r in rows]

@@ -110,115 +110,62 @@ def log_activity(
     سجل نشاط المستخدم في قاعدة البيانات.
     يسجل: من، ماذا، أين، متى، وتفاصيل إضافية.
 
+    Feature 022: Now routes through the outbox-backed audit writer so the
+    row commits/rolls back atomically with the caller's business transaction.
+
     Args:
-        critical: TASK-021 — When True, a failure to persist the audit row
-            raises HTTPException(503) so the caller's transaction is rolled
-            back. Use this for operations where losing the audit trail is
-            unacceptable (e.g., financial posts, role grants, user admin).
-            When False (default), failures are only logged.
+        critical: When True, a failure to persist the audit row raises
+            AuditWriteError so the caller can rollback.  Use for operations
+            where losing the audit trail is unacceptable.
     """
     try:
         ip_address = None
         if request:
-            ip_address = request.client.host
-        
-        # Branch Fallback Logic
-        if branch_id is None:
-            try:
-                # 1. Try to get user's first assigned branch
-                branch_id = db_conn.execute(
-                    text("SELECT branch_id FROM user_branches WHERE user_id = :uid LIMIT 1"), 
-                    {"uid": user_id}
-                ).scalar()
-                
-                # 2. If user has no branches, fallback to company default branch
-                if branch_id is None:
-                    branch_id = db_conn.execute(
-                        text("SELECT id FROM branches WHERE is_default = TRUE LIMIT 1")
-                    ).scalar()
-            except Exception as e:
-                logger.warning(f"Could not determine branch for audit log: {e}")
-
-        # Ensure details is JSON serializable
-        details_json = json.dumps(details, default=str, sort_keys=True) if details else '{}'
-
-        # T3.7: serialize on a per-table advisory lock so concurrent
-        # writers see a consistent (chain_seq, prev_hash) tail.
-        db_conn.execute(
-            text("SELECT pg_advisory_xact_lock(hashtextextended('audit_logs_chain', 0))")
-        )
-        tail = db_conn.execute(
-            text("SELECT chain_seq, hash FROM audit_logs ORDER BY chain_seq DESC NULLS LAST LIMIT 1")
-        ).fetchone()
-        prev_seq = (tail.chain_seq if tail and tail.chain_seq is not None else 0) or 0
-        prev_hash = (tail.hash if tail and tail.hash else "") or ""
-        new_seq = int(prev_seq) + 1
-
-        now = datetime.now(timezone.utc)
-        # ISO with microseconds, matching to_char in the SQL backfill.
-        created_at_iso = now.strftime("%Y-%m-%dT%H:%M:%S.") + f"{now.microsecond:06d}Z"
-
-        new_hash = compute_audit_hash(
-            prev_hash=prev_hash,
-            chain_seq=new_seq,
-            user_id=user_id,
-            username=username,
-            action=action,
-            resource_type=resource_type,
-            resource_id=str(resource_id) if resource_id is not None else None,
-            details_json=details_json,
-            ip_address=ip_address,
-            branch_id=branch_id,
-            created_at_iso=created_at_iso,
-        )
-
-        db_conn.execute(
-            text("""
-                INSERT INTO audit_logs
-                (user_id, username, action, resource_type, resource_id, details,
-                 ip_address, branch_id, created_at,
-                 prev_hash, hash, chain_seq)
-                VALUES
-                (:uid, :uname, :act, :res_type, :res_id, :det,
-                 :ip, :bid, :now,
-                 :prev, :h, :seq)
-            """),
-            {
-                "uid": user_id,
-                "uname": username,
-                "act": action,
-                "res_type": resource_type,
-                "res_id": str(resource_id) if resource_id is not None else None,
-                "det": details_json,
-                "ip": ip_address,
-                "bid": branch_id,
-                "now": now,
-                "prev": prev_hash or None,
-                "h": new_hash,
-                "seq": new_seq,
+            forwarded_for = request.headers.get("x-forwarded-for")
+            if forwarded_for:
+                ip_address = forwarded_for.split(",", 1)[0].strip()
+            elif request.client:
+                ip_address = request.client.host
+            request_meta = {
+                "method": request.method,
+                "endpoint": request.url.path,
             }
+            details = {**(details or {}), "request": request_meta}
+            # Also capture client IP in details for audit trail
+            if ip_address:
+                details = {**details, "ip_address": ip_address}
+
+        # Feature 022: delegate to outbox-backed writer
+        from services.audit_writer import log_activity as _outbox_log, AuditWriteError
+
+        # Enrich details with legacy context fields
+        enriched = dict(details) if details else {}
+        if username:
+            enriched["_legacy_username"] = username
+        if branch_id is not None:
+            enriched["_legacy_branch_id"] = branch_id
+
+        _outbox_log(
+            db_conn,
+            action=action,
+            entity_type=resource_type,
+            entity_id=str(resource_id) if resource_id is not None else None,
+            actor_id=user_id,
+            details=enriched,
+            critical=critical,
         )
-        db_conn.commit()
-        logger.info(f"📝 AUDIT[{new_seq}]: {username} -> {action} ({resource_id})")
+        logger.info(f"📝 AUDIT[enqueue]: {username} -> {action} ({resource_id})")
 
     except Exception as e:
-        # ACC-F6: never swallow silently — emit full stack for observability
+        # Never swallow silently — emit full stack for observability
         logger.error(
             f"❌ FAILED TO LOG AUDIT: user={username} action={action} resource={resource_type}:{resource_id} err={e}",
             exc_info=True,
         )
         if critical:
-            # TASK-021: fail-closed — reject the operation so the caller
-            # rolls back. The audit trail is a non-negotiable prerequisite
-            # for critical actions.
-            try:
-                db_conn.rollback()
-            except Exception:
-                pass
-            raise HTTPException(
-                status_code=503,
-                detail="تعذّر تسجيل الحدث في سجل التدقيق؛ تم إلغاء العملية للحفاظ على النزاهة.",
-            )
+            # fail-closed — reject the operation so the caller rolls back.
+            from services.audit_writer import AuditWriteError as _AWE
+            raise _AWE(f"Audit write failed for critical action {action}: {e}")
 
 
 def log_system_activity(
@@ -233,7 +180,11 @@ def log_system_activity(
         ip_address = None
         user_agent = None
         if request:
-            ip_address = request.client.host
+            forwarded_for = request.headers.get("x-forwarded-for")
+            if forwarded_for:
+                ip_address = forwarded_for.split(",", 1)[0].strip()
+            elif request.client:
+                ip_address = request.client.host
             user_agent = request.headers.get("user-agent")
             
         with engine.connect() as conn:

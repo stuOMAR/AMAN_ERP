@@ -54,6 +54,7 @@ from routers import projects, reports, scheduled_reports, dashboard
 
 # ── Commerce & External ────────────────────────────────────────────────────────
 from routers import pos, contracts, crm, external, services
+from routers import calculator as calculator_router
 
 # ── Role-Based KPI Dashboards ──────────────────────────────────────────────────
 from routers import role_dashboards
@@ -66,6 +67,11 @@ from routers import sms as sms_router  # SMS gateways
 from routers import shipping as shipping_router  # carriers
 from routers import governance as governance_router
 from routers import search as search_router  # T7.2 unified search
+
+# ── Feature 022: Audit, Security, Finance Integrity ────────────────────────────
+from routers import credentials as credentials_router
+from routers import account_classifications as account_classifications_router
+from routers import recurring_review as recurring_review_router
 
 # OPS-001: Structured logging — JSON in production, human-readable in dev
 from utils.logging_config import setup_logging, RequestIDMiddleware
@@ -319,7 +325,21 @@ async def lifespan(app: FastAPI):
             logger.warning(f"⚠️ Alembic migration warnings: {result.stderr or result.stdout}")
     except Exception as e:
         logger.warning(f"⚠️ Schema sync skipped: {e}")
-    
+
+    # Feature 022: Sensitive permission startup discovery
+    try:
+        from services.permissions.sensitive import discover_sensitive_routes
+        discover_sensitive_routes(app, strict=False)
+    except ImportError:
+        logger.debug("sensitive permission discovery not available")
+
+    # Feature 022: Audit outbox worker startup banner
+    try:
+        from services.audit_outbox_worker import start_worker as _audit_banner
+        _audit_banner()
+    except ImportError:
+        pass
+
     yield
     
     logger.info("⏹️ Stopping AMAN ERP System...")
@@ -472,6 +492,31 @@ class AcceptLanguageMiddleware(BaseHTTPMiddleware):
 
 app.add_middleware(AcceptLanguageMiddleware)
 
+# T10.2 #171 — Server-wide request body size cap. Protects against DoS via
+# huge multipart uploads even before the per-endpoint size checks in
+# ``utils/sql_safety.py`` (50 MB document, 10 MB import) run. The default
+# is 100 MB which is double the largest per-endpoint cap; tune via env.
+_MAX_REQUEST_BODY_BYTES = int(os.environ.get("MAX_REQUEST_BODY_BYTES", str(100 * 1024 * 1024)))
+
+
+class RequestSizeLimitMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        cl = request.headers.get("content-length")
+        if cl:
+            try:
+                if int(cl) > _MAX_REQUEST_BODY_BYTES:
+                    from fastapi.responses import JSONResponse
+                    return JSONResponse(
+                        status_code=413,
+                        content={"detail": "حجم الطلب يتجاوز الحد الأقصى المسموح به على مستوى الخادم"},
+                    )
+            except (TypeError, ValueError):
+                pass
+        return await call_next(request)
+
+
+app.add_middleware(RequestSizeLimitMiddleware)
+
 # SEC-203: HTTPS Enforcement + Security Headers
 # SEC-204: Input Sanitization (XSS/SQLi detection)
 from utils.security_middleware import HTTPSRedirectMiddleware, InputSanitizationMiddleware
@@ -494,6 +539,13 @@ app.add_middleware(CSRFMiddleware)
 # Optional N+1 query observer (disabled unless ENABLE_QUERY_COUNTER=1).
 from utils.query_counter import QueryCounterMiddleware, install_engine_listener
 app.add_middleware(QueryCounterMiddleware)
+
+# Feature 022: Audit body capture — sanitise request bodies on sensitive routes
+try:
+    from utils.audit_body_capture import AuditBodyCaptureMiddleware
+    app.add_middleware(AuditBodyCaptureMiddleware)
+except ImportError:
+    pass
 try:
     from database import engine as _system_engine
     install_engine_listener(_system_engine)
@@ -620,6 +672,14 @@ app.include_router(sales.router, prefix="/api")
 app.include_router(purchases.router, prefix="/api")
 app.include_router(inventory.router, prefix="/api")
 app.include_router(parties.router, prefix="/api")
+from routers.party_balances import router as party_balances_router
+app.include_router(party_balances_router, prefix="/api")
+from routers.party_sites import router as party_sites_router
+app.include_router(party_sites_router, prefix="/api")
+from routers.price_lists import router as price_lists_router
+app.include_router(price_lists_router, prefix="/api")
+from routers.price_sync import router as price_sync_router
+app.include_router(price_sync_router, prefix="/api")
 
 # ── HR (2 sub-routers) & Manufacturing ────────────────────────────
 app.include_router(hr.router, prefix="/api")
@@ -640,12 +700,17 @@ app.include_router(contracts.router, prefix="/api")
 app.include_router(crm.router, prefix="/api")
 app.include_router(external.router, prefix="/api")
 app.include_router(services.router, prefix="/api")
+app.include_router(calculator_router.router, prefix="/api")
 # ── Role-Based KPI Dashboards ────────────────────────────────────────────
 app.include_router(role_dashboards.router, prefix="/api")
 # ── System Completion (New modules) ──────────────────────────────
 app.include_router(delivery_orders.router, prefix="/api")
 app.include_router(landed_costs.router, prefix="/api")
 app.include_router(hr_wps_compliance.router, prefix="/api")
+
+# Feature 022: Employee receipt settlement endpoints
+from routers.hr.employee_receipts import router as employee_receipts_router
+app.include_router(employee_receipts_router, prefix="/api")
 app.include_router(system_completion.router, prefix="/api")
 app.include_router(sso.router, prefix="/api")
 app.include_router(matching.router, prefix="/api")
@@ -653,6 +718,11 @@ app.include_router(mobile.router, prefix="/api")
 app.include_router(sms_router.router, prefix="/api")
 app.include_router(shipping_router.router, prefix="/api")
 app.include_router(governance_router.router, prefix="/api")
+
+# ── Feature 022: Audit, Security, Finance Integrity ────────────────────────────
+app.include_router(credentials_router.router, prefix="/api")
+app.include_router(account_classifications_router.router, prefix="/api")
+app.include_router(recurring_review_router.router, prefix="/api")
 
 # T4.3 — Smart Alerts router
 try:
@@ -665,6 +735,87 @@ try:
     app.include_router(integrations_admin_router.router, prefix="/api")
 except ImportError:
     pass
+
+# ── Feature 023: Sales/POS/CRM/ZATCA + Inventory/Manufacturing ──────
+try:
+    from routers.sales.order_to_invoice import router as order_to_invoice_router
+    from routers.sales.cancellation import router as sales_cancellation_router
+    from routers.returns_unified import router as returns_unified_router
+    from routers.pos.offline import router as pos_offline_router
+    from routers.pos.cancellation import router as pos_cancellation_router
+    from routers.crm.velocity import router as crm_velocity_router
+    from routers.crm.funnel import router as crm_funnel_router
+    from routers.crm.cashflow import router as crm_cashflow_router
+    from routers.einvoicing.outbox_admin import router as outbox_admin_router
+    from routers.manufacturing.mrp import router as mrp_router
+    from routers.manufacturing.mrp_recommendations import router as mrp_recommendations_router
+    from routers.manufacturing.production import router as production_router
+    from routers.manufacturing.production_approval import router as production_approval_router
+    from routers.manufacturing.qc import router as qc_router
+    from routers.inventory.archival_admin import router as archival_admin_router
+    from routers.inventory.transfer_deprecated import router as transfer_deprecated_router
+
+    app.include_router(order_to_invoice_router, prefix="/api")
+    app.include_router(sales_cancellation_router, prefix="/api")
+    app.include_router(returns_unified_router, prefix="/api")
+    app.include_router(pos_offline_router, prefix="/api")
+    app.include_router(pos_cancellation_router, prefix="/api")
+    app.include_router(crm_velocity_router, prefix="/api")
+    app.include_router(crm_funnel_router, prefix="/api")
+    app.include_router(crm_cashflow_router, prefix="/api")
+    app.include_router(outbox_admin_router, prefix="/api")
+    app.include_router(mrp_router, prefix="/api")
+    app.include_router(mrp_recommendations_router, prefix="/api")
+    app.include_router(production_router, prefix="/api")
+    app.include_router(production_approval_router, prefix="/api")
+    app.include_router(qc_router, prefix="/api")
+    app.include_router(archival_admin_router, prefix="/api")
+    app.include_router(transfer_deprecated_router, prefix="/api")
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"Feature 023 routers not fully loaded: {e}")
+
+# ── Feature 024: HR/PII + Payroll + FSM + DMS + Notifications ────────
+try:
+    from routers.hr.pii_admin import router as pii_admin_router
+    from routers.hr.salary_increments import router as salary_increments_router
+    from routers.payroll.reversal import router as payroll_reversal_router
+    from routers.fsm.pricelists_admin import router as pricelists_admin_router
+    from routers.fsm.technicians_admin import router as technicians_admin_router
+    from routers.fsm.contracts_renewal import router as contracts_renewal_router
+    from routers.dms.quotas_admin import router as dms_quotas_admin_router
+
+    app.include_router(pii_admin_router, prefix="/api")
+    app.include_router(salary_increments_router, prefix="/api")
+    app.include_router(payroll_reversal_router, prefix="/api")
+    app.include_router(pricelists_admin_router, prefix="/api")
+    app.include_router(technicians_admin_router, prefix="/api")
+    app.include_router(contracts_renewal_router, prefix="/api")
+    app.include_router(dms_quotas_admin_router, prefix="/api")
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"Feature 024 routers not fully loaded: {e}")
+
+# ── Feature 025: Reports/KPI/Search/Health/Scheduler/Restore routers ──────
+try:
+    from routers.reports import router as reports_router
+    from routers.kpi import router as kpi_router
+    from routers.health import router as health_detailed_router
+    from routers.search import router as search_registry_router
+    from routers.ops_scheduler import router as ops_scheduler_router
+    from routers.ops_restore import router as ops_restore_router
+    from routers.locale import router as locale_router
+
+    app.include_router(reports_router, prefix="/api")
+    app.include_router(kpi_router, prefix="/api")
+    app.include_router(health_detailed_router)
+    app.include_router(search_registry_router, prefix="/api")
+    app.include_router(ops_scheduler_router, prefix="/api")
+    app.include_router(ops_restore_router, prefix="/api")
+    app.include_router(locale_router, prefix="/api")
+except ImportError as e:
+    import logging
+    logging.getLogger(__name__).warning(f"Feature 025 routers not fully loaded: {e}")
 
 
 @app.get("/")

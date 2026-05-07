@@ -207,6 +207,30 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
             time.sleep(wait)
     
     logger.error(f"❌ Webhook #{webhook_id} failed after {retry_count} attempts: {event} → {url}")
+    try:
+        db = db_factory()
+        db.execute(text("""
+            INSERT INTO integration_dlq (
+                queue_type, queue_item_id, provider, final_status, reason,
+                payload, gateway_response
+            ) VALUES (
+                'webhook', :wid, 'outgoing_webhook', 'permanently_failed', :reason,
+                CAST(:payload AS JSONB), CAST(:gateway_response AS JSONB)
+            )
+        """), {
+            "wid": webhook_id,
+            "reason": (error_msg or "max retries exceeded")[:1000],
+            "payload": json.dumps({"event": event, "target_url": url, "payload": payload}, default=str),
+            "gateway_response": json.dumps({
+                "status": response_status,
+                "body": response_body,
+                "attempts": retry_count,
+            }, default=str),
+        })
+        db.commit()
+        db.close()
+    except Exception as dlq_err:
+        logger.error(f"Failed to move webhook #{webhook_id} to DLQ: {dlq_err}")
 
 
 def fire_webhook_event(db, event: str, payload: dict, db_factory=None):

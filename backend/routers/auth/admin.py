@@ -30,7 +30,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import AdminTwoFASetup, AdminTwoFAVerify, get_current_user, oauth2_scheme, oauth2_scheme_optional
+from .core import AdminTwoFASetup, AdminTwoFAVerify, _require_system_admin, get_current_user, oauth2_scheme, oauth2_scheme_optional
 
 @router.post("/admin/2fa/setup", tags=["Authentication"], response_model=Dict[str, Any])
 def admin_2fa_setup(

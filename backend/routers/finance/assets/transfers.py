@@ -36,7 +36,7 @@ router = APIRouter()
 from .core import AssetTransfer, _D2, _D4, _dec
 
 @router.get("/transfers", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
-def list_asset_transfers(status: Optional[str] = None, current_user: dict = Depends(get_current_user)):
+def list_asset_transfers(status: Optional[str] = None, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """List Asset Transfers."""
     with transactional(current_user.company_id) as conn:
         q = "SELECT * FROM asset_transfers WHERE 1=1"
@@ -44,6 +44,9 @@ def list_asset_transfers(status: Optional[str] = None, current_user: dict = Depe
         if status:
             q += " AND status = :status"
             params["status"] = status
+        if branch_id:
+            q += " AND (from_branch_id = :branch_id OR to_branch_id = :branch_id)"
+            params["branch_id"] = branch_id
         q += " ORDER BY created_at DESC"
         rows = conn.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]

@@ -39,7 +39,7 @@ function ChecksAgingReport() {
 
     const activeData = data[activeTab] || [];
     const buckets = ['0-30', '31-60', '61-90', '90+'];
-    const summary = data.summary || {};
+    const summary = data.bucket_summary || data.summary || {};
 
     return (
         <div className="workspace fade-in">
@@ -67,7 +67,7 @@ function ChecksAgingReport() {
                             <div key={bucket} className="metric-card">
                                 <div className="metric-label">{bucket} {t('checks_aging.days')}</div>
                                 <div className={`metric-value ${bucket === '90+' ? 'text-danger' : bucket === '61-90' ? 'text-warning' : 'text-success'}`}>
-                                    {formatNumber(summary[`receivable_${bucket}`] || 0)}
+                                    {formatNumber(summary[bucket]?.receivable || 0)}
                                 </div>
                                 <div className="metric-change">{t('checks_aging.receivable')}</div>
                             </div>

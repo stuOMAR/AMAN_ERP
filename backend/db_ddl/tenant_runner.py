@@ -52,6 +52,9 @@ from db_ddl.tenant_schema import (
     get_system_completion_tables_sql,
     get_treasury_base_tables_sql,
     get_treasury_dependent_tables_sql,
+    get_audit_security_finance_tables_sql,
+    get_feature023_tables_sql,
+    get_feature024_tables_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -276,6 +279,9 @@ def _ordered_sql_blocks() -> list[str]:
         get_extended_features_tables_sql(),        # 21 Extended features
         get_gl_integrity_guards_sql(),             # 22 GL integrity guards
         get_phase5_integration_tables_sql(),       # 23 Integration keys/retry/DLQ
+        get_audit_security_finance_tables_sql(),   # 24 Feature 022 audit/security/finance
+        get_feature023_tables_sql(),               # 25 Feature 023 sales/inventory/mfg
+        get_feature024_tables_sql(),               # 26 Feature 024 workforce/service/comms
     ]
 
 
@@ -316,6 +322,12 @@ _POST_DDL_INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_employees_department ON employees(department_id)",
     "CREATE INDEX IF NOT EXISTS idx_attendance_employee_date ON attendance(employee_id, date)",
     "CREATE INDEX IF NOT EXISTS idx_payroll_entries_period ON payroll_entries(period_id)",
+    # T10.2 #175 — additional index coverage for hot read paths.
+    "CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance(date)",
+    "CREATE INDEX IF NOT EXISTS idx_payroll_entries_emp_period ON payroll_entries(employee_id, period_id)",
+    "CREATE INDEX IF NOT EXISTS idx_pos_orders_customer_date ON pos_orders(customer_id, order_date)",
+    # Partial index — only the unreconciled rows (the typical bank-rec hot set).
+    "CREATE INDEX IF NOT EXISTS idx_journal_lines_unreconciled ON journal_lines(is_reconciled) WHERE is_reconciled = FALSE",
     "CREATE INDEX IF NOT EXISTS idx_treasury_txn_date ON treasury_transactions(transaction_date)",
     "CREATE INDEX IF NOT EXISTS idx_treasury_txn_treasury ON treasury_transactions(treasury_id)",
     "CREATE INDEX IF NOT EXISTS idx_party_txn_party ON party_transactions(party_id)",
@@ -451,6 +463,65 @@ END $$;
 # Public so alembic migration 0020_search_and_fk_indexes can re-use them.
 # ---------------------------------------------------------------------------
 
+# T10.2 #172/#173/#174 — Pin ON DELETE behaviour for employee-linked HR
+# history tables. Deletion of an `employees` row must NOT silently destroy
+# attendance / leave / payroll history (audit + payroll integrity). We
+# rebuild each FK with `ON DELETE RESTRICT` if the existing constraint
+# carries the default `NO ACTION` (PostgreSQL `confdeltype = 'a'`).
+# Idempotent: skips when the FK already enforces RESTRICT (`'r'`),
+# CASCADE (`'c'`), or SET NULL (`'n'`) intentionally.
+_FK_ON_DELETE_GUARDS_DO_BLOCK = """
+DO $fk_guards$
+DECLARE
+    rec RECORD;
+    target_pairs TEXT[][] := ARRAY[
+        ARRAY['attendance',      'employee_id', 'employees'],
+        ARRAY['leave_requests',  'employee_id', 'employees'],
+        ARRAY['payroll_entries', 'employee_id', 'employees']
+    ];
+    pair TEXT[];
+    fk_name TEXT;
+BEGIN
+    FOREACH pair SLICE 1 IN ARRAY target_pairs
+    LOOP
+        IF to_regclass('public.' || pair[1]) IS NULL
+           OR to_regclass('public.' || pair[3]) IS NULL THEN
+            CONTINUE;
+        END IF;
+
+        FOR rec IN
+            SELECT c.conname, c.confdeltype
+            FROM pg_constraint c
+            JOIN pg_class child ON child.oid = c.conrelid
+            JOIN pg_attribute a ON a.attrelid = c.conrelid
+                                AND a.attnum = ANY(c.conkey)
+            JOIN pg_class parent ON parent.oid = c.confrelid
+            WHERE c.contype = 'f'
+              AND child.relname = pair[1]
+              AND a.attname = pair[2]
+              AND parent.relname = pair[3]
+        LOOP
+            -- Only rewrite if it's still the default NO ACTION.
+            IF rec.confdeltype = 'a' THEN
+                fk_name := rec.conname;
+                BEGIN
+                    EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I',
+                                   pair[1], fk_name);
+                    EXECUTE format(
+                        'ALTER TABLE %I ADD CONSTRAINT %I '
+                        'FOREIGN KEY (%I) REFERENCES %I(id) ON DELETE RESTRICT',
+                        pair[1], fk_name, pair[2], pair[3]
+                    );
+                EXCEPTION WHEN OTHERS THEN
+                    RAISE NOTICE 'fk guard % skipped: %', fk_name, SQLERRM;
+                END;
+            END IF;
+        END LOOP;
+    END LOOP;
+END $fk_guards$;
+"""
+
+
 _PG_TRGM_EXTENSION_SQL = """
 DO $$
 BEGIN
@@ -462,6 +533,29 @@ BEGIN
         RAISE NOTICE 'pg_trgm install skipped: %', SQLERRM;
     END;
 END $$;
+"""
+
+
+# T10.2 #151/#150 — extend opportunity_activities with the fields the audit
+# flagged (outcome / duration_minutes / completed_at). The base table
+# already has `completed BOOLEAN`, so the API exposes that as the
+# ``is_completed`` flag. New columns are nullable so existing rows are
+# unaffected. Idempotent ALTER … IF NOT EXISTS.
+_OPPORTUNITY_ACTIVITIES_EXTEND_DO_BLOCK = """
+DO $oppact_extend$
+BEGIN
+    IF to_regclass('public.opportunity_activities') IS NULL THEN
+        RETURN;
+    END IF;
+    BEGIN
+        ALTER TABLE opportunity_activities
+            ADD COLUMN IF NOT EXISTS outcome VARCHAR(40),
+            ADD COLUMN IF NOT EXISTS duration_minutes INTEGER,
+            ADD COLUMN IF NOT EXISTS completed_at TIMESTAMPTZ;
+    EXCEPTION WHEN OTHERS THEN
+        RAISE NOTICE 'opportunity_activities extend skipped: %', SQLERRM;
+    END;
+END $oppact_extend$;
 """
 
 
@@ -807,6 +901,12 @@ def apply_tenant_schema(conn: Any, currency: str = "SAR") -> None:
     conn.execute(text(_UPDATED_AT_TRIGGER_FN))
     for tbl in _TRIGGER_TABLES:
         try:
+            has_col = conn.execute(text(
+                "SELECT 1 FROM information_schema.columns "
+                "WHERE table_name = :tbl AND column_name = 'updated_at'"
+            ), {"tbl": tbl}).scalar()
+            if not has_col:
+                continue
             conn.execute(text(
                 f"DROP TRIGGER IF EXISTS trigger_update_{tbl}_updated_at ON {tbl}; "
                 f"CREATE TRIGGER trigger_update_{tbl}_updated_at "
@@ -827,6 +927,18 @@ def apply_tenant_schema(conn: Any, currency: str = "SAR") -> None:
         conn.execute(text(_RETURNS_UNIFIED_VIEW_DO_BLOCK))
     except Exception as e:
         logger.warning(f"returns_unified view skipped: {e}")
+
+    # T10.2 #172/#173/#174 — pin ON DELETE RESTRICT on HR-history FKs.
+    try:
+        conn.execute(text(_FK_ON_DELETE_GUARDS_DO_BLOCK))
+    except Exception as e:
+        logger.warning(f"FK ON DELETE guards skipped: {e}")
+
+    # T10.2 #150/#151 — opportunity_activities outcome/duration/completed_at.
+    try:
+        conn.execute(text(_OPPORTUNITY_ACTIVITIES_EXTEND_DO_BLOCK))
+    except Exception as e:
+        logger.warning(f"opportunity_activities extend skipped: {e}")
 
     # T7.1 + T7.6: pg_trgm extension, GIN trigram search indexes, and missing
     # FK/lookup indexes. The same lists are imported by alembic migration

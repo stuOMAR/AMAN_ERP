@@ -10,8 +10,9 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from .schemas import SOCreate
+from services.tax_engine import resolve_line_tax
 
 orders_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -26,8 +27,7 @@ def _dec(v) -> Decimal:
 @orders_router.get("/orders", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_sales_orders(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض قائمة أوامر البيع"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
 
     db = get_db_connection(current_user.company_id)
     try:
@@ -38,9 +38,7 @@ def list_sales_orders(branch_id: Optional[int] = None, current_user: dict = Depe
             WHERE 1=1
         """
         params = {}
-        if branch_id:
-            query_str += " AND so.branch_id = :branch_id"
-            params["branch_id"] = branch_id
+        query_str += branch_scope_filter_from_scope(branch_scope, "so.branch_id", params)
 
         query_str += " ORDER BY so.created_at DESC"
 
@@ -96,26 +94,33 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
     try:
         # 0. Validate quotation if provided
         if data.quotation_id:
-            quot = db.execute(text("SELECT id, status FROM quotations WHERE id = :qid"), {"qid": data.quotation_id}).fetchone()
+            quot = db.execute(text("""
+                SELECT id, party_id, status
+                FROM sales_quotations
+                WHERE id = :qid
+            """), {"qid": data.quotation_id}).fetchone()
             if not quot:
                 raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
             if quot.status in ('expired', 'converted', 'cancelled'):
                 raise HTTPException(status_code=400, detail=f"عرض السعر لا يمكن تحويله (الحالة: {quot.status})")
+            if quot.party_id and quot.party_id != data.customer_id:
+                raise HTTPException(status_code=400, detail="العميل المختار لا يطابق عميل عرض السعر")
 
         # 1. Generate Sequential SO Number
         from utils.accounting import generate_sequential_number
         so_num = generate_sequential_number(db, f"SO-{datetime.now().year}", "sales_orders", "so_number")
 
-        # 2. Calculate Totals
+        # 2. Calculate Totals (tax resolved via engine)
         subtotal = Decimal('0')
         total_tax = Decimal('0')
         total_discount = Decimal('0')
         items_to_save = []
 
         for item in data.items:
+            tax_info = resolve_line_tax(data.branch_id, item.product_id, db, data.order_date, customer_id=data.customer_id)
             line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
             taxable = line_subtotal - _dec(item.discount)
-            line_tax = taxable * (_dec(item.tax_rate) / Decimal('100'))
+            line_tax = taxable * (_dec(tax_info["tax_rate"]) / Decimal('100'))
             line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
 
             subtotal += line_subtotal
@@ -124,6 +129,8 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
 
             items_to_save.append({
                 **item.model_dump(),
+                "tax_rate": tax_info["tax_rate"],
+                "tax_rate_id": tax_info["tax_rate_id"],
                 "total": line_total
             })
 
@@ -135,19 +142,20 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
                 so_number, party_id, order_date, expected_delivery_date,
                 subtotal, tax_amount, discount, total, status, notes, created_by, branch_id,
                 warehouse_id, quotation_id,
-                currency, exchange_rate
+                currency, exchange_rate, party_site_id
             ) VALUES (
                 :num, :cust, :odate, :edate,
                 :sub, :tax, :disc, :total, 'draft', :notes, :user, :bid,
                 :whid, :qid,
-                :currency, :exchange_rate
+                :currency, :exchange_rate, :party_site_id
             ) RETURNING id
         """), {
             "num": so_num, "cust": data.customer_id, "odate": data.order_date,
             "edate": data.expected_delivery_date, "sub": subtotal, "tax": total_tax,
             "disc": total_discount, "total": grand_total, "notes": data.notes, "user": current_user.id,
             "bid": data.branch_id, "whid": data.warehouse_id, "qid": data.quotation_id,
-            "currency": data.currency, "exchange_rate": data.exchange_rate
+            "currency": data.currency, "exchange_rate": data.exchange_rate,
+            "party_site_id": data.party_site_id,
         }).fetchone()
 
         so_id = res[0]
@@ -156,13 +164,14 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         for line in items_to_save:
             db.execute(text("""
                 INSERT INTO sales_order_lines (
-                    so_id, product_id, description, quantity, unit_price, tax_rate, discount, total
+                    so_id, product_id, description, quantity, unit_price, tax_rate, tax_rate_id, discount, total
                 ) VALUES (
-                    :so_id, :pid, :desc, :qty, :price, :tax_rate, :disc, :total
+                    :so_id, :pid, :desc, :qty, :price, :tax_rate, :tax_rate_id, :disc, :total
                 )
             """), {
                 "so_id": so_id, "pid": line["product_id"], "desc": line["description"],
-                "qty": line["quantity"], "price": line["unit_price"], "tax_rate": line["tax_rate"],
+                "qty": line["quantity"], "price": line["unit_price"],
+                "tax_rate": line["tax_rate"], "tax_rate_id": line.get("tax_rate_id"),
                 "disc": line["discount"], "total": line["total"]
             })
 
@@ -217,7 +226,11 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
 
         # Update quotation status to 'converted' if applicable
         if data.quotation_id:
-            db.execute(text("UPDATE quotations SET status = 'converted' WHERE id = :qid"), {"qid": data.quotation_id})
+            db.execute(text("""
+                UPDATE sales_quotations
+                SET status = 'converted', updated_at = NOW(), updated_by = :user
+                WHERE id = :qid
+            """), {"qid": data.quotation_id, "user": current_user.username})
 
         db.commit()
 
@@ -235,6 +248,9 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
             branch_id=data.branch_id
         )
         return {"id": so_id, "so_number": so_num}
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating Sales Order: {str(e)}")

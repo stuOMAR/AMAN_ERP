@@ -35,7 +35,13 @@ function UserProfile() {
         setLoadingSessions(true)
         try {
             const res = await securityAPI.listSessions()
-            setSessions(res.data || [])
+            const payload = res?.data
+            const normalizedSessions = Array.isArray(payload)
+                ? payload
+                : Array.isArray(payload?.sessions)
+                    ? payload.sessions
+                    : []
+            setSessions(normalizedSessions)
         } catch {
             setSessions([])
         } finally {
@@ -271,7 +277,7 @@ function UserProfile() {
                 <h3 style={{ marginBottom: '16px' }}>{t('common.profile_page.active_sessions')}</h3>
                 {loadingSessions ? (
                     <PageLoading />
-                ) : sessions.length === 0 ? (
+                ) : !Array.isArray(sessions) || sessions.length === 0 ? (
                     <p style={{ color: '#888', fontSize: '14px' }}>{t('common.profile_page.no_sessions')}</p>
                 ) : (
                     <div className="data-table-container">

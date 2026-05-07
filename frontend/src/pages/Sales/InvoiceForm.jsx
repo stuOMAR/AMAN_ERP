@@ -1,6 +1,7 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { salesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
+import { taxesAPI } from '../../services/taxes'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
 import { formatNumber, getStep } from '../../utils/format'
@@ -10,6 +11,7 @@ import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import useInvoiceCalc from '../../hooks/useInvoiceCalc';
 
 function InvoiceForm() {
     const { t } = useTranslation()
@@ -27,9 +29,15 @@ function InvoiceForm() {
     const [error, setError] = useState(null)
     const [currencies, setCurrencies] = useState([])
     const [treasuryAccounts, setTreasuryAccounts] = useState([])
+    const [branchTax, setBranchTax] = useState(null) // { tax_rate_id, tax_rate, tax_name, country_code }
+
+    // Backend-powered calculations
+    const { totals: calcTotals, preview, previewDebounced, quickCalc } = useInvoiceCalc()
+    const [localTotals, setLocalTotals] = useState({ subtotal: 0, discount: 0, tax: 0, total: 0 })
 
     const [formData, setFormData] = useState({
         customer_id: '',
+        party_site_id: '',
         warehouse_id: '',
         invoice_date: new Date().toISOString().split('T')[0],
         due_date: '',
@@ -43,20 +51,21 @@ function InvoiceForm() {
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0 }
+        { product_id: '', description: '', quantity: 1, unit_price: 0, discount: 0, discount_percent: 0 }
     ])
 
     useEffect(() => {
         const fetchData = async () => {
             try {
                 const params = { branch_id: currentBranch?.id }
-                const [custRes, groupsRes, prodRes, whRes, curRes, treasRes] = await Promise.all([
+                const [custRes, groupsRes, prodRes, whRes, curRes, treasRes, priceRes] = await Promise.all([
                     salesAPI.listCustomers(params),
                     salesAPI.listCustomerGroups(params),
                     inventoryAPI.listProducts(params),
                     inventoryAPI.listWarehouses(params),
                     currenciesAPI.list(),
-                    treasuryAPI.listAccounts(currentBranch?.id)
+                    treasuryAPI.listAccounts(currentBranch?.id),
+                    inventoryAPI.getBranchPrices(currentBranch?.id)
                 ])
                 setCustomers(custRes.data)
                 setCustomerGroups(groupsRes.data)
@@ -64,9 +73,23 @@ function InvoiceForm() {
                 setWarehouses(whRes.data)
                 setCurrencies(curRes.data)
                 setTreasuryAccounts(treasRes.data)
+                
+                // Store branch prices for auto-fill
+                window.__branchPrices = priceRes.data?.prices || {}
+                window.__branchCurrency = priceRes.data?.currency || formData.currency
 
                 const base = curRes.data.find(c => c.is_base)
                 if (base && !formData.currency) {
+
+                // Fetch branch tax
+                if (currentBranch?.id) {
+                    try {
+                        const taxRes = await taxesAPI.getBranchTax(currentBranch.id)
+                        setBranchTax(taxRes.data)
+                    } catch (err) {
+                        console.warn('Failed to fetch branch tax', err)
+                    }
+                }
                     setFormData(prev => ({ ...prev, currency: base.code }))
                 }
 
@@ -143,9 +166,12 @@ function InvoiceForm() {
                     const product = products.find(p => p.id === parseInt(value))
                     if (product) {
                         updatedItem.description = product.item_name
-                        updatedItem.unit_price = product.selling_price
+                        // Use branch price if available, otherwise use product default
+                        const branchPrices = window.__branchPrices || {}
+                        const priceInfo = branchPrices[parseInt(value)]
+                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0)
                         updatedItem.unit = product.unit || 'قطعة'
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        updatedItem.tax_rate = null // Resolved by backend engine
                         // Try applying item-level effect from group
                         const customer = customers.find(c => c.id === parseInt(formData.customer_id));
                         if (customer && customer.group_id) {
@@ -155,7 +181,8 @@ function InvoiceForm() {
                                     updatedItem.discount_percent = group.discount_percentage;
                                 } else if (group.effect_type === 'markup') {
                                     // Markup applied by increasing unit_price
-                                    updatedItem.unit_price = product.selling_price * (1 + (group.discount_percentage / 100));
+                                    const basePrice = priceInfo ? priceInfo.price : (product.selling_price || 0)
+                                    updatedItem.unit_price = basePrice * (1 + (group.discount_percentage / 100));
                                 }
                             }
                         }
@@ -232,63 +259,55 @@ function InvoiceForm() {
     }
 
     const getTotals = () => {
-        let subtotal = 0
-        let discount = 0
-        let tax = 0
-
-        let globalEffectType = 'discount';
-        let globalEffectPercent = 0;
-
-        // Find group effects on total
-        const customer = customers.find(c => c.id === parseInt(formData.customer_id));
-        if (customer && customer.group_id) {
-            const group = customerGroups.find(g => g.id === customer.group_id);
-            if (group && group.application_scope === 'total' && group.discount_percentage > 0) {
-                globalEffectType = group.effect_type;
-                globalEffectPercent = Number(group.discount_percentage);
+        // Use backend-calculated totals if available, otherwise use local quick calc
+        if (calcTotals) {
+            return {
+                subtotal: calcTotals.subtotal,
+                discount: calcTotals.totalDiscount,
+                markup: 0,
+                tax: calcTotals.totalTax,
+                total: calcTotals.grandTotal,
+                globalEffectType: 'discount',
+                globalEffectPercent: 0,
+                globalMakeupAmount: 0,
+                globalDiscountAmount: calcTotals.totalDiscount,
             }
         }
-
-        items.forEach(item => {
-            const lineTotal = item.quantity * item.unit_price
-            subtotal += lineTotal
-            discount += item.discount
-        })
-
-        let totalAfterLineDiscounts = subtotal - discount;
-        let globalDiscountAmount = 0;
-        let globalMarkupAmount = 0;
-
-        if (globalEffectPercent > 0) {
-            if (globalEffectType === 'discount') {
-                globalDiscountAmount = totalAfterLineDiscounts * (globalEffectPercent / 100);
-            } else if (globalEffectType === 'markup') {
-                globalMarkupAmount = totalAfterLineDiscounts * (globalEffectPercent / 100);
-            }
-        }
-
-        let baseForTax = totalAfterLineDiscounts - globalDiscountAmount + globalMarkupAmount;
-
-        items.forEach(item => {
-            const weight = (item.quantity * item.unit_price - item.discount) / totalAfterLineDiscounts || 0;
-            const itemBase = (item.quantity * item.unit_price - item.discount)
-                - (globalDiscountAmount * weight)
-                + (globalMarkupAmount * weight);
-            tax += itemBase * (item.tax_rate / 100);
-        });
-
-        return {
-            subtotal,
-            discount: discount + globalDiscountAmount,
-            markup: globalMarkupAmount,
-            tax,
-            total: baseForTax + tax,
-            globalEffectType,
-            globalEffectPercent,
-            globalMakeupAmount: globalMarkupAmount,
-            globalDiscountAmount
-        }
+        // Fallback to local quick calculation
+        return localTotals
     }
+
+    // Call backend for accurate calculations when items change
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            const lines = items.map(i => ({
+                quantity: Number(i.quantity) || 0,
+                unit_price: Number(i.unit_price) || 0,
+                tax_rate: Number(i.tax_rate) || 0,
+                discount: Number(i.discount) || 0,
+            }))
+
+            // Quick local calc for instant feedback
+            const quick = quickCalc(lines)
+            setLocalTotals({
+                subtotal: quick.subtotal,
+                discount: items.reduce((s, i) => s + (Number(i.discount) || 0), 0),
+                tax: quick.totalTax,
+                total: quick.grandTotal,
+                globalEffectType: 'discount',
+                globalEffectPercent: 0,
+                globalMakeupAmount: 0,
+                globalDiscountAmount: 0,
+            })
+
+            // Debounced backend calc for accurate totals
+            previewDebounced({
+                lines,
+                currency: formData.currency || currency,
+                paid_amount: Number(formData.paid_amount) || 0,
+            })
+        }
+    }, [items, formData.currency])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -328,6 +347,7 @@ function InvoiceForm() {
                 branch_id: currentBranch ? currentBranch.id : null,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 customer_id: parseInt(formData.customer_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 due_date: formData.due_date || null,
                 down_payment_method: formData.down_payment_method || 'cash',
                 paid_amount: String(formData.paid_amount || 0),
@@ -338,13 +358,11 @@ function InvoiceForm() {
                 effect_percentage: totals.globalEffectPercent,
                 markup_amount: totals.globalMakeupAmount,
                 items: items.map(item => ({
-                    ...item,
                     product_id: item.product_id ? parseInt(item.product_id) : null,
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: String(item.tax_rate || 0),
                     discount: String(item.discount || 0),
-                    markup: 0 // Handled at line level unit_price for sales now, or could pass to backend
+                    markup: 0
                 }))
             }
             await salesAPI.createInvoice(payload)
@@ -467,8 +485,9 @@ function InvoiceForm() {
                         </thead>
                         <tbody>
                             {items.map((item, index) => {
+                                const taxRate = branchTax?.tax_rate || 0
                                 const taxable = (item.quantity * item.unit_price) - item.discount
-                                const lineTotal = taxable + (taxable * (item.tax_rate / 100))
+                                const lineTotal = taxable + (taxable * (taxRate / 100))
                                 return (
                                     <tr key={index}>
                                         <td>
@@ -521,11 +540,16 @@ function InvoiceForm() {
                                             />
                                         </td>
                                         <td>
-                                            <input
-                                                type="number" className="form-input"
-                                                value={item.tax_rate}
-                                                onChange={(e) => handleItemChange(index, 'tax_rate', Number(e.target.value) || 0)}
-                                            />
+                                            <div style={{ padding: '6px 4px', fontSize: '13px', textAlign: 'center' }}>
+                                                <div style={{ fontWeight: '600', color: 'var(--primary)' }}>
+                                                    {branchTax ? `${branchTax.tax_rate}%` : '—'}
+                                                </div>
+                                                {branchTax?.tax_name && (
+                                                    <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
+                                                        {branchTax.tax_name}
+                                                    </div>
+                                                )}
+                                            </div>
                                         </td>
                                         <td style={{ fontWeight: 'bold' }}>{formatNumber(lineTotal)}</td>
                                         <td>

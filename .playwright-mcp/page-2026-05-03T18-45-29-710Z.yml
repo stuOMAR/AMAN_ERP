@@ -1,0 +1,205 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🔔" [ref=e110] [cursor=pointer]
+          - generic [ref=e112] [cursor=pointer]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: aaaa
+              - generic [ref=e115]: "ID: e24bcd11"
+            - generic [ref=e116]: O
+      - main [ref=e118]:
+        - generic [ref=e429]:
+          - generic [ref=e431]:
+            - generic [ref=e432]:
+              - heading "🧾 إدارة الضرائب" [level=1] [ref=e433]
+              - paragraph [ref=e434]: إدارة أنواع الضرائب، الإقرارات، المدفوعات والتسويات
+            - button "+ إقرار جديد" [ref=e436] [cursor=pointer]
+          - generic [ref=e437]:
+            - generic [ref=e438]:
+              - generic [ref=e439]: أنواع الضرائب النشطة
+              - generic [ref=e440]: "4"
+            - generic [ref=e441]:
+              - generic [ref=e442]: ضريبة المخرجات (الشهر الحالي)
+              - generic [ref=e443]: 0.00 SAR
+            - generic [ref=e444]:
+              - generic [ref=e445]: ضريبة المدخلات (الشهر الحالي)
+              - generic [ref=e446]: 0.00 SAR
+            - generic [ref=e447]:
+              - generic [ref=e448]: صافي الضريبة المستحقة
+              - generic [ref=e449]: 0.00 SAR
+              - generic [ref=e450]: مستحق للدفع
+            - generic [ref=e451]:
+              - generic [ref=e452]: إقرارات بانتظار الدفع
+              - generic [ref=e453]: "0"
+              - generic [ref=e454]: 0.00 SAR
+          - generic [ref=e455]:
+            - button "نظرة عامة" [ref=e456] [cursor=pointer]
+            - button "أنواع الضرائب" [ref=e457] [cursor=pointer]
+            - button "الإقرارات الضريبية" [ref=e458] [cursor=pointer]
+            - button "تحليل الفروع" [ref=e459] [cursor=pointer]
+            - button "ضرائب الموظفين" [ref=e460] [cursor=pointer]
+          - generic [ref=e483]:
+            - generic [ref=e484]:
+              - heading "أنواع الضرائب" [level=3] [ref=e485]
+              - button "+ إضافة نوع ضريبة" [ref=e486] [cursor=pointer]
+            - table [ref=e488]:
+              - rowgroup [ref=e489]:
+                - row "كود الضريبة اسم الضريبة الاسم بالإنجليزي النسبة % رمز الدولة تاريخ البدء تاريخ الانتهاء الحالة الإجراءات" [ref=e490]:
+                  - columnheader "كود الضريبة" [ref=e491]
+                  - columnheader "اسم الضريبة" [ref=e492]
+                  - columnheader "الاسم بالإنجليزي" [ref=e493]
+                  - columnheader "النسبة %" [ref=e494]
+                  - columnheader "رمز الدولة" [ref=e495]
+                  - columnheader "تاريخ البدء" [ref=e496]
+                  - columnheader "تاريخ الانتهاء" [ref=e497]
+                  - columnheader "الحالة" [ref=e498]
+                  - columnheader "الإجراءات" [ref=e499]
+              - rowgroup [ref=e500]:
+                - row "WHT5 ضريبة الاستقطاع للخدمات الأجنبية WHT - Foreign Services 5.0000% 🌍 عالمي — — ✅ نشط ✏️ 🗑️" [ref=e622]:
+                  - cell "WHT5" [ref=e623]
+                  - cell "ضريبة الاستقطاع للخدمات الأجنبية" [ref=e624]
+                  - cell "WHT - Foreign Services" [ref=e625]
+                  - cell "5.0000%" [ref=e626]
+                  - cell "🌍 عالمي" [ref=e627]:
+                    - generic [ref=e628]: 🌍 عالمي
+                  - cell "—" [ref=e629]
+                  - cell "—" [ref=e630]
+                  - cell "✅ نشط" [ref=e631]
+                  - cell "✏️ 🗑️" [ref=e632]:
+                    - generic [ref=e633]:
+                      - button "✏️" [ref=e634] [cursor=pointer]
+                      - button "🗑️" [ref=e635] [cursor=pointer]
+                - row "VAT14 ضريبة القيمة المضافة مصر Egypt VAT 14.0000% EG — — ✅ نشط ✏️ 🗑️" [ref=e582]:
+                  - cell "VAT14" [ref=e583]
+                  - cell "ضريبة القيمة المضافة مصر" [ref=e584]
+                  - cell "Egypt VAT" [ref=e585]
+                  - cell "14.0000%" [ref=e586]
+                  - cell "EG" [ref=e587]
+                  - cell "—" [ref=e588]
+                  - cell "—" [ref=e589]
+                  - cell "✅ نشط" [ref=e590]
+                  - cell "✏️ 🗑️" [ref=e591]:
+                    - generic [ref=e592]:
+                      - button "✏️" [ref=e593] [cursor=pointer]
+                      - button "🗑️" [ref=e594] [cursor=pointer]
+                - row "VAT5 ضريبة القيمة المضافة الإمارات UAE VAT 5.0000% AE — — ✅ نشط ✏️ 🗑️" [ref=e542]:
+                  - cell "VAT5" [ref=e543]
+                  - cell "ضريبة القيمة المضافة الإمارات" [ref=e544]
+                  - cell "UAE VAT" [ref=e545]
+                  - cell "5.0000%" [ref=e546]
+                  - cell "AE" [ref=e547]
+                  - cell "—" [ref=e548]
+                  - cell "—" [ref=e549]
+                  - cell "✅ نشط" [ref=e550]
+                  - cell "✏️ 🗑️" [ref=e551]:
+                    - generic [ref=e552]:
+                      - button "✏️" [ref=e553] [cursor=pointer]
+                      - button "🗑️" [ref=e554] [cursor=pointer]
+                - row "VAT15 ضريبة القيمة المضافة VAT 15.0000% 🌍 عالمي — — ✅ نشط ✏️ 🗑️" [ref=e501]:
+                  - cell "VAT15" [ref=e502]
+                  - cell "ضريبة القيمة المضافة" [ref=e503]
+                  - cell "VAT" [ref=e504]
+                  - cell "15.0000%" [ref=e505]
+                  - cell "🌍 عالمي" [ref=e506]:
+                    - generic [ref=e507]: 🌍 عالمي
+                  - cell "—" [ref=e508]
+                  - cell "—" [ref=e509]
+                  - cell "✅ نشط" [ref=e510]
+                  - cell "✏️ 🗑️" [ref=e511]:
+                    - generic [ref=e512]:
+                      - button "✏️" [ref=e513] [cursor=pointer]
+                      - button "🗑️" [ref=e514] [cursor=pointer]

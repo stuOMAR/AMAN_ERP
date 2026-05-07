@@ -84,14 +84,40 @@ def drain_once(db, batch_size: int = _DEFAULT_BATCH) -> Dict[str, int]:
             delivered += 1
         except Exception as e:
             logger.exception("outbox relay: publish failed for id=%s", ev_id)
+            new_attempts = (attempts or 0) + 1
+            # T10.2 #142: when a row exhausts its attempts, prefix
+            # last_error with ``DEAD:`` so operators can distinguish
+            # "still retrying" from "gave up". Without this, dead rows
+            # remain ``delivered_at IS NULL`` forever and look identical
+            # to fresh rows in dashboards/queries.
+            err_text = str(e)[:480]
+            if new_attempts >= _MAX_ATTEMPTS:
+                err_text = f"DEAD:max_attempts_exceeded: {err_text}"
             db.execute(
                 text(
                     "UPDATE event_outbox "
                     "   SET attempts = attempts + 1, last_error = :err "
                     " WHERE id = :id"
                 ),
-                {"err": str(e)[:500], "id": ev_id},
+                {"err": err_text, "id": ev_id},
             )
+            if new_attempts >= _MAX_ATTEMPTS:
+                db.execute(
+                    text("""
+                        INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
+                        SELECT u.id,
+                               'outbox_dead_letter',
+                               'Outbox event delivery failed',
+                               :message,
+                               '/settings/integrations/outbox',
+                               FALSE,
+                               NOW()
+                        FROM company_users u
+                        WHERE u.role IN ('admin', 'system_admin')
+                           OR COALESCE(u.permissions::text, '') LIKE '%admin%'
+                    """),
+                    {"message": f"Event {ev_name} #{ev_id} reached max retry attempts."},
+                )
             failed += 1
     db.commit()
     return {"attempted": len(rows), "delivered": delivered, "failed": failed}

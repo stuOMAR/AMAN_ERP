@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 
@@ -13,6 +14,7 @@ function FiscalYears() {
     const { t, i18n } = useTranslation()
     const { showToast } = useToast()
     const currency = getCurrency()
+    const { currentBranch } = useBranch()
     const isRTL = i18n.language === 'ar'
 
     const [fiscalYears, setFiscalYears] = useState([])
@@ -39,14 +41,16 @@ function FiscalYears() {
     const fetchFiscalYears = useCallback(async () => {
         try {
             setLoading(true)
-            const res = await accountingAPI.listFiscalYears()
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
+            const res = await accountingAPI.listFiscalYears(params)
             setFiscalYears(res.data)
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
         } finally {
             setLoading(false)
         }
-    }, [showToast])
+    }, [showToast, currentBranch])
 
     useEffect(() => { fetchFiscalYears() }, [fetchFiscalYears])
 
@@ -244,6 +248,7 @@ function FiscalYears() {
                                     value={newYear.year}
                                     onChange={e => {
                                         const y = parseInt(e.target.value)
+                                        if (!y || isNaN(y)) return
                                         setNewYear({
                                             year: y,
                                             start_date: `${y}-01-01`,

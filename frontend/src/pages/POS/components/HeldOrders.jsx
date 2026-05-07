@@ -4,6 +4,7 @@ import api from '../../../utils/api';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../../context/ToastContext';
 import { formatDateTime } from '../../../utils/dateUtils';
+import { formatNumber } from '../../../utils/format';
 import { Spinner } from '../../../components/common/LoadingStates'
 
 

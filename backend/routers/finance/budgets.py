@@ -7,7 +7,7 @@ from database import get_db_connection
 from schemas import UserResponse
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, require_module
 from utils.audit import log_activity
 from utils.limiter import limiter
 from schemas.budgets import BudgetItemCreate, BudgetCreate, BudgetResponse, BudgetReportItem
@@ -30,15 +30,17 @@ def create_budget(budget: BudgetCreate, request: Request, current_user: UserResp
                 raise HTTPException(status_code=400, detail="Budget name already exists")
                 
             result = conn.execute(text("""
-                INSERT INTO budgets (name, budget_name, start_date, end_date, description, status, created_by)
-                VALUES (:name, :name, :start, :end, :desc, 'draft', :uid)
+                INSERT INTO budgets (name, budget_name, start_date, end_date, description, status, created_by, branch_id, cost_center_id)
+                VALUES (:name, :name, :start, :end, :desc, 'draft', :uid, :branch_id, :cost_center_id)
                 RETURNING id, created_at, status
             """), {
                 "name": budget.name,
                 "start": budget.start_date,
                 "end": budget.end_date,
                 "desc": budget.description,
-                "uid": current_user.id
+                "uid": current_user.id,
+                "branch_id": budget.branch_id,
+                "cost_center_id": budget.cost_center_id
             }).fetchone()
             
             
@@ -54,7 +56,9 @@ def create_budget(budget: BudgetCreate, request: Request, current_user: UserResp
                 "end_date": budget.end_date,
                 "description": budget.description,
                 "status": result.status,
-                "created_at": str(result.created_at)
+                "created_at": str(result.created_at),
+                "branch_id": budget.branch_id,
+                "cost_center_id": budget.cost_center_id
             }
         except HTTPException:
             raise
@@ -66,10 +70,16 @@ def create_budget(budget: BudgetCreate, request: Request, current_user: UserResp
 
 @router.get("/", response_model=List[BudgetResponse], dependencies=[Depends(require_permission("accounting.budgets.view"))])
 @limiter.limit("200/minute")
-def list_budgets(request: Request, current_user: UserResponse = Depends(get_current_user)):
+def list_budgets(request: Request, branch_id: Optional[int] = None, cost_center_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user)):
     """List Budgets."""
     with transactional(current_user.company_id) as conn:
-        results = conn.execute(text("SELECT * FROM budgets ORDER BY created_at DESC")).fetchall()
+        params = {}
+        branch_filter = branch_scope_filter(current_user, branch_id, "b.branch_id", params)
+        cc_filter = ""
+        if cost_center_id:
+            cc_filter = "AND b.cost_center_id = :cc_id"
+            params["cc_id"] = cost_center_id
+        results = conn.execute(text(f"SELECT b.* FROM budgets b WHERE 1=1 {branch_filter} {cc_filter} ORDER BY b.created_at DESC"), params).fetchall()
         return [
             {
                 "id": row.id,
@@ -78,7 +88,9 @@ def list_budgets(request: Request, current_user: UserResponse = Depends(get_curr
                 "end_date": row.end_date,
                 "description": row.description,
                 "status": row.status,
-                "created_at": str(row.created_at)
+                "created_at": str(row.created_at),
+                "branch_id": row.branch_id,
+                "cost_center_id": row.cost_center_id
             }
             for row in results
         ]
@@ -169,9 +181,6 @@ def get_budget_report(
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Get Budget Report."""
-    # Validate branch access
-    branch_id = validate_branch_access(current_user, branch_id)
-    
     with transactional(current_user.company_id) as conn:
         try:
             budget = conn.execute(text("SELECT start_date, end_date FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
@@ -195,15 +204,19 @@ def get_budget_report(
                 # Factor = (Months in report) / (Total months in budget)
                 scaling_factor = report_months / budget_months
             
-            # Build optional branch filter for actuals
-            branch_filter = ""
-            if branch_id:
-                branch_filter = "AND je.branch_id = :branch_id"
-            
+            params = {
+                "bid": budget_id, 
+                "start": report_start, 
+                "end": report_end,
+                "factor": scaling_factor
+            }
+            branch_filter = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
+
             # Build optional cost center filter for actuals
             cost_center_filter = ""
             if cost_center_id:
                 cost_center_filter = "AND jl.cost_center_id = :cost_center_id"
+                params["cost_center_id"] = cost_center_id
                 
             # Query Explanation:
             # 1. Get all budget items for this budget.
@@ -246,17 +259,6 @@ def get_budget_report(
                 ORDER BY a.account_number
             """
             
-            params = {
-                "bid": budget_id, 
-                "start": report_start, 
-                "end": report_end,
-                "factor": scaling_factor
-            }
-            if branch_id:
-                params["branch_id"] = branch_id
-            if cost_center_id:
-                params["cost_center_id"] = cost_center_id
-            
             rows = conn.execute(text(query), params).fetchall()
             
             report = []
@@ -264,8 +266,10 @@ def get_budget_report(
                 planned = float(row.planned_amount) if row.planned_amount is not None else 0.0
                 actual = float(row.actual_amount) if row.actual_amount is not None else 0.0
                 variance = planned - actual # Positive means under budget (good for expense), Negative means over budget
+                is_over_budget = actual > planned
                 
-                percent = (actual / planned * 100) if planned != 0 else 0
+                usage_pct = (actual / planned * 100) if planned != 0 else 0
+                variance_pct = ((actual - planned) / planned * 100) if planned != 0 else 0
                 
                 report.append({
                     "account_id": row.account_id,
@@ -274,7 +278,9 @@ def get_budget_report(
                     "planned": planned,
                     "actual": actual,
                     "variance": variance,
-                    "variance_percentage": round(percent, 2)
+                    "usage_percentage": round(usage_pct, 2),
+                    "variance_percentage": round(variance_pct, 2),
+                    "is_over_budget": is_over_budget
                 })
                 
             return report
@@ -303,7 +309,7 @@ def update_budget(budget_id: int, budget: BudgetCreate, request: Request, curren
                 raise HTTPException(status_code=400, detail="Budget name already exists")
             
             conn.execute(text("""
-                UPDATE budgets SET name = :name, start_date = :start, end_date = :end, 
+                UPDATE budgets SET name = :name, budget_name = :name, start_date = :start, end_date = :end, 
                 description = :desc, updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id
             """), {
@@ -321,7 +327,9 @@ def update_budget(budget_id: int, budget: BudgetCreate, request: Request, curren
                 "id": updated.id, "name": updated.name,
                 "start_date": updated.start_date, "end_date": updated.end_date,
                 "description": updated.description, "status": updated.status,
-                "created_at": str(updated.created_at)
+                "created_at": str(updated.created_at),
+                "branch_id": updated.branch_id,
+                "cost_center_id": updated.cost_center_id
             }
         except HTTPException:
             raise
@@ -421,18 +429,22 @@ def get_budget_items(request: Request, budget_id: int, current_user: UserRespons
         ]
 
 
-@router.get("/alerts/overruns", dependencies=[Depends(require_permission("accounting.budgets.view"))], response_model=Dict[str, Any])
+@router.get("/alerts/overruns", dependencies=[Depends(require_permission("accounting.budgets.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
 def get_budget_overrun_alerts(
     request: Request,
     threshold: float = 80.0,
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Get budget items that are at or over the threshold percentage of planned amount"""
     with transactional(current_user.company_id) as conn:
         try:
+            params = {"threshold": threshold}
+            branch_filter = branch_scope_filter(current_user, branch_id, "b.branch_id", params)
+            
             # Only check active budgets
-            rows = conn.execute(text("""
+            rows = conn.execute(text(f"""
                 WITH Actuals AS (
                     SELECT 
                         jl.account_id,
@@ -450,6 +462,7 @@ def get_budget_overrun_alerts(
                     JOIN budget_items bi ON bi.budget_id = b.id AND bi.account_id = jl.account_id
                     WHERE je.status = 'posted'
                     AND b.status = 'active'
+                    {branch_filter}
                     GROUP BY jl.account_id, b.id
                 )
                 SELECT 
@@ -470,9 +483,10 @@ def get_budget_overrun_alerts(
                 LEFT JOIN Actuals act ON bi.account_id = act.account_id AND b.id = act.budget_id
                 WHERE b.status = 'active'
                 AND bi.planned_amount > 0
+                {branch_filter}
                 AND COALESCE(act.actual_amount, 0) / bi.planned_amount * 100 >= :threshold
                 ORDER BY usage_percentage DESC
-            """), {"threshold": threshold}).fetchall()
+            """), params).fetchall()
             
             alerts = []
             for row in rows:
@@ -508,48 +522,97 @@ def get_budget_overrun_alerts(
 
 @router.get("/stats/summary", dependencies=[Depends(require_permission("accounting.budgets.view"))], response_model=Dict[str, Any])
 @limiter.limit("200/minute")
-def get_budget_stats(request: Request, current_user: UserResponse = Depends(get_current_user)):
-    """Get overall budget statistics"""
+def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user)):
+    """Get overall budget statistics with currency conversion"""
     with transactional(current_user.company_id) as conn:
         try:
+            params = {}
+            branch_filter = branch_scope_filter(current_user, branch_id, "b.branch_id", params)
+            
             # Budget counts by status
-            counts = conn.execute(text("""
+            counts = conn.execute(text(f"""
                 SELECT 
                     COUNT(*) as total,
-                    COUNT(*) FILTER (WHERE status = 'draft') as draft_count,
-                    COUNT(*) FILTER (WHERE status = 'active') as active_count,
-                    COUNT(*) FILTER (WHERE status = 'closed') as closed_count
-                FROM budgets
-            """)).fetchone()
+                    COUNT(*) FILTER (WHERE b.status = 'draft') as draft_count,
+                    COUNT(*) FILTER (WHERE b.status = 'active') as active_count,
+                    COUNT(*) FILTER (WHERE b.status = 'closed') as closed_count
+                FROM budgets b
+                WHERE 1=1 {branch_filter}
+            """), params).fetchone()
             
-            # Total planned vs actual for active budgets
-            totals = conn.execute(text("""
-                SELECT 
-                    COALESCE(SUM(bi.planned_amount), 0) as total_planned,
-                    COALESCE(SUM(
-                        (SELECT COALESCE(SUM(
-                            CASE 
-                                WHEN a.account_type IN ('expense', 'asset') THEN jl.debit - jl.credit
-                                ELSE jl.credit - jl.debit
-                            END
-                        ), 0)
-                        FROM journal_lines jl
-                        JOIN journal_entries je ON jl.journal_entry_id = je.id
-                        JOIN accounts a ON jl.account_id = a.id
-                        WHERE jl.account_id = bi.account_id
-                        AND je.entry_date BETWEEN b.start_date AND b.end_date
-                        AND je.status = 'posted')
-                    ), 0) as total_actual
-                FROM budget_items bi
-                JOIN budgets b ON bi.budget_id = b.id
-                WHERE b.status = 'active'
-            """)).fetchone()
+            # Total planned with currency conversion
+            # When branch_id is specified: use amounts as-is (local currency)
+            # When branch_id is null (all branches): convert to SAR using exchange rates
+            if branch_id:
+                params["actual_branch_id"] = branch_id
+                totals = conn.execute(text(f"""
+                    SELECT 
+                        COALESCE(SUM(bi.planned_amount), 0) as total_planned,
+                        COALESCE(SUM(
+                            (SELECT COALESCE(SUM(
+                                CASE 
+                                    WHEN a.account_type IN ('expense', 'asset') THEN jl.debit - jl.credit
+                                    ELSE jl.credit - jl.debit
+                                END
+                            ), 0)
+                            FROM journal_lines jl
+                            JOIN journal_entries je ON jl.journal_entry_id = je.id
+                            JOIN accounts a ON jl.account_id = a.id
+                            WHERE jl.account_id = bi.account_id
+                            AND je.entry_date BETWEEN b.start_date AND b.end_date
+                            AND je.status = 'posted'
+                            AND je.branch_id = :actual_branch_id)
+                        ), 0) as total_actual
+                    FROM budget_items bi
+                    JOIN budgets b ON bi.budget_id = b.id
+                    WHERE b.status IN ('active', 'draft') {branch_filter}
+                """), params).fetchone()
+            else:
+                # All branches: convert to SAR using branch currency and latest exchange rates
+                # Filter journal entries by budget's branch to get correct actual per branch
+                totals = conn.execute(text(f"""
+                    SELECT 
+                        COALESCE(SUM(bi.planned_amount * COALESCE(
+                            (SELECT er.rate FROM exchange_rates er 
+                             JOIN currencies c ON c.id = er.currency_id
+                             WHERE c.code = br.default_currency 
+                             AND er.rate_date = (SELECT MAX(rate_date) FROM exchange_rates)
+                             LIMIT 1),
+                            1.0
+                        )), 0) as total_planned,
+                        COALESCE(SUM(
+                            (SELECT COALESCE(SUM(
+                                (CASE 
+                                    WHEN a.account_type IN ('expense', 'asset') THEN jl.debit - jl.credit
+                                    ELSE jl.credit - jl.debit
+                                END) * COALESCE(
+                                    (SELECT er2.rate FROM exchange_rates er2
+                                     JOIN currencies c2 ON c2.id = er2.currency_id
+                                     WHERE c2.code = COALESCE(br.default_currency, 'SAR')
+                                     AND er2.rate_date = (SELECT MAX(rate_date) FROM exchange_rates)
+                                     LIMIT 1),
+                                    1.0
+                                )
+                            ), 0)
+                            FROM journal_lines jl
+                            JOIN journal_entries je ON jl.journal_entry_id = je.id
+                            JOIN accounts a ON jl.account_id = a.id
+                            WHERE jl.account_id = bi.account_id
+                            AND je.entry_date BETWEEN b.start_date AND b.end_date
+                            AND je.status = 'posted'
+                            AND je.branch_id = b.branch_id)
+                        ), 0) as total_actual
+                    FROM budget_items bi
+                    JOIN budgets b ON bi.budget_id = b.id
+                    LEFT JOIN branches br ON br.id = b.branch_id
+                    WHERE b.status IN ('active', 'draft') {branch_filter}
+                """), params).fetchone()
             
             total_planned = float(totals.total_planned) if totals else 0
             total_actual = float(totals.total_actual) if totals else 0
             
-            # Count overrun items in active budgets
-            overruns = conn.execute(text("""
+            # Count overrun items
+            overruns = conn.execute(text(f"""
                 WITH ActualAmounts AS (
                     SELECT 
                         bi.id as item_id,
@@ -569,12 +632,13 @@ def get_budget_stats(request: Request, current_user: UserResponse = Depends(get_
                         AND je.status = 'posted'
                     WHERE b.status = 'active'
                     AND bi.planned_amount > 0
+                    {branch_filter}
                     GROUP BY bi.id, bi.planned_amount
                 )
                 SELECT COUNT(*) as overrun_count
                 FROM ActualAmounts
                 WHERE actual_amount > planned_amount
-            """)).scalar() or 0
+            """), params).scalar() or 0
             
             return {
                 "total_budgets": counts.total,

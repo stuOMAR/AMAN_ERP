@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -29,14 +29,16 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
     try:
         kpis = {}
 
-        # Revenue KPI
+        # Revenue KPI (with exchange_rate conversion)
         rev = db.execute(text("""
-            SELECT COALESCE(SUM(total_amount), 0) as current_month,
-                   (SELECT COALESCE(SUM(total_amount), 0) FROM invoices
-                    WHERE invoice_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
+            SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as current_month,
+                   (SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) FROM invoices
+                    WHERE invoice_type = 'sales' AND status != 'cancelled'
+                      AND invoice_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
                       AND invoice_date < date_trunc('month', CURRENT_DATE)) as last_month
             FROM invoices
-            WHERE invoice_date >= date_trunc('month', CURRENT_DATE)
+            WHERE invoice_type = 'sales' AND status != 'cancelled'
+              AND invoice_date >= date_trunc('month', CURRENT_DATE)
         """)).fetchone()
         if rev:
             r = dict(rev._mapping)
@@ -54,17 +56,17 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
         """)).fetchone()
         kpis["expenses"] = {"value": Decimal(str(dict(exp._mapping).get("current_month", 0)))} if exp else {"value": 0}
 
-        # Outstanding receivables
+        # Outstanding receivables (converted to base)
         ar = db.execute(text("""
-            SELECT COALESCE(SUM(balance_due), 0) as total
-            FROM invoices WHERE status != 'paid' AND invoice_type = 'sale'
+            SELECT COALESCE(SUM((total - COALESCE(paid_amount, 0)) * COALESCE(exchange_rate, 1)), 0) as total
+            FROM invoices WHERE status IN ('unpaid', 'partial') AND invoice_type = 'sales'
         """)).fetchone()
         kpis["accounts_receivable"] = {"value": Decimal(str(dict(ar._mapping).get("total", 0)))} if ar else {"value": 0}
 
-        # Outstanding payables
+        # Outstanding payables (converted to base)
         ap = db.execute(text("""
-            SELECT COALESCE(SUM(balance_due), 0) as total
-            FROM invoices WHERE status != 'paid' AND invoice_type = 'purchase'
+            SELECT COALESCE(SUM((total - COALESCE(paid_amount, 0)) * COALESCE(exchange_rate, 1)), 0) as total
+            FROM invoices WHERE status IN ('unpaid', 'partial') AND invoice_type = 'purchase'
         """)).fetchone()
         kpis["accounts_payable"] = {"value": Decimal(str(dict(ap._mapping).get("total", 0)))} if ap else {"value": 0}
 
@@ -85,11 +87,13 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
         """)).fetchone()
         kpis["cash_balance"] = {"value": Decimal(str(dict(cash._mapping).get("balance", 0)))} if cash else {"value": 0}
 
-        # Inventory value
+        # Inventory value (using cost_price from products)
         inv = db.execute(text("""
-            SELECT COALESCE(SUM(quantity_on_hand * unit_cost), 0) as total_value,
-                   COUNT(*) as total_items
-            FROM products WHERE is_active = TRUE
+            SELECT COALESCE(SUM(i.quantity * p.cost_price), 0) as total_value,
+                   COUNT(DISTINCT p.id) as total_items
+            FROM products p
+            LEFT JOIN inventory i ON i.product_id = p.id
+            WHERE p.is_active = TRUE
         """)).fetchone()
         if inv:
             d = dict(inv._mapping)

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { accountingAPI } from '../../utils/api'
-import { getCurrency, hasPermission } from '../../utils/auth'
+import { hasPermission } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
@@ -9,10 +9,10 @@ import { formatNumber } from '../../utils/format'
 function AccountingHome() {
     const { t, i18n } = useTranslation()
     const navigate = useNavigate()
-    const { currentBranch } = useBranch()
+    const { currentBranch, displayCurrency } = useBranch()
     const [stats, setStats] = useState({ total_income: 0, total_expenses: 0, net_profit: 0, cash_balance: 0 })
     const [loading, setLoading] = useState(true)
-    const currency = getCurrency()
+    const currency = stats.display_currency || displayCurrency?.currency || ''
 
     useEffect(() => {
         const fetchStats = async () => {
@@ -47,7 +47,6 @@ function AccountingHome() {
             title: i18n.t('manufacturing.master_data'),
             items: [
                 { label: t('accounting.home.links.coa'), path: '/accounting/coa', icon: '🌳', permission: 'accounting.view' },
-                { label: t('accounting.home.links.cost_centers'), path: '/accounting/cost-centers', icon: '🎯', permission: 'accounting.view' },
                 { label: t('accounting.home.links.currencies'), path: '/accounting/currencies', icon: '💱', permission: 'accounting.view' }
             ]
         },
@@ -55,7 +54,7 @@ function AccountingHome() {
             title: i18n.t('accounting.budgeting_planning'),
             items: [
                 { label: t('accounting.budgets.title'), path: '/accounting/budgets', icon: '📊', permission: 'accounting.budgets.view' },
-                { label: i18n.t('budget.advanced_title'), path: '/accounting/budgets/advanced', icon: '📈', permission: 'accounting.budgets.view' }
+                { label: t('accounting.home.links.cost_centers'), path: '/accounting/cost-centers', icon: '🎯', permission: 'accounting.view' }
             ]
         },
         {

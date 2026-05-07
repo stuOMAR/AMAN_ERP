@@ -17,7 +17,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, check_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, check_permission
 from utils.audit import log_activity
 from utils.masking import mask_pii
 from utils.accounting import (
@@ -92,6 +92,13 @@ def _sif_num(value, width: int, decimals: int = 0) -> str:
     return str(n).zfill(width)[:width]
 
 
+def _validate_mol_establishment_id(value: str) -> str:
+    mol_id = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(mol_id) != 10 or mol_id == "0" * 10:
+        raise HTTPException(status_code=400, detail="MOL establishment ID must be a real 10-digit value")
+    return mol_id
+
+
 @router.post("/wps/export", dependencies=[Depends(require_permission(["hr.manage", "hr.pii"]))])
 def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_user)):
     """
@@ -152,7 +159,7 @@ def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_use
             month_str = period.start_date.strftime("%m%Y") if period.start_date else datetime.now().strftime("%m%Y")
     
             # EDR — Employer Data Record (header)
-            mol_id = getattr(company, 'mol_establishment_id', '0000000000') if company else '0000000000'
+            mol_id = _validate_mol_establishment_id(getattr(company, 'mol_establishment_id', '') if company else '')
             employer_bank = body.bank_code or (getattr(company, 'bank_short_name', 'RJHI') if company else 'RJHI')
             employer_iban = getattr(company, 'bank_account_iban', '') if company else ''
     
@@ -278,7 +285,22 @@ def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_use
                          resource_type="payroll_period", resource_id=body.period_id,
                          details={"period_name": period.name, "records": record_count,
                                   "total": str(total_amount), "format": export_format})
-    
+
+            # T028: Record bank movements for the WPS export
+            try:
+                from services.payroll.bank_movements import record_payroll_bank_movements
+                record_payroll_bank_movements(
+                    db,
+                    tenant_id=int(company_id),
+                    period_id=body.period_id,
+                    run_id=0,  # WPS export without explicit run
+                    treasury_account_id=0,  # Will be resolved from company settings
+                    total_amount=float(total_amount),
+                    description=f"WPS export for period {period.name}",
+                )
+            except Exception as e:
+                logger.warning(f"Bank movement recording failed (non-blocking): {e}")
+
             return Response(
                 content=response_body,
                 media_type=response_media,
@@ -292,17 +314,15 @@ def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_use
             raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.get("/wps/preview/{period_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
+@router.get("/wps/preview/{period_id}", dependencies=[Depends(require_permission("hr.pii"))], response_model=Dict[str, Any])
 def preview_wps(period_id: int, branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """معاينة بيانات WPS قبل التصدير"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         period = db.execute(text("SELECT * FROM payroll_periods WHERE id = :pid"), {"pid": period_id}).fetchone()
         if not period:
             raise HTTPException(**http_error(404, "payroll_period_not_found"))
-
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
 
         preview_query = """
             SELECT pe.employee_id, pe.basic_salary, pe.housing_allowance,
@@ -320,9 +340,7 @@ def preview_wps(period_id: int, branch_id: Optional[int] = None, current_user=De
             WHERE pe.period_id = :pid AND pe.net_salary > 0
         """
         preview_params = {"pid": period_id}
-        if branch_id:
-            preview_query += " AND e.branch_id = :bid"
-            preview_params["bid"] = branch_id
+        preview_query += branch_scope_filter_from_scope(branch_scope, "e.branch_id", preview_params)
         preview_query += " ORDER BY e.employee_code"
         entries = db.execute(text(preview_query), preview_params).fetchall()
 
@@ -364,15 +382,11 @@ def saudization_dashboard(branch_id: Optional[int] = None, current_user=Depends(
     - أحمر (Red): < 10%
     """
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         try:
-            if branch_id:
-                branch_id = validate_branch_access(current_user, branch_id)
-            branch_filter = ""
             params = {}
-            if branch_id:
-                branch_filter = "AND e.branch_id = :bid"
-                params["bid"] = branch_id
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params)
     
             # Count employees by nationality
             stats = db.execute(text(f"""
@@ -487,10 +501,8 @@ def saudization_dashboard(branch_id: Optional[int] = None, current_user=Depends(
 def saudization_report(branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """تقرير السعودة التفصيلي — لكل فرع"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
-
         report_query = """
             SELECT b.id, b.branch_name,
                    COUNT(e.id) as total,
@@ -506,9 +518,9 @@ def saudization_report(branch_id: Optional[int] = None, current_user=Depends(get
             LEFT JOIN employees e ON e.branch_id = b.id AND e.status = 'active'
         """
         report_params = {}
-        if branch_id:
-            report_query += " WHERE b.id = :bid"
-            report_params["bid"] = branch_id
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "b.id", report_params, prefix="WHERE")
+        if branch_filter:
+            report_query += f" {branch_filter}"
         report_query += " GROUP BY b.id, b.branch_name ORDER BY b.branch_name"
 
         branches = db.execute(text(report_query), report_params).fetchall()
@@ -594,7 +606,21 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
     
             # ── Calculate EOS Gratuity using shared helper (Saudi Labor Law Art. 84/85) ──
             from utils.hr_helpers import calculate_eos_gratuity
-            eos = calculate_eos_gratuity(total_salary, total_years, body.termination_reason)
+            unpaid_days = db.execute(text("""
+                SELECT COALESCE(SUM(
+                    CASE WHEN leave_type = 'unpaid' AND status = 'approved'
+                         THEN (end_date - start_date + 1) ELSE 0 END
+                ), 0)
+                FROM leave_requests
+                WHERE employee_id = :eid
+                  AND end_date <= :term_date
+            """), {"eid": body.employee_id, "term_date": term_date}).scalar() or 0
+            eos = calculate_eos_gratuity(
+                total_salary,
+                total_years,
+                body.termination_reason,
+                unpaid_leave_days=int(unpaid_days),
+            )
             eos_amount = _dec(eos["final_gratuity"])
     
             # ── Vacation balance ──
@@ -653,8 +679,13 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
                     "description": "عكس مخصص نهاية خدمة"
                 })
     
-            # Cr: Cash/Bank
-            cash_account = get_mapped_account_id(db, "acc_map_cash")
+            # Cr: Bank (preferred for EOS settlement \u2014 paid via bank
+            # transfer per WPS), fall back to Cash if no bank account
+            # is mapped. T10.2 #189: previously hard-coded acc_map_cash.
+            cash_account = (
+                get_mapped_account_id(db, "acc_map_bank")
+                or get_mapped_account_id(db, "acc_map_cash")
+            )
             if cash_account and total_settlement > 0:
                 lines.append({
                     "account_id": cash_account, "debit": 0, "credit": total_settlement,
@@ -678,8 +709,14 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
                     lines=lines,
                     user_id=user_id
                 )
-                je_id = je_result.get("id") if isinstance(je_result, dict) else je_result
-                je_number = je_result.get("entry_number") if isinstance(je_result, dict) else None
+                if isinstance(je_result, dict):
+                    je_id = je_result.get("id")
+                    je_number = je_result.get("entry_number")
+                elif isinstance(je_result, (tuple, list)):
+                    je_id = je_result[0] if len(je_result) > 0 else None
+                    je_number = je_result[1] if len(je_result) > 1 else None
+                else:
+                    je_id = je_result
     
             # Update employee status
             db.execute(text("""
@@ -694,7 +731,10 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
             log_activity(db, user_id=user_id, username=current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", ""),
                          action="eos.settle", resource_type="employee", resource_id=body.employee_id,
                          details={"total_settlement": str(total_settlement), "service_years": round(total_years, 2),
-                                  "termination_reason": body.termination_reason, "journal_entry_id": je_id})
+                                  "termination_reason": body.termination_reason,
+                                  "unpaid_leave_days": int(unpaid_days),
+                                  "unpaid_leave_deduction": str(eos.get("unpaid_leave_deduction", 0)),
+                                  "journal_entry_id": je_id})
     
             return {
                 "employee_id": body.employee_id,
@@ -702,6 +742,8 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
                 "service_years": round(total_years, 2),
                 "termination_reason": body.termination_reason,
                 "eos_gratuity": str(eos_amount),
+                "unpaid_leave_days": int(unpaid_days),
+                "unpaid_leave_deduction": str(eos.get("unpaid_leave_deduction", 0)),
                 "vacation_balance_amount": str(vacation_amount),
                 "pending_salary": str(pending_salary),
                 "additional_deductions": body.additional_deductions,

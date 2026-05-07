@@ -13,6 +13,29 @@ logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
 
 
+def round_amount(value: Decimal | float | str, precision: int = 4) -> Decimal:
+    """Round a monetary amount to the given decimal precision using ROUND_HALF_UP.
+
+    Policy:
+      - Amounts (SAR): NUMERIC(18,4) → 4 decimal places
+      - FX rates: NUMERIC(18,6) → 6 decimal places
+      - Intermediate calculations: full precision, round only at persistence boundary
+    """
+    d = Decimal(str(value))
+    quantizer = Decimal(10) ** -precision
+    return d.quantize(quantizer, rounding=ROUND_HALF_UP)
+
+
+def round_fx_rate(value: Decimal | float | str) -> Decimal:
+    """Round an FX rate to 6 decimal places (NUMERIC(18,6))."""
+    return round_amount(value, precision=6)
+
+
+def round_je_amount(value: Decimal | float | str) -> Decimal:
+    """Round a JE line amount to 4 decimal places (NUMERIC(18,4))."""
+    return round_amount(value, precision=4)
+
+
 def _dec(v: Any) -> Decimal:
     return Decimal(str(v or 0))
 
@@ -25,7 +48,7 @@ def validate_je_lines(lines: List[Dict[str, Any]]) -> tuple[Decimal, Decimal]:
       1. At least one line is present.
       2. No line has a negative debit or credit.
       3. No line has both debit and credit > 0.
-      4. Totals are non-zero and balanced within 0.01.
+    4. Totals are non-zero and balanced below 0.01 difference.
 
     Returns `(total_debit, total_credit)` — both quantized to 2 decimals.
     Raises HTTPException(400) on violation. Pure (no I/O).
@@ -49,10 +72,39 @@ def validate_je_lines(lines: List[Dict[str, Any]]) -> tuple[Decimal, Decimal]:
     if total_debit == 0 and total_credit == 0:
         raise HTTPException(status_code=400, detail="لا يمكن إنشاء قيد بمبالغ صفرية")
 
-    if abs(total_debit - total_credit) > _D2:
+    if abs(total_debit - total_credit) >= _D2:
         raise HTTPException(status_code=400, detail="القيود غير موزونة (المدين لا يساوي الدائن)")
 
     return total_debit, total_credit
+
+
+def validate_period(db, entry_date: str, status: str = "posted") -> None:
+    """Uniform fiscal-period validation.
+
+    Consults ``company_settings.fiscal.allow_drafts_in_closed_period``:
+      - If ``false`` (default): both draft and posted entries are blocked in closed periods.
+      - If ``true``: only posted entries are blocked; drafts are allowed.
+
+    Raises HTTPException(400) on violation.
+    """
+    from utils.fiscal_lock import check_fiscal_period_open
+
+    if status == "posted":
+        check_fiscal_period_open(db, entry_date)
+        return
+
+    # Draft entry — check if drafts are allowed in closed periods
+    try:
+        row = db.execute(text(
+            "SELECT setting_value FROM company_settings "
+            "WHERE setting_key = 'fiscal.allow_drafts_in_closed_period'"
+        )).fetchone()
+        allow_drafts = row and row[0] and str(row[0]).lower() in ("true", "1", "yes")
+    except Exception:
+        allow_drafts = False
+
+    if not allow_drafts:
+        check_fiscal_period_open(db, entry_date)
 
 
 def create_journal_entry(
@@ -67,7 +119,7 @@ def create_journal_entry(
     status: str = "posted",
     currency: Optional[str] = None,
     exchange_rate: float = 1.0,
-    source: str = "Manual",
+    source: str = "manual",
     source_id: Optional[int] = None,
     username: Optional[str] = None,
     idempotency_key: Optional[str] = None,
@@ -90,7 +142,11 @@ def create_journal_entry(
             }
         ]
     """
-    # 0. Idempotency guard — if caller supplied a key, return existing JE
+    # 0. Normalize source to valid enum value
+    from models.domain_models.je_source import JESource
+    source = JESource.normalize(source) or "system"
+
+    # 0b. Idempotency guard — if caller supplied a key, return existing JE
     if idempotency_key:
         existing = db.execute(text("""
             SELECT id, entry_number FROM journal_entries
@@ -104,11 +160,27 @@ def create_journal_entry(
     # 1. Validation (TASK-032: extracted to validate_je_lines for property-testing)
     total_debit, total_credit = validate_je_lines(lines)
 
+    # 1a. Configurable JE epsilon from company_settings
+    try:
+        epsilon_row = db.execute(text(
+            "SELECT setting_value FROM company_settings WHERE setting_key = 'gl.je_epsilon'"
+        )).fetchone()
+        je_epsilon = Decimal(str(epsilon_row[0])) if epsilon_row and epsilon_row[0] else Decimal("0.005")
+    except Exception:
+        je_epsilon = Decimal("0.005")
+    imbalance = abs(total_debit - total_credit)
+    if imbalance > je_epsilon:
+        from utils.i18n import http_error
+        raise HTTPException(
+            status_code=400,
+            detail=http_error("je.epsilon_violation", imbalance=str(imbalance), epsilon=str(je_epsilon)),
+        )
+
     if status not in ("draft", "posted"):
         status = "posted"
 
     # 1b. Source-level duplicate guard (prevents double-posting from same module action)
-    if source and source != "Manual" and source_id is not None:
+    if source and source != "manual" and source_id is not None:
         dup = db.execute(text("""
             SELECT id, entry_number FROM journal_entries
             WHERE source = :src AND source_id = :sid AND entry_date = :dt
@@ -124,9 +196,9 @@ def create_journal_entry(
     # honours both fiscal_period_locks (admin lock) and fiscal_periods
     # (year-end close). Defense-in-depth: every router already calls
     # this guard, but gl_service enforces it again here as a backstop.
-    if date and status == "posted":
-        from utils.fiscal_lock import check_fiscal_period_open
-        check_fiscal_period_open(db, date)
+    # R2.3: consult company_settings.fiscal.allow_drafts_in_closed_period
+    if date:
+        validate_period(db, date, status)
 
     # 2. Header
     entry_number = generate_sequential_number(db, "JE", "journal_entries", "entry_number")
@@ -163,7 +235,8 @@ def create_journal_entry(
         curr_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
         if not curr_row:
             curr_row = db.execute(text("SELECT setting_value as code FROM company_settings WHERE setting_key = 'default_currency'")).fetchone()
-        currency = curr_row[0] if curr_row else "SYP"
+        # T10.2 #123: default fallback aligned with COA seed (SAR), not SYP.
+        currency = curr_row[0] if curr_row else "SAR"
 
     # Insert header
     try:
@@ -199,7 +272,7 @@ def create_journal_entry(
             if row:
                 logger.info("Idempotency race resolved: key=%s → JE %s", idempotency_key, row[1])
                 return row[0], row[1]
-        if source and source != "Manual" and source_id is not None:
+        if source and source != "manual" and source_id is not None:
             row = db.execute(text("""
                 SELECT id, entry_number FROM journal_entries
                 WHERE source = :s AND source_id = :sid AND entry_date = :d LIMIT 1
@@ -243,20 +316,40 @@ def create_journal_entry(
         else:
             line_amount_currency = (input_debit + input_credit).quantize(_D2, ROUND_HALF_UP)
 
+        # txn_currency/txn_amount: preserve the *original* transaction currency
+        # and amount when the booking-side functional currency differs from
+        # the actual money currency (tri-currency journals). Defaults make
+        # this transparent for legacy single-currency callers.
+        line_txn_currency = (
+            line.get("txn_currency")
+            or line.get("transaction_currency")
+            or line_currency
+        )
+        if line.get("txn_amount") is not None:
+            line_txn_amount = _dec(line["txn_amount"]).quantize(_D2, ROUND_HALF_UP)
+        elif line.get("transaction_amount") is not None:
+            line_txn_amount = _dec(line["transaction_amount"]).quantize(_D2, ROUND_HALF_UP)
+        else:
+            line_txn_amount = line_amount_currency
+
         db.execute(text("""
-            INSERT INTO journal_lines 
-            (journal_entry_id, account_id, debit, credit, description, cost_center_id, amount_currency, currency)
-            VALUES 
-            (:jid, :aid, :deb, :cred, :desc, :cc_id, :amt_curr, :curr)
+            INSERT INTO journal_lines
+            (journal_entry_id, account_id, debit, credit, description, cost_center_id,
+             amount_currency, currency, txn_currency, txn_amount)
+            VALUES
+            (:jid, :aid, :deb, :cred, :desc, :cc_id,
+             :amt_curr, :curr, :txn_curr, :txn_amt)
         """), {
             "jid": journal_id,
             "aid": account_id,
             "deb": debit_base,
             "cred": credit_base,
             "desc": line.get("description", description),
-            "cc_id": line.get("cost_center_id"),
+            "cc_id": line.get("cost_center_id") or None,
             "amt_curr": line_amount_currency,
-            "curr": line_currency
+            "curr": line_currency,
+            "txn_curr": line_txn_currency,
+            "txn_amt": line_txn_amount,
         })
         
         if status == "posted":
@@ -404,16 +497,27 @@ def reverse_journal_entry(
     `reversed_by_je_id` column (if present) is updated.
     """
     head = db.execute(text(
-        "SELECT id, status, entry_date, entry_number, branch_id, currency, exchange_rate "
+        "SELECT id, status, source, entry_date, entry_number, branch_id, currency, exchange_rate "
         "FROM journal_entries WHERE id = :id FOR UPDATE"
     ), {"id": je_id}).fetchone()
     if not head:
         raise HTTPException(status_code=404, detail="القيد الأصلي غير موجود")
+    if head.status == "reversed":
+        raise HTTPException(status_code=400, detail="تم عكس هذا القيد مسبقاً")
     if head.status != "posted":
         raise HTTPException(
             status_code=400,
             detail="لا يمكن عكس قيد غير مرحَّل",
         )
+    # Block reversing a reversal entry (prevents infinite chains)
+    if (head.source or "").strip().lower() in ("reversal",):
+        raise HTTPException(status_code=400, detail="لا يمكن عكس قيد عكسي")
+    # Guard: block if a reversal JE already exists for this entry
+    already = db.execute(text(
+        "SELECT id FROM journal_entries WHERE source = 'reversal' AND source_id = :id LIMIT 1"
+    ), {"id": je_id}).fetchone()
+    if already:
+        raise HTTPException(status_code=400, detail="يوجد قيد عكسي لهذا القيد مسبقاً")
 
     src_lines = db.execute(text(
         "SELECT account_id, debit, credit, description, cost_center_id, "
@@ -450,6 +554,12 @@ def reverse_journal_entry(
         source="reversal",
         source_id=je_id,
     )
+
+    # Mark the original entry as reversed so it cannot be reversed again
+    db.execute(text(
+        "UPDATE journal_entries SET status = 'reversed' WHERE id = :id"
+    ), {"id": je_id})
+
     return rev_id, rev_num
 
 

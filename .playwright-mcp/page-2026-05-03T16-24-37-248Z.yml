@@ -1,0 +1,1286 @@
+- generic [ref=e1]:
+  - generic [ref=e2]:
+    - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+      - /url: "#main-content"
+    - generic [ref=e7]:
+      - navigation "القائمة الرئيسية" [ref=e8]:
+        - generic [ref=e9]:
+          - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+            - img [ref=e11]
+          - generic [ref=e13]: AMAN ERP
+        - navigation [ref=e14]:
+          - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+            - /url: /dashboard
+            - generic [ref=e17]: 🏠
+            - generic [ref=e18]: مساحة العمل
+          - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+            - /url: /accounting
+            - generic [ref=e21]: 📊
+            - generic [ref=e22]: المحاسبة
+          - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+            - /url: /assets
+            - generic [ref=e25]: 🏗️
+            - generic [ref=e26]: الأصول الثابتة
+          - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+            - /url: /treasury
+            - generic [ref=e29]: 🏦
+            - generic [ref=e30]: الخزينة والمصروفات
+          - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+            - /url: /sales
+            - generic [ref=e33]: 💰
+            - generic [ref=e34]: المبيعات
+          - link "🛒 المشتريات" [ref=e35] [cursor=pointer]:
+            - /url: /buying
+            - generic [ref=e37]: 🛒
+            - generic [ref=e38]: المشتريات
+          - link "🤝 إدارة العلاقات" [ref=e39] [cursor=pointer]:
+            - /url: /crm
+            - generic [ref=e41]: 🤝
+            - generic [ref=e42]: إدارة العلاقات
+          - link "💸 المصروفات" [ref=e43] [cursor=pointer]:
+            - /url: /expenses
+            - generic [ref=e45]: 💸
+            - generic [ref=e46]: المصروفات
+          - link "🧾 الضرائب" [ref=e47] [cursor=pointer]:
+            - /url: /taxes
+            - generic [ref=e49]: 🧾
+            - generic [ref=e50]: الضرائب
+          - link "📈 التقارير" [ref=e51] [cursor=pointer]:
+            - /url: /reports
+            - generic [ref=e53]: 📈
+            - generic [ref=e54]: التقارير
+      - generic [ref=e55]:
+        - banner [ref=e56]:
+          - generic [ref=e58] [cursor=pointer]:
+            - generic [ref=e59]:
+              - img [ref=e60]
+              - text: بحث...
+            - generic [ref=e63]: Ctrl+K
+          - generic [ref=e64]:
+            - button "EN" [ref=e65] [cursor=pointer]
+            - button "الوضع الفاتح" [ref=e66] [cursor=pointer]:
+              - img [ref=e67]
+            - button "🔔" [ref=e74] [cursor=pointer]
+            - generic [ref=e76] [cursor=pointer]:
+              - generic [ref=e77]:
+                - generic [ref=e78]: Ahmed Accountant
+                - generic [ref=e79]: "ID: e24bcd11"
+              - generic [ref=e80]: A
+        - main [ref=e82]:
+          - generic [ref=e253]:
+            - generic [ref=e255]:
+              - generic [ref=e256]:
+                - button "العودة" [ref=e257] [cursor=pointer]:
+                  - img [ref=e258]
+                - heading "🔄 القيود المتكررة" [level=2] [ref=e260]
+              - generic [ref=e261]:
+                - combobox [ref=e262]:
+                  - option "الكل" [selected]
+                  - option "نشط"
+                  - option "متوقف"
+                - button "⚡ توليد المستحقة" [ref=e263] [cursor=pointer]
+                - button "+ قالب جديد" [ref=e264] [cursor=pointer]
+            - generic [ref=e265]: لا توجد قوالب متكررة
+            - generic [ref=e268]:
+              - generic [ref=e269]:
+                - heading "قالب متكرر جديد" [level=5] [ref=e270]
+                - button [ref=e271]
+              - generic [ref=e272]:
+                - generic [ref=e273]:
+                  - generic [ref=e274]:
+                    - generic [ref=e275]: اسم القالب *
+                    - textbox [ref=e276]: إيجار شهري
+                  - generic [ref=e277]:
+                    - generic [ref=e278]: المرجع
+                    - textbox [ref=e279]
+                  - generic [ref=e280]:
+                    - generic [ref=e281]: التكرار *
+                    - combobox [ref=e282]:
+                      - option "يومي"
+                      - option "أسبوعي"
+                      - option "شهري" [selected]
+                      - option "ربع سنوي"
+                      - option "سنوي"
+                - generic [ref=e283]:
+                  - generic [ref=e284]:
+                    - generic [ref=e285]: تاريخ البداية *
+                    - generic [ref=e286]:
+                      - generic:
+                        - img
+                      - textbox "YYYY/MM/DD" [ref=e289]: 2026/01/01
+                  - generic [ref=e290]:
+                    - generic [ref=e291]: تاريخ النهاية
+                    - generic [ref=e292]:
+                      - generic:
+                        - img
+                      - textbox "YYYY/MM/DD" [ref=e295]: 2026/12/31
+                  - generic [ref=e296]:
+                    - generic [ref=e297]: التنفيذ التالي
+                    - generic [ref=e298]:
+                      - generic:
+                        - img
+                      - textbox "YYYY/MM/DD" [ref=e301]: 2026/01/01
+                  - generic [ref=e302]:
+                    - generic [ref=e303]: الحد الأقصى للتنفيذ
+                    - spinbutton [ref=e304]: "12"
+                - generic [ref=e305]:
+                  - generic [ref=e306]:
+                    - generic [ref=e307]: الوصف
+                    - textbox [active] [ref=e308]: إيجار شهري 20,000 SAR
+                  - generic [ref=e311]:
+                    - checkbox "نشط" [checked] [ref=e312]
+                    - text: نشط
+                  - generic [ref=e315]:
+                    - checkbox "ترحيل تلقائي" [ref=e316]
+                    - text: ترحيل تلقائي
+                - heading "بنود القيد" [level=6] [ref=e317]
+                - table [ref=e319]:
+                  - rowgroup [ref=e320]:
+                    - row "الحساب مدين دائن البيان" [ref=e321]:
+                      - columnheader "الحساب" [ref=e322]
+                      - columnheader "مدين" [ref=e323]
+                      - columnheader "دائن" [ref=e324]
+                      - columnheader "البيان" [ref=e325]
+                      - columnheader [ref=e326]
+                  - rowgroup [ref=e327]:
+                    - row "5202 - مصروف الإيجار ✕" [ref=e579]:
+                      - cell "5202 - مصروف الإيجار" [ref=e580]:
+                        - combobox [ref=e330]:
+                          - option "-- اختر --"
+                          - option "1 - الأصول"
+                          - option "11 - أصول متداولة"
+                          - option "1101 - النقد وما في حكمه"
+                          - option "110101 - الصندوق الرئيسي"
+                          - option "110102 - البنك"
+                          - option "1102 - العملاء والذمم المدينة"
+                          - option "1103 - المخزون"
+                          - option "110301 - مخزون المواد الأولية"
+                          - option "110302 - مخزون الإنتاج التام"
+                          - option "1104 - سلف وقروض الموظفين"
+                          - option "1105 - مصروفات مدفوعة مقدماً"
+                          - option "110501 - إيجار مدفوع مقدماً"
+                          - option "110502 - تأمين مدفوع مقدماً"
+                          - option "1106 - مدفوعات مقدمة للموردين"
+                          - option "1107 - ضريبة المدخلات"
+                          - option "1108 - شيكات تحت التحصيل"
+                          - option "1109 - أوراق قبض"
+                          - option "1110 - أعمال تحت التشغيل"
+                          - option "1111 - حسابات بين الفروع"
+                          - option "1112 - مخزون في الطريق"
+                          - option "12 - أصول ثابتة"
+                          - option "1201 - الآلات والمعدات"
+                          - option "1202 - السيارات ووسائل النقل"
+                          - option "1203 - الأثاث والمفروشات"
+                          - option "1204 - المباني والإنشاءات"
+                          - option "1205 - الأراضي"
+                          - option "1206 - أجهزة حاسوب وأنظمة"
+                          - option "1207 - الإهلاك المتراكم"
+                          - option "13 - أصول غير ملموسة"
+                          - option "13001 - مخزون بضاعة"
+                          - option "1301 - شهرة"
+                          - option "1302 - براءات اختراع وعلامات تجارية"
+                          - option "1303 - حقوق التأليف والنشر"
+                          - option "1304 - الإطفاء المتراكم"
+                          - option "1305 - أصل حق الاستخدام"
+                          - option "2 - الخصوم"
+                          - option "21 - خصوم متداولة"
+                          - option "2101 - الموردين والذمم الدائنة"
+                          - option "2102 - مصاريف مستحقة"
+                          - option "2103 - ضريبة القيمة المضافة"
+                          - option "210301 - ضريبة المخرجات"
+                          - option "2104 - مشتريات مستلمة غير مفوترة"
+                          - option "2105 - شيكات تحت الدفع"
+                          - option "2106 - التأمينات الاجتماعية المستحقة"
+                          - option "2107 - عربون / دفعات مقدمة من العملاء"
+                          - option "2108 - ضريبة الاستقطاع"
+                          - option "2109 - ضريبة الدخل المستحقة"
+                          - option "2110 - أوراق دفع"
+                          - option "2111 - الزكاة المستحقة"
+                          - option "2112 - تسوية ضريبة القيمة المضافة"
+                          - option "22 - خصوم غير متداولة"
+                          - option "2201 - قروض طويلة الأجل"
+                          - option "2202 - مخصص نهاية الخدمة"
+                          - option "2203 - مخصص الإجازات"
+                          - option "2204 - مخصص الديون المعدومة"
+                          - option "3 - حقوق الملكية"
+                          - option "31 - رأس المال"
+                          - option "32 - الأرباح المبقاة"
+                          - option "33 - أرباح العام الحالي"
+                          - option "34 - الجارى والمسحوبات"
+                          - option "35 - احتياطي إعادة التقييم"
+                          - option "4 - الإيرادات"
+                          - option "41 - إيرادات التشغيل"
+                          - option "4101 - مبيعات البضائع"
+                          - option "41010 - مبيعات متنوعة"
+                          - option "4102 - إيرادات الخدمات"
+                          - option "41020 - مردودات مبيعات"
+                          - option "4103 - مردودات المبيعات"
+                          - option "4104 - خصم مبيعات"
+                          - option "42 - إيرادات أخرى"
+                          - option "4201 - أرباح فروقات عملة (محققة)"
+                          - option "4202 - أرباح فروقات عملة (غير محققة)"
+                          - option "4203 - فوائد محصلة"
+                          - option "4204 - توزيعات أرباح"
+                          - option "4205 - ربح بيع أصول"
+                          - option "4206 - خصومات مكتسبة"
+                          - option "5 - المصروفات"
+                          - option "51 - تكلفة البضاعة المباعة"
+                          - option "5101 - تكلفة مبيعات البضائع"
+                          - option "5102 - تكلفة التصنيع"
+                          - option "5103 - تكلفة العمالة المباشرة"
+                          - option "5104 - المصاريف الصناعية العامة"
+                          - option "52 - المصروفات التشغيلية والإدارية"
+                          - option "5201 - الرواتب والأجور"
+                          - option "5202 - مصروف الإيجار" [selected]
+                          - option "5203 - الكهرباء والمياه"
+                          - option "5204 - الاتصالات والإنترنت"
+                          - option "5205 - الصيانة"
+                          - option "5206 - الرسوم الحكومية"
+                          - option "5207 - التسويق والإعلان"
+                          - option "5208 - مصاريف السفر والتنقل"
+                          - option "5209 - مصروفات عمومية"
+                          - option "5210 - مصروف التأمينات الاجتماعية"
+                          - option "5211 - مصروف التأمين"
+                          - option "5212 - مصروف النظافة"
+                          - option "5213 - مصروف القرطاسية"
+                          - option "5214 - مصروف الضيافة"
+                          - option "5215 - مصروفات قانونية"
+                          - option "5216 - مصروف التدقيق والمراجعة"
+                          - option "5217 - عمولات المبيعات"
+                          - option "5218 - علاقات عامة"
+                          - option "5219 - بدلات الموظفين"
+                          - option "5220 - العمل الإضافي"
+                          - option "5221 - مكافآت نهاية الخدمة (مصروف)"
+                          - option "5222 - مصروف الإجازات"
+                          - option "5223 - مصروف ديون معدومة"
+                          - option "53 - الإهلاك"
+                          - option "54 - المصروفات المالية والبنكية"
+                          - option "5401 - الرسوم البنكية"
+                          - option "5402 - خسائر فروقات عملة (محققة)"
+                          - option "5403 - خسائر فروقات عملة (غير محققة)"
+                          - option "55 - مصروفات أخرى"
+                          - option "5501 - خسائر استبعاد الأصول"
+                          - option "5502 - فروقات صندوق (زيادة/نقصان)"
+                          - option "5503 - فروقات تسوية المخزون"
+                      - cell [ref=e331]:
+                        - spinbutton [ref=e332]
+                      - cell [ref=e333]:
+                        - spinbutton [ref=e334]
+                      - cell [ref=e335]:
+                        - textbox [ref=e336]
+                      - cell "✕" [ref=e337]:
+                        - button "✕" [disabled] [ref=e338]
+                    - row "-- اختر -- ✕" [ref=e339]:
+                      - cell "-- اختر --" [ref=e340]:
+                        - combobox [ref=e341]:
+                          - option "-- اختر --" [selected]
+                          - option "1 - الأصول"
+                          - option "11 - أصول متداولة"
+                          - option "1101 - النقد وما في حكمه"
+                          - option "110101 - الصندوق الرئيسي"
+                          - option "110102 - البنك"
+                          - option "1102 - العملاء والذمم المدينة"
+                          - option "1103 - المخزون"
+                          - option "110301 - مخزون المواد الأولية"
+                          - option "110302 - مخزون الإنتاج التام"
+                          - option "1104 - سلف وقروض الموظفين"
+                          - option "1105 - مصروفات مدفوعة مقدماً"
+                          - option "110501 - إيجار مدفوع مقدماً"
+                          - option "110502 - تأمين مدفوع مقدماً"
+                          - option "1106 - مدفوعات مقدمة للموردين"
+                          - option "1107 - ضريبة المدخلات"
+                          - option "1108 - شيكات تحت التحصيل"
+                          - option "1109 - أوراق قبض"
+                          - option "1110 - أعمال تحت التشغيل"
+                          - option "1111 - حسابات بين الفروع"
+                          - option "1112 - مخزون في الطريق"
+                          - option "12 - أصول ثابتة"
+                          - option "1201 - الآلات والمعدات"
+                          - option "1202 - السيارات ووسائل النقل"
+                          - option "1203 - الأثاث والمفروشات"
+                          - option "1204 - المباني والإنشاءات"
+                          - option "1205 - الأراضي"
+                          - option "1206 - أجهزة حاسوب وأنظمة"
+                          - option "1207 - الإهلاك المتراكم"
+                          - option "13 - أصول غير ملموسة"
+                          - option "13001 - مخزون بضاعة"
+                          - option "1301 - شهرة"
+                          - option "1302 - براءات اختراع وعلامات تجارية"
+                          - option "1303 - حقوق التأليف والنشر"
+                          - option "1304 - الإطفاء المتراكم"
+                          - option "1305 - أصل حق الاستخدام"
+                          - option "2 - الخصوم"
+                          - option "21 - خصوم متداولة"
+                          - option "2101 - الموردين والذمم الدائنة"
+                          - option "2102 - مصاريف مستحقة"
+                          - option "2103 - ضريبة القيمة المضافة"
+                          - option "210301 - ضريبة المخرجات"
+                          - option "2104 - مشتريات مستلمة غير مفوترة"
+                          - option "2105 - شيكات تحت الدفع"
+                          - option "2106 - التأمينات الاجتماعية المستحقة"
+                          - option "2107 - عربون / دفعات مقدمة من العملاء"
+                          - option "2108 - ضريبة الاستقطاع"
+                          - option "2109 - ضريبة الدخل المستحقة"
+                          - option "2110 - أوراق دفع"
+                          - option "2111 - الزكاة المستحقة"
+                          - option "2112 - تسوية ضريبة القيمة المضافة"
+                          - option "22 - خصوم غير متداولة"
+                          - option "2201 - قروض طويلة الأجل"
+                          - option "2202 - مخصص نهاية الخدمة"
+                          - option "2203 - مخصص الإجازات"
+                          - option "2204 - مخصص الديون المعدومة"
+                          - option "3 - حقوق الملكية"
+                          - option "31 - رأس المال"
+                          - option "32 - الأرباح المبقاة"
+                          - option "33 - أرباح العام الحالي"
+                          - option "34 - الجارى والمسحوبات"
+                          - option "35 - احتياطي إعادة التقييم"
+                          - option "4 - الإيرادات"
+                          - option "41 - إيرادات التشغيل"
+                          - option "4101 - مبيعات البضائع"
+                          - option "41010 - مبيعات متنوعة"
+                          - option "4102 - إيرادات الخدمات"
+                          - option "41020 - مردودات مبيعات"
+                          - option "4103 - مردودات المبيعات"
+                          - option "4104 - خصم مبيعات"
+                          - option "42 - إيرادات أخرى"
+                          - option "4201 - أرباح فروقات عملة (محققة)"
+                          - option "4202 - أرباح فروقات عملة (غير محققة)"
+                          - option "4203 - فوائد محصلة"
+                          - option "4204 - توزيعات أرباح"
+                          - option "4205 - ربح بيع أصول"
+                          - option "4206 - خصومات مكتسبة"
+                          - option "5 - المصروفات"
+                          - option "51 - تكلفة البضاعة المباعة"
+                          - option "5101 - تكلفة مبيعات البضائع"
+                          - option "5102 - تكلفة التصنيع"
+                          - option "5103 - تكلفة العمالة المباشرة"
+                          - option "5104 - المصاريف الصناعية العامة"
+                          - option "52 - المصروفات التشغيلية والإدارية"
+                          - option "5201 - الرواتب والأجور"
+                          - option "5202 - مصروف الإيجار"
+                          - option "5203 - الكهرباء والمياه"
+                          - option "5204 - الاتصالات والإنترنت"
+                          - option "5205 - الصيانة"
+                          - option "5206 - الرسوم الحكومية"
+                          - option "5207 - التسويق والإعلان"
+                          - option "5208 - مصاريف السفر والتنقل"
+                          - option "5209 - مصروفات عمومية"
+                          - option "5210 - مصروف التأمينات الاجتماعية"
+                          - option "5211 - مصروف التأمين"
+                          - option "5212 - مصروف النظافة"
+                          - option "5213 - مصروف القرطاسية"
+                          - option "5214 - مصروف الضيافة"
+                          - option "5215 - مصروفات قانونية"
+                          - option "5216 - مصروف التدقيق والمراجعة"
+                          - option "5217 - عمولات المبيعات"
+                          - option "5218 - علاقات عامة"
+                          - option "5219 - بدلات الموظفين"
+                          - option "5220 - العمل الإضافي"
+                          - option "5221 - مكافآت نهاية الخدمة (مصروف)"
+                          - option "5222 - مصروف الإجازات"
+                          - option "5223 - مصروف ديون معدومة"
+                          - option "53 - الإهلاك"
+                          - option "54 - المصروفات المالية والبنكية"
+                          - option "5401 - الرسوم البنكية"
+                          - option "5402 - خسائر فروقات عملة (محققة)"
+                          - option "5403 - خسائر فروقات عملة (غير محققة)"
+                          - option "55 - مصروفات أخرى"
+                          - option "5501 - خسائر استبعاد الأصول"
+                          - option "5502 - فروقات صندوق (زيادة/نقصان)"
+                          - option "5503 - فروقات تسوية المخزون"
+                      - cell [ref=e342]:
+                        - spinbutton [ref=e343]
+                      - cell [ref=e344]:
+                        - spinbutton [ref=e345]
+                      - cell [ref=e346]:
+                        - textbox [ref=e347]
+                      - cell "✕" [ref=e348]:
+                        - button "✕" [disabled] [ref=e349]
+                  - rowgroup [ref=e350]:
+                    - row "الإجمالي 0.00 0.00 + سطر" [ref=e351]:
+                      - cell "الإجمالي" [ref=e352]
+                      - cell "0.00" [ref=e353]
+                      - cell "0.00" [ref=e354]
+                      - cell "+ سطر" [ref=e355]:
+                        - button "+ سطر" [ref=e356] [cursor=pointer]
+              - generic [ref=e357]:
+                - button "إلغاء" [ref=e358] [cursor=pointer]
+                - button "إنشاء" [disabled] [ref=e359]
+  - generic:
+    - generic [ref=e360]:
+      - dialog "Choose Date" [ref=e363]:
+        - alert [ref=e364]: يناير 2026
+        - button "Previous Month" [ref=e365] [cursor=pointer]:
+          - generic: Previous Month
+        - button "Next Month" [ref=e366] [cursor=pointer]:
+          - generic: Next Month
+        - generic [ref=e367]:
+          - generic [ref=e368]:
+            - heading "يناير 2026" [level=2] [ref=e369]
+            - generic [ref=e370]:
+              - combobox [ref=e372] [cursor=pointer]:
+                - option "يناير" [selected]
+                - option "فبراير"
+                - option "مارس"
+                - option "أبريل"
+                - option "مايو"
+                - option "يونيو"
+                - option "يوليو"
+                - option "أغسطس"
+                - option "سبتمبر"
+                - option "أكتوبر"
+                - option "نوفمبر"
+                - option "ديسمبر"
+              - combobox [ref=e374] [cursor=pointer]:
+                - option "1900"
+                - option "1901"
+                - option "1902"
+                - option "1903"
+                - option "1904"
+                - option "1905"
+                - option "1906"
+                - option "1907"
+                - option "1908"
+                - option "1909"
+                - option "1910"
+                - option "1911"
+                - option "1912"
+                - option "1913"
+                - option "1914"
+                - option "1915"
+                - option "1916"
+                - option "1917"
+                - option "1918"
+                - option "1919"
+                - option "1920"
+                - option "1921"
+                - option "1922"
+                - option "1923"
+                - option "1924"
+                - option "1925"
+                - option "1926"
+                - option "1927"
+                - option "1928"
+                - option "1929"
+                - option "1930"
+                - option "1931"
+                - option "1932"
+                - option "1933"
+                - option "1934"
+                - option "1935"
+                - option "1936"
+                - option "1937"
+                - option "1938"
+                - option "1939"
+                - option "1940"
+                - option "1941"
+                - option "1942"
+                - option "1943"
+                - option "1944"
+                - option "1945"
+                - option "1946"
+                - option "1947"
+                - option "1948"
+                - option "1949"
+                - option "1950"
+                - option "1951"
+                - option "1952"
+                - option "1953"
+                - option "1954"
+                - option "1955"
+                - option "1956"
+                - option "1957"
+                - option "1958"
+                - option "1959"
+                - option "1960"
+                - option "1961"
+                - option "1962"
+                - option "1963"
+                - option "1964"
+                - option "1965"
+                - option "1966"
+                - option "1967"
+                - option "1968"
+                - option "1969"
+                - option "1970"
+                - option "1971"
+                - option "1972"
+                - option "1973"
+                - option "1974"
+                - option "1975"
+                - option "1976"
+                - option "1977"
+                - option "1978"
+                - option "1979"
+                - option "1980"
+                - option "1981"
+                - option "1982"
+                - option "1983"
+                - option "1984"
+                - option "1985"
+                - option "1986"
+                - option "1987"
+                - option "1988"
+                - option "1989"
+                - option "1990"
+                - option "1991"
+                - option "1992"
+                - option "1993"
+                - option "1994"
+                - option "1995"
+                - option "1996"
+                - option "1997"
+                - option "1998"
+                - option "1999"
+                - option "2000"
+                - option "2001"
+                - option "2002"
+                - option "2003"
+                - option "2004"
+                - option "2005"
+                - option "2006"
+                - option "2007"
+                - option "2008"
+                - option "2009"
+                - option "2010"
+                - option "2011"
+                - option "2012"
+                - option "2013"
+                - option "2014"
+                - option "2015"
+                - option "2016"
+                - option "2017"
+                - option "2018"
+                - option "2019"
+                - option "2020"
+                - option "2021"
+                - option "2022"
+                - option "2023"
+                - option "2024"
+                - option "2025"
+                - option "2026" [selected]
+                - option "2027"
+                - option "2028"
+                - option "2029"
+                - option "2030"
+                - option "2031"
+                - option "2032"
+                - option "2033"
+                - option "2034"
+                - option "2035"
+                - option "2036"
+                - option "2037"
+                - option "2038"
+                - option "2039"
+                - option "2040"
+                - option "2041"
+                - option "2042"
+                - option "2043"
+                - option "2044"
+                - option "2045"
+                - option "2046"
+                - option "2047"
+                - option "2048"
+                - option "2049"
+                - option "2050"
+                - option "2051"
+                - option "2052"
+                - option "2053"
+                - option "2054"
+                - option "2055"
+                - option "2056"
+                - option "2057"
+                - option "2058"
+                - option "2059"
+                - option "2060"
+                - option "2061"
+                - option "2062"
+                - option "2063"
+                - option "2064"
+                - option "2065"
+                - option "2066"
+                - option "2067"
+                - option "2068"
+                - option "2069"
+                - option "2070"
+                - option "2071"
+                - option "2072"
+                - option "2073"
+                - option "2074"
+                - option "2075"
+                - option "2076"
+                - option "2077"
+                - option "2078"
+                - option "2079"
+                - option "2080"
+                - option "2081"
+                - option "2082"
+                - option "2083"
+                - option "2084"
+                - option "2085"
+                - option "2086"
+                - option "2087"
+                - option "2088"
+                - option "2089"
+                - option "2090"
+                - option "2091"
+                - option "2092"
+                - option "2093"
+                - option "2094"
+                - option "2095"
+                - option "2096"
+                - option "2097"
+                - option "2098"
+                - option "2099"
+                - option "2100"
+          - table [ref=e375]:
+            - rowgroup [ref=e376]:
+              - row "الأحد الاثنين الثلاثاء الأربعاء الخميس الجمعة السبت" [ref=e377]:
+                - columnheader "الأحد" [ref=e378]:
+                  - generic [ref=e379]: الأحد
+                  - text: أحد
+                - columnheader "الاثنين" [ref=e380]:
+                  - generic [ref=e381]: الاثنين
+                  - text: اثنين
+                - columnheader "الثلاثاء" [ref=e382]:
+                  - generic [ref=e383]: الثلاثاء
+                  - text: ثلاثاء
+                - columnheader "الأربعاء" [ref=e384]:
+                  - generic [ref=e385]: الأربعاء
+                  - text: أربعاء
+                - columnheader "الخميس" [ref=e386]:
+                  - generic [ref=e387]: الخميس
+                  - text: خميس
+                - columnheader "الجمعة" [ref=e388]:
+                  - generic [ref=e389]: الجمعة
+                  - text: جمعة
+                - columnheader "السبت" [ref=e390]:
+                  - generic [ref=e391]: السبت
+                  - text: سبت
+            - rowgroup "Month يناير, 2026" [ref=e392]:
+              - row "Choose الأحد, ديسمبر 28, 2025 Choose الاثنين, ديسمبر 29, 2025 Choose الثلاثاء, ديسمبر 30, 2025 Choose الأربعاء, ديسمبر 31, 2025 Choose الخميس, يناير 1, 2026 Choose الجمعة, يناير 2, 2026 Choose السبت, يناير 3, 2026" [ref=e393]:
+                - gridcell "Choose الأحد, ديسمبر 28, 2025" [ref=e394] [cursor=pointer]: "28"
+                - gridcell "Choose الاثنين, ديسمبر 29, 2025" [ref=e395] [cursor=pointer]: "29"
+                - gridcell "Choose الثلاثاء, ديسمبر 30, 2025" [ref=e396] [cursor=pointer]: "30"
+                - gridcell "Choose الأربعاء, ديسمبر 31, 2025" [ref=e397] [cursor=pointer]: "31"
+                - gridcell "Choose الخميس, يناير 1, 2026" [selected] [ref=e398] [cursor=pointer]: "1"
+                - gridcell "Choose الجمعة, يناير 2, 2026" [ref=e399] [cursor=pointer]: "2"
+                - gridcell "Choose السبت, يناير 3, 2026" [ref=e400] [cursor=pointer]: "3"
+              - row "Choose الأحد, يناير 4, 2026 Choose الاثنين, يناير 5, 2026 Choose الثلاثاء, يناير 6, 2026 Choose الأربعاء, يناير 7, 2026 Choose الخميس, يناير 8, 2026 Choose الجمعة, يناير 9, 2026 Choose السبت, يناير 10, 2026" [ref=e401]:
+                - gridcell "Choose الأحد, يناير 4, 2026" [ref=e402] [cursor=pointer]: "4"
+                - gridcell "Choose الاثنين, يناير 5, 2026" [ref=e403] [cursor=pointer]: "5"
+                - gridcell "Choose الثلاثاء, يناير 6, 2026" [ref=e404] [cursor=pointer]: "6"
+                - gridcell "Choose الأربعاء, يناير 7, 2026" [ref=e405] [cursor=pointer]: "7"
+                - gridcell "Choose الخميس, يناير 8, 2026" [ref=e406] [cursor=pointer]: "8"
+                - gridcell "Choose الجمعة, يناير 9, 2026" [ref=e407] [cursor=pointer]: "9"
+                - gridcell "Choose السبت, يناير 10, 2026" [ref=e408] [cursor=pointer]: "10"
+              - row "Choose الأحد, يناير 11, 2026 Choose الاثنين, يناير 12, 2026 Choose الثلاثاء, يناير 13, 2026 Choose الأربعاء, يناير 14, 2026 Choose الخميس, يناير 15, 2026 Choose الجمعة, يناير 16, 2026 Choose السبت, يناير 17, 2026" [ref=e409]:
+                - gridcell "Choose الأحد, يناير 11, 2026" [ref=e410] [cursor=pointer]: "11"
+                - gridcell "Choose الاثنين, يناير 12, 2026" [ref=e411] [cursor=pointer]: "12"
+                - gridcell "Choose الثلاثاء, يناير 13, 2026" [ref=e412] [cursor=pointer]: "13"
+                - gridcell "Choose الأربعاء, يناير 14, 2026" [ref=e413] [cursor=pointer]: "14"
+                - gridcell "Choose الخميس, يناير 15, 2026" [ref=e414] [cursor=pointer]: "15"
+                - gridcell "Choose الجمعة, يناير 16, 2026" [ref=e415] [cursor=pointer]: "16"
+                - gridcell "Choose السبت, يناير 17, 2026" [ref=e416] [cursor=pointer]: "17"
+              - row "Choose الأحد, يناير 18, 2026 Choose الاثنين, يناير 19, 2026 Choose الثلاثاء, يناير 20, 2026 Choose الأربعاء, يناير 21, 2026 Choose الخميس, يناير 22, 2026 Choose الجمعة, يناير 23, 2026 Choose السبت, يناير 24, 2026" [ref=e417]:
+                - gridcell "Choose الأحد, يناير 18, 2026" [ref=e418] [cursor=pointer]: "18"
+                - gridcell "Choose الاثنين, يناير 19, 2026" [ref=e419] [cursor=pointer]: "19"
+                - gridcell "Choose الثلاثاء, يناير 20, 2026" [ref=e420] [cursor=pointer]: "20"
+                - gridcell "Choose الأربعاء, يناير 21, 2026" [ref=e421] [cursor=pointer]: "21"
+                - gridcell "Choose الخميس, يناير 22, 2026" [ref=e422] [cursor=pointer]: "22"
+                - gridcell "Choose الجمعة, يناير 23, 2026" [ref=e423] [cursor=pointer]: "23"
+                - gridcell "Choose السبت, يناير 24, 2026" [ref=e424] [cursor=pointer]: "24"
+              - row "Choose الأحد, يناير 25, 2026 Choose الاثنين, يناير 26, 2026 Choose الثلاثاء, يناير 27, 2026 Choose الأربعاء, يناير 28, 2026 Choose الخميس, يناير 29, 2026 Choose الجمعة, يناير 30, 2026 Choose السبت, يناير 31, 2026" [ref=e425]:
+                - gridcell "Choose الأحد, يناير 25, 2026" [ref=e426] [cursor=pointer]: "25"
+                - gridcell "Choose الاثنين, يناير 26, 2026" [ref=e427] [cursor=pointer]: "26"
+                - gridcell "Choose الثلاثاء, يناير 27, 2026" [ref=e428] [cursor=pointer]: "27"
+                - gridcell "Choose الأربعاء, يناير 28, 2026" [ref=e429] [cursor=pointer]: "28"
+                - gridcell "Choose الخميس, يناير 29, 2026" [ref=e430] [cursor=pointer]: "29"
+                - gridcell "Choose الجمعة, يناير 30, 2026" [ref=e431] [cursor=pointer]: "30"
+                - gridcell "Choose السبت, يناير 31, 2026" [ref=e432] [cursor=pointer]: "31"
+      - img
+    - generic [ref=e433]:
+      - dialog "Choose Date" [ref=e436]:
+        - alert [ref=e437]: ديسمبر 2026
+        - button "Previous Month" [ref=e438] [cursor=pointer]:
+          - generic: Previous Month
+        - button "Next Month" [ref=e439] [cursor=pointer]:
+          - generic: Next Month
+        - generic [ref=e440]:
+          - generic [ref=e441]:
+            - heading "ديسمبر 2026" [level=2] [ref=e442]
+            - generic [ref=e443]:
+              - combobox [ref=e445] [cursor=pointer]:
+                - option "يناير"
+                - option "فبراير"
+                - option "مارس"
+                - option "أبريل"
+                - option "مايو"
+                - option "يونيو"
+                - option "يوليو"
+                - option "أغسطس"
+                - option "سبتمبر"
+                - option "أكتوبر"
+                - option "نوفمبر"
+                - option "ديسمبر" [selected]
+              - combobox [ref=e447] [cursor=pointer]:
+                - option "1900"
+                - option "1901"
+                - option "1902"
+                - option "1903"
+                - option "1904"
+                - option "1905"
+                - option "1906"
+                - option "1907"
+                - option "1908"
+                - option "1909"
+                - option "1910"
+                - option "1911"
+                - option "1912"
+                - option "1913"
+                - option "1914"
+                - option "1915"
+                - option "1916"
+                - option "1917"
+                - option "1918"
+                - option "1919"
+                - option "1920"
+                - option "1921"
+                - option "1922"
+                - option "1923"
+                - option "1924"
+                - option "1925"
+                - option "1926"
+                - option "1927"
+                - option "1928"
+                - option "1929"
+                - option "1930"
+                - option "1931"
+                - option "1932"
+                - option "1933"
+                - option "1934"
+                - option "1935"
+                - option "1936"
+                - option "1937"
+                - option "1938"
+                - option "1939"
+                - option "1940"
+                - option "1941"
+                - option "1942"
+                - option "1943"
+                - option "1944"
+                - option "1945"
+                - option "1946"
+                - option "1947"
+                - option "1948"
+                - option "1949"
+                - option "1950"
+                - option "1951"
+                - option "1952"
+                - option "1953"
+                - option "1954"
+                - option "1955"
+                - option "1956"
+                - option "1957"
+                - option "1958"
+                - option "1959"
+                - option "1960"
+                - option "1961"
+                - option "1962"
+                - option "1963"
+                - option "1964"
+                - option "1965"
+                - option "1966"
+                - option "1967"
+                - option "1968"
+                - option "1969"
+                - option "1970"
+                - option "1971"
+                - option "1972"
+                - option "1973"
+                - option "1974"
+                - option "1975"
+                - option "1976"
+                - option "1977"
+                - option "1978"
+                - option "1979"
+                - option "1980"
+                - option "1981"
+                - option "1982"
+                - option "1983"
+                - option "1984"
+                - option "1985"
+                - option "1986"
+                - option "1987"
+                - option "1988"
+                - option "1989"
+                - option "1990"
+                - option "1991"
+                - option "1992"
+                - option "1993"
+                - option "1994"
+                - option "1995"
+                - option "1996"
+                - option "1997"
+                - option "1998"
+                - option "1999"
+                - option "2000"
+                - option "2001"
+                - option "2002"
+                - option "2003"
+                - option "2004"
+                - option "2005"
+                - option "2006"
+                - option "2007"
+                - option "2008"
+                - option "2009"
+                - option "2010"
+                - option "2011"
+                - option "2012"
+                - option "2013"
+                - option "2014"
+                - option "2015"
+                - option "2016"
+                - option "2017"
+                - option "2018"
+                - option "2019"
+                - option "2020"
+                - option "2021"
+                - option "2022"
+                - option "2023"
+                - option "2024"
+                - option "2025"
+                - option "2026" [selected]
+                - option "2027"
+                - option "2028"
+                - option "2029"
+                - option "2030"
+                - option "2031"
+                - option "2032"
+                - option "2033"
+                - option "2034"
+                - option "2035"
+                - option "2036"
+                - option "2037"
+                - option "2038"
+                - option "2039"
+                - option "2040"
+                - option "2041"
+                - option "2042"
+                - option "2043"
+                - option "2044"
+                - option "2045"
+                - option "2046"
+                - option "2047"
+                - option "2048"
+                - option "2049"
+                - option "2050"
+                - option "2051"
+                - option "2052"
+                - option "2053"
+                - option "2054"
+                - option "2055"
+                - option "2056"
+                - option "2057"
+                - option "2058"
+                - option "2059"
+                - option "2060"
+                - option "2061"
+                - option "2062"
+                - option "2063"
+                - option "2064"
+                - option "2065"
+                - option "2066"
+                - option "2067"
+                - option "2068"
+                - option "2069"
+                - option "2070"
+                - option "2071"
+                - option "2072"
+                - option "2073"
+                - option "2074"
+                - option "2075"
+                - option "2076"
+                - option "2077"
+                - option "2078"
+                - option "2079"
+                - option "2080"
+                - option "2081"
+                - option "2082"
+                - option "2083"
+                - option "2084"
+                - option "2085"
+                - option "2086"
+                - option "2087"
+                - option "2088"
+                - option "2089"
+                - option "2090"
+                - option "2091"
+                - option "2092"
+                - option "2093"
+                - option "2094"
+                - option "2095"
+                - option "2096"
+                - option "2097"
+                - option "2098"
+                - option "2099"
+                - option "2100"
+          - table [ref=e448]:
+            - rowgroup [ref=e449]:
+              - row "الأحد الاثنين الثلاثاء الأربعاء الخميس الجمعة السبت" [ref=e450]:
+                - columnheader "الأحد" [ref=e451]:
+                  - generic [ref=e452]: الأحد
+                  - text: أحد
+                - columnheader "الاثنين" [ref=e453]:
+                  - generic [ref=e454]: الاثنين
+                  - text: اثنين
+                - columnheader "الثلاثاء" [ref=e455]:
+                  - generic [ref=e456]: الثلاثاء
+                  - text: ثلاثاء
+                - columnheader "الأربعاء" [ref=e457]:
+                  - generic [ref=e458]: الأربعاء
+                  - text: أربعاء
+                - columnheader "الخميس" [ref=e459]:
+                  - generic [ref=e460]: الخميس
+                  - text: خميس
+                - columnheader "الجمعة" [ref=e461]:
+                  - generic [ref=e462]: الجمعة
+                  - text: جمعة
+                - columnheader "السبت" [ref=e463]:
+                  - generic [ref=e464]: السبت
+                  - text: سبت
+            - rowgroup "Month ديسمبر, 2026" [ref=e465]:
+              - row "Choose الأحد, نوفمبر 29, 2026 Choose الاثنين, نوفمبر 30, 2026 Choose الثلاثاء, ديسمبر 1, 2026 Choose الأربعاء, ديسمبر 2, 2026 Choose الخميس, ديسمبر 3, 2026 Choose الجمعة, ديسمبر 4, 2026 Choose السبت, ديسمبر 5, 2026" [ref=e466]:
+                - gridcell "Choose الأحد, نوفمبر 29, 2026" [ref=e467] [cursor=pointer]: "29"
+                - gridcell "Choose الاثنين, نوفمبر 30, 2026" [ref=e468] [cursor=pointer]: "30"
+                - gridcell "Choose الثلاثاء, ديسمبر 1, 2026" [ref=e469] [cursor=pointer]: "1"
+                - gridcell "Choose الأربعاء, ديسمبر 2, 2026" [ref=e470] [cursor=pointer]: "2"
+                - gridcell "Choose الخميس, ديسمبر 3, 2026" [ref=e471] [cursor=pointer]: "3"
+                - gridcell "Choose الجمعة, ديسمبر 4, 2026" [ref=e472] [cursor=pointer]: "4"
+                - gridcell "Choose السبت, ديسمبر 5, 2026" [ref=e473] [cursor=pointer]: "5"
+              - row "Choose الأحد, ديسمبر 6, 2026 Choose الاثنين, ديسمبر 7, 2026 Choose الثلاثاء, ديسمبر 8, 2026 Choose الأربعاء, ديسمبر 9, 2026 Choose الخميس, ديسمبر 10, 2026 Choose الجمعة, ديسمبر 11, 2026 Choose السبت, ديسمبر 12, 2026" [ref=e474]:
+                - gridcell "Choose الأحد, ديسمبر 6, 2026" [ref=e475] [cursor=pointer]: "6"
+                - gridcell "Choose الاثنين, ديسمبر 7, 2026" [ref=e476] [cursor=pointer]: "7"
+                - gridcell "Choose الثلاثاء, ديسمبر 8, 2026" [ref=e477] [cursor=pointer]: "8"
+                - gridcell "Choose الأربعاء, ديسمبر 9, 2026" [ref=e478] [cursor=pointer]: "9"
+                - gridcell "Choose الخميس, ديسمبر 10, 2026" [ref=e479] [cursor=pointer]: "10"
+                - gridcell "Choose الجمعة, ديسمبر 11, 2026" [ref=e480] [cursor=pointer]: "11"
+                - gridcell "Choose السبت, ديسمبر 12, 2026" [ref=e481] [cursor=pointer]: "12"
+              - row "Choose الأحد, ديسمبر 13, 2026 Choose الاثنين, ديسمبر 14, 2026 Choose الثلاثاء, ديسمبر 15, 2026 Choose الأربعاء, ديسمبر 16, 2026 Choose الخميس, ديسمبر 17, 2026 Choose الجمعة, ديسمبر 18, 2026 Choose السبت, ديسمبر 19, 2026" [ref=e482]:
+                - gridcell "Choose الأحد, ديسمبر 13, 2026" [ref=e483] [cursor=pointer]: "13"
+                - gridcell "Choose الاثنين, ديسمبر 14, 2026" [ref=e484] [cursor=pointer]: "14"
+                - gridcell "Choose الثلاثاء, ديسمبر 15, 2026" [ref=e485] [cursor=pointer]: "15"
+                - gridcell "Choose الأربعاء, ديسمبر 16, 2026" [ref=e486] [cursor=pointer]: "16"
+                - gridcell "Choose الخميس, ديسمبر 17, 2026" [ref=e487] [cursor=pointer]: "17"
+                - gridcell "Choose الجمعة, ديسمبر 18, 2026" [ref=e488] [cursor=pointer]: "18"
+                - gridcell "Choose السبت, ديسمبر 19, 2026" [ref=e489] [cursor=pointer]: "19"
+              - row "Choose الأحد, ديسمبر 20, 2026 Choose الاثنين, ديسمبر 21, 2026 Choose الثلاثاء, ديسمبر 22, 2026 Choose الأربعاء, ديسمبر 23, 2026 Choose الخميس, ديسمبر 24, 2026 Choose الجمعة, ديسمبر 25, 2026 Choose السبت, ديسمبر 26, 2026" [ref=e490]:
+                - gridcell "Choose الأحد, ديسمبر 20, 2026" [ref=e491] [cursor=pointer]: "20"
+                - gridcell "Choose الاثنين, ديسمبر 21, 2026" [ref=e492] [cursor=pointer]: "21"
+                - gridcell "Choose الثلاثاء, ديسمبر 22, 2026" [ref=e493] [cursor=pointer]: "22"
+                - gridcell "Choose الأربعاء, ديسمبر 23, 2026" [ref=e494] [cursor=pointer]: "23"
+                - gridcell "Choose الخميس, ديسمبر 24, 2026" [ref=e495] [cursor=pointer]: "24"
+                - gridcell "Choose الجمعة, ديسمبر 25, 2026" [ref=e496] [cursor=pointer]: "25"
+                - gridcell "Choose السبت, ديسمبر 26, 2026" [ref=e497] [cursor=pointer]: "26"
+              - row "Choose الأحد, ديسمبر 27, 2026 Choose الاثنين, ديسمبر 28, 2026 Choose الثلاثاء, ديسمبر 29, 2026 Choose الأربعاء, ديسمبر 30, 2026 Choose الخميس, ديسمبر 31, 2026 Choose الجمعة, يناير 1, 2027 Choose السبت, يناير 2, 2027" [ref=e498]:
+                - gridcell "Choose الأحد, ديسمبر 27, 2026" [ref=e499] [cursor=pointer]: "27"
+                - gridcell "Choose الاثنين, ديسمبر 28, 2026" [ref=e500] [cursor=pointer]: "28"
+                - gridcell "Choose الثلاثاء, ديسمبر 29, 2026" [ref=e501] [cursor=pointer]: "29"
+                - gridcell "Choose الأربعاء, ديسمبر 30, 2026" [ref=e502] [cursor=pointer]: "30"
+                - gridcell "Choose الخميس, ديسمبر 31, 2026" [selected] [ref=e503] [cursor=pointer]: "31"
+                - gridcell "Choose الجمعة, يناير 1, 2027" [ref=e504] [cursor=pointer]: "1"
+                - gridcell "Choose السبت, يناير 2, 2027" [ref=e505] [cursor=pointer]: "2"
+      - img
+    - generic [ref=e506]:
+      - dialog "Choose Date" [ref=e509]:
+        - alert [ref=e510]
+        - button "Previous Month" [ref=e511] [cursor=pointer]:
+          - generic: Previous Month
+        - button "Next Month" [ref=e512] [cursor=pointer]:
+          - generic: Next Month
+        - generic [ref=e513]:
+          - generic [ref=e514]:
+            - heading "يناير 2026" [level=2] [ref=e515]
+            - generic [ref=e516]:
+              - combobox [ref=e518] [cursor=pointer]:
+                - option "يناير" [selected]
+                - option "فبراير"
+                - option "مارس"
+                - option "أبريل"
+                - option "مايو"
+                - option "يونيو"
+                - option "يوليو"
+                - option "أغسطس"
+                - option "سبتمبر"
+                - option "أكتوبر"
+                - option "نوفمبر"
+                - option "ديسمبر"
+              - combobox [ref=e520] [cursor=pointer]:
+                - option "1900"
+                - option "1901"
+                - option "1902"
+                - option "1903"
+                - option "1904"
+                - option "1905"
+                - option "1906"
+                - option "1907"
+                - option "1908"
+                - option "1909"
+                - option "1910"
+                - option "1911"
+                - option "1912"
+                - option "1913"
+                - option "1914"
+                - option "1915"
+                - option "1916"
+                - option "1917"
+                - option "1918"
+                - option "1919"
+                - option "1920"
+                - option "1921"
+                - option "1922"
+                - option "1923"
+                - option "1924"
+                - option "1925"
+                - option "1926"
+                - option "1927"
+                - option "1928"
+                - option "1929"
+                - option "1930"
+                - option "1931"
+                - option "1932"
+                - option "1933"
+                - option "1934"
+                - option "1935"
+                - option "1936"
+                - option "1937"
+                - option "1938"
+                - option "1939"
+                - option "1940"
+                - option "1941"
+                - option "1942"
+                - option "1943"
+                - option "1944"
+                - option "1945"
+                - option "1946"
+                - option "1947"
+                - option "1948"
+                - option "1949"
+                - option "1950"
+                - option "1951"
+                - option "1952"
+                - option "1953"
+                - option "1954"
+                - option "1955"
+                - option "1956"
+                - option "1957"
+                - option "1958"
+                - option "1959"
+                - option "1960"
+                - option "1961"
+                - option "1962"
+                - option "1963"
+                - option "1964"
+                - option "1965"
+                - option "1966"
+                - option "1967"
+                - option "1968"
+                - option "1969"
+                - option "1970"
+                - option "1971"
+                - option "1972"
+                - option "1973"
+                - option "1974"
+                - option "1975"
+                - option "1976"
+                - option "1977"
+                - option "1978"
+                - option "1979"
+                - option "1980"
+                - option "1981"
+                - option "1982"
+                - option "1983"
+                - option "1984"
+                - option "1985"
+                - option "1986"
+                - option "1987"
+                - option "1988"
+                - option "1989"
+                - option "1990"
+                - option "1991"
+                - option "1992"
+                - option "1993"
+                - option "1994"
+                - option "1995"
+                - option "1996"
+                - option "1997"
+                - option "1998"
+                - option "1999"
+                - option "2000"
+                - option "2001"
+                - option "2002"
+                - option "2003"
+                - option "2004"
+                - option "2005"
+                - option "2006"
+                - option "2007"
+                - option "2008"
+                - option "2009"
+                - option "2010"
+                - option "2011"
+                - option "2012"
+                - option "2013"
+                - option "2014"
+                - option "2015"
+                - option "2016"
+                - option "2017"
+                - option "2018"
+                - option "2019"
+                - option "2020"
+                - option "2021"
+                - option "2022"
+                - option "2023"
+                - option "2024"
+                - option "2025"
+                - option "2026" [selected]
+                - option "2027"
+                - option "2028"
+                - option "2029"
+                - option "2030"
+                - option "2031"
+                - option "2032"
+                - option "2033"
+                - option "2034"
+                - option "2035"
+                - option "2036"
+                - option "2037"
+                - option "2038"
+                - option "2039"
+                - option "2040"
+                - option "2041"
+                - option "2042"
+                - option "2043"
+                - option "2044"
+                - option "2045"
+                - option "2046"
+                - option "2047"
+                - option "2048"
+                - option "2049"
+                - option "2050"
+                - option "2051"
+                - option "2052"
+                - option "2053"
+                - option "2054"
+                - option "2055"
+                - option "2056"
+                - option "2057"
+                - option "2058"
+                - option "2059"
+                - option "2060"
+                - option "2061"
+                - option "2062"
+                - option "2063"
+                - option "2064"
+                - option "2065"
+                - option "2066"
+                - option "2067"
+                - option "2068"
+                - option "2069"
+                - option "2070"
+                - option "2071"
+                - option "2072"
+                - option "2073"
+                - option "2074"
+                - option "2075"
+                - option "2076"
+                - option "2077"
+                - option "2078"
+                - option "2079"
+                - option "2080"
+                - option "2081"
+                - option "2082"
+                - option "2083"
+                - option "2084"
+                - option "2085"
+                - option "2086"
+                - option "2087"
+                - option "2088"
+                - option "2089"
+                - option "2090"
+                - option "2091"
+                - option "2092"
+                - option "2093"
+                - option "2094"
+                - option "2095"
+                - option "2096"
+                - option "2097"
+                - option "2098"
+                - option "2099"
+                - option "2100"
+          - table [ref=e521]:
+            - rowgroup [ref=e522]:
+              - row "الأحد الاثنين الثلاثاء الأربعاء الخميس الجمعة السبت" [ref=e523]:
+                - columnheader "الأحد" [ref=e524]:
+                  - generic [ref=e525]: الأحد
+                  - text: أحد
+                - columnheader "الاثنين" [ref=e526]:
+                  - generic [ref=e527]: الاثنين
+                  - text: اثنين
+                - columnheader "الثلاثاء" [ref=e528]:
+                  - generic [ref=e529]: الثلاثاء
+                  - text: ثلاثاء
+                - columnheader "الأربعاء" [ref=e530]:
+                  - generic [ref=e531]: الأربعاء
+                  - text: أربعاء
+                - columnheader "الخميس" [ref=e532]:
+                  - generic [ref=e533]: الخميس
+                  - text: خميس
+                - columnheader "الجمعة" [ref=e534]:
+                  - generic [ref=e535]: الجمعة
+                  - text: جمعة
+                - columnheader "السبت" [ref=e536]:
+                  - generic [ref=e537]: السبت
+                  - text: سبت
+            - rowgroup "Month يناير, 2026" [ref=e538]:
+              - row "Choose الأحد, ديسمبر 28, 2025 Choose الاثنين, ديسمبر 29, 2025 Choose الثلاثاء, ديسمبر 30, 2025 Choose الأربعاء, ديسمبر 31, 2025 Choose الخميس, يناير 1, 2026 Choose الجمعة, يناير 2, 2026 Choose السبت, يناير 3, 2026" [ref=e539]:
+                - gridcell "Choose الأحد, ديسمبر 28, 2025" [ref=e540] [cursor=pointer]: "28"
+                - gridcell "Choose الاثنين, ديسمبر 29, 2025" [ref=e541] [cursor=pointer]: "29"
+                - gridcell "Choose الثلاثاء, ديسمبر 30, 2025" [ref=e542] [cursor=pointer]: "30"
+                - gridcell "Choose الأربعاء, ديسمبر 31, 2025" [ref=e543] [cursor=pointer]: "31"
+                - gridcell "Choose الخميس, يناير 1, 2026" [selected] [ref=e544] [cursor=pointer]: "1"
+                - gridcell "Choose الجمعة, يناير 2, 2026" [ref=e545] [cursor=pointer]: "2"
+                - gridcell "Choose السبت, يناير 3, 2026" [ref=e546] [cursor=pointer]: "3"
+              - row "Choose الأحد, يناير 4, 2026 Choose الاثنين, يناير 5, 2026 Choose الثلاثاء, يناير 6, 2026 Choose الأربعاء, يناير 7, 2026 Choose الخميس, يناير 8, 2026 Choose الجمعة, يناير 9, 2026 Choose السبت, يناير 10, 2026" [ref=e547]:
+                - gridcell "Choose الأحد, يناير 4, 2026" [ref=e548] [cursor=pointer]: "4"
+                - gridcell "Choose الاثنين, يناير 5, 2026" [ref=e549] [cursor=pointer]: "5"
+                - gridcell "Choose الثلاثاء, يناير 6, 2026" [ref=e550] [cursor=pointer]: "6"
+                - gridcell "Choose الأربعاء, يناير 7, 2026" [ref=e551] [cursor=pointer]: "7"
+                - gridcell "Choose الخميس, يناير 8, 2026" [ref=e552] [cursor=pointer]: "8"
+                - gridcell "Choose الجمعة, يناير 9, 2026" [ref=e553] [cursor=pointer]: "9"
+                - gridcell "Choose السبت, يناير 10, 2026" [ref=e554] [cursor=pointer]: "10"
+              - row "Choose الأحد, يناير 11, 2026 Choose الاثنين, يناير 12, 2026 Choose الثلاثاء, يناير 13, 2026 Choose الأربعاء, يناير 14, 2026 Choose الخميس, يناير 15, 2026 Choose الجمعة, يناير 16, 2026 Choose السبت, يناير 17, 2026" [ref=e555]:
+                - gridcell "Choose الأحد, يناير 11, 2026" [ref=e556] [cursor=pointer]: "11"
+                - gridcell "Choose الاثنين, يناير 12, 2026" [ref=e557] [cursor=pointer]: "12"
+                - gridcell "Choose الثلاثاء, يناير 13, 2026" [ref=e558] [cursor=pointer]: "13"
+                - gridcell "Choose الأربعاء, يناير 14, 2026" [ref=e559] [cursor=pointer]: "14"
+                - gridcell "Choose الخميس, يناير 15, 2026" [ref=e560] [cursor=pointer]: "15"
+                - gridcell "Choose الجمعة, يناير 16, 2026" [ref=e561] [cursor=pointer]: "16"
+                - gridcell "Choose السبت, يناير 17, 2026" [ref=e562] [cursor=pointer]: "17"
+              - row "Choose الأحد, يناير 18, 2026 Choose الاثنين, يناير 19, 2026 Choose الثلاثاء, يناير 20, 2026 Choose الأربعاء, يناير 21, 2026 Choose الخميس, يناير 22, 2026 Choose الجمعة, يناير 23, 2026 Choose السبت, يناير 24, 2026" [ref=e563]:
+                - gridcell "Choose الأحد, يناير 18, 2026" [ref=e564] [cursor=pointer]: "18"
+                - gridcell "Choose الاثنين, يناير 19, 2026" [ref=e565] [cursor=pointer]: "19"
+                - gridcell "Choose الثلاثاء, يناير 20, 2026" [ref=e566] [cursor=pointer]: "20"
+                - gridcell "Choose الأربعاء, يناير 21, 2026" [ref=e567] [cursor=pointer]: "21"
+                - gridcell "Choose الخميس, يناير 22, 2026" [ref=e568] [cursor=pointer]: "22"
+                - gridcell "Choose الجمعة, يناير 23, 2026" [ref=e569] [cursor=pointer]: "23"
+                - gridcell "Choose السبت, يناير 24, 2026" [ref=e570] [cursor=pointer]: "24"
+              - row "Choose الأحد, يناير 25, 2026 Choose الاثنين, يناير 26, 2026 Choose الثلاثاء, يناير 27, 2026 Choose الأربعاء, يناير 28, 2026 Choose الخميس, يناير 29, 2026 Choose الجمعة, يناير 30, 2026 Choose السبت, يناير 31, 2026" [ref=e571]:
+                - gridcell "Choose الأحد, يناير 25, 2026" [ref=e572] [cursor=pointer]: "25"
+                - gridcell "Choose الاثنين, يناير 26, 2026" [ref=e573] [cursor=pointer]: "26"
+                - gridcell "Choose الثلاثاء, يناير 27, 2026" [ref=e574] [cursor=pointer]: "27"
+                - gridcell "Choose الأربعاء, يناير 28, 2026" [ref=e575] [cursor=pointer]: "28"
+                - gridcell "Choose الخميس, يناير 29, 2026" [ref=e576] [cursor=pointer]: "29"
+                - gridcell "Choose الجمعة, يناير 30, 2026" [ref=e577] [cursor=pointer]: "30"
+                - gridcell "Choose السبت, يناير 31, 2026" [ref=e578] [cursor=pointer]: "31"
+      - img

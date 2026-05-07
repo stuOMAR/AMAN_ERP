@@ -104,7 +104,6 @@ function TransactionList() {
                 loading={loading}
                 emptyIcon="🔄"
                 emptyTitle={t('intercompany.no_transactions')}
-                onRowClick={(txn) => navigate(`/accounting/intercompany/transactions/${txn.id}`)}
                 rowKey="id"
             />
         </div>

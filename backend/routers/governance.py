@@ -361,7 +361,7 @@ def list_branch_tax_settings(current_user=Depends(get_current_user)):
 def upsert_branch_tax_setting(body: BranchTaxSetting, current_user=Depends(get_current_user)):
     """Upsert Branch Tax Setting."""
     with transactional(current_user.company_id) as db:
-        db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS default_tax_rate DECIMAL(6,3) DEFAULT 15"))
+        db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS default_tax_rate DECIMAL(6,3) DEFAULT 0"))
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS tax_exempt BOOLEAN DEFAULT FALSE"))
         db.execute(text("ALTER TABLE branch_tax_settings ADD COLUMN IF NOT EXISTS notes TEXT"))
         db.execute(text("CREATE UNIQUE INDEX IF NOT EXISTS ux_branch_tax_settings_branch ON branch_tax_settings(branch_id)"))
@@ -963,6 +963,24 @@ def post_service_request_gl(
             get_mapped_account_id(db, "acc_map_service_cost_clearing")
             or get_mapped_account_id(db, "acc_map_inventory")
         )
+        # T10.1 P1 #110j — when the service consumed actual parts (rows in
+        # service_request_costs with cost_type='parts' AND product_id), we
+        # already decremented inventory in `add_service_cost`. The closing
+        # JE must therefore credit the inventory account to mirror the
+        # physical movement, not a generic clearing account.
+        consumed_parts = db.execute(
+            text(
+                "SELECT COALESCE(SUM(total_cost), 0) AS parts_cost "
+                "FROM service_request_costs "
+                "WHERE service_request_id = :rid "
+                "  AND COALESCE(is_deleted, FALSE) = FALSE "
+                "  AND cost_type = 'parts' "
+                "  AND product_id IS NOT NULL"
+            ),
+            {"rid": request_id},
+        ).scalar() or 0
+        parts_cost = _dec(consumed_parts)
+        inventory_acc = get_mapped_account_id(db, "acc_map_inventory")
         if revenue > 0 and not (cash_acc and revenue_acc):
             raise HTTPException(status_code=400, detail="حسابات الإيراد غير مهيأة")
         if cost > 0 and not (cost_acc and clearing_acc):
@@ -977,8 +995,18 @@ def post_service_request_gl(
         if cost > 0:
             lines.append({"account_id": cost_acc, "debit": float(cost), "credit": 0,
                           "description": f"Cost of services SR#{request_id}"})
-            lines.append({"account_id": clearing_acc, "debit": 0, "credit": float(cost),
-                          "description": f"Service cost clearing SR#{request_id}"})
+            # P1 #110j — split the credit side: inventory for parts
+            # actually drawn (already decremented physically), clearing
+            # for labor/travel/other.
+            non_parts = (cost - parts_cost) if cost > parts_cost else _dec(0)
+            if parts_cost > 0 and inventory_acc:
+                lines.append({"account_id": inventory_acc, "debit": 0, "credit": float(parts_cost),
+                              "description": f"Service parts consumption SR#{request_id}"})
+            else:
+                non_parts = cost  # fallback when inventory mapping missing
+            if non_parts > 0:
+                lines.append({"account_id": clearing_acc, "debit": 0, "credit": float(non_parts),
+                              "description": f"Service cost clearing SR#{request_id}"})
 
         je_id, je_num = gl_service.create_journal_entry(
             db,

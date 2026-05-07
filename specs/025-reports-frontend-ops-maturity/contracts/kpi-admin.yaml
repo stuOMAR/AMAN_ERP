@@ -1,0 +1,100 @@
+openapi: 3.1.0
+info:
+  title: KPI Admin (R7)
+  version: "1.0.0"
+paths:
+  /kpi/definitions:
+    get:
+      summary: List KPI definitions
+      security: [{ sensitive_permission: ["kpi.admin"] }]
+      responses:
+        "200":
+          description: KPI list
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: "#/components/schemas/KpiDefinition" }
+    post:
+      summary: Create a KPI definition
+      security: [{ sensitive_permission: ["kpi.admin"] }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KpiDefinitionInput" }
+      responses:
+        "201":
+          description: Created
+          content:
+            application/json:
+              schema: { $ref: "#/components/schemas/KpiDefinition" }
+  /kpi/definitions/{id}:
+    patch:
+      summary: Update a KPI definition
+      security: [{ sensitive_permission: ["kpi.admin"] }]
+      parameters: [{ in: path, name: id, required: true, schema: { type: string } }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: "#/components/schemas/KpiDefinitionInput" }
+      responses:
+        "200": { description: Updated }
+        "404": { description: Not found }
+  /kpi/evaluations:
+    get:
+      summary: List recent evaluations
+      security: [{ sensitive_permission: ["kpi.admin"] }]
+      parameters:
+        - in: query
+          name: kpi_id
+          schema: { type: string }
+        - in: query
+          name: limit
+          schema: { type: integer, minimum: 1, maximum: 100, default: 50 }
+      responses:
+        "200":
+          description: Evaluation list
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  type: object
+                  required: [id, kpi_id, evaluation_window_start, value, breached]
+                  properties:
+                    id: { type: string }
+                    kpi_id: { type: string }
+                    evaluation_window_start: { type: string, format: date-time }
+                    value: { type: number }
+                    breached: { type: boolean }
+                    notified_at: { type: string, format: date-time, nullable: true }
+components:
+  schemas:
+    KpiDefinitionInput:
+      type: object
+      required: [kpi_code, metric_source, metric_reference, threshold_value, comparison_op, channels, evaluation_interval_minutes]
+      properties:
+        kpi_code: { type: string, pattern: "^[a-z0-9_]+$" }
+        metric_source: { type: string, enum: [report_key, classifier_category] }
+        metric_reference: { type: string }
+        threshold_value: { type: number }
+        comparison_op: { type: string, enum: [lt, lte, gt, gte, eq] }
+        channels:
+          type: array
+          minItems: 1
+          items: { type: string, enum: [email, sms, push, in_app, webhook] }
+        evaluation_interval_minutes: { type: integer, minimum: 5 }
+        is_active: { type: boolean, default: true }
+    KpiDefinition:
+      allOf:
+        - $ref: "#/components/schemas/KpiDefinitionInput"
+        - type: object
+          required: [id, tenant_id, created_at]
+          properties:
+            id: { type: string }
+            tenant_id: { type: string }
+            created_at: { type: string, format: date-time }
+  securitySchemes:
+    sensitive_permission: { type: apiKey, in: header, name: Authorization }

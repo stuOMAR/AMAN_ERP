@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { purchasesAPI } from '../../utils/api';
+import { getCurrency } from '../../utils/auth';
 import { useToast } from '../../context/ToastContext';
 import DateInput from '../../components/common/DateInput';
 import BackButton from '../../components/common/BackButton';
@@ -15,11 +16,12 @@ const BlanketPOForm = () => {
     const [submitting, setSubmitting] = useState(false);
     const [form, setForm] = useState({
         supplier_id: '',
+        party_site_id: '',
         total_quantity: '',
         unit_price: '',
         valid_from: '',
         valid_to: '',
-        currency: 'SAR',
+        currency: getCurrency() || 'SAR',
         notes: '',
     });
 
@@ -48,11 +50,12 @@ const BlanketPOForm = () => {
         try {
             const payload = {
                 supplier_id: parseInt(form.supplier_id),
+                party_site_id: form.party_site_id ? parseInt(form.party_site_id) : null,
                 total_quantity: String(form.total_quantity),
                 unit_price: String(form.unit_price),
                 valid_from: form.valid_from,
                 valid_to: form.valid_to,
-                currency: form.currency || 'SAR',
+                currency: form.currency || getCurrency() || 'SAR',
                 notes: form.notes || null,
             };
             const res = await purchasesAPI.createBlanketPO(payload);

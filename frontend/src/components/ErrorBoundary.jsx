@@ -1,7 +1,8 @@
 import React from 'react'
+import { useNavigate, useLocation } from 'react-router-dom'
 import i18next from 'i18next'
 
-class ErrorBoundary extends React.Component {
+class ErrorBoundaryInner extends React.Component {
     constructor(props) {
         super(props)
         this.state = { hasError: false, error: null }
@@ -17,10 +18,15 @@ class ErrorBoundary extends React.Component {
 
     handleReset = () => {
         this.setState({ hasError: false, error: null })
+        const { navigate, previousPath } = this.props
+        if (previousPath) {
+            navigate(previousPath, { replace: true })
+        }
     }
 
-    handleReload = () => {
-        window.location.reload()
+    handleGoHome = () => {
+        this.setState({ hasError: false, error: null })
+        this.props.navigate('/dashboard', { replace: true })
     }
 
     render() {
@@ -70,10 +76,10 @@ class ErrorBoundary extends React.Component {
                             {i18next.t('error_boundary.try_again', 'Try Again')}
                         </button>
                         <button
-                            onClick={this.handleReload}
+                            onClick={this.handleGoHome}
                             className="btn btn-primary"
                         >
-                            {i18next.t('error_boundary.reload', 'Reload Page')}
+                            {i18next.t('error_boundary.go_home', 'Go to Dashboard')}
                         </button>
                     </div>
                 </div>
@@ -84,4 +90,14 @@ class ErrorBoundary extends React.Component {
     }
 }
 
-export default ErrorBoundary
+export default function ErrorBoundary({ children }) {
+    const navigate = useNavigate()
+    const location = useLocation()
+    const previousPath = location.state?.from || location.pathname
+
+    return (
+        <ErrorBoundaryInner navigate={navigate} previousPath={previousPath}>
+            {children}
+        </ErrorBoundaryInner>
+    )
+}

@@ -10,6 +10,7 @@ import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import { PageLoading } from '../../components/common/LoadingStates'
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function ContractForm() {
     const { t } = useTranslation()
@@ -79,7 +80,7 @@ function ContractForm() {
                     if (product) {
                         updatedItem.description = product.item_name
                         updatedItem.unit_price = product.selling_price
-                        updatedItem.tax_rate = product.tax_rate || 15
+                        updatedItem.tax_rate = null // Resolved by backend engine
                     }
                 }
                 return updatedItem
@@ -95,7 +96,15 @@ function ContractForm() {
         setItems(items.filter((_, i) => i !== index))
     }
 
+    // Backend-powered calculations
+    const { totals: backendTotals, previewContract, previewDebounced } = useInvoiceCalc()
+
     const getTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return { subtotal: backendTotals.subtotal, tax: backendTotals.totalTax, total: backendTotals.grandTotal }
+        }
+        // Fallback to local calculation
         let subtotal = 0
         let tax = 0
         items.forEach(item => {
@@ -105,6 +114,21 @@ function ContractForm() {
         })
         return { subtotal, tax, total: subtotal + tax }
     }
+
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
 
     const handleSubmit = async (e) => {
         e.preventDefault()

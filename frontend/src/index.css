@@ -705,13 +705,27 @@ body {
 }
 
 /* Form Styles Override */
+/* When any auth page is visible, allow the body to scroll */
+body:has(.auth-layout) {
+  overflow-y: auto;
+}
+
 .auth-layout {
   min-height: 100vh;
   display: flex;
+  flex-direction: column;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   background: var(--bg-main);
   padding: 20px;
+}
+
+/* Center card vertically when content fits */
+.auth-layout > .auth-card,
+.auth-layout > .card {
+  width: 100%;
+  margin-top: auto;
+  margin-bottom: auto;
 }
 
 .auth-card {

@@ -12,11 +12,11 @@ from schemas.cost_centers import CostCenterCreate, CostCenterUpdate, CostCenterR
 import logging
 logger = logging.getLogger(__name__)
 
-router = APIRouter(prefix="/cost-centers", tags=["Cost Centers"], dependencies=[Depends(require_module("cost_centers"))])
+router = APIRouter(prefix="/cost-centers", tags=["Cost Centers"], dependencies=[Depends(require_module("accounting"))])
 
 # --- Endpoints ---
 
-@router.get("/", response_model=List[CostCenterResponse], dependencies=[Depends(require_permission("accounting.cost_centers.view"))])
+@router.get("/", response_model=List[CostCenterResponse], dependencies=[Depends(require_permission(["accounting.view", "accounting.cost_centers.view"]))])
 @limiter.limit("200/minute")
 def list_cost_centers(request: Request, current_user: dict = Depends(get_current_user)):
     """List all cost centers"""

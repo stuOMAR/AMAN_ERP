@@ -162,7 +162,7 @@ async def start_operation(
     try:
         # 1) Verify work order exists and is active
         wo = db.execute(
-            text("SELECT id, status, branch_id FROM production_orders WHERE id = :wid"),
+            text("SELECT id, status, branch_id, route_id FROM production_orders WHERE id = :wid"),
             {"wid": body.work_order_id},
         ).fetchone()
         if not wo:
@@ -175,11 +175,14 @@ async def start_operation(
 
         # 2) Verify operation exists
         op = db.execute(
-            text("SELECT id, sequence FROM manufacturing_operations WHERE id = :oid AND is_deleted = false"),
+            text("SELECT id, sequence, route_id FROM manufacturing_operations WHERE id = :oid AND is_deleted = false"),
             {"oid": body.routing_operation_id},
         ).fetchone()
         if not op:
             raise HTTPException(status_code=404, detail="Operation not found")
+
+        if wo.route_id != op.route_id:
+            raise HTTPException(status_code=400, detail="Operation does not belong to this work order route")
 
         # 3) Sequence enforcement
         if op.sequence > 1 and not body.supervisor_override:

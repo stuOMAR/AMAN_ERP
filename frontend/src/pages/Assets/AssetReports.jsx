@@ -81,17 +81,17 @@ function AssetReports() {
                                 {row.status}
                             </span>
                         </td>
-                        <td className="text-end">{formatNumber(row.cost || row.original_cost)}</td>
-                        <td className="text-end">{formatNumber(row.accumulated_depreciation || 0)}</td>
-                        <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv || 0)}</td>
+                        <td className="text-end">{formatNumber(row.cost || row.original_cost)} <small>{currency}</small></td>
+                        <td className="text-end">{formatNumber(row.accumulated_depreciation || 0)} <small>{currency}</small></td>
+                        <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv || 0)} <small>{currency}</small></td>
                     </tr>
                 ))}
                 {data.length > 0 && (
                     <tr className="font-bold" style={{ borderTop: '2px solid var(--border-color)' }}>
                         <td colSpan={6} className="text-end">{t('common.total')}</td>
-                        <td className="text-end">{formatNumber(totalCost)}</td>
-                        <td className="text-end">{formatNumber(totalDepreciation)}</td>
-                        <td className="text-end">{formatNumber(totalNBV)}</td>
+                        <td className="text-end">{formatNumber(totalCost)} <small>{currency}</small></td>
+                        <td className="text-end">{formatNumber(totalDepreciation)} <small>{currency}</small></td>
+                        <td className="text-end">{formatNumber(totalNBV)} <small>{currency}</small></td>
                     </tr>
                 )}
             </tbody>
@@ -118,10 +118,10 @@ function AssetReports() {
                     <tr key={i}>
                         <td className="font-medium">{row.category}</td>
                         <td>{row.asset_count || row.count}</td>
-                        <td className="text-end">{formatNumber(row.original_cost || row.total_cost)}</td>
-                        <td className="text-end">{formatNumber(row.period_depreciation || 0)}</td>
-                        <td className="text-end">{formatNumber(row.total_depreciation || row.accumulated_depreciation)}</td>
-                        <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv)}</td>
+                        <td className="text-end">{formatNumber(row.original_cost || row.total_cost)} <small>{currency}</small></td>
+                        <td className="text-end">{formatNumber(row.period_depreciation || 0)} <small>{currency}</small></td>
+                        <td className="text-end">{formatNumber(row.total_depreciation || row.accumulated_depreciation)} <small>{currency}</small></td>
+                        <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv)} <small>{currency}</small></td>
                         <td className="text-end">{row.depreciation_rate || row.rate ? `${formatNumber(row.depreciation_rate || row.rate)}%` : '-'}</td>
                     </tr>
                 ))}
@@ -156,9 +156,9 @@ function AssetReports() {
                             <td>{row.category}</td>
                             <td>{row.useful_life || '-'}</td>
                             <td>{row.remaining_life || '-'}</td>
-                            <td className="text-end">{formatNumber(row.cost || row.original_cost)}</td>
-                            <td className="text-end">{formatNumber(row.accumulated_depreciation || row.total_depreciation || 0)}</td>
-                            <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv || 0)}</td>
+                            <td className="text-end">{formatNumber(row.cost || row.original_cost)} <small>{currency}</small></td>
+                            <td className="text-end">{formatNumber(row.accumulated_depreciation || row.total_depreciation || 0)} <small>{currency}</small></td>
+                            <td className="text-end font-medium">{formatNumber(row.net_book_value || row.nbv || 0)} <small>{currency}</small></td>
                             <td className="text-end">
                                 <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '8px' }}>
                                     <div className="progress-bar-container" style={{ width: '60px', height: '6px', background: 'var(--bg-secondary)', borderRadius: '3px' }}>

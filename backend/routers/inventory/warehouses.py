@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from schemas import WarehouseCreate, WarehouseResponse
 
 warehouses_router = APIRouter()
@@ -26,6 +26,7 @@ def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depend
 
     db = get_db_connection(current_user.company_id)
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         query = """
             SELECT w.id, w.warehouse_name as name, w.warehouse_code as code, 
                    w.branch_id, COALESCE(b.branch_name, '') as branch_name
@@ -34,17 +35,7 @@ def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depend
             WHERE 1=1
         """
         params = {}
-        if branch_id:
-            query += " AND w.branch_id = :bid"
-            params["bid"] = branch_id
-        else:
-            # INV-002: Enforce allowed_branches
-            allowed = getattr(current_user, 'allowed_branches', []) or []
-            if allowed and "*" not in getattr(current_user, 'permissions', []):
-                branch_placeholders = ", ".join(f":_ab_{i}" for i in range(len(allowed)))
-                query += f" AND w.branch_id IN ({branch_placeholders})"
-                for i, bid in enumerate(allowed):
-                    params[f"_ab_{i}"] = bid
+        query += branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
 
         query += " ORDER BY w.id"
         result = db.execute(text(query), params).fetchall()
@@ -77,7 +68,6 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
             INSERT INTO warehouses (warehouse_name, warehouse_code, branch_id) 
             VALUES (:name, :code, :branch_id) RETURNING id
         """), {"name": warehouse.name, "code": warehouse.code, "branch_id": warehouse.branch_id}).fetchone()
-        db.commit()
 
         # Get branch name if branch_id is set
         branch_name = None
@@ -91,6 +81,7 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
             resource_id=str(result[0]), details={"name": warehouse.name, "code": warehouse.code},
             request=request, branch_id=warehouse.branch_id
         )
+        db.commit()
 
         return {**warehouse.model_dump(), "id": result[0], "branch_name": branch_name}
     except HTTPException:
@@ -118,11 +109,13 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
             if existing.branch_id and existing.branch_id not in allowed:
                 raise HTTPException(status_code=403, detail="لا يمكنك تعديل مستودع خارج فروعك")
 
+        # BUG-FIX: Convert branch_id to int if it's None or invalid
+        safe_branch_id = warehouse.branch_id if warehouse.branch_id is not None else None
+
         db.execute(text("""
             UPDATE warehouses SET warehouse_name = :name, warehouse_code = :code, branch_id = :branch_id
             WHERE id = :id
-        """), {"name": warehouse.name, "code": warehouse.code, "branch_id": warehouse.branch_id, "id": id})
-        db.commit()
+        """), {"name": warehouse.name, "code": warehouse.code, "branch_id": safe_branch_id, "id": id})
 
         # Get branch name if branch_id is set
         branch_name = None
@@ -136,6 +129,7 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
             resource_id=str(id), details={"name": warehouse.name},
             request=request, branch_id=warehouse.branch_id
         )
+        db.commit()
 
         return {**warehouse.model_dump(), "id": id, "branch_name": branch_name}
     except HTTPException:
@@ -186,7 +180,6 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
             raise HTTPException(status_code=400, detail="لا يمكن حذف مستودع له حركات سابقة")
 
         db.execute(text("DELETE FROM warehouses WHERE id = :id"), {"id": id})
-        db.commit()
 
         # INV-012: Audit log
         log_activity(
@@ -195,6 +188,7 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
             resource_id=str(id), details={"name": warehouse.warehouse_name},
             request=request, branch_id=warehouse.branch_id
         )
+        db.commit()
 
         return {"message": "تم حذف المستودع بنجاح"}
     except HTTPException:

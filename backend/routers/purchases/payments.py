@@ -11,15 +11,17 @@ from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache
+from utils.cache import invalidate_company_cache, invalidate_aggregates
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.party_balance import update_party_site_balance
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
@@ -52,11 +54,13 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             # Fiscal-period lock: payment voucher posts at voucher_date.
             check_fiscal_period_open(db, data.voucher_date)
             
-            # Check supplier balance (total owed)
+            # Check supplier balance (total owed) from party_site_balances
             supplier_balance = db.execute(text("""
-                SELECT COALESCE(current_balance, 0) as balance
-                FROM parties
-                WHERE id = :sid
+                SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as balance
+                FROM party_sites ps
+                JOIN party_site_balances psb ON psb.party_site_id = ps.id
+                LEFT JOIN currencies c ON psb.currency = c.code
+                WHERE ps.party_id = :sid
                 FOR UPDATE
             """), {"sid": data.supplier_id}).fetchone()
             if not supplier_balance:
@@ -66,6 +70,13 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             voucher_rate = _dec(data.exchange_rate or 1)
             if voucher_rate <= 0:
                 raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
+            validated_branch_id = validate_branch_access(current_user, data.branch_id)
+            selected_treasury_id = data.treasury_account_id or data.bank_account_id
+            selected_treasury = None
+            if selected_treasury_id:
+                selected_treasury = validate_treasury_account_access(
+                    db, current_user, selected_treasury_id, validated_branch_id
+                )
             amount_base = (_dec(data.amount) * voucher_rate).quantize(_D2, ROUND_HALF_UP)
             if data.voucher_type != 'refund' and amount_base > (_dec(supplier_balance.balance) + _D2):
                 # Allow overpayment but log warning (some businesses prepay)
@@ -92,7 +103,7 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                 "bank": data.bank_account_id if data.payment_method != 'cash' else None,
                 "treasury": data.treasury_account_id or (data.bank_account_id if data.payment_method == 'cash' else None), 
                 "check_num": data.check_number, "check_date": data.check_date,
-                "ref": data.reference, "notes": data.notes, "user": current_user.id, "bid": data.branch_id,
+                "ref": data.reference, "notes": data.notes, "user": current_user.id, "bid": validated_branch_id or data.branch_id,
                 "curr": data.currency, "rate": data.exchange_rate or 1.0
             }).fetchone()
             
@@ -164,29 +175,15 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     )
                 )
             
-            # 3. Update Supplier Balance (Base + Currency)
+            # 3. Update Supplier Balance via party_site_balances
             amount_base = (_dec(data.amount) * voucher_rate).quantize(_D2, ROUND_HALF_UP)
-            balance_change = amount_base if data.voucher_type != 'refund' else -amount_base
-            
-            # Update base currency balance
-            db.execute(text("""
-                UPDATE parties
-                SET current_balance = COALESCE(current_balance, 0) + :change
-                WHERE id = :sid
-            """), {"change": balance_change, "sid": data.supplier_id})
-            
-            # Update foreign currency balance if applicable
-            balance_change_fc = _dec(data.amount) if data.voucher_type != 'refund' else -_dec(data.amount)
-            if data.currency and data.currency != base_currency:
-                db.execute(text("""
-                    UPDATE parties
-                    SET balance_currency = COALESCE(balance_currency, 0) + :change
-                    WHERE id = :sid
-                """), {"change": balance_change_fc, "sid": data.supplier_id})
+            balance_change_fc = float(_dec(data.amount) if data.voucher_type != 'refund' else -_dec(data.amount))
+            update_party_site_balance(db, party_id=data.supplier_id, branch_id=validated_branch_id or data.branch_id,
+                               currency=data.currency, amount=balance_change_fc)
             
             # 4. Create GL Entry
             # Dynamic Treasury Lookup
-            treasury_id = data.treasury_account_id or data.bank_account_id
+            treasury_id = selected_treasury_id
             cash_acc = None
             treasury_curr = data.currency
             treasury_rate = voucher_rate
@@ -194,10 +191,10 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             
             if treasury_id:
                 # Fetch treasury account details
-                treasury = db.execute(text("SELECT gl_account_id, currency FROM treasury_accounts WHERE id = :id"), {"id": treasury_id}).fetchone()
+                treasury = selected_treasury
                 if treasury:
-                    cash_acc = treasury.gl_account_id
-                    treasury_curr = treasury.currency or data.currency
+                    cash_acc = treasury["gl_account_id"]
+                    treasury_curr = treasury["currency"] or data.currency
                     
                     # Fetch current rate for treasury currency
                     treasury_rate = Decimal('1')
@@ -271,12 +268,15 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     user_id=current_user.id,
                     branch_id=data.branch_id,
                     currency=data.currency,
-                    exchange_rate=data.exchange_rate or 1.0,
+                    exchange_rate=1.0,  # amounts already in base currency
                     source="payment_voucher",
                     source_id=voucher_id
                 )
     
-            invalidate_company_cache(str(current_user.company_id))
+            # T12 — scoped invalidation: supplier payment hits treasury + AP + reports.
+            invalidate_aggregates(str(current_user.company_id),
+                                  "treasury", "purchases", "reports",
+                                  "dashboard")
             
     
             supp_name = db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": data.supplier_id}).scalar()
@@ -322,8 +322,7 @@ def list_supplier_payments(branch_id: Optional[int] = None, current_user: dict =
     """قائمة سندات الصرف"""
     with transactional(current_user.company_id) as db:
         try:
-            from utils.permissions import validate_branch_access
-            branch_id = validate_branch_access(current_user, branch_id)
+            branch_scope = resolve_branch_scope(current_user, branch_id)
     
             query_str = """
                 SELECT pv.id, pv.voucher_number, pv.voucher_date, pv.amount, pv.currency,
@@ -333,9 +332,7 @@ def list_supplier_payments(branch_id: Optional[int] = None, current_user: dict =
                 WHERE pv.voucher_type = 'payment' AND pv.party_type = 'supplier'
             """
             params = {}
-            if branch_id:
-                query_str += " AND (pv.branch_id = :branch_id OR pv.branch_id IS NULL)"
-                params["branch_id"] = branch_id
+            query_str += branch_scope_filter_from_scope(branch_scope, "pv.branch_id", params)
             
             query_str += " ORDER BY pv.created_at DESC"
             
@@ -391,6 +388,7 @@ def get_supplier_outstanding_invoices(
     """Fetch unpaid/partial purchase invoices for a supplier"""
     with transactional(current_user.company_id) as db:
         try:
+            branch_scope = resolve_branch_scope(current_user, branch_id)
             query = """
                 SELECT id, invoice_number, invoice_date, total, paid_amount, status, invoice_type,
                        currency, exchange_rate,
@@ -401,9 +399,7 @@ def get_supplier_outstanding_invoices(
                   AND status IN ('unpaid', 'partial', 'posted')
             """
             params = {"sid": supplier_id}
-            if branch_id:
-                query += " AND branch_id = :bid"
-                params["bid"] = branch_id
+            query += branch_scope_filter_from_scope(branch_scope, "branch_id", params)
             
             query += " ORDER BY invoice_date ASC"
             
@@ -455,8 +451,7 @@ def list_purchase_credit_notes(
 ):
     """قائمة إشعارات دائنة (مشتريات)"""
     with transactional(current_user.company_id) as db:
-        from utils.permissions import validate_branch_access
-        branch_id = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         conditions = ["i.invoice_type = 'purchase_credit_note'"]
         params = {}
@@ -475,9 +470,9 @@ def list_purchase_credit_notes(
         if search:
             conditions.append("(i.invoice_number ILIKE :search OR i.notes ILIKE :search)")
             params["search"] = f"%{search}%"
-        if branch_id:
-            conditions.append("i.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, prefix="").strip()
+        if branch_condition:
+            conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
         total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa: sql-lint
@@ -578,8 +573,13 @@ def create_purchase_credit_note(
             for line in lines:
                 qty = _dec(line.get("quantity", 1))
                 price = _dec(line.get("unit_price", 0))
-                tax_rate = _dec(line.get("tax_rate", 0))
                 disc = _dec(line.get("discount", 0))
+                product_id = line.get("product_id")
+                if product_id and branch_id:
+                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date)
+                    tax_rate = tax_info["tax_rate"]
+                else:
+                    tax_rate = _dec(line.get("tax_rate", 0))
                 line_net = (qty * price - disc).quantize(_D2, ROUND_HALF_UP)
                 line_tax = (line_net * tax_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
                 line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
@@ -587,7 +587,7 @@ def create_purchase_credit_note(
                 tax_total += line_tax
                 discount_total += disc
                 computed_lines.append({
-                    "product_id": line.get("product_id"),
+                    "product_id": product_id,
                     "description": line.get("description", ""),
                     "quantity": qty, "unit_price": price,
                     "tax_rate": tax_rate, "discount": disc, "total": line_total,
@@ -664,7 +664,7 @@ def create_purchase_credit_note(
                 user_id=current_user.id,
                 branch_id=branch_id,
                 currency=currency,
-                exchange_rate=exchange_rate,
+                exchange_rate=1.0,  # amounts already in base currency
                 source="purchase_credit_note",
                 source_id=note_id
             )
@@ -677,12 +677,10 @@ def create_purchase_credit_note(
                     WHERE id = :id
                 """), {"amt": total, "id": related_invoice_id})
     
-            # Update supplier balance (credit note REDUCES what we owe supplier)
+            # Update supplier balance via party_site_balances (credit note REDUCES what we owe supplier)
             gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
-            db.execute(text("""
-                UPDATE parties SET current_balance = current_balance - :amt
-                WHERE id = :pid
-            """), {"amt": gl_total_base, "pid": party_id})
+            update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
+                               currency=currency, amount=-float(total))
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="buying.credit_note.create", resource_type="purchase_credit_note",
@@ -716,8 +714,7 @@ def list_purchase_debit_notes(
 ):
     """قائمة إشعارات مدينة (مشتريات)"""
     with transactional(current_user.company_id) as db:
-        from utils.permissions import validate_branch_access
-        branch_id = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         conditions = ["i.invoice_type = 'purchase_debit_note'"]
         params = {}
@@ -736,9 +733,9 @@ def list_purchase_debit_notes(
         if search:
             conditions.append("(i.invoice_number ILIKE :search OR i.notes ILIKE :search)")
             params["search"] = f"%{search}%"
-        if branch_id:
-            conditions.append("i.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_condition = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, prefix="").strip()
+        if branch_condition:
+            conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
         total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa: sql-lint
@@ -831,8 +828,13 @@ def create_purchase_debit_note(
             for line in lines:
                 qty = _dec(line.get("quantity", 1))
                 price = _dec(line.get("unit_price", 0))
-                tax_rate = _dec(line.get("tax_rate", 0))
                 disc = _dec(line.get("discount", 0))
+                product_id = line.get("product_id")
+                if product_id and branch_id:
+                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date)
+                    tax_rate = tax_info["tax_rate"]
+                else:
+                    tax_rate = _dec(line.get("tax_rate", 0))
                 line_net = (qty * price - disc).quantize(_D2, ROUND_HALF_UP)
                 line_tax = (line_net * tax_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
                 line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
@@ -840,7 +842,7 @@ def create_purchase_debit_note(
                 tax_total += line_tax
                 discount_total += disc
                 computed_lines.append({
-                    "product_id": line.get("product_id"),
+                    "product_id": product_id,
                     "description": line.get("description", ""),
                     "quantity": qty, "unit_price": price,
                     "tax_rate": tax_rate, "discount": disc, "total": line_total,
@@ -917,17 +919,15 @@ def create_purchase_debit_note(
                 user_id=current_user.id,
                 branch_id=branch_id,
                 currency=currency,
-                exchange_rate=exchange_rate,
+                exchange_rate=1.0,  # amounts already in base currency
                 source="purchase_debit_note",
                 source_id=note_id
             )
     
-            # Update supplier balance (debit note INCREASES what we owe supplier)
+            # Update supplier balance via party_site_balances (debit note INCREASES what we owe supplier)
             gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
-            db.execute(text("""
-                UPDATE parties SET current_balance = current_balance + :amt
-                WHERE id = :pid
-            """), {"amt": gl_total_base, "pid": party_id})
+            update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
+                               currency=currency, amount=float(total))
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="buying.debit_note.create", resource_type="purchase_debit_note",

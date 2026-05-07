@@ -299,9 +299,9 @@ def convert_to_quotation(
 
         # Find customer record
         cust = db.execute(text(
-            "SELECT id FROM customers WHERE party_id = :pid LIMIT 1"
+            "SELECT id FROM parties WHERE id = :pid AND (party_type = 'customer' OR is_customer = TRUE) LIMIT 1"
         ), {"pid": qd["customer_id"]}).fetchone()
-        customer_id = cust.id if cust else None
+        customer_id = cust.id if cust else qd["customer_id"]
 
         # Get branch of current user
         branch = db.execute(text(
@@ -317,16 +317,15 @@ def convert_to_quotation(
 
         # Create sales quotation
         sq = db.execute(text("""
-            INSERT INTO sales_quotations (sq_number, party_id, customer_id, branch_id, total_amount, status, created_by)
-            VALUES (:sqn, :pid, :cid, :bid, :total, 'draft', :uid)
+            INSERT INTO sales_quotations (sq_number, party_id, customer_id, branch_id, total, status)
+            VALUES (:sqn, :pid, :cid, :bid, :total, 'draft')
             RETURNING id
         """), {
             "sqn": sq_number,
             "pid": qd["customer_id"],
             "cid": customer_id,
             "bid": branch_id,
-            "total": str(qd["final_amount"]),
-            "uid": current_user.id,
+            "total": str(qd.get("final_amount", 0)),
         }).fetchone()
         sq_id = sq.id
 

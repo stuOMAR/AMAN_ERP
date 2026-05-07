@@ -41,10 +41,11 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
 
         if locked:
             if raise_error:
+                locked_date = locked.locked_at.strftime("%Y-%m-%d") if locked.locked_at else "—"
                 raise HTTPException(
                     400,
-                    f"الفترة المحاسبية مقفلة: {locked.period_name}. "
-                    f"تم القفل بتاريخ {locked.locked_at}. "
+                    f"لا يمكن الترحيل — الفترة المحاسبية مقفلة: {locked.period_name} "
+                    f"(تم القفل بتاريخ {locked_date}). "
                     "يرجى التواصل مع المدير لفتح الفترة."
                 )
             return False
@@ -71,8 +72,8 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
             if raise_error:
                 raise HTTPException(
                     400,
-                    f"الفترة المحاسبية مغلقة: {closed.name}. "
-                    "لا يمكن ترحيل قيود في فترة مغلقة."
+                    f"لا يمكن الترحيل — الفترة المحاسبية مغلقة: {closed.name}. "
+                    "يرجى التواصل مع المدير لإعادة فتح الفترة."
                 )
             return False
 

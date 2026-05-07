@@ -11,7 +11,7 @@ from utils.i18n import http_error
 from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from database import get_db_connection
 from utils.tx import transactional
 from utils.accounting import get_base_currency
@@ -48,8 +48,7 @@ def report_production_cost(
     """
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT po.id, po.order_number, po.product_id, p.product_name, po.quantity,
@@ -61,9 +60,7 @@ def report_production_cost(
             WHERE po.status = 'completed'
         """
         params = {}
-        if validated_branch:
-            query += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        query += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         if start_date:
             query += " AND po.start_date >= :start"
             params["start"] = start_date
@@ -129,6 +126,7 @@ def report_production_cost(
 def report_work_center_efficiency(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """
@@ -136,7 +134,10 @@ def report_work_center_efficiency(
     """
     conn = get_db_connection(current_user.company_id)
     try:
-        wcs = conn.execute(text("SELECT * FROM work_centers WHERE is_deleted = false ORDER BY name")).fetchall()
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        wc_params = {}
+        wc_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", wc_params)
+        wcs = conn.execute(text(f"SELECT * FROM work_centers WHERE is_deleted = false {wc_filter} ORDER BY name"), wc_params).fetchall()
         
         date_filter = ""
         params = {}
@@ -199,14 +200,10 @@ def report_material_consumption(
     """
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
-
         date_filter = ""
         params = {}
-        if validated_branch:
-            date_filter += " AND it.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        date_filter += branch_scope_filter_from_scope(branch_scope, "it.branch_id", params)
         if start_date:
             date_filter += " AND it.created_at >= :start"
             params["start"] = start_date
@@ -266,14 +263,10 @@ def report_production_summary(
     """
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
-
         date_filter = ""
         params = {}
-        if validated_branch:
-            date_filter += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        date_filter += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         if start_date:
             date_filter += " AND po.created_at >= :start"
             params["start"] = start_date
@@ -342,14 +335,10 @@ def report_direct_labor(
     """
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
-
         date_filter = ""
         params = {}
-        if validated_branch:
-            date_filter += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        date_filter += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         if start_date:
             date_filter += " AND poo.start_time >= :start"
             params["start"] = start_date
@@ -498,9 +487,6 @@ def cost_variance_report(
     """تقرير الانحرافات — مقارنة التكلفة المعيارية بالفعلية لكل أوامر الإنتاج"""
     conn = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        validated_branch = validate_branch_access(current_user, branch_id)
-
         query = """
             SELECT po.id, po.order_number, po.product_id,
                    p.product_name, p.sku,
@@ -514,9 +500,8 @@ def cost_variance_report(
             WHERE po.costing_status = 'calculated'
         """
         params = {}
-        if validated_branch:
-            query += " AND po.branch_id = :branch_id"
-            params["branch_id"] = validated_branch
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        query += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
         if from_date:
             query += " AND po.created_at >= :fd"
             params["fd"] = from_date
@@ -556,6 +541,7 @@ def calculate_oee(
     work_center_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
     """حساب الفعالية الشاملة للمعدات OEE"""
@@ -572,6 +558,8 @@ def calculate_oee(
             WHERE 1=1 AND cp.is_deleted = false AND (wc.is_deleted = false OR wc.id IS NULL)
         """
         params = {}
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        q += branch_scope_filter_from_scope(branch_scope, "wc.branch_id", params)
         if work_center_id:
             q += " AND cp.work_center_id = :wc"
             params["wc"] = work_center_id

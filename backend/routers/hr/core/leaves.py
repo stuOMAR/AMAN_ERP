@@ -15,7 +15,7 @@ from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
 from repositories import EmployeeRepository
-from utils.permissions import require_permission, validate_branch_access, check_permission, require_module
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, check_permission, require_module
 from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
 from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
@@ -182,35 +182,23 @@ def list_leave_requests(branch_id: Optional[int] = None, current_user: UserRespo
         # If strict: raise HTTPException(status_code=403, detail="Not authorized")
     
     with transactional(company_id) as conn:
-        if branch_id:
-            branch_id = validate_branch_access(current_user, branch_id)
-        # Check if manager
         is_manager = has_permission(current_user, "hr.leaves.manage")
-        
         query = """
             SELECT l.*, e.first_name || ' ' || e.last_name as employee_name 
             FROM leave_requests l
             JOIN employees e ON l.employee_id = e.id
+            WHERE 1=1
         """
         params = {}
-        
+
         if not is_manager:
-            # Filter by self
             emp_res = conn.execute(text("SELECT id FROM employees WHERE user_id = :uid"), {"uid": current_user.get("id") if isinstance(current_user, dict) else current_user.id}).fetchone()
             if not emp_res:
-                return [] # No employee record
-            query += " WHERE l.employee_id = :eid"
+                return []
+            query += " AND l.employee_id = :eid"
             params["eid"] = emp_res[0]
-        else:
-             # Manager view - filter by branch if provided
-             where_clauses = []
-             if branch_id:
-                 where_clauses.append("e.branch_id = :bid")
-                 params["bid"] = branch_id
-             
-             if where_clauses:
-                 query += " WHERE " + " AND ".join(where_clauses)
-            
+
+        query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY l.created_at DESC"
         
         records = conn.execute(text(query), params).fetchall()

@@ -83,7 +83,7 @@ class InvoiceLineItem(BaseModel):
     description: Optional[str] = None
     quantity: Decimal
     unit_price: Decimal
-    tax_rate: Decimal = Decimal("15.0")
+    tax_rate: Optional[Decimal] = None  # Ignored — resolved by tax engine on backend
     discount: Decimal = Decimal("0")
     markup: Decimal = Decimal("0")
 
@@ -113,13 +113,14 @@ class InvoiceLineItem(BaseModel):
 
     @validator("tax_rate")
     def tax_rate_must_be_valid(cls, v):
-        if v < 0 or v > 100:
+        if v is not None and (v < 0 or v > 100):
             raise ValueError("نسبة الضريبة يجب أن تكون بين 0 و 100")
         return v
 
 
 class InvoiceCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None  # موقع العميل (اختياري)
     invoice_date: date
     due_date: Optional[date] = None
     items: List[InvoiceLineItem]
@@ -174,12 +175,13 @@ class SOLineItem(BaseModel):
     description: Optional[str] = None
     quantity: Decimal
     unit_price: Decimal
-    tax_rate: Decimal = Decimal("15.0")
+    tax_rate: Optional[Decimal] = None  # Ignored — resolved by tax engine on backend
     discount: Decimal = Decimal("0")
 
 
 class SOCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None
     order_date: date
     expected_delivery_date: Optional[date] = None
     items: List[SOLineItem]
@@ -197,12 +199,48 @@ class QuotationLineItem(BaseModel):
     description: Optional[str] = None
     quantity: Decimal
     unit_price: Decimal
-    tax_rate: Decimal = Decimal("15.0")
+    tax_rate: Optional[Decimal] = None  # Ignored — resolved by tax engine on backend
     discount: Decimal = Decimal("0")
+
+    @field_validator('product_id')
+    @classmethod
+    def quotation_product_required(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("يجب اختيار صنف صالح لكل سطر في عرض السعر")
+        return v
+
+    @field_validator('quantity')
+    @classmethod
+    def quotation_quantity_positive(cls, v):
+        if v <= 0:
+            raise ValueError("كمية عرض السعر يجب أن تكون أكبر من صفر")
+        return v
+
+    @field_validator('unit_price')
+    @classmethod
+    def quotation_price_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("سعر الوحدة في عرض السعر لا يمكن أن يكون سالباً")
+        return v
+
+    @field_validator('tax_rate')
+    @classmethod
+    def quotation_tax_rate_valid(cls, v):
+        if v < 0 or v > 100:
+            raise ValueError("نسبة الضريبة يجب أن تكون بين 0 و 100")
+        return v
+
+    @field_validator('discount')
+    @classmethod
+    def quotation_discount_non_negative(cls, v):
+        if v < 0:
+            raise ValueError("الخصم لا يمكن أن يكون سالباً")
+        return v
 
 
 class QuotationCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None
     quotation_date: date
     expiry_date: Optional[date] = None
     items: List[QuotationLineItem]
@@ -211,6 +249,13 @@ class QuotationCreate(BaseModel):
     branch_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = Decimal("1.0")
+
+    @field_validator('items')
+    @classmethod
+    def quotation_must_have_items(cls, v):
+        if not v:
+            raise ValueError("يجب إضافة صنف واحد على الأقل إلى عرض السعر")
+        return v
 
 
 # --- Sales Return ---
@@ -249,6 +294,7 @@ class SalesReturnLineItem(BaseModel):
 
 class SalesReturnCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None
     invoice_id: Optional[int] = None
     return_date: date
     items: List[SalesReturnLineItem]
@@ -290,6 +336,7 @@ class PaymentAllocation(BaseModel):
 
 class CustomerReceiptCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None
     voucher_date: date
     amount: Decimal
     payment_method: str
@@ -307,6 +354,7 @@ class CustomerReceiptCreate(BaseModel):
 
 class CustomerPaymentCreate(BaseModel):
     customer_id: int
+    party_site_id: Optional[int] = None
     voucher_date: date
     amount: Decimal
     payment_method: str

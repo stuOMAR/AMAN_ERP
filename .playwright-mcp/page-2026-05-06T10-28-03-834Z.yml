@@ -1,0 +1,225 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e3] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e4]:
+    - navigation "القائمة الرئيسية" [ref=e5]:
+      - generic [ref=e6]:
+        - button "إغلاق القائمة" [expanded] [ref=e7] [cursor=pointer]:
+          - img [ref=e8]
+        - generic [ref=e10]: AMAN ERP
+      - navigation [ref=e11]:
+        - link "🏠 مساحة العمل" [ref=e12] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e14]: 🏠
+          - generic [ref=e15]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e16] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e18]: 📊
+          - generic [ref=e19]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e20] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e22]: 🏗️
+          - generic [ref=e23]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e24] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e26]: 🏦
+          - generic [ref=e27]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e28] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e30]: 💰
+          - generic [ref=e31]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e32] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e34]: 🏪
+          - generic [ref=e35]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e36] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e38]: 🛒
+          - generic [ref=e39]: المشتريات
+        - link "📦 المخزون" [ref=e40] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e42]: 📦
+          - generic [ref=e43]: المخزون
+        - link "🏭 التصنيع" [ref=e44] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e46]: 🏭
+          - generic [ref=e47]: التصنيع
+        - link "📐 المشاريع" [ref=e48] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e50]: 📐
+          - generic [ref=e51]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e52] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e54]: 🤝
+          - generic [ref=e55]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e56] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e58]: 🔧
+          - generic [ref=e59]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e60] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e62]: 💸
+          - generic [ref=e63]: المصروفات
+        - link "🧾 الضرائب" [ref=e64] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e66]: 🧾
+          - generic [ref=e67]: الضرائب
+        - link "✅ الاعتمادات" [ref=e68] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e70]: ✅
+          - generic [ref=e71]: الاعتمادات
+        - link "📈 التقارير" [ref=e72] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e74]: 📈
+          - generic [ref=e75]: التقارير
+        - link "👥 الموارد البشرية" [ref=e76] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e78]: 👥
+          - generic [ref=e79]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e80] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e82]: ⚙️
+          - generic [ref=e83]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e84] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e86]: 🎯
+          - generic [ref=e87]: إدارة المؤشرات
+    - generic [ref=e88]:
+      - banner [ref=e89]:
+        - generic [ref=e91] [cursor=pointer]:
+          - generic [ref=e92]:
+            - img [ref=e93]
+            - text: بحث...
+          - generic [ref=e96]: Ctrl+K
+        - generic [ref=e97]:
+          - button "EN" [ref=e98] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e99] [cursor=pointer]:
+            - img [ref=e100]
+          - generic [ref=e106]:
+            - button "🏢 كل الفروع SAR ▼" [active] [ref=e107] [cursor=pointer]:
+              - generic [ref=e108]:
+                - text: 🏢
+                - generic [ref=e109]: كل الفروع
+              - generic [ref=e110]: SAR
+              - generic [ref=e111]: ▼
+            - generic [ref=e242]:
+              - generic [ref=e243] [cursor=pointer]:
+                - generic [ref=e244]: 🌐 كل الفروع
+                - generic [ref=e245]: SAR
+              - generic [ref=e247] [cursor=pointer]:
+                - generic [ref=e248]: الفرع الرئيسي - الرياض
+                - generic [ref=e249]:
+                  - generic [ref=e250]: SAR
+                  - generic [ref=e251]: افتراضي
+              - generic [ref=e252] [cursor=pointer]:
+                - generic [ref=e253]: مصر - فرع القاهرة
+                - generic [ref=e255]: EGP
+              - generic [ref=e256] [cursor=pointer]:
+                - generic [ref=e257]: الإمارات - فرع دبي
+                - generic [ref=e259]: AED
+              - generic [ref=e260] [cursor=pointer]:
+                - generic [ref=e261]: لندن - فرع بريطانيا
+                - generic [ref=e263]: GBP
+          - button "🔔" [ref=e113] [cursor=pointer]
+          - generic [ref=e115] [cursor=pointer]:
+            - generic [ref=e116]:
+              - generic [ref=e117]: omar
+              - generic [ref=e118]: "ID: 1a134155"
+            - generic [ref=e119]: O
+      - main [ref=e121]:
+        - generic [ref=e122]:
+          - generic [ref=e124]:
+            - generic [ref=e125]:
+              - button "العودة" [ref=e126] [cursor=pointer]:
+                - img [ref=e127]
+              - generic [ref=e129]:
+                - heading "الميزانيات التقديرية" [level=1] [ref=e130]
+                - paragraph [ref=e131]: إدارة الميزانيات ومتابعة الأداء المالي
+            - button "+ ميزانية جديدة" [ref=e132] [cursor=pointer]:
+              - generic [ref=e133]: +
+              - text: ميزانية جديدة
+          - generic [ref=e135]:
+            - img [ref=e136]
+            - combobox [ref=e138]:
+              - option "جميع مراكز التكلفة" [selected]
+              - option "العمليات"
+              - option "المبيعات والتسويق"
+              - option "الإدارة العامة"
+          - generic [ref=e139]:
+            - generic [ref=e140]:
+              - img [ref=e142]
+              - generic [ref=e145]:
+                - generic [ref=e146]: إجمالي الميزانيات
+                - generic [ref=e147]: "2"
+                - generic [ref=e148]: "نشطة: 1 | مسودة: 1"
+            - generic [ref=e149]:
+              - img [ref=e151]
+              - generic [ref=e154]:
+                - generic [ref=e155]: إجمالي المخطط
+                - generic [ref=e156]: 1,315,600.00
+                - generic [ref=e157]: SAR
+            - generic [ref=e158]:
+              - img [ref=e160]
+              - generic [ref=e163]:
+                - generic [ref=e164]: إجمالي الفعلي
+                - generic [ref=e165]: 609,396.34
+                - generic [ref=e166]: SAR • 46.32%
+            - generic [ref=e167]:
+              - img [ref=e169]
+              - generic [ref=e171]:
+                - generic [ref=e172]: تجاوزات
+                - generic [ref=e173]: "0"
+                - generic [ref=e174]: جيد
+          - generic [ref=e175]:
+            - generic [ref=e176]:
+              - generic [ref=e177]:
+                - generic [ref=e178]:
+                  - heading "ميزانية القاهرة 2026" [level=3] [ref=e179]
+                  - generic [ref=e180]:
+                    - img [ref=e181]
+                    - text: مسودة
+                - button [ref=e185] [cursor=pointer]:
+                  - img [ref=e186]
+              - paragraph [ref=e190]: ميزانية سنوية لفرع القاهرة
+              - generic [ref=e191]:
+                - img [ref=e192]
+                - generic [ref=e194]:
+                  - generic [ref=e195]:
+                    - generic [ref=e196]: تاريخ البدء
+                    - generic [ref=e197]: 2026/01/01
+                  - generic [ref=e199]:
+                    - generic [ref=e200]: تاريخ الانتهاء
+                    - generic [ref=e201]: 2026/12/31
+              - generic [ref=e202]:
+                - button "بنود الميزانية" [ref=e203] [cursor=pointer]:
+                  - img [ref=e204]
+                  - text: بنود الميزانية
+                - button "تقرير الانحراف" [ref=e207] [cursor=pointer]:
+                  - img [ref=e208]
+                  - text: تقرير الانحراف
+            - generic [ref=e209]:
+              - generic [ref=e210]:
+                - generic [ref=e211]:
+                  - heading "ميزانية المبيعات 2026" [level=3] [ref=e212]
+                  - generic [ref=e213]:
+                    - img [ref=e214]
+                    - text: نشطة
+                - button [ref=e218] [cursor=pointer]:
+                  - img [ref=e219]
+              - paragraph [ref=e223]: ميزانية تقديرية لقسم المبيعات
+              - generic [ref=e224]:
+                - img [ref=e225]
+                - generic [ref=e227]:
+                  - generic [ref=e228]:
+                    - generic [ref=e229]: تاريخ البدء
+                    - generic [ref=e230]: 2026/05/06
+                  - generic [ref=e232]:
+                    - generic [ref=e233]: تاريخ الانتهاء
+                    - generic [ref=e234]: 2027/05/06
+              - generic [ref=e235]:
+                - button "بنود الميزانية" [ref=e236] [cursor=pointer]:
+                  - img [ref=e237]
+                  - text: بنود الميزانية
+                - button "تقرير الانحراف" [ref=e240] [cursor=pointer]:
+                  - img [ref=e241]
+                  - text: تقرير الانحراف

@@ -26,6 +26,7 @@ class TaxRateUpdate(BaseModel):
     effective_from: Optional[date] = None
     effective_to: Optional[date] = None
     is_active: Optional[bool] = None
+    reason: Optional[str] = None
 
 
 class TaxGroupCreate(BaseModel):

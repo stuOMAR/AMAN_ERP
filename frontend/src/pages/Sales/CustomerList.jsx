@@ -97,7 +97,7 @@ function CustomerList() {
             ),
         },
         {
-            key: 'current_balance',
+            key: 'balance_display',
             label: t('sales.customers.table.balance'),
             width: '15%',
             render: (val, row) => (
@@ -106,7 +106,7 @@ function CustomerList() {
                     color: val > 0 ? 'var(--error)' : 'var(--text-primary)',
                     direction: 'ltr', textAlign: 'right',
                 }}>
-                    {formatNumber(val)} {row.currency || currency}
+                    {formatNumber(val)} {row.display_currency || currency}
                 </div>
             ),
         },

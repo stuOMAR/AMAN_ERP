@@ -42,7 +42,7 @@ def _resolve_employee(conn, user, raise_on_missing: bool = True) -> dict | None:
                e.department_id, e.position_id, e.branch_id,
                e.salary, e.housing_allowance, e.transport_allowance,
                e.other_allowances, e.nationality, e.hire_date,
-               21 AS annual_leave_days,
+               COALESCE(e.annual_leave_entitlement, e.annual_leave_days, 30) AS annual_leave_days,
                d.department_name, p.position_name,
                e.user_id
         FROM employees e
@@ -202,6 +202,7 @@ def list_own_payslips(
 @router.get("/payslips/{payslip_id}", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
 def get_payslip_detail(
     payslip_id: int,
+    request: Request,
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
@@ -233,6 +234,18 @@ def get_payslip_detail(
 
         if not row:
             raise HTTPException(status_code=404, detail="Payslip not found")
+
+        uid = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+        log_activity(
+            conn,
+            user_id=uid,
+            username=getattr(current_user, "username", "unknown"),
+            action="hr.self_service.payslip_view",
+            resource_type="payroll_entry",
+            resource_id=str(payslip_id),
+            details={"employee_id": emp["id"]},
+            request=request,
+        )
 
         return {"success": True, "data": dict(row)}
     finally:
@@ -335,8 +348,21 @@ def submit_leave_request(
                   AND leave_type IN ('annual', 'سنوية')
                   AND start_date >= :ys
             """), {"eid": eid, "ys": year_start}).scalar() or 0
+            pending = conn.execute(text("""
+                SELECT COALESCE(SUM(end_date - start_date + 1), 0)
+                FROM leave_requests
+                WHERE employee_id = :eid AND status = 'pending'
+                  AND leave_type IN ('annual', 'سنوية')
+                  AND start_date >= :ys
+            """), {"eid": eid, "ys": year_start}).scalar() or 0
+            carry = conn.execute(text("""
+                SELECT COALESCE(carried_days, 0)
+                FROM leave_carryover
+                WHERE employee_id = :eid
+                ORDER BY year DESC LIMIT 1
+            """), {"eid": eid}).scalar() or 0
             entitlement = int(emp["annual_leave_days"])
-            remaining = entitlement - int(used)
+            remaining = entitlement + int(carry) - int(used) - int(pending)
             if leave_days > remaining:
                 raise HTTPException(
                     status_code=400,

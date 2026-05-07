@@ -4,6 +4,7 @@ Email & SMS Notification Service - NOT-001, NOT-002
 """
 import hashlib
 import hmac
+import html
 import smtplib
 import ssl
 import logging
@@ -13,6 +14,21 @@ from typing import Optional, List
 from sqlalchemy import text
 
 logger = logging.getLogger("aman.email")
+
+
+def _mask_email(value: str) -> str:
+    local, _, domain = (value or "").partition("@")
+    if not domain:
+        return "***"
+    visible = local[:1] if local else ""
+    return f"{visible}***@{domain}"
+
+
+def _mask_phone(value: str) -> str:
+    digits = "".join(ch for ch in str(value or "") if ch.isdigit())
+    if len(digits) <= 4:
+        return "***"
+    return f"***{digits[-4:]}"
 
 
 # ===================== Email Service =====================
@@ -76,15 +92,17 @@ class EmailService:
             return False
 
     def send_bulk(self, recipients: List[str], subject: str, html_body: str) -> dict:
-        """Send to multiple recipients. Returns success/failure counts."""
+        """Send to multiple recipients. Returns success/failure counts and per-user failures."""
         success = 0
         failed = 0
+        failed_recipients = []
         for email in recipients:
             if self.send(email, subject, html_body):
                 success += 1
             else:
                 failed += 1
-        return {"sent": success, "failed": failed}
+                failed_recipients.append({"email": _mask_email(email), "reason": "send_failed"})
+        return {"sent": success, "failed": failed, "failures": failed_recipients}
 
 
 # ===================== SMS Service =====================
@@ -108,13 +126,13 @@ class SMSService:
                 "message": message
             }, timeout=10)
             if response.status_code == 200:
-                logger.info(f"✅ SMS sent to {phone}")
+                logger.info("SMS sent to %s", _mask_phone(phone))
                 return True
             else:
-                logger.error(f"❌ SMS failed to {phone}: {response.text}")
+                logger.error("SMS failed to %s: %s", _mask_phone(phone), response.text)
                 return False
         except Exception as e:
-            logger.error(f"❌ SMS send failed to {phone}: {str(e)}")
+            logger.error("SMS send failed to %s: %s", _mask_phone(phone), str(e))
             return False
 
 
@@ -160,7 +178,12 @@ def get_base_template(content: str, company_name: str = "AMAN ERP") -> str:
 
 def approval_request_template(requester: str, document_type: str, amount: float,
                                description: str, approval_url: str) -> str:
-    """Email template for new approval request."""
+    """Email template for new approval request.
+
+    P1 #92 fix: HTML-escape every user-controlled value before splicing
+    into the template body. ``approval_url`` is escaped for attribute
+    context to defang ``" onclick=...`` style payloads.
+    """
     doc_labels = {
         "purchase_order": "أمر شراء",
         "expense": "مصروف",
@@ -168,30 +191,38 @@ def approval_request_template(requester: str, document_type: str, amount: float,
         "payment_voucher": "سند صرف",
         "sales_order": "أمر بيع",
     }
-    doc_label = doc_labels.get(document_type, document_type)
+    doc_label = doc_labels.get(document_type, html.escape(str(document_type or "")))
+    safe_requester = html.escape(str(requester or ""))
+    safe_description = html.escape(str(description or ""))
+    safe_url = html.escape(str(approval_url or ""), quote=True)
 
     content = f"""
     <h2>📋 طلب اعتماد جديد</h2>
     <div class="info-box">
         <p><strong>النوع:</strong> {doc_label}</p>
-        <p><strong>من:</strong> {requester}</p>
+        <p><strong>من:</strong> {safe_requester}</p>
         <p><strong>المبلغ:</strong> <span class="amount">{amount:,.2f}</span></p>
-        <p><strong>الوصف:</strong> {description}</p>
+        <p><strong>الوصف:</strong> {safe_description}</p>
     </div>
-    <a href="{approval_url}" class="btn">مراجعة واعتماد</a>
+    <a href="{safe_url}" class="btn">مراجعة واعتماد</a>
     """
     return get_base_template(content)
 
 
 def approval_result_template(status: str, document_type: str, amount: float,
                               notes: str = "", approver: str = "") -> str:
-    """Email template for approval result notification."""
+    """Email template for approval result notification.
+
+    P1 #92 fix: HTML-escape user values (notes, approver, document_type).
+    """
     doc_labels = {
         "purchase_order": "أمر شراء",
         "expense": "مصروف",
         "leave_request": "طلب إجازة",
     }
-    doc_label = doc_labels.get(document_type, document_type)
+    doc_label = doc_labels.get(document_type, html.escape(str(document_type or "")))
+    safe_notes = html.escape(str(notes or ""))
+    safe_approver = html.escape(str(approver or ""))
 
     status_labels = {
         "approved": ("✅ تم الاعتماد", "#28a745"),
@@ -205,8 +236,8 @@ def approval_result_template(status: str, document_type: str, amount: float,
     <div class="info-box">
         <p><strong>النوع:</strong> {doc_label}</p>
         <p><strong>المبلغ:</strong> <span class="amount">{amount:,.2f}</span></p>
-        {"<p><strong>المعتمد:</strong> " + approver + "</p>" if approver else ""}
-        {"<p><strong>ملاحظات:</strong> " + notes + "</p>" if notes else ""}
+        {"<p><strong>المعتمد:</strong> " + safe_approver + "</p>" if safe_approver else ""}
+        {"<p><strong>ملاحظات:</strong> " + safe_notes + "</p>" if safe_notes else ""}
     </div>
     """
     return get_base_template(content)
@@ -215,13 +246,16 @@ def approval_result_template(status: str, document_type: str, amount: float,
 def invoice_template(invoice_number: str, customer_name: str, total: float,
                       due_date: str, items_html: str = "") -> str:
     """Email template for invoice notification."""
+    safe_invoice_number = html.escape(str(invoice_number or ""))
+    safe_customer_name = html.escape(str(customer_name or ""))
+    safe_due_date = html.escape(str(due_date or ""))
     content = f"""
     <h2>📄 فاتورة جديدة</h2>
     <div class="info-box">
-        <p><strong>رقم الفاتورة:</strong> {invoice_number}</p>
-        <p><strong>العميل:</strong> {customer_name}</p>
+        <p><strong>رقم الفاتورة:</strong> {safe_invoice_number}</p>
+        <p><strong>العميل:</strong> {safe_customer_name}</p>
         <p><strong>الإجمالي:</strong> <span class="amount">{total:,.2f}</span></p>
-        <p><strong>تاريخ الاستحقاق:</strong> {due_date}</p>
+        <p><strong>تاريخ الاستحقاق:</strong> {safe_due_date}</p>
     </div>
     {items_html}
     """
@@ -231,11 +265,13 @@ def invoice_template(invoice_number: str, customer_name: str, total: float,
 def payroll_template(employee_name: str, period: str, net_salary: float,
                       gross: float, deductions: float) -> str:
     """Email template for payroll notification."""
+    safe_employee_name = html.escape(str(employee_name or ""))
+    safe_period = html.escape(str(period or ""))
     content = f"""
     <h2>💰 إشعار راتب</h2>
-    <p>مرحباً <strong>{employee_name}</strong>،</p>
+    <p>مرحباً <strong>{safe_employee_name}</strong>،</p>
     <div class="info-box">
-        <p><strong>الفترة:</strong> {period}</p>
+        <p><strong>الفترة:</strong> {safe_period}</p>
         <p><strong>الراتب الإجمالي:</strong> {gross:,.2f}</p>
         <p><strong>الاستقطاعات:</strong> {deductions:,.2f}</p>
         <p><strong>صافي الراتب:</strong> <span class="amount">{net_salary:,.2f}</span></p>
@@ -248,13 +284,16 @@ def expiry_alert_template(item_type: str, item_name: str, expiry_date: str,
                            days_remaining: int) -> str:
     """Email template for expiry alerts (documents, iqama, etc.)."""
     urgency = "🔴" if days_remaining <= 7 else "🟡" if days_remaining <= 30 else "🟢"
+    safe_item_type = html.escape(str(item_type or ""))
+    safe_item_name = html.escape(str(item_name or ""))
+    safe_expiry_date = html.escape(str(expiry_date or ""))
 
     content = f"""
     <h2>{urgency} تنبيه انتهاء صلاحية</h2>
     <div class="info-box">
-        <p><strong>النوع:</strong> {item_type}</p>
-        <p><strong>الاسم:</strong> {item_name}</p>
-        <p><strong>تاريخ الانتهاء:</strong> {expiry_date}</p>
+        <p><strong>النوع:</strong> {safe_item_type}</p>
+        <p><strong>الاسم:</strong> {safe_item_name}</p>
+        <p><strong>تاريخ الانتهاء:</strong> {safe_expiry_date}</p>
         <p><strong>الأيام المتبقية:</strong> <span class="amount">{days_remaining}</span> يوم</p>
     </div>
     """

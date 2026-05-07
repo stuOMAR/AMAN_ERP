@@ -506,7 +506,7 @@ class CostingService:
         }
 
     @staticmethod
-    def get_cost_layers(db, product_id=None, warehouse_id=None, include_exhausted=False):
+    def get_cost_layers(db, product_id=None, warehouse_id=None, include_exhausted=False, branch_id=None, branch_ids=None):
         """Get cost layers with optional filters."""
         conditions = ["1=1"]
         params = {}
@@ -516,6 +516,15 @@ class CostingService:
         if warehouse_id:
             conditions.append("cl.warehouse_id = :wid")
             params["wid"] = warehouse_id
+        elif branch_id:
+            conditions.append("w.branch_id = :branch_id")
+            params["branch_id"] = branch_id
+        elif branch_ids is not None:
+            if branch_ids:
+                conditions.append("w.branch_id = ANY(:branch_ids)")
+                params["branch_ids"] = branch_ids
+            else:
+                conditions.append("1=0")
         if not include_exhausted:
             conditions.append("cl.is_exhausted = FALSE")
 
@@ -599,13 +608,26 @@ class CostingService:
         }
 
     @staticmethod
-    def calculate_inventory_valuation(db, as_of_date=None):
+    def calculate_inventory_valuation(db, as_of_date=None, warehouse_id=None, branch_id=None, branch_ids=None):
         """Calculate inventory valuation grouped by product and costing method."""
         date_filter = ""
         params = {}
+        scope_filter = ""
         if as_of_date:
             date_filter = "AND cl.purchase_date <= :cutoff"
             params["cutoff"] = str(as_of_date)
+        if warehouse_id:
+            scope_filter += " AND cl.warehouse_id = :warehouse_id"
+            params["warehouse_id"] = warehouse_id
+        elif branch_id:
+            scope_filter += " AND w.branch_id = :branch_id"
+            params["branch_id"] = branch_id
+        elif branch_ids is not None:
+            if branch_ids:
+                scope_filter += " AND w.branch_id = ANY(:branch_ids)"
+                params["branch_ids"] = branch_ids
+            else:
+                scope_filter += " AND 1=0"
 
         rows = db.execute(text(f"""
             SELECT cl.product_id, p.product_name as product_name, cl.costing_method,
@@ -616,7 +638,8 @@ class CostingService:
                         ELSE 0 END as weighted_avg_cost
             FROM cost_layers cl
             JOIN products p ON p.id = cl.product_id
-            WHERE cl.is_exhausted = FALSE {date_filter}
+            LEFT JOIN warehouses w ON w.id = cl.warehouse_id
+            WHERE cl.is_exhausted = FALSE {date_filter} {scope_filter}
             GROUP BY cl.product_id, p.product_name, cl.costing_method
             HAVING SUM(cl.remaining_quantity) > 0
             ORDER BY p.product_name
@@ -643,14 +666,29 @@ class CostingService:
         }
 
     @staticmethod
-    def get_consumption_history(db, product_id: int):
+    def get_consumption_history(db, product_id: int, warehouse_id=None, branch_id=None, branch_ids=None):
         """Get consumption history for a product's cost layers."""
+        filters = ["cl.product_id = :pid"]
+        params = {"pid": product_id}
+        if warehouse_id:
+            filters.append("cl.warehouse_id = :warehouse_id")
+            params["warehouse_id"] = warehouse_id
+        elif branch_id:
+            filters.append("w.branch_id = :branch_id")
+            params["branch_id"] = branch_id
+        elif branch_ids is not None:
+            if branch_ids:
+                filters.append("w.branch_id = ANY(:branch_ids)")
+                params["branch_ids"] = branch_ids
+            else:
+                filters.append("1=0")
         return db.execute(text("""
             SELECT clc.id, clc.cost_layer_id, clc.quantity_consumed,
                    clc.sale_document_type, clc.sale_document_id, clc.consumed_at,
                    cl.unit_cost, cl.costing_method, cl.purchase_date
             FROM cost_layer_consumptions clc
             JOIN cost_layers cl ON cl.id = clc.cost_layer_id
-            WHERE cl.product_id = :pid
+            LEFT JOIN warehouses w ON w.id = cl.warehouse_id
+            WHERE """ + " AND ".join(filters) + """
             ORDER BY clc.consumed_at DESC
-        """), {"pid": product_id}).fetchall()
+        """), params).fetchall()

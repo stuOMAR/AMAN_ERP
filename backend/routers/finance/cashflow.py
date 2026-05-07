@@ -20,7 +20,7 @@ from schemas.cashflow import (
     ForecastRead,
 )
 from services.forecast_service import generate_cashflow_forecast
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 
 logger = logging.getLogger(__name__)
 
@@ -78,14 +78,11 @@ def list_forecasts(
     current_user=Depends(get_current_user),
 ):
     """List Forecasts."""
-    resolved_branch = validate_branch_access(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
         where = "deleted_at IS NULL"
         params = {"lim": limit, "off": skip}
-        if resolved_branch is not None:
-            where += " AND branch_id = :branch_id"
-            params["branch_id"] = resolved_branch
+        where += " " + branch_scope_filter(current_user, branch_id, "branch_id", params)
         total = db.execute(
             text(f"SELECT COUNT(*) FROM cashflow_forecasts WHERE {where}"), params
         ).scalar()

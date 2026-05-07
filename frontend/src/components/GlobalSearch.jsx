@@ -2,6 +2,8 @@ import { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { hasPermission, getUser } from '../utils/auth'
+import useDebounce from '../hooks/useDebounce'
+import api from '../services/apiClient'
 
 // All searchable pages in the ERP system
 function useSearchablePages() {
@@ -40,7 +42,6 @@ function useSearchablePages() {
     add('/accounting/closing-entries', 'قيود الإقفال', 'Closing Entries', '🔒', 'Accounting', 'المحاسبة', 'accounting.manage', 'accounting', ['closing', 'إقفال'])
     add('/accounting/cost-centers', 'مراكز التكلفة', 'Cost Centers', '🎯', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['cost center', 'تكلفة', 'مركز'])
     add('/accounting/budgets', 'الميزانيات', 'Budgets', '💹', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['budget', 'ميزانية', 'موازنة'])
-    add('/accounting/budgets/advanced', 'الميزانيات المتقدمة', 'Advanced Budgets', '💹', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['advanced budget', 'متقدم'])
     add('/accounting/vat-report', 'تقرير الضريبة', 'VAT Report', '🧾', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['vat', 'ضريبة', 'القيمة المضافة'])
     add('/accounting/tax-audit', 'تدقيق الضرائب', 'Tax Audit', '🔍', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['tax', 'تدقيق', 'ضريبي'])
     add('/accounting/cashflow', 'التدفق النقدي', 'Cash Flow Report', '💵', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['cash flow', 'نقدي', 'تدفق'])
@@ -52,229 +53,54 @@ function useSearchablePages() {
     add('/accounting/zakat', 'الزكاة', 'Zakat Calculator', '🕌', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['zakat', 'زكاة'])
     add('/accounting/fiscal-locks', 'أقفال الفترات', 'Fiscal Period Locks', '🔐', 'Accounting', 'المحاسبة', 'accounting.manage', 'accounting', ['lock', 'قفل', 'فترة'])
 
-    // Intercompany v2
-    add('/accounting/intercompany/entities', 'مجموعات الكيانات', 'Entity Groups', '🏢', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['entity', 'كيان', 'مجموعة', 'intercompany', 'بين الشركات'])
-    add('/accounting/intercompany/transactions', 'معاملات بين الشركات', 'Intercompany Transactions', '🔄', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['intercompany', 'شركات', 'معاملة'])
-    add('/accounting/intercompany/transactions/new', 'معاملة جديدة بين الشركات', 'New Intercompany Transaction', '➕', 'Accounting', 'المحاسبة', 'accounting.edit', 'accounting', ['create', 'إنشاء', 'intercompany'])
-    add('/accounting/intercompany/consolidation', 'تجميع القوائم المالية', 'Consolidation', '📊', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['consolidation', 'تجميع', 'موحد'])
-    add('/accounting/intercompany/mappings', 'ربط الحسابات بين الشركات', 'Intercompany Account Mappings', '🔗', 'Accounting', 'المحاسبة', 'accounting.view', 'accounting', ['mapping', 'ربط', 'حسابات', 'intercompany'])
-
     // Sales
     add('/sales', 'المبيعات', 'Sales', '💰', 'Sales', 'المبيعات', 'sales.view', 'sales', ['بيع', 'مبيعات'])
     add('/sales/customers', 'العملاء', 'Customers', '👤', 'Sales', 'المبيعات', 'sales.view', 'sales', ['customer', 'عميل', 'زبون'])
-    add('/sales/customers/new', 'عميل جديد', 'New Customer', '➕', 'Sales', 'المبيعات', 'sales.view', 'sales', ['create', 'إنشاء', 'إضافة'])
     add('/sales/invoices', 'فواتير المبيعات', 'Sales Invoices', '🧾', 'Sales', 'المبيعات', 'sales.view', 'sales', ['invoice', 'فاتورة', 'فواتير'])
-    add('/sales/invoices/new', 'فاتورة جديدة', 'New Invoice', '➕', 'Sales', 'المبيعات', 'sales.view', 'sales', ['create', 'إنشاء'])
     add('/sales/orders', 'أوامر البيع', 'Sales Orders', '📋', 'Sales', 'المبيعات', 'sales.view', 'sales', ['order', 'أمر', 'طلب'])
-    add('/sales/orders/new', 'أمر بيع جديد', 'New Sales Order', '➕', 'Sales', 'المبيعات', 'sales.view', 'sales', ['create', 'إنشاء'])
     add('/sales/quotations', 'عروض الأسعار', 'Quotations', '📄', 'Sales', 'المبيعات', 'sales.view', 'sales', ['quotation', 'عرض سعر', 'تسعير'])
-    add('/sales/quotations/new', 'عرض سعر جديد', 'New Quotation', '➕', 'Sales', 'المبيعات', 'sales.view', 'sales', ['create', 'إنشاء'])
-    add('/sales/cpq/products', 'التسعير المتقدم', 'Configure-Price-Quote', '🧮', 'Sales', 'المبيعات', 'sales.view', 'cpq', ['cpq', 'configure', 'price', 'quote', 'تسعير متقدم'])
-    add('/sales/cpq/quotes', 'عروض التسعير المتقدم', 'CPQ Quotes', '🧾', 'Sales', 'المبيعات', 'sales.view', 'cpq', ['cpq', 'quote', 'تسعير', 'عرض'])
-    add('/sales/customer-groups', 'مجموعات العملاء', 'Customer Groups', '👥', 'Sales', 'المبيعات', 'sales.view', 'sales', ['group', 'مجموعة'])
     add('/sales/returns', 'مرتجعات المبيعات', 'Sales Returns', '↩️', 'Sales', 'المبيعات', 'sales.view', 'sales', ['return', 'مرتجع', 'إرجاع'])
-    add('/sales/receipts', 'إيصالات القبض', 'Customer Receipts', '🧾', 'Sales', 'المبيعات', 'sales.view', 'sales', ['receipt', 'إيصال', 'قبض', 'تحصيل'])
-    add('/sales/contracts', 'العقود', 'Contracts', '📑', 'Sales', 'المبيعات', 'sales.view', 'sales', ['contract', 'عقد'])
-    add('/sales/credit-notes', 'إشعارات دائنة', 'Credit Notes', '📝', 'Sales', 'المبيعات', 'sales.view', 'sales', ['credit note', 'إشعار دائن'])
-    add('/sales/debit-notes', 'إشعارات مدينة', 'Debit Notes', '📝', 'Sales', 'المبيعات', 'sales.view', 'sales', ['debit note', 'إشعار مدين'])
-    add('/sales/commissions', 'العمولات', 'Sales Commissions', '💵', 'Sales', 'المبيعات', 'sales.view', 'sales', ['commission', 'عمولة'])
-    add('/sales/delivery-orders', 'أوامر التسليم', 'Delivery Orders', '🚚', 'Sales', 'المبيعات', 'sales.view', 'sales', ['delivery', 'تسليم', 'شحن'])
-    add('/sales/reports/analytics', 'تقارير المبيعات', 'Sales Reports', '📈', 'Sales', 'المبيعات', 'sales.reports', 'sales', ['analytics', 'تحليلات'])
-    add('/sales/reports/customer-statement', 'كشف حساب العميل', 'Customer Statement', '📋', 'Sales', 'المبيعات', 'sales.reports', 'sales', ['statement', 'كشف حساب'])
-    add('/sales/reports/aging', 'تقرير الأعمار', 'Aging Report', '⏰', 'Sales', 'المبيعات', 'sales.reports', 'sales', ['aging', 'أعمار', 'تأخير'])
 
     // POS
     add('/pos', 'نقاط البيع', 'Point of Sale', '🏪', 'POS', 'نقاط البيع', 'pos.view', 'pos', ['pos', 'كاشير', 'بيع مباشر'])
-    add('/pos/interface', 'شاشة البيع', 'POS Interface', '💳', 'POS', 'نقاط البيع', 'pos.sessions', 'pos', ['sell', 'بيع', 'كاشير'])
-    add('/pos/promotions', 'العروض والخصومات', 'Promotions', '🎁', 'POS', 'نقاط البيع', 'pos.view', 'pos', ['promotion', 'عرض', 'خصم'])
-    add('/pos/loyalty', 'برامج الولاء', 'Loyalty Programs', '⭐', 'POS', 'نقاط البيع', 'pos.view', 'pos', ['loyalty', 'ولاء', 'نقاط'])
-    add('/pos/tables', 'إدارة الطاولات', 'Table Management', '🪑', 'POS', 'نقاط البيع', 'pos.view', 'pos', ['table', 'طاولة', 'مطعم'])
-    add('/pos/kitchen', 'شاشة المطبخ', 'Kitchen Display', '👨‍🍳', 'POS', 'نقاط البيع', 'pos.view', 'pos', ['kitchen', 'مطبخ'])
 
     // Buying
     add('/buying', 'المشتريات', 'Purchases', '🛒', 'Buying', 'المشتريات', 'buying.view', 'buying', ['purchase', 'شراء', 'مشتريات'])
     add('/buying/suppliers', 'الموردين', 'Suppliers', '🏭', 'Buying', 'المشتريات', 'buying.view', 'buying', ['supplier', 'مورد', 'موردين'])
-    add('/buying/suppliers/new', 'مورد جديد', 'New Supplier', '➕', 'Buying', 'المشتريات', 'buying.view', 'buying', ['create', 'إنشاء'])
     add('/buying/invoices', 'فواتير المشتريات', 'Purchase Invoices', '🧾', 'Buying', 'المشتريات', 'buying.view', 'buying', ['invoice', 'فاتورة'])
-    add('/buying/invoices/new', 'فاتورة مشتريات جديدة', 'New Purchase Invoice', '➕', 'Buying', 'المشتريات', 'buying.view', 'buying', ['create', 'إنشاء'])
     add('/buying/orders', 'أوامر الشراء', 'Purchase Orders', '📋', 'Buying', 'المشتريات', 'buying.view', 'buying', ['order', 'أمر شراء', 'طلب'])
-    add('/buying/orders/new', 'أمر شراء جديد', 'New Purchase Order', '➕', 'Buying', 'المشتريات', 'buying.create', 'buying', ['create', 'إنشاء'])
-    add('/buying/returns', 'مرتجعات المشتريات', 'Purchase Returns', '↩️', 'Buying', 'المشتريات', 'buying.view', 'buying', ['return', 'مرتجع'])
-    add('/buying/payments', 'سداد الموردين', 'Supplier Payments', '💳', 'Buying', 'المشتريات', 'buying.view', 'buying', ['payment', 'سداد', 'دفع'])
-    add('/buying/supplier-groups', 'مجموعات الموردين', 'Supplier Groups', '👥', 'Buying', 'المشتريات', 'buying.view', 'buying', ['group', 'مجموعة'])
-    add('/buying/credit-notes', 'إشعارات دائنة', 'Purchase Credit Notes', '📝', 'Buying', 'المشتريات', 'buying.view', 'buying', ['credit', 'إشعار دائن'])
-    add('/buying/debit-notes', 'إشعارات مدينة', 'Purchase Debit Notes', '📝', 'Buying', 'المشتريات', 'buying.view', 'buying', ['debit', 'إشعار مدين'])
-    add('/buying/rfq', 'طلبات عروض الأسعار', 'RFQ', '📩', 'Buying', 'المشتريات', 'buying.view', 'buying', ['rfq', 'طلب عرض سعر'])
-    add('/buying/supplier-ratings', 'تقييم الموردين', 'Supplier Ratings', '⭐', 'Buying', 'المشتريات', 'buying.view', 'buying', ['rating', 'تقييم'])
-    add('/buying/agreements', 'اتفاقيات الشراء', 'Purchase Agreements', '📑', 'Buying', 'المشتريات', 'buying.view', 'buying', ['agreement', 'اتفاقية'])
-    add('/buying/blanket-po', 'أوامر الشراء الشاملة', 'Blanket Purchase Orders', '📋', 'Buying', 'المشتريات', 'buying.view', 'buying', ['blanket po', 'blanket', 'أمر شراء شامل', 'شامل'])
-    add('/buying/blanket-po/new', 'أمر شراء شامل جديد', 'New Blanket Purchase Order', '➕', 'Buying', 'المشتريات', 'buying.create', 'buying', ['blanket po', 'create', 'إنشاء', 'شامل'])
-    add('/buying/landed-costs', 'التكاليف المضافة', 'Landed Costs', '📦', 'Buying', 'المشتريات', 'buying.view', 'buying', ['landed cost', 'تكاليف', 'شحن'])
-    add('/buying/reports/analytics', 'تقارير المشتريات', 'Purchase Reports', '📈', 'Buying', 'المشتريات', 'buying.reports', 'buying', ['analytics', 'تحليلات'])
-    add('/buying/reports/supplier-statement', 'كشف حساب المورد', 'Supplier Statement', '📋', 'Buying', 'المشتريات', 'buying.reports', 'buying', ['statement', 'كشف حساب'])
-
-    // 3-Way Matching
-    add('/buying/matching', 'المطابقة الثلاثية', '3-Way Matching', '✅', 'Buying', 'المشتريات', 'buying.view', 'buying', ['match', 'مطابقة', 'three-way', 'ثلاثي'])
-    add('/buying/matching/tolerances', 'حدود التفاوت', 'Tolerance Configuration', '⚙️', 'Buying', 'المشتريات', 'buying.view', 'buying', ['tolerance', 'تفاوت', 'حد', 'threshold'])
 
     // Stock / Inventory
     add('/stock', 'المخزون', 'Inventory', '📦', 'Inventory', 'المخزون', 'stock.view', 'stock', ['stock', 'مخزون', 'inventory'])
     add('/stock/products', 'المنتجات', 'Products', '🏷️', 'Inventory', 'المخزون', 'stock.view', 'stock', ['product', 'منتج', 'صنف', 'أصناف'])
-    add('/stock/products/new', 'منتج جديد', 'New Product', '➕', 'Inventory', 'المخزون', 'stock.view', 'stock', ['create', 'إنشاء'])
-    add('/stock/categories', 'فئات المنتجات', 'Product Categories', '📂', 'Inventory', 'المخزون', 'stock.view', 'stock', ['category', 'فئة', 'تصنيف'])
     add('/stock/warehouses', 'المستودعات', 'Warehouses', '🏭', 'Inventory', 'المخزون', 'stock.view', 'stock', ['warehouse', 'مستودع', 'مخزن'])
     add('/stock/transfer', 'تحويل مخزون', 'Stock Transfer', '🔀', 'Inventory', 'المخزون', 'stock.view', 'stock', ['transfer', 'تحويل', 'نقل'])
-    add('/stock/adjustments', 'تسويات المخزون', 'Stock Adjustments', '📝', 'Inventory', 'المخزون', 'stock.view', 'stock', ['adjustment', 'تسوية', 'جرد'])
-    add('/stock/shipments', 'الشحنات', 'Shipments', '🚛', 'Inventory', 'المخزون', 'stock.view', 'stock', ['shipment', 'شحن', 'شحنة'])
-    add('/stock/shipments/incoming', 'الشحنات الواردة', 'Incoming Shipments', '📥', 'Inventory', 'المخزون', 'stock.view', 'stock', ['incoming', 'وارد', 'استلام'])
-    add('/stock/price-lists', 'قوائم الأسعار', 'Price Lists', '💲', 'Inventory', 'المخزون', 'stock.view', 'stock', ['price list', 'سعر', 'تسعير'])
-    add('/stock/batches', 'الدفعات', 'Batches', '📋', 'Inventory', 'المخزون', 'stock.view', 'stock', ['batch', 'دفعة', 'lot'])
-    add('/stock/serials', 'الأرقام التسلسلية', 'Serial Numbers', '🔢', 'Inventory', 'المخزون', 'stock.view', 'stock', ['serial', 'تسلسلي', 'رقم'])
-    add('/stock/quality', 'فحص الجودة', 'Quality Inspections', '✅', 'Inventory', 'المخزون', 'stock.view', 'stock', ['quality', 'جودة', 'فحص'])
-    add('/stock/cycle-counts', 'العد الدوري', 'Cycle Counts', '🔄', 'Inventory', 'المخزون', 'stock.view', 'stock', ['cycle count', 'عد', 'جرد'])
-    add('/stock/reports/balance', 'تقارير المخزون', 'Stock Reports', '📊', 'Inventory', 'المخزون', 'stock.reports', 'stock', ['report', 'تقرير', 'رصيد'])
-    add('/stock/reports/movements', 'حركات المخزون', 'Stock Movements', '📊', 'Inventory', 'المخزون', 'stock.reports', 'stock', ['movement', 'حركة'])
-    add('/stock/valuation-report', 'تقرير التقييم', 'Inventory Valuation', '💰', 'Inventory', 'المخزون', 'reports.view', 'stock', ['valuation', 'تقييم'])
-    add('/inventory/forecast', 'توقعات الطلب', 'Demand Forecasts', '📉', 'Inventory', 'المخزون', 'inventory.forecast_view', 'forecast', ['forecast', 'demand', 'تنبؤ', 'توقعات الطلب'])
-    add('/inventory/forecast/generate', 'توليد توقع الطلب', 'Generate Demand Forecast', '➕', 'Inventory', 'المخزون', 'inventory.forecast_generate', 'forecast', ['forecast', 'generate', 'توليد', 'تنبؤ'])
-
-    // Inventory Costing (FIFO/LIFO)
-    add('/stock/cost-layers', 'طبقات التكلفة', 'Cost Layers', '📊', 'Inventory', 'المخزون', 'stock.view', 'stock', ['cost layer', 'طبقة', 'FIFO', 'LIFO', 'تكلفة'])
-    add('/stock/costing-method', 'طريقة التكلفة', 'Costing Method', '⚙️', 'Inventory', 'المخزون', 'stock.view', 'stock', ['costing method', 'FIFO', 'LIFO', 'متوسط', 'weighted'])
-    add('/stock/costing-valuation', 'تقرير تقييم التكلفة', 'Costing Valuation Report', '💰', 'Inventory', 'المخزون', 'stock.reports', 'stock', ['valuation', 'تقييم', 'costing', 'تكلفة'])
 
     // Manufacturing
     add('/manufacturing', 'التصنيع', 'Manufacturing', '🏭', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['production', 'إنتاج', 'تصنيع'])
-    add('/manufacturing/work-centers', 'مراكز العمل', 'Work Centers', '⚙️', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['work center', 'مركز عمل'])
-    add('/manufacturing/routes', 'مسارات التصنيع', 'Routings', '🔀', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['routing', 'مسار', 'عملية'])
-    add('/manufacturing/boms', 'قوائم المواد', 'Bills of Materials', '📋', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['bom', 'مواد', 'تركيب', 'وصفة'])
     add('/manufacturing/orders', 'أوامر الإنتاج', 'Production Orders', '📦', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['production order', 'أمر إنتاج', 'تشغيل'])
-    add('/manufacturing/job-cards', 'بطاقات العمل', 'Job Cards', '🎫', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['job card', 'بطاقة', 'عمل'])
     add('/manufacturing/mrp', 'تخطيط الموارد', 'MRP Planning', '📊', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['mrp', 'تخطيط', 'موارد'])
-    add('/manufacturing/equipment', 'المعدات والصيانة', 'Equipment', '🔧', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['equipment', 'معدة', 'صيانة'])
-    add('/manufacturing/schedule', 'جدول الإنتاج', 'Production Schedule', '📅', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['schedule', 'جدول', 'موعد'])
-    add('/manufacturing/costing', 'تكاليف التصنيع', 'Manufacturing Costing', '💰', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['costing', 'تكلفة'])
-    add('/manufacturing/shopfloor', 'أرضية الإنتاج', 'Shop Floor', '⚙️', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'shop_floor', ['shop floor', 'shopfloor', 'أرضية الإنتاج'])
-    add('/manufacturing/reports/analytics', 'تحليلات الإنتاج', 'Production Analytics', '📈', 'Manufacturing', 'التصنيع', 'manufacturing.view', 'manufacturing', ['analytics', 'تحليلات'])
 
     // Treasury
     add('/treasury', 'الخزينة', 'Treasury', '🏦', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['خزينة', 'treasury'])
     add('/treasury/accounts', 'حسابات الخزينة', 'Treasury Accounts', '🏦', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['account', 'حساب', 'بنك'])
-    add('/treasury/expense', 'صرف مبلغ', 'Expense', '💸', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['expense', 'صرف', 'مصروف'])
-    add('/treasury/transfer', 'تحويل بين الحسابات', 'Transfer', '🔄', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['transfer', 'تحويل'])
     add('/treasury/reconciliation', 'تسوية البنك', 'Bank Reconciliation', '🏧', 'Treasury', 'الخزينة', 'reconciliation.view', 'treasury', ['reconciliation', 'تسوية', 'بنك'])
-    add('/treasury/checks-receivable', 'شيكات القبض', 'Checks Receivable', '📝', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['check', 'شيك', 'قبض'])
-    add('/treasury/checks-payable', 'شيكات الدفع', 'Checks Payable', '📝', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['check', 'شيك', 'دفع'])
-    add('/treasury/notes-receivable', 'أوراق القبض', 'Notes Receivable', '📄', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['note', 'ورقة', 'قبض', 'كمبيالة'])
-    add('/treasury/notes-payable', 'أوراق الدفع', 'Notes Payable', '📄', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['note', 'ورقة', 'دفع', 'كمبيالة'])
-    add('/treasury/bank-import', 'استيراد البنك', 'Bank Import', '📥', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['bank import', 'استيراد', 'كشف بنك'])
-    add('/treasury/reports/balances', 'أرصدة الخزينة', 'Treasury Balances', '📊', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['balance', 'رصيد'])
-    add('/treasury/reports/cashflow', 'التدفق النقدي', 'Cash Flow', '💵', 'Treasury', 'الخزينة', 'treasury.view', 'treasury', ['cashflow', 'تدفق', 'نقدي'])
-
-    // Cash Flow Forecast
-    add('/finance/cashflow', 'توقعات التدفق النقدي', 'Cash Flow Forecasts', '🔮', 'Treasury', 'الخزينة', 'finance.cashflow_view', 'treasury', ['forecast', 'توقع', 'تدفق', 'cash flow'])
-    add('/finance/cashflow/generate', 'إنشاء توقع تدفق نقدي', 'Generate Forecast', '➕', 'Treasury', 'الخزينة', 'finance.cashflow_generate', 'treasury', ['generate', 'إنشاء', 'forecast', 'توقع'])
-    add('/finance/subscriptions', 'الاشتراكات', 'Subscriptions', '🔄', 'Treasury', 'الخزينة', 'finance.subscription_view', 'treasury', ['subscription', 'plan', 'اشتراك', 'اشتراكات'])
 
     // HR
     add('/hr', 'الموارد البشرية', 'Human Resources', '👥', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['hr', 'موارد', 'بشرية', 'موظفين'])
     add('/hr/employees', 'الموظفين', 'Employees', '👤', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['employee', 'موظف'])
-    add('/hr/departments', 'الأقسام', 'Departments', '🏢', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['department', 'قسم'])
-    add('/hr/positions', 'المناصب', 'Positions', '💼', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['position', 'منصب', 'وظيفة'])
     add('/hr/payroll', 'الرواتب', 'Payroll', '💰', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['payroll', 'راتب', 'أجر', 'مسير'])
-    add('/hr/loans', 'السلف', 'Loans', '💳', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['loan', 'سلفة', 'قرض'])
     add('/hr/leaves', 'الإجازات', 'Leaves', '🌴', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['leave', 'إجازة', 'غياب'])
-    add('/hr/attendance', 'الحضور والانصراف', 'Attendance', '⏰', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['attendance', 'حضور', 'انصراف'])
-    add('/hr/salary-structures', 'هياكل الرواتب', 'Salary Structures', '📊', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['salary', 'هيكل', 'بدل'])
-    add('/hr/overtime', 'العمل الإضافي', 'Overtime', '⏱️', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['overtime', 'إضافي', 'ساعات'])
-    add('/hr/gosi', 'التأمينات الاجتماعية', 'GOSI Settings', '🏥', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['gosi', 'تأمينات', 'اجتماعية'])
-    add('/hr/documents', 'مستندات الموظفين', 'Employee Documents', '📄', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['document', 'مستند', 'وثيقة'])
-    add('/hr/performance', 'تقييم الأداء', 'Performance Reviews', '⭐', 'HR', 'الموارد البشرية', 'hr.performance_view', 'hr', ['performance', 'أداء', 'تقييم'])
-    add('/hr/training', 'البرامج التدريبية', 'Training Programs', '📚', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['training', 'تدريب'])
-    add('/hr/violations', 'المخالفات', 'Violations', '⚠️', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['violation', 'مخالفة', 'جزاء'])
-    add('/hr/custody', 'العهد', 'Custody Management', '🔑', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['custody', 'عهدة'])
-    add('/hr/payslips', 'قسائم الرواتب', 'Payslips', '🧾', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['payslip', 'قسيمة', 'مسير'])
-    add('/hr/recruitment', 'التوظيف', 'Recruitment', '🎯', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['recruitment', 'توظيف', 'مقابلة'])
-    add('/hr/wps', 'حماية الأجور', 'WPS Export', '🏧', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['wps', 'حماية أجور'])
-    add('/hr/saudization', 'السعودة', 'Saudization', '🇸🇦', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['saudization', 'سعودة', 'توطين'])
-    add('/hr/end-of-service', 'مكافأة نهاية الخدمة', 'End of Service', '🎓', 'HR', 'الموارد البشرية', 'hr.view', 'hr', ['end of service', 'نهاية خدمة', 'مكافأة'])
-    add('/hr/reports', 'تقارير الموارد البشرية', 'HR Reports', '📈', 'HR', 'الموارد البشرية', 'hr.reports', 'hr', ['report', 'تقرير'])
-
-    // Employee Self-Service
-    add('/hr/self-service', 'الخدمة الذاتية', 'Self-Service Portal', '👤', 'HR', 'الموارد البشرية', 'hr.self_service', 'hr', ['self-service', 'خدمة ذاتية', 'employee'])
-    add('/hr/self-service/leave-request', 'طلب إجازة', 'Leave Request', '🏖️', 'HR', 'الموارد البشرية', 'hr.self_service', 'hr', ['leave', 'إجازة', 'طلب'])
-    add('/hr/self-service/payslips', 'قسائم راتبي', 'My Payslips', '💰', 'HR', 'الموارد البشرية', 'hr.self_service', 'hr', ['payslip', 'قسيمة', 'راتب'])
-    add('/hr/self-service/profile', 'ملفي الشخصي', 'My Profile', '📝', 'HR', 'الموارد البشرية', 'hr.self_service', 'hr', ['profile', 'ملف', 'شخصي'])
-    add('/hr/self-service/team-requests', 'طلبات الفريق', 'Team Requests', '👥', 'HR', 'الموارد البشرية', 'hr.self_service_approve', 'hr', ['team', 'فريق', 'طلبات', 'approve'])
-
-    // Assets
-    add('/assets', 'الأصول الثابتة', 'Fixed Assets', '🏗️', 'Assets', 'الأصول', 'assets.view', 'assets', ['asset', 'أصل', 'أصول'])
-    add('/assets/new', 'أصل جديد', 'New Asset', '➕', 'Assets', 'الأصول', 'assets.view', 'assets', ['create', 'إنشاء'])
-    add('/assets/management', 'إدارة الأصول', 'Asset Management', '⚙️', 'Assets', 'الأصول', 'assets.view', 'assets', ['management', 'إهلاك', 'استهلاك'])
 
     // Projects
-    add('/projects', 'المشاريع', 'Projects', '📐', 'Projects', 'المشاريع', 'projects.view', 'projects', ['project', 'مشروع'])
-    add('/projects/new', 'مشروع جديد', 'New Project', '➕', 'Projects', 'المشاريع', 'projects.create', 'projects', ['create', 'إنشاء'])
-    add('/projects/resources', 'إدارة الموارد', 'Resource Management', '👥', 'Projects', 'المشاريع', 'projects.view', 'projects', ['resource', 'مورد', 'فريق'])
-    add('/projects/timetracking', 'تتبع الوقت', 'Time Tracking', '⏱️', 'Projects', 'المشاريع', 'projects.time_view', 'projects', ['time', 'timesheet', 'تتبع الوقت', 'ساعات'])
-    add('/projects/timetracking/team', 'طلبات الوقت للفريق', 'Team Timesheets', '👥', 'Projects', 'المشاريع', 'projects.time_approve', 'projects', ['team', 'approve', 'اعتماد', 'فريق'])
-    add('/projects/timetracking/profitability', 'ربحية المشاريع', 'Project Profitability', '💰', 'Projects', 'المشاريع', 'projects.time_view', 'projects', ['profitability', 'ربحية', 'ساعات'])
-    add('/projects/resources/availability', 'تخطيط الموارد', 'Resource Planning', '📅', 'Projects', 'المشاريع', 'projects.resource_view', 'projects', ['resource planning', 'availability', 'تخطيط الموارد'])
-    add('/projects/resources/allocate', 'تخصيص الموارد', 'Allocate Resource', '🧭', 'Projects', 'المشاريع', 'projects.resource_manage', 'projects', ['allocate', 'تخصيص', 'resource'])
-    add('/projects/reports/financials', 'ماليات المشاريع', 'Project Financials', '💰', 'Projects', 'المشاريع', 'projects.view', 'projects', ['financial', 'مالي', 'ربح'])
-    add('/projects/reports/resources', 'استخدام الموارد', 'Resource Utilization', '📊', 'Projects', 'المشاريع', 'projects.view', 'projects', ['utilization', 'استخدام'])
-
-    // Expenses
-    add('/expenses', 'المصروفات', 'Expenses', '💸', 'Expenses', 'المصروفات', 'expenses.view', 'expenses', ['expense', 'مصروف', 'صرف'])
-    add('/expenses/new', 'مصروف جديد', 'New Expense', '➕', 'Expenses', 'المصروفات', 'expenses.create', 'expenses', ['create', 'إنشاء'])
-
-    // Taxes
-    add('/taxes', 'الضرائب', 'Taxes', '🧾', 'Taxes', 'الضرائب', 'accounting.view', 'taxes', ['tax', 'ضريبة'])
-    add('/taxes/returns/new', 'إقرار ضريبي جديد', 'New Tax Return', '➕', 'Taxes', 'الضرائب', 'taxes.manage', 'taxes', ['return', 'إقرار'])
-    add('/taxes/wht', 'ضريبة الاستقطاع', 'Withholding Tax', '📋', 'Taxes', 'الضرائب', 'taxes.view', 'taxes', ['withholding', 'استقطاع'])
-    add('/taxes/compliance', 'الامتثال الضريبي', 'Tax Compliance', '✅', 'Taxes', 'الضرائب', 'taxes.view', 'taxes', ['compliance', 'امتثال'])
-    add('/taxes/calendar', 'التقويم الضريبي', 'Tax Calendar', '📅', 'Taxes', 'الضرائب', 'taxes.view', 'taxes', ['calendar', 'تقويم', 'مواعيد'])
-
-    // CRM
-    add('/crm', 'إدارة العلاقات', 'CRM', '🤝', 'CRM', 'إدارة العلاقات', 'sales.view', 'crm', ['crm', 'علاقات', 'عملاء'])
-    add('/crm/opportunities', 'الفرص البيعية', 'Opportunities', '🎯', 'CRM', 'إدارة العلاقات', 'sales.view', 'crm', ['opportunity', 'فرصة', 'بيعية'])
-    add('/crm/tickets', 'تذاكر الدعم', 'Support Tickets', '🎫', 'CRM', 'إدارة العلاقات', 'sales.view', 'crm', ['ticket', 'تذكرة', 'دعم'])
-    add('/crm/campaigns', 'الحملات التسويقية', 'Marketing Campaigns', '📣', 'CRM', 'إدارة العلاقات', 'crm.campaign_view', 'crm', ['campaign', 'حملة', 'تسويق'])
-    add('/crm/knowledge-base', 'قاعدة المعرفة', 'Knowledge Base', '📚', 'CRM', 'إدارة العلاقات', 'sales.view', 'crm', ['knowledge', 'معرفة'])
-
-    // Services
-    add('/services', 'الخدمات والصيانة', 'Services', '🔧', 'Services', 'الخدمات', 'services.view', 'services', ['service', 'خدمة', 'صيانة'])
-    add('/services/requests', 'طلبات الخدمة', 'Service Requests', '📝', 'Services', 'الخدمات', 'services.view', 'services', ['request', 'طلب'])
-    add('/services/documents', 'إدارة المستندات', 'Document Management', '📁', 'Services', 'الخدمات', 'services.view', 'services', ['document', 'مستند', 'ملف'])
+    add('/projects', 'المشاريع', 'Projects', '📐', 'Projects', 'المشاريع', 'projects.view', 'projects', ['project', ' مشروع'])
 
     // Reports
     add('/reports', 'مركز التقارير', 'Report Center', '📈', 'Reports', 'التقارير', 'reports.view', 'reports', ['report', 'تقرير'])
-    add('/reports/builder', 'منشئ التقارير', 'Report Builder', '🔨', 'Reports', 'التقارير', 'reports.create', 'reports', ['builder', 'بناء', 'إنشاء'])
-    add('/reports/scheduled', 'التقارير المجدولة', 'Scheduled Reports', '⏰', 'Reports', 'التقارير', 'reports.view', 'reports', ['scheduled', 'مجدول'])
-    add('/reports/detailed-pl', 'الأرباح والخسائر التفصيلي', 'Detailed P&L', '📊', 'Reports', 'التقارير', 'accounting.view', 'reports', ['profit', 'loss', 'أرباح', 'خسائر'])
-    add('/reports/shared', 'التقارير المشتركة', 'Shared Reports', '🔗', 'Reports', 'التقارير', 'reports.view', 'reports', ['shared', 'مشترك'])
-    add('/reports/consolidation', 'تقارير التجميع', 'Consolidation Reports', '📊', 'Reports', 'التقارير', 'reports.view', 'reports', ['consolidation', 'تجميع'])
-    add('/analytics', 'تحليلات IBI', 'BI Analytics', '📊', 'Reports', 'التقارير', 'dashboard.analytics_view', 'reports', ['ibi', 'analytics', 'dashboard', 'تحليلات', 'لوحات'])
-    add('/analytics/new', 'لوحة IBI جديدة', 'New BI Dashboard', '➕', 'Reports', 'التقارير', 'dashboard.analytics_manage', 'reports', ['ibi', 'new dashboard', 'analytics', 'جديد'])
 
     // Admin / Settings
-    add('/approvals', 'الاعتمادات', 'Approvals', '✅', 'Admin', 'الإدارة', 'approvals.view', 'approvals', ['approval', 'اعتماد', 'موافقة'])
-    add('/data-import', 'استيراد البيانات', 'Data Import', '📥', 'Admin', 'الإدارة', 'data_import.view', 'data_import', ['import', 'استيراد', 'بيانات'])
-    add('/admin/audit-logs', 'سجلات المراقبة', 'Audit Logs', '📋', 'Admin', 'الإدارة', 'audit.view', 'audit', ['audit', 'سجل', 'مراقبة'])
-    add('/admin/roles', 'إدارة الأدوار', 'Role Management', '🔐', 'Admin', 'الإدارة', 'admin.roles', null, ['role', 'دور', 'صلاحية'])
     add('/settings', 'الإعدادات', 'Settings', '⚙️', 'Admin', 'الإدارة', 'settings.view', null, ['settings', 'إعدادات', 'ضبط'])
-    add('/settings/branches', 'الفروع', 'Branches', '🏢', 'Admin', 'الإدارة', 'branches.view', null, ['branch', 'فرع'])
-    add('/settings/costing-policy', 'سياسة التكلفة', 'Costing Policy', '💹', 'Admin', 'الإدارة', 'settings.view', null, ['costing', 'تكلفة', 'سياسة'])
-    add('/settings/api-keys', 'مفاتيح API', 'API Keys', '🔑', 'Admin', 'الإدارة', 'settings.view', null, ['api', 'key', 'مفتاح'])
-    add('/settings/webhooks', 'الويب هوك', 'Webhooks', '🔗', 'Admin', 'الإدارة', 'settings.view', null, ['webhook', 'ويب هوك'])
-    add('/settings/sso', 'الدخول الموحد', 'SSO Configuration', '🔑', 'Admin', 'الإدارة', 'settings.view', null, ['sso', 'دخول موحد', 'SAML', 'OAuth'])
-    add('/settings/sso/new', 'إعداد SSO جديد', 'New SSO Configuration', '➕', 'Admin', 'الإدارة', 'settings.manage', null, ['sso', 'create', 'إنشاء'])
-    add('/settings/print-templates', 'قوالب الطباعة', 'Print Templates', '🖨️', 'Admin', 'الإدارة', 'settings.view', null, ['print', 'طباعة', 'قالب', 'فاتورة'])
-    add('/settings/smart-alerts', 'التنبيهات الذكية', 'Smart Alerts', '🔔', 'Admin', 'الإدارة', 'settings.view', null, ['alerts', 'تنبيهات', 'إشعارات', 'smart'])
-    add('/settings/email-templates', 'قوالب البريد الإلكتروني', 'Email Templates', '✉️', 'Admin', 'الإدارة', 'settings.view', null, ['email', 'بريد', 'قالب', 'template'])
-    add('/settings/integration-dlq', 'قوائم الفشل - DLQ', 'Integration DLQ', '⚠️', 'Admin', 'الإدارة', 'admin', null, ['dlq', 'retry', 'إعادة', 'فشل', 'integration'])
-    add('/admin/company-profile', 'ملف الشركة', 'Company Profile', '🏢', 'Admin', 'الإدارة', null, null, ['company', 'شركة', 'ملف'])
-    add('/profile', 'الملف الشخصي', 'My Profile', '👤', 'General', 'عام', null, null, ['profile', 'ملف شخصي', 'حساب'])
+    add('/admin/audit-logs', 'سجلات المراقبة', 'Audit Logs', '📋', 'Admin', 'الإدارة', 'audit.view', 'audit', ['audit', 'سجل', 'مراقبة'])
 
     return pages
   }, [user?.username, user?.role, user?.enabled_modules, t])
@@ -316,14 +142,65 @@ export default function GlobalSearch({ isOpen, onClose }) {
   const navigate = useNavigate()
   const [query, setQuery] = useState('')
   const [selectedIndex, setSelectedIndex] = useState(0)
+  const [registry, setRegistry] = useState(null)
+  const [entityResults, setEntityResults] = useState([])
+  const [searching, setSearching] = useState(false)
   const inputRef = useRef(null)
   const listRef = useRef(null)
   const isArabic = i18n.language === 'ar'
   const pages = useSearchablePages()
+  const debouncedQuery = useDebounce(query, 300)
 
-  const results = useMemo(() => {
+  // Fetch search registry on mount
+  useEffect(() => {
+    api.get('/search/registry')
+      .then(res => setRegistry(res.data?.entities || []))
+      .catch(() => setRegistry(null))
+  }, [])
+
+  // Search backend entities when debounced query changes
+  useEffect(() => {
+    if (!debouncedQuery.trim() || debouncedQuery.trim().length < 2) {
+      setEntityResults([])
+      return
+    }
+
+    let cancelled = false
+    setSearching(true)
+
+    api.get('/search', { params: { q: debouncedQuery.trim(), limit: 10 } })
+      .then(res => {
+        if (cancelled) return
+        const data = res.data || []
+        // Flatten entity results into a list
+        const items = []
+        for (const entity of data) {
+          const entityMeta = registry?.find(e => e.entity_code === entity.entity)
+          for (const item of (entity.items || [])) {
+            let route = entityMeta?.route_template || ''
+            // Replace {id} in route template
+            if (item.id && route) {
+              route = route.replace('{id}', item.id)
+            }
+            items.push({
+              entityCode: entity.entity,
+              label: item.name || item.label || item.title || item.code || `#${item.id}`,
+              route,
+              icon: entityMeta?.icon || 'FileText',
+              entityLabel: entityMeta?.label || entity.entity,
+            })
+          }
+        }
+        if (!cancelled) setEntityResults(items)
+      })
+      .catch(() => { if (!cancelled) setEntityResults([]) })
+      .finally(() => { if (!cancelled) setSearching(false) })
+
+    return () => { cancelled = true }
+  }, [debouncedQuery, registry])
+
+  const pageResults = useMemo(() => {
     if (!query.trim()) {
-      // Show recent/popular pages when empty
       const popular = ['/dashboard', '/sales/invoices', '/buying/invoices', '/stock/products', '/accounting/journal-entries', '/hr/employees', '/treasury/accounts', '/sales/customers']
       return pages.filter(p => popular.includes(p.path)).slice(0, 8)
     }
@@ -332,21 +209,56 @@ export default function GlobalSearch({ isOpen, onClose }) {
       .map(p => ({ ...p, score: matchScore(query, p, isArabic) }))
       .filter(p => p.score > 0)
       .sort((a, b) => b.score - a.score)
-      .slice(0, 12)
+      .slice(0, 8)
   }, [query, pages, isArabic])
+
+  // Merge page results and entity results
+  const allResults = useMemo(() => {
+    const items = []
+
+    // Page results
+    if (pageResults.length > 0) {
+      for (const p of pageResults) {
+        items.push({
+          type: 'page',
+          path: p.path,
+          label: isArabic ? p.labelAr : p.labelEn,
+          sublabel: isArabic ? p.labelEn : p.labelAr,
+          icon: p.icon,
+          category: isArabic ? p.categoryAr : p.category,
+        })
+      }
+    }
+
+    // Entity results from backend
+    if (entityResults.length > 0) {
+      for (const e of entityResults) {
+        items.push({
+          type: 'entity',
+          path: e.route,
+          label: e.label,
+          sublabel: e.entityLabel,
+          icon: '🔗',
+          category: e.entityLabel,
+        })
+      }
+    }
+
+    return items
+  }, [pageResults, entityResults, isArabic])
 
   // Group results by category
   const groupedResults = useMemo(() => {
     const groups = {}
     const flatList = []
-    results.forEach((r, idx) => {
-      const cat = isArabic ? r.categoryAr : r.category
+    allResults.forEach((r, idx) => {
+      const cat = r.category
       if (!groups[cat]) groups[cat] = []
       groups[cat].push({ ...r, flatIndex: flatList.length })
       flatList.push(r)
     })
     return { groups, flatList }
-  }, [results, isArabic])
+  }, [allResults])
 
   // Reset selection when results change
   useEffect(() => {
@@ -372,8 +284,10 @@ export default function GlobalSearch({ isOpen, onClose }) {
     }
   }, [selectedIndex])
 
-  const handleSelect = useCallback((page) => {
-    navigate(page.path)
+  const handleSelect = useCallback((item) => {
+    if (item.path) {
+      navigate(item.path)
+    }
     onClose()
     setQuery('')
   }, [navigate, onClose])
@@ -421,13 +335,14 @@ export default function GlobalSearch({ isOpen, onClose }) {
               autoCorrect="off"
               spellCheck="false"
             />
+            {searching && <span className="global-search-spinner" style={{fontSize:'12px',opacity:0.5}}>...</span>}
             <kbd className="global-search-kbd">ESC</kbd>
           </div>
         </div>
 
         {/* Results */}
         <div className="global-search-results" ref={listRef}>
-          {groupedResults.flatList.length === 0 && query.trim() ? (
+          {groupedResults.flatList.length === 0 && query.trim() && !searching ? (
             <div className="global-search-empty">
               <span style={{ fontSize: 32, opacity: 0.4 }}>🔍</span>
               <p>{t('globalsearch.no_results_for')} "{query}"</p>
@@ -446,7 +361,7 @@ export default function GlobalSearch({ isOpen, onClose }) {
                   )}
                   {items.map(item => (
                     <div
-                      key={item.path}
+                      key={item.type + ':' + item.path}
                       data-index={item.flatIndex}
                       className={`global-search-item ${item.flatIndex === selectedIndex ? 'selected' : ''}`}
                       onClick={() => handleSelect(item)}
@@ -455,10 +370,10 @@ export default function GlobalSearch({ isOpen, onClose }) {
                       <span className="global-search-item-icon">{item.icon}</span>
                       <div className="global-search-item-text">
                         <span className="global-search-item-label">
-                          {isArabic ? item.labelAr : item.labelEn}
+                          {item.label}
                         </span>
                         <span className="global-search-item-path">
-                          {isArabic ? item.labelEn : item.labelAr}
+                          {item.sublabel}
                         </span>
                       </div>
                       {item.flatIndex === selectedIndex && (

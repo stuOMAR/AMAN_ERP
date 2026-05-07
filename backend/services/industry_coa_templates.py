@@ -422,6 +422,7 @@ def seed_industry_coa(db, industry_key: str, replace_existing: bool = False) -> 
         db.commit()
         # Link parents for newly inserted accounts
         _link_parents(db, industry_key)
+        _ensure_default_coa_mappings(db)
         db.commit()
         return result
     
@@ -463,6 +464,7 @@ def seed_industry_coa(db, industry_key: str, replace_existing: bool = False) -> 
     
     # Now update parent_id references
     _link_parents(db, industry_key)
+    _ensure_default_coa_mappings(db)
     db.commit()
     
     logger.info(f"COA seeded for '{industry_key}': core={result['core']}, industry={result['industry']}, skipped={result['skipped']}")
@@ -516,6 +518,27 @@ def _link_parents(db, industry_key: str = None):
             """), {"code": code, "parent_code": parent_code})
         except Exception:
             pass
+
+
+def _ensure_default_coa_mappings(db):
+    """Ensure key tax account mappings exist after industry COA seeding."""
+    mapping_codes = {
+        "acc_map_vat_in": "15010",
+        "acc_map_vat_out": "21040",
+    }
+    for key, account_number in mapping_codes.items():
+        account_id = db.execute(
+            text("SELECT id FROM accounts WHERE account_number = :num LIMIT 1"),
+            {"num": account_number},
+        ).scalar()
+        if not account_id:
+            continue
+        db.execute(text("""
+            INSERT INTO company_settings (setting_key, setting_value)
+            VALUES (:key, :value)
+            ON CONFLICT (setting_key) DO UPDATE
+                SET setting_value = EXCLUDED.setting_value
+        """), {"key": key, "value": str(account_id)})
 
 
 def get_industry_coa_summary(industry_key: str) -> dict:

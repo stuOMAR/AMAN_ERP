@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '../../utils/api'
-import { ArrowRight, FileText, Banknote, Calendar, CreditCard, Building, Edit2, Clock } from 'lucide-react'
+import { ArrowRight, FileText, Banknote, Calendar, CreditCard, Building, Edit2, Clock, Globe } from 'lucide-react'
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
@@ -146,6 +146,39 @@ export default function SupplierDetails() {
                     </div>
                 </div>
             </div>
+
+            {/* Party Sites */}
+            {data.supplier?.party_sites && data.supplier.party_sites.length > 0 && (
+                <div style={{ marginBottom: '24px' }}>
+                    <h3 style={{ fontSize: '14px', fontWeight: '600', marginBottom: '12px', display: 'flex', alignItems: 'center', gap: '8px' }}>
+                        <Globe size={16} />
+                        {t('buying.suppliers.details.party_sites', 'Sites & Currencies')}
+                    </h3>
+                    <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
+                        {data.supplier.party_sites.map(site => (
+                            <div key={site.id} style={{
+                                padding: '12px 16px',
+                                background: site.is_default ? 'var(--primary-light)' : 'var(--bg-secondary)',
+                                borderRadius: 'var(--radius)',
+                                border: `1px solid ${site.is_default ? 'var(--primary)' : 'var(--border)'}`,
+                                minWidth: '180px'
+                            }}>
+                                <div style={{ fontWeight: '600', fontSize: '14px' }}>{site.site_name}</div>
+                                <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '4px' }}>
+                                    {site.currency}
+                                    {site.is_default && ' ★'}
+                                </div>
+                                <div style={{
+                                    fontSize: '16px', fontWeight: '700', marginTop: '8px',
+                                    color: site.site_balance > 0 ? 'var(--error)' : 'var(--success)'
+                                }}>
+                                    {Number(site.site_balance).toLocaleString()} {site.currency}
+                                </div>
+                            </div>
+                        ))}
+                    </div>
+                </div>
+            )}
 
             {/* Tabs */}
             <div style={{ borderBottom: '1px solid var(--border)', marginBottom: '24px', display: 'flex', gap: '24px' }}>

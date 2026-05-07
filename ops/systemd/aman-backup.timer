@@ -1,0 +1,11 @@
+[Unit]
+Description=AMAN ERP Backup Timer (daily)
+Requires=aman-backup.service
+
+[Timer]
+OnCalendar=*-*-* 02:00:00
+Persistent=true
+RandomizedDelaySec=300
+
+[Install]
+WantedBy=timers.target

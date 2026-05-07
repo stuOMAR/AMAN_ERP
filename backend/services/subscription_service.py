@@ -14,12 +14,12 @@ from sqlalchemy import text
 
 from services.gl_service import create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
+from services.tax_engine import resolve_line_tax
 
 logger = logging.getLogger(__name__)
 
 _ZERO = Decimal("0")
 _D4 = Decimal("0.0001")
-_VAT_RATE = Decimal("0.15")  # Saudi VAT 15%
 
 
 def _dec(val) -> Decimal:
@@ -241,10 +241,21 @@ def generate_subscription_invoice(db, *, enrollment_id: int, user: str | None = 
     # Fiscal period check
     check_fiscal_period_open(db, billing_start)
 
-    # VAT calculation (TASK-027: unified via compute_invoice_totals)
+    # VAT calculation (resolved via tax engine)
     from utils.accounting import compute_invoice_totals
-    tax_rate = _VAT_RATE
-    _tax_rate_pct = tax_rate * Decimal("100")
+    
+    # Get default branch for tax resolution (subscriptions don't have branch_id)
+    default_branch = db.execute(text(
+        "SELECT id FROM branches WHERE is_default = TRUE AND is_active = TRUE LIMIT 1"
+    )).fetchone()
+    _branch_id = default_branch.id if default_branch else None
+    
+    if _branch_id:
+        tax_info = resolve_line_tax(_branch_id, None, db, billing_start, customer_id=enrollment.customer_id)
+        _tax_rate_pct = tax_info["tax_rate"]
+    else:
+        _tax_rate_pct = Decimal("0")  # No branch = no tax
+    
     _totals = compute_invoice_totals([
         {"quantity": 1, "unit_price": amount, "tax_rate": _tax_rate_pct, "discount": 0}
     ])

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
+import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
 import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton'
@@ -12,6 +13,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 function RevenueRecognition() {
     const { t } = useTranslation()
   const { showToast } = useToast()
+    const { currentBranch } = useBranch()
     const currency = getCurrency()
     const [schedules, setSchedules] = useState([])
     const [summary, setSummary] = useState(null)
@@ -24,14 +26,16 @@ function RevenueRecognition() {
         start_date: '', end_date: '', method: 'straight_line'
     })
 
-    useEffect(() => { fetchData() }, [])
+    useEffect(() => { fetchData() }, [currentBranch])
 
     const fetchData = async () => {
         try {
             setLoading(true)
+            const params = {};
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
             const [schedRes, sumRes] = await Promise.all([
-                accountingAPI.listRevenueSchedules(),
-                accountingAPI.getRevenueSummary()
+                accountingAPI.listRevenueSchedules(params),
+                accountingAPI.getRevenueSummary(params)
             ])
             setSchedules(schedRes.data)
             setSummary(sumRes.data)

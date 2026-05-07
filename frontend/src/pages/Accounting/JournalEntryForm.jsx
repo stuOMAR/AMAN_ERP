@@ -6,6 +6,7 @@ import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { accountingAPI, costCentersAPI } from '../../utils/api';
 import { useBranch } from '../../context/BranchContext';
+import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
 import CurrencySelector from '../../components/common/CurrencySelector';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
@@ -18,6 +19,7 @@ const JournalEntryForm = () => {
     const [accounts, setAccounts] = useState([]);
     const [costCenters, setCostCenters] = useState([]);
     const { currentBranch } = useBranch();
+    const currency = getCurrency();
 
     const [formData, setFormData] = useState({
         date: new Date().toISOString().split('T')[0],
@@ -91,7 +93,7 @@ const JournalEntryForm = () => {
 
     const handleSubmit = async (e, entryStatus = 'posted') => {
         if (e) e.preventDefault();
-        const { totalDebit, difference } = calculateTotals();
+        const { totalDebit, totalCredit, difference } = calculateTotals();
 
         if (Math.abs(difference) > 0.01) {
             toast.error(t('accounting.journal.unbalanced_error', 'Journal Entry must be balanced'));
@@ -105,6 +107,19 @@ const JournalEntryForm = () => {
 
         if (formData.lines.some(l => !l.account_id)) {
             toast.error(t('accounting.journal.account_required', 'All lines must have an account selected'));
+            return;
+        }
+
+        const hasDebit = formData.lines.some(l => parseFloat(l.debit || 0) > 0);
+        const hasCredit = formData.lines.some(l => parseFloat(l.credit || 0) > 0);
+        if (!hasDebit || !hasCredit) {
+            toast.error(t('accounting.journal.debit_credit_required', 'Each entry must have at least one debit line and one credit line'));
+            return;
+        }
+
+        const invalidLines = formData.lines.filter(l => parseFloat(l.debit || 0) > 0 && parseFloat(l.credit || 0) > 0);
+        if (invalidLines.length > 0) {
+            toast.error(t('accounting.journal.both_debit_credit', 'A line cannot have both debit and credit amounts. Please use separate lines.'));
             return;
         }
 
@@ -235,7 +250,7 @@ const JournalEntryForm = () => {
                                                 onChange={(e) => handleLineChange(index, 'account_id', e.target.value)}
                                             >
                                                 <option value="">{t('common.select_account')}</option>
-                                                {accounts.map(acc => (
+                                                {accounts.filter(acc => !acc.is_header).map(acc => (
                                                     <option key={acc.id} value={acc.id}>
                                                         {acc.account_number} - {acc.name}
                                                     </option>
@@ -304,10 +319,10 @@ const JournalEntryForm = () => {
                                 <tr>
                                     <td colSpan="3" className="text-end py-3">{t('common.total')}</td>
                                     <td className={`text-end py-3 ${totalDebit !== totalCredit ? 'text-danger' : 'text-success'}`}>
-                                        {formatNumber(totalDebit)}
+                                        {formatNumber(totalDebit)} <small>{currency}</small>
                                     </td>
                                     <td className={`text-end py-3 ${totalDebit !== totalCredit ? 'text-danger' : 'text-success'}`}>
-                                        {formatNumber(totalCredit)}
+                                        {formatNumber(totalCredit)} <small>{currency}</small>
                                     </td>
                                     <td></td>
                                 </tr>
@@ -324,7 +339,7 @@ const JournalEntryForm = () => {
 
                     {Math.abs(difference) > 0.01 && (
                         <div className="badge bg-danger-subtle text-danger p-2" style={{ borderRadius: '8px' }}>
-                            {t('accounting.trial_balance.metrics.difference')}: {formatNumber(difference)}
+                            {t('accounting.trial_balance.metrics.difference')}: {formatNumber(difference)} <small>{currency}</small>
                         </div>
                     )}
                 </div>

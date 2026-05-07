@@ -1,8 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import { Save, Search } from 'lucide-react';
+import { Save, Search, AlertTriangle, Lock } from 'lucide-react';
 import { useParams } from 'react-router-dom';
-import { toast } from 'react-hot-toast';
+import { useToast } from '../../context/ToastContext';
+import { useBranch } from '../../context/BranchContext';
 import { budgetsAPI, accountingAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
 import BackButton from '../../components/common/BackButton';
@@ -10,45 +11,84 @@ import { Spinner } from '../../components/common/LoadingStates'
 
 const BudgetItems = () => {
     const { t } = useTranslation();
+    const { showToast } = useToast();
     const { id } = useParams();
 
     const [loading, setLoading] = useState(true);
     const [accounts, setAccounts] = useState([]);
-    const [budgetItems, setBudgetItems] = useState({}); // { account_id: { planned, notes } }
+    const [budgetItems, setBudgetItems] = useState({});
+    const [budgetMonths, setBudgetMonths] = useState(12);
     const [searchTerm, setSearchTerm] = useState('');
     const [saving, setSaving] = useState(false);
+    const [budgetBranchId, setBudgetBranchId] = useState(null);
+    const [budgetBranchName, setBudgetBranchName] = useState('');
+    const [budgetCurrency, setBudgetCurrency] = useState('');
     const currency = getCurrency() || '';
+    const { currentBranch, branches, setBranch } = useBranch();
+
+    // Lock branch to budget's branch - warn if user tries to switch
+    useEffect(() => {
+        if (budgetBranchId && currentBranch?.id && currentBranch.id !== budgetBranchId) {
+            showToast(`⚠️ لا يمكن تغيير الفرع أثناء تعديل بنود الميزانية. هذه الميزانية خاصة بفرع: ${budgetBranchName}`, 'error');
+            // Force back to budget's branch
+            if (branches?.length) {
+                const budgetBranch = branches.find(b => b.id === budgetBranchId);
+                if (budgetBranch) {
+                    setBranch(budgetBranch);
+                }
+            }
+        }
+    }, [currentBranch, budgetBranchId]);
 
     useEffect(() => {
         fetchData();
     }, [id]);
 
+    const countMonths = (start, end) => {
+        const s = new Date(start);
+        const e = new Date(end);
+        return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1;
+    };
+
     const fetchData = async () => {
         setLoading(true);
         try {
-            // Fetch Accounts
-            const accountsRes = await accountingAPI.list();
-            // Filter only Expenses and Revenues (usually what we budget for)
-            // But maybe assets too for Capex? Let's check type.
+            // Fetch budget details to get duration and branch
+            const budgetRes = await budgetsAPI.get(id);
+            const budget = budgetRes.data;
+            if (budget?.start_date && budget?.end_date) {
+                setBudgetMonths(countMonths(budget.start_date, budget.end_date));
+            }
+            if (budget?.branch_id) {
+                setBudgetBranchId(budget.branch_id);
+                // Find branch name from branches list
+                const branch = branches?.find(b => b.id === budget.branch_id);
+                if (branch) {
+                    setBudgetBranchName(branch.branch_name || branch.name);
+                    setBudgetCurrency(branch.default_currency || currency);
+                }
+            }
+
+            // Fetch Accounts (company-wide for budget purposes - skip branch scope)
+            const accountsRes = await accountingAPI.list({}, { skipBranchScope: true });
             const allAccounts = accountsRes.data || [];
             const budgetableAccounts = allAccounts.filter(a => ['expense', 'revenue', 'asset'].includes(a.account_type));
             setAccounts(budgetableAccounts);
 
-            // Fetch Existing Items (via Report endpoint or we need a specific getItems?)
-            // The report endpoint returns planned amounts. Let's use that for now to populate.
-            const reportRes = await budgetsAPI.getReport(id);
+            // Fetch Existing Items via getItems endpoint
+            const itemsRes = await budgetsAPI.getItems(id);
             const itemsMap = {};
-            (reportRes.data || []).forEach(item => {
+            (itemsRes.data || []).forEach(item => {
                 itemsMap[item.account_id] = {
-                    planned: item.planned,
-                    notes: '' // Report doesn't return notes currently, need to update API if we want notes
+                    planned: item.planned_amount,
+                    notes: item.notes || ''
                 };
             });
             setBudgetItems(itemsMap);
 
         } catch (error) {
             console.error(error);
-            toast.error(t('common.error_loading'));
+            showToast(t('common.error_loading'), 'error');
         } finally {
             setLoading(false);
         }
@@ -63,7 +103,7 @@ const BudgetItems = () => {
                     ...prev,
                     [accountId]: {
                         ...currentItem,
-                        planned: floatValue * 12,
+                        planned: floatValue * budgetMonths,
                         monthly: floatValue
                     }
                 };
@@ -73,7 +113,7 @@ const BudgetItems = () => {
                     [accountId]: {
                         ...currentItem,
                         planned: floatValue,
-                        monthly: floatValue / 12
+                        monthly: floatValue / budgetMonths
                     }
                 };
             }
@@ -81,6 +121,11 @@ const BudgetItems = () => {
     };
 
     const handleSave = async () => {
+        // Prevent saving if branch doesn't match budget's branch
+        if (budgetBranchId && currentBranch?.id && currentBranch.id !== budgetBranchId) {
+            showToast(`⚠️ لا يمكن الحفظ! هذه الميزانية خاصة بفرع ${budgetBranchName}. يرجى التبديل لفرع ${budgetBranchName} أولاً.`, 'error');
+            return;
+        }
         setSaving(true);
         try {
             const items = Object.entries(budgetItems)
@@ -92,15 +137,15 @@ const BudgetItems = () => {
                 }));
 
             if (items.length === 0) {
-                toast.error(t('accounting.budgets.no_items'));
+                showToast(t('accounting.budgets.no_items'), 'error');
                 return;
             }
 
             await budgetsAPI.setItems(id, items);
-            toast.success(t('accounting.budgets.items_saved'));
+            showToast(t('accounting.budgets.items_saved'), 'success');
         } catch (error) {
             console.error(error);
-            toast.error(t('common.error_saving'));
+            showToast(t('common.error_saving'), 'error');
         } finally {
             setSaving(false);
         }
@@ -118,6 +163,14 @@ const BudgetItems = () => {
                         <BackButton />
                     <div>
                         <h1 className="workspace-title mb-0">{t('accounting.budgets.items', 'Budget Items')}</h1>
+                        {budgetBranchId && (
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginTop: '4px' }}>
+                                <Lock size={12} style={{ color: 'var(--primary)' }} />
+                                <span style={{ fontSize: '12px', color: 'var(--primary)', fontWeight: 600 }}>
+                                    فرع: {budgetBranchName} ({budgetCurrency})
+                                </span>
+                            </div>
+                        )}
                     </div>
                 </div>
                 <div className="header-actions">
@@ -127,6 +180,21 @@ const BudgetItems = () => {
                     </button>
                 </div>
             </div>
+
+            {/* Branch lock warning */}
+            {budgetBranchId && currentBranch?.id && currentBranch.id !== budgetBranchId && (
+                <div style={{ 
+                    display: 'flex', alignItems: 'center', gap: '10px', padding: '12px 16px', 
+                    background: '#fef2f2', border: '1px solid #fecaca', borderRadius: '8px', 
+                    marginBottom: '16px', fontSize: '13px', color: '#dc2626' 
+                }}>
+                    <AlertTriangle size={18} />
+                    <div>
+                        <strong>تحذير:</strong> هذه الميزانية خاصة بفرع <strong>{budgetBranchName}</strong>. 
+                        لا يمكن حفظ البنود على فرع آخر. يرجى العودة لفرع {budgetBranchName} أولاً.
+                    </div>
+                </div>
+            )}
 
             <div className="card card-flush shadow-sm">
                 <div className="card-header border-0 pt-4 pb-2">
@@ -183,7 +251,7 @@ const BudgetItems = () => {
                                                     <input
                                                         type="number"
                                                         className="form-input text-center"
-                                                        value={budgetItems[acc.id]?.monthly || (budgetItems[acc.id]?.planned / 12) || ''}
+                                                        value={budgetItems[acc.id]?.monthly || (budgetItems[acc.id]?.planned / budgetMonths) || ''}
                                                         onChange={(e) => handleAmountChange(acc.id, 'monthly', e.target.value)}
                                                         placeholder="0.00"
                                                         autoComplete="off"

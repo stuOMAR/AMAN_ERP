@@ -1,0 +1,212 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [active] [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🏢 كل الفروع ▼" [ref=e363] [cursor=pointer]:
+            - generic [ref=e364]:
+              - text: 🏢
+              - generic [ref=e365]: كل الفروع
+            - generic [ref=e366]: ▼
+          - button "🔔" [ref=e110] [cursor=pointer]
+          - generic [ref=e112] [cursor=pointer]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: aaaa
+              - generic [ref=e115]: "ID: e24bcd11"
+            - generic [ref=e116]: O
+      - main [ref=e118]:
+        - generic [ref=e493]:
+          - generic [ref=e494]:
+            - heading "المخزون والمستودعات" [level=1] [ref=e495]
+            - paragraph [ref=e496]: إدارة المنتجات، المستودعات، وحركة المخزون.
+          - generic [ref=e497]:
+            - generic [ref=e498]:
+              - generic [ref=e499]: إجمالي الأصناف
+              - generic [ref=e500]: "1"
+            - generic [ref=e501]:
+              - generic [ref=e502]: قيمة المخزون
+              - generic [ref=e503]: 0.00 SAR
+            - generic [ref=e504]:
+              - generic [ref=e505]: أصناف منخفضة
+              - generic [ref=e506]: "0"
+          - generic [ref=e507]:
+            - generic [ref=e508]:
+              - heading "السجلات الرئيسية" [level=3] [ref=e509]
+              - generic [ref=e510]:
+                - generic [ref=e511] [cursor=pointer]:
+                  - generic [ref=e512]: 📦
+                  - text: المنتجات والخدمات
+                  - generic [ref=e513]: ←
+                - generic [ref=e514] [cursor=pointer]:
+                  - generic [ref=e515]: 🏷️
+                  - text: قوائم الأسعار
+                  - generic [ref=e516]: ←
+                - generic [ref=e517] [cursor=pointer]:
+                  - generic [ref=e518]: 📁
+                  - text: فئات المنتجات
+                  - generic [ref=e519]: ←
+                - generic [ref=e520] [cursor=pointer]:
+                  - generic [ref=e521]: 🏭
+                  - text: المستودعات
+                  - generic [ref=e522]: ←
+            - generic [ref=e523]:
+              - heading "العمليات" [level=3] [ref=e524]
+              - generic [ref=e525]:
+                - generic [ref=e526] [cursor=pointer]:
+                  - generic [ref=e527]: 🔄
+                  - text: تحويل بين المستودعات
+                  - generic [ref=e528]: ←
+                - generic [ref=e529] [cursor=pointer]:
+                  - generic [ref=e530]: 🚚
+                  - text: الشحنات بين المستودعات
+                  - generic [ref=e531]: ←
+                - generic [ref=e532] [cursor=pointer]:
+                  - generic [ref=e533]: 📥
+                  - text: الشحنات الواردة
+                  - generic [ref=e534]: ←
+                - generic [ref=e535] [cursor=pointer]:
+                  - generic [ref=e536]: ⚖️
+                  - text: تسويات الجرد
+                  - generic [ref=e537]: ←
+            - generic [ref=e538]:
+              - heading "التقارير" [level=3] [ref=e539]
+              - generic [ref=e540]:
+                - generic [ref=e541] [cursor=pointer]:
+                  - generic [ref=e542]: 📊
+                  - text: أرصدة المخزون
+                  - generic [ref=e543]: ←
+                - generic [ref=e544] [cursor=pointer]:
+                  - generic [ref=e545]: 📈
+                  - text: حركة الأصناف
+                  - generic [ref=e546]: ←
+            - generic [ref=e547]:
+              - heading "متقدم" [level=3] [ref=e548]
+              - generic [ref=e549]:
+                - generic [ref=e550] [cursor=pointer]:
+                  - generic [ref=e551]: 📦
+                  - text: تتبع الدفعات
+                  - generic [ref=e552]: ←
+                - generic [ref=e553] [cursor=pointer]:
+                  - generic [ref=e554]: 🏷️
+                  - text: الأرقام التسلسلية
+                  - generic [ref=e555]: ←
+                - generic [ref=e556] [cursor=pointer]:
+                  - generic [ref=e557]: 🔬
+                  - text: مراقبة الجودة
+                  - generic [ref=e558]: ←
+                - generic [ref=e559] [cursor=pointer]:
+                  - generic [ref=e560]: 📋
+                  - text: الجرد الدوري
+                  - generic [ref=e561]: ←
+                - generic [ref=e562] [cursor=pointer]:
+                  - generic [ref=e563]: 📊
+                  - text: طبقات التكلفة (FIFO/LIFO)
+                  - generic [ref=e564]: ←
+                - generic [ref=e565] [cursor=pointer]:
+                  - generic [ref=e566]: ⚙️
+                  - text: طريقة التكلفة
+                  - generic [ref=e567]: ←
+                - generic [ref=e568] [cursor=pointer]:
+                  - generic [ref=e569]: 📈
+                  - text: تقرير تقييم المخزون
+                  - generic [ref=e570]: ←
+                - generic [ref=e571] [cursor=pointer]:
+                  - generic [ref=e572]: 📉
+                  - text: التنبؤ بالطلب
+                  - generic [ref=e573]: ←
+                - generic [ref=e574] [cursor=pointer]:
+                  - generic [ref=e575]: ➕
+                  - text: توليد توقع
+                  - generic [ref=e576]: ←

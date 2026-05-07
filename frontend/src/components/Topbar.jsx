@@ -24,7 +24,8 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
     const notifRef = useRef(null)
     const branchRef = useRef(null)
     const [showBranchMenu, setShowBranchMenu] = useState(false)
-    const { branches, currentBranch, setBranch } = useBranch()
+    const { branches, currentBranch, setBranch, displayCurrency } = useBranch()
+    const isAdmin = user?.role === 'admin' || user?.role === 'superuser' || user?.role === 'system_admin' || user?.permissions?.includes('*')
     const userMenuDockStyle = { marginInlineStart: 'auto' }
 
     // Global Ctrl+K / Cmd+K shortcut
@@ -212,13 +213,13 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
                     <div ref={branchRef} style={{ position: 'relative' }}>
                         <button
                             className="topbar-branch-btn"
-                            onClick={() => setShowBranchMenu(!showBranchMenu)}
+                            onClick={() => branches.length > 1 || isAdmin ? setShowBranchMenu(!showBranchMenu) : undefined}
                             style={{
                                 background: 'var(--bg-card)',
                                 border: '1px solid var(--border-color)',
                                 borderRadius: '6px',
                                 padding: '4px 12px',
-                                cursor: 'pointer',
+                                cursor: (branches.length > 1 || isAdmin) ? 'pointer' : 'default',
                                 fontSize: '13px',
                                 fontWeight: '600',
                                 display: 'flex',
@@ -228,9 +229,20 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
                             }}
                         >
                             <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                                🏢 <span className="topbar-branch-label">{currentBranch ? currentBranch.branch_name : t('branches.all_branches') || 'كل الفروع'}</span>
+                                🏢 <span className="topbar-branch-label">
+                                    {currentBranch
+                                        ? currentBranch.branch_name
+                                        : isAdmin
+                                            ? (t('branches.all_branches') || 'كل الفروع')
+                                            : (t('branches.all_my_branches') || 'كل فروعي')}
+                                </span>
                             </span>
-                            <span style={{ fontSize: '10px' }}>▼</span>
+                            {displayCurrency?.currency && (
+                                <span style={{ fontSize: '11px', color: 'var(--text-secondary)', borderInlineStart: '1px solid var(--border-color)', paddingInlineStart: '8px' }}>
+                                    {displayCurrency.currency}
+                                </span>
+                            )}
+                            {(branches.length > 1 || isAdmin) && <span style={{ fontSize: '10px' }}>▼</span>}
                         </button>
 
                         {showBranchMenu && (
@@ -248,20 +260,34 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
                                 maxHeight: '300px',
                                 overflowY: 'auto'
                             }}>
-                                <div
-                                    className="dropdown-item"
-                                    onClick={() => { setBranch(null); setShowBranchMenu(false); }}
-                                    style={{
-                                        padding: '8px 12px',
-                                        cursor: 'pointer',
-                                        fontSize: '13px',
-                                        background: !currentBranch ? 'var(--bg-hover)' : 'transparent',
-                                        color: !currentBranch ? 'var(--primary)' : 'inherit'
-                                    }}
-                                >
-                                    🌐 {t('branches.all_branches') || 'كل الفروع'}
-                                </div>
-                                <div style={{ height: '1px', background: 'var(--border-color)', margin: '4px 0' }}></div>
+                                {/* "All branches" option — admin sees all system, non-admin sees all their branches */}
+                                {(isAdmin || branches.length > 1) && (
+                                    <>
+                                        <div
+                                            className="dropdown-item"
+                                            onClick={() => { setBranch(null); setShowBranchMenu(false); }}
+                                            style={{
+                                                padding: '8px 12px',
+                                                cursor: 'pointer',
+                                                fontSize: '13px',
+                                                background: !currentBranch ? 'var(--bg-hover)' : 'transparent',
+                                                color: !currentBranch ? 'var(--primary)' : 'inherit',
+                                                display: 'flex',
+                                                justifyContent: 'space-between',
+                                                alignItems: 'center',
+                                                gap: '12px'
+                                            }}
+                                        >
+                                            <span>🌐 {isAdmin
+                                                ? (t('branches.all_branches') || 'كل الفروع')
+                                                : (t('branches.all_my_branches') || 'كل فروعي')}</span>
+                                            {displayCurrency?.currency && (
+                                                <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{displayCurrency.currency}</span>
+                                            )}
+                                        </div>
+                                        <div style={{ height: '1px', background: 'var(--border-color)', margin: '4px 0' }}></div>
+                                    </>
+                                )}
                                 {branches.map(branch => (
                                     <div
                                         key={branch.id}
@@ -278,7 +304,10 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
                                         }}
                                     >
                                         <span>{branch.branch_name}</span>
-                                        {branch.is_default && <span style={{ fontSize: '10px', background: 'var(--bg-hover)', padding: '2px 4px', borderRadius: '4px' }}>{t('common.default')}</span>}
+                                        <span style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
+                                            {branch.default_currency && <span style={{ fontSize: '11px', color: 'var(--text-secondary)' }}>{branch.default_currency}</span>}
+                                            {branch.is_default && <span style={{ fontSize: '10px', background: 'var(--bg-hover)', padding: '2px 4px', borderRadius: '4px' }}>{t('common.default')}</span>}
+                                        </span>
                                     </div>
                                 ))}
                             </div>

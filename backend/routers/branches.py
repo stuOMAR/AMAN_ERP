@@ -85,7 +85,7 @@ def list_branches(
 @router.post("", response_model=BranchResponse)
 def create_branch(
     branch: BranchCreate,
-    current_user = Depends(require_permission("admin.branches"))
+    current_user = Depends(require_permission("branches.manage"))
 ):
     """Create a new branch"""
     with transactional(current_user.company_id) as conn:
@@ -101,14 +101,20 @@ def create_branch(
             count_res = conn.execute(text("SELECT COUNT(*) FROM branches")).scalar()
             is_first = (count_res == 0)
             
+            # Auto-generate branch code if empty
+            if not branch.branch_code or not branch.branch_code.strip():
+                max_code = conn.execute(text(
+                    "SELECT MAX(CAST(SUBSTRING(branch_code FROM '[0-9]+') AS INT)) FROM branches WHERE branch_code ~ '^BR-[0-9]+$'"
+                )).scalar() or 0
+                branch.branch_code = f"BR-{str(max_code + 1).zfill(3)}"
+            
             # Check duplicate code
-            if branch.branch_code:
-                existing = conn.execute(
-                    text("SELECT 1 FROM branches WHERE branch_code = :code"),
-                    {"code": branch.branch_code}
-                ).fetchone()
-                if existing:
-                    raise HTTPException(status_code=400, detail="Branch code already exists")
+            existing = conn.execute(
+                text("SELECT 1 FROM branches WHERE branch_code = :code"),
+                {"code": branch.branch_code}
+            ).fetchone()
+            if existing:
+                raise HTTPException(status_code=400, detail="Branch code already exists")
             
             query = text("""
                 INSERT INTO branches (
@@ -138,6 +144,20 @@ def create_branch(
             result = conn.execute(query, params).fetchone()
             branch_id = result.id
             
+            # Auto-register currency if not already in currencies table
+            if branch.default_currency and branch.default_currency.strip():
+                try:
+                    conn.execute(
+                        text("""
+                            INSERT INTO currencies (code, name, is_active)
+                            VALUES (:code, :name, TRUE)
+                            ON CONFLICT (code) DO NOTHING
+                        """),
+                        {"code": branch.default_currency.strip().upper(), "name": branch.default_currency.strip().upper()}
+                    )
+                except Exception:
+                    pass
+            
             # 2. Link creator to the branch in user_branches
             # Extract user_id robustly
             if isinstance(current_user, dict):
@@ -160,7 +180,6 @@ def create_branch(
                                  resource_type="branch", resource_id=str(branch_id),
                                  details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
                                  branch_id=branch_id)
-                    conn.commit()
                 except Exception:
                     logger.warning("Failed to write branch create audit log")
             
@@ -183,7 +202,7 @@ def create_branch(
 def update_branch(
     branch_id: int,
     branch: BranchCreate,
-    current_user = Depends(require_permission("admin.branches"))
+    current_user = Depends(require_permission("branches.manage"))
 ):
     """Update a branch"""
     with transactional(current_user.company_id) as conn:
@@ -247,6 +266,20 @@ def update_branch(
             
             result = conn.execute(query, params).fetchone()
             
+            # Auto-register currency if not already in currencies table
+            if branch.default_currency and branch.default_currency.strip():
+                try:
+                    conn.execute(
+                        text("""
+                            INSERT INTO currencies (code, name, is_active)
+                            VALUES (:code, :name, TRUE)
+                            ON CONFLICT (code) DO NOTHING
+                        """),
+                        {"code": branch.default_currency.strip().upper(), "name": branch.default_currency.strip().upper()}
+                    )
+                except Exception:
+                    pass
+            
             # Audit log
             try:
                 user_id = current_user.get('id') if isinstance(current_user, dict) else getattr(current_user, 'id', None)
@@ -256,7 +289,6 @@ def update_branch(
                                  resource_type="branch", resource_id=str(branch_id),
                                  details={"branch_code": branch.branch_code, "branch_name": branch.branch_name},
                                  branch_id=branch_id)
-                    conn.commit()
             except Exception:
                 logger.warning("Failed to write branch update audit log")
             
@@ -277,7 +309,7 @@ def update_branch(
 @router.delete("/{branch_id}", response_model=Dict[str, Any])
 def delete_branch(
     branch_id: int,
-    current_user = Depends(require_permission("admin.branches"))
+    current_user = Depends(require_permission("branches.manage"))
 ):
     """Delete a branch (soft delete or check dependencies)"""
     conn = get_db_connection(current_user.company_id)
@@ -285,27 +317,54 @@ def delete_branch(
         # Start transaction
         # Check if default
         check = conn.execute(
-            text("SELECT is_default FROM branches WHERE id = :id"),
+            text("SELECT is_default, is_active FROM branches WHERE id = :id"),
             {"id": branch_id}
         ).fetchone()
         
         if not check:
-            raise HTTPException(status_code=404, detail="Branch not found")
+            raise HTTPException(status_code=404, detail="الفرع غير موجود")
             
         if check.is_default:
             raise HTTPException(status_code=400, detail="Cannot delete the default branch")
+            
+        if check.is_active:
+            raise HTTPException(status_code=400, detail="لا يمكن حذف الفرع لأنه نشط. الرجاء إيقاف تنشيط الفرع أولاً.")
         
-        # T011: Check for dependent transactions before deletion
-        for table_name in ("invoices", "journal_entries", "inventory_movements"):
+        # T011: Check for dependent records across all tables with branch_id FK
+        fk_query = text("""
+            SELECT conname, conrelid::regclass::text AS tbl,
+                   (SELECT string_agg(a.attname, ',')
+                    FROM pg_attribute a
+                    WHERE a.attrelid = conrelid AND a.attnum = ANY(conkey)) AS col
+            FROM pg_constraint
+            WHERE confrelid = 'branches'::regclass
+              AND contype = 'f'
+              AND conrelid::regclass::text NOT IN (
+                  'user_branches', 'audit_logs', 'audit_logs_archive'
+              )
+        """)
+        fk_tables = conn.execute(fk_query).fetchall()
+        for fk in fk_tables:
+            col = fk.col or 'branch_id'
+            # Build WHERE clause for single or composite FK
+            where_clause = ' AND '.join(f'{c} = :bid' for c in col.split(','))
             count = conn.execute(
-                text(f"SELECT COUNT(*) FROM {table_name} WHERE branch_id = :bid"),
+                text(f'SELECT COUNT(*) FROM {fk.tbl} WHERE {where_clause}'),
                 {"bid": branch_id}
             ).scalar() or 0
             if count > 0:
                 raise HTTPException(
-                    status_code=409,
-                    detail="لا يمكن حذف الفرع لوجود عمليات مرتبطة به"
+                    status_code=400,
+                    detail=f"لا يمكن حذف الفرع لارتباطه بـ {count} سجل في النظام ({fk.tbl})"
                 )
+        
+        # Clean up user_branches and detach audit_logs before deleting
+        conn.execute(text("DELETE FROM user_branches WHERE branch_id = :bid"), {"bid": branch_id})
+        
+        # Disable trigger temporarily to allow orphaning the logs securely
+        conn.execute(text("ALTER TABLE audit_logs DISABLE TRIGGER audit_logs_no_update"))
+        conn.execute(text("UPDATE audit_logs SET branch_id = NULL WHERE branch_id = :bid"), {"bid": branch_id})
+        conn.execute(text("ALTER TABLE audit_logs ENABLE TRIGGER audit_logs_no_update"))
             
         conn.execute(
             text("DELETE FROM branches WHERE id = :id"),

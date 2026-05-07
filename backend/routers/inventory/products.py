@@ -12,7 +12,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.tx import transactional
 from repositories import ProductRepository
 from .schemas import ProductCreate, ProductResponse
@@ -84,12 +84,17 @@ def list_products(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض قائمة المنتجات"""
-    from utils.permissions import validate_branch_access
-    branch_id = validate_branch_access(current_user, branch_id)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
 
     with transactional(current_user.company_id) as db:
         repo = ProductRepository(db)
-        rows = repo.list(branch_id=branch_id, search=search, limit=limit, offset=skip)
+        rows = repo.list(
+            branch_id=branch_scope["branch_id"],
+            branch_ids=branch_scope["branch_ids"],
+            search=search,
+            limit=limit,
+            offset=skip,
+        )
         return [
             {
                 "id": r["id"],
@@ -100,8 +105,11 @@ def list_products(
                 "unit": r.get("unit_of_measure") or "قطعة",
                 "selling_price": str(r.get("selling_price") or 0),
                 "buying_price": str(r.get("cost_price") or 0),
+                "branch_avg_cost": str(r.get("branch_avg_cost") or r.get("cost_price") or 0),
                 "last_buying_price": str(r.get("last_purchase_price") or 0),
                 "tax_rate": str(r.get("tax_rate") or 0),
+                "tax_rate_id": r.get("tax_rate_id"),
+                "is_exempt": r.get("is_exempt") or False,
                 "description": r.get("description"),
                 "is_active": r.get("is_active", True),
                 "current_stock": str(r.get("current_stock") or 0),
@@ -123,42 +131,24 @@ def list_products(
 def get_product_stock(
     product_id: int,
     warehouse_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب رصيد المنتج المتاح (في كل المستودعات أو مستودع محدد)"""
     db = get_db_connection(current_user.company_id)
     try:
-        from utils.permissions import validate_branch_access
-        # Check permissions - if user is restricted, filter warehouses
-        allowed_branch = None
-        try:
-             allowed_branch = validate_branch_access(current_user, None)
-        except Exception:
-             # If validation fails (e.g. need to select branch), we might need to handle it or let it fail
-             # For stock sum, ideally we return sum of allowed. 
-             # For now let's leniently check if they have specific branch requirement
-             pass
-             
-        # But wait, validate_branch_access logic is strict.
-        # Let's check user allowed branches manually to filter the SUM
-        if isinstance(current_user, dict):
-            allowed_branches = current_user.get("allowed_branches", [])
-            user_role = current_user.get("role")
-            user_perms = current_user.get("permissions", [])
-        else:
-            allowed_branches = getattr(current_user, "allowed_branches", [])
-            user_role = getattr(current_user, "role", None)
-            user_perms = getattr(current_user, "permissions", [])
-
-        is_admin = user_role in ['admin', 'system_admin', 'superuser'] or '*' in user_perms
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         
         query = "SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE product_id = :pid"
         params = {"pid": product_id}
 
-        if not is_admin and allowed_branches:
-            # Filter by allowed branches
-            query += " AND warehouse_id IN (SELECT id FROM warehouses WHERE branch_id = ANY(:allowed_branches))"
-            params["allowed_branches"] = allowed_branches
+        warehouse_branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
+        if warehouse_branch_filter:
+            query += f""" AND warehouse_id IN (
+                SELECT w.id FROM warehouses w
+                WHERE 1=1
+                {warehouse_branch_filter}
+            )"""
 
         if warehouse_id:
             query += " AND warehouse_id = :wid"
@@ -202,11 +192,13 @@ def create_product(
         result = db.execute(text("""
             INSERT INTO products (
                 product_code, product_name, product_name_en, product_type, unit_id, category_id,
-                selling_price, cost_price, last_purchase_price, tax_rate, description, is_active,
+                selling_price, cost_price, last_purchase_price, tax_rate, tax_rate_id, is_exempt,
+                description, is_active,
                 has_batch_tracking, has_serial_tracking, has_expiry_tracking, shelf_life_days, expiry_alert_days
             ) VALUES (
                 :code, :name, :name_en, :type, :unit_id, :cat_id,
-                :sell, :buy, :last_buy, :tax, :desc, :active,
+                :sell, :buy, :last_buy, :tax, :tax_rate_id, :is_exempt,
+                :desc, :active,
                 :hbt, :hst, :het, :sld, :ead
             ) RETURNING id, created_at
         """), {
@@ -220,6 +212,8 @@ def create_product(
             "buy": product.buying_price,
             "last_buy": product.last_buying_price,
             "tax": product.tax_rate,
+            "tax_rate_id": product.tax_rate_id,
+            "is_exempt": product.is_exempt,
             "desc": product.description,
             "active": product.is_active,
             "hbt": product.has_batch_tracking,
@@ -272,6 +266,72 @@ def create_product(
         db.close()
 
 
+@products_router.get("/products/branch-prices", dependencies=[Depends(require_permission(["inventory.view", "sales.view"]))])
+def get_branch_prices(
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """جلب أسعار المنتجات حسب الفرع من قوائم الأسعار"""
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    db = get_db_connection(company_id)
+    try:
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        
+        # Get the default price list (customer_price_lists has no branch_id column)
+        price_list = db.execute(text("""
+            SELECT id, currency FROM customer_price_lists 
+            WHERE status = 'active' AND is_default = TRUE
+            LIMIT 1
+        """)).fetchone()
+        
+        display_cur = price_list.currency if price_list else base_cur
+        
+        # Get exchange rate for conversion (SAR -> branch currency)
+        exchange_rate = 1.0
+        if display_cur != base_cur:
+            rate_val = db.execute(text(
+                "SELECT current_rate FROM currencies WHERE code = :c"
+            ), {"c": display_cur}).scalar()
+            if rate_val and rate_val > 0:
+                exchange_rate = float(rate_val)
+        
+        if price_list:
+            # Get prices from the branch's price list
+            prices = db.execute(text("""
+                SELECT cpli.product_id, cpli.price, cpl.currency
+                FROM customer_price_list_items cpli
+                JOIN customer_price_lists cpl ON cpli.price_list_id = cpl.id
+                WHERE cpl.id = :plid
+            """), {"plid": price_list.id}).fetchall()
+            
+            result = {}
+            for p in prices:
+                result[p.product_id] = {
+                    "price": float(p.price),
+                    "currency": price_list.currency,
+                    "price_list_id": price_list.id
+                }
+        else:
+            # No price list for this branch, use product defaults
+            products = db.execute(text("SELECT id, selling_price FROM products WHERE is_active = TRUE")).fetchall()
+            result = {}
+            for p in products:
+                result[p.id] = {
+                    "price": float(p.selling_price or 0),
+                    "currency": base_cur,
+                    "price_list_id": None
+                }
+        
+        return {
+            "prices": result, 
+            "currency": display_cur,
+            "rate": exchange_rate,
+            "base_currency": base_cur
+        }
+    finally:
+        db.close()
+
+
 @products_router.get("/products/{id}", response_model=ProductResponse, dependencies=[Depends(require_permission("products.view"))])
 def get_product(id: int, current_user: dict = Depends(get_current_user)):
     """Get Product."""
@@ -289,6 +349,10 @@ def get_product(id: int, current_user: dict = Depends(get_current_user)):
                 p.cost_price as buying_price,
                 p.last_purchase_price as last_buying_price,
                 p.tax_rate,
+                p.tax_rate_id,
+                p.is_exempt,
+                tr.tax_name,
+                tr.rate_value as tax_rate_value,
                 p.description,
                 p.category_id,
                 p.is_active,
@@ -300,6 +364,7 @@ def get_product(id: int, current_user: dict = Depends(get_current_user)):
             FROM products p
             LEFT JOIN product_categories pc ON p.category_id = pc.id
             LEFT JOIN product_units pu ON p.unit_id = pu.id
+            LEFT JOIN tax_rates tr ON p.tax_rate_id = tr.id
             WHERE p.id = :id
         """), {"id": id}).fetchone()
 
@@ -348,6 +413,8 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
                 cost_price = :buy,
                 last_purchase_price = :last,
                 tax_rate = :tax,
+                tax_rate_id = :tax_rate_id,
+                is_exempt = :is_exempt,
                 description = :desc,
                 category_id = :cat,
                 is_active = :active,
@@ -371,6 +438,8 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
             "buy": product.buying_price,
             "last": product.last_buying_price,
             "tax": product.tax_rate,
+            "tax_rate_id": product.tax_rate_id,
+            "is_exempt": product.is_exempt,
             "desc": product.description,
             "cat": product.category_id,
             "active": product.is_active,

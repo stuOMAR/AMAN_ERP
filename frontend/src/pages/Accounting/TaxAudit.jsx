@@ -3,6 +3,7 @@ import { taxesAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
 import { formatNumber } from '../../utils/format'
+import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
@@ -12,6 +13,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 function TaxAudit() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
+    const currency = getCurrency()
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
     const [endDate, setEndDate] = useState(new Date())
     const [data, setData] = useState([])
@@ -121,8 +123,8 @@ function TaxAudit() {
                                         </td>
                                         <td>{item.party || <span className="text-muted">—</span>}</td>
                                         <td style={{ fontFamily: 'monospace' }}>{item.tax_number || <span className="text-muted">—</span>}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(item.taxable)}</td>
-                                        <td style={{ textAlign: 'left', fontWeight: '700', whiteSpace: 'nowrap' }}>{formatNumber(item.vat)}</td>
+                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(item.taxable)} <small>{currency}</small></td>
+                                        <td style={{ textAlign: 'left', fontWeight: '700', whiteSpace: 'nowrap' }}>{formatNumber(item.vat)} <small>{currency}</small></td>
                                     </tr>
                                 ))}
                                 {data.length === 0 && (

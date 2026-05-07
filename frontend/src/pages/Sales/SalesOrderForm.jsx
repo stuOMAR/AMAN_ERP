@@ -1,14 +1,15 @@
 import { useState, useEffect } from 'react'
-import { useNavigate, useLocation } from 'react-router-dom'
+import { useNavigate } from 'react-router-dom'
 import { salesAPI, inventoryAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
+import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
-import { useToast } from '../../context/ToastContext'
-import { formatNumber } from '../../utils/format'
+import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 
 function SalesOrderForm() {
     const { t } = useTranslation()
@@ -25,6 +26,7 @@ function SalesOrderForm() {
 
     const [formData, setFormData] = useState({
         customer_id: '',
+        party_site_id: '',
         warehouse_id: '',
         quotation_id: '',
         order_date: new Date().toISOString().split('T')[0],
@@ -39,20 +41,25 @@ function SalesOrderForm() {
     useEffect(() => {
         const fetchData = async () => {
             try {
-                const [custRes, prodRes, whRes] = await Promise.all([
+                const [custRes, prodRes, whRes, priceRes] = await Promise.all([
                     salesAPI.listCustomers(),
                     inventoryAPI.listProducts(),
-                    inventoryAPI.listWarehouses()
+                    inventoryAPI.listWarehouses(),
+                    inventoryAPI.getBranchPrices(currentBranch?.id)
                 ])
                 setCustomers(custRes.data)
                 setProducts(prodRes.data)
                 setWarehouses(whRes.data)
+                
+                // Store branch prices for auto-fill
+                window.__branchPrices = priceRes.data?.prices || {}
+                window.__branchCurrency = priceRes.data?.currency || currency
             } catch (err) {
                 showToast(t('common.error'), 'error')
             }
         }
         fetchData()
-    }, [])
+    }, [currentBranch])
 
     useEffect(() => {
         if (location.state?.fromQuotation) {
@@ -60,6 +67,7 @@ function SalesOrderForm() {
             setFormData(prev => ({
                 ...prev,
                 customer_id: quote.customer_id || '',
+        party_site_id: '',
                 quotation_id: quote.id,
                 notes: `${t('sales.orders.converted_from_quote')}: ${quote.sq_number}\n${quote.notes || ''}`
             }))
@@ -102,8 +110,11 @@ function SalesOrderForm() {
                     const product = products.find(p => p.id === parseInt(value))
                     if (product) {
                         updatedItem.description = product.product_name || product.item_name || ''
-                        updatedItem.unit_price = product.selling_price || 0
-                        updatedItem.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15
+                        // Use branch price if available, otherwise use product default
+                        const branchPrices = window.__branchPrices || {}
+                        const priceInfo = branchPrices[parseInt(value)]
+                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0)
+                        updatedItem.tax_rate = null // Resolved by backend engine
                     }
                 }
 
@@ -140,7 +151,20 @@ function SalesOrderForm() {
         setItems(newItems)
     }
 
+    // Backend-powered calculations
+    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+
     const calculateTotals = () => {
+        // Use backend totals if available
+        if (backendTotals) {
+            return {
+                subtotal: backendTotals.subtotal,
+                discount: backendTotals.totalDiscount,
+                tax: backendTotals.totalTax,
+                total: backendTotals.grandTotal,
+            }
+        }
+        // Fallback to local calculation
         return items.reduce((acc, item) => {
             const qty = Number(item.quantity) || 0
             const price = Number(item.unit_price) || 0
@@ -156,6 +180,21 @@ function SalesOrderForm() {
             return acc
         }, { subtotal: 0, discount: 0, tax: 0, total: 0 })
     }
+
+    // Call backend for accurate calculations
+    useEffect(() => {
+        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+            previewDebounced({
+                lines: items.map(i => ({
+                    quantity: Number(i.quantity) || 0,
+                    unit_price: Number(i.unit_price) || 0,
+                    tax_rate: Number(i.tax_rate) || 0,
+                    discount: Number(i.discount) || 0,
+                })),
+                currency,
+            })
+        }
+    }, [items])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -186,6 +225,7 @@ function SalesOrderForm() {
         try {
             const payload = {
                 customer_id: parseInt(formData.customer_id),
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 branch_id: currentBranch?.id,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 quotation_id: formData.quotation_id ? parseInt(formData.quotation_id) : null,

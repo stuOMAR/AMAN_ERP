@@ -117,6 +117,52 @@ jobs:
       - name: PII / secret logging guard (SEC-07)
         run: python scripts/check_pii_logging.py
 
+      # ── Feature 023 guards ─────────────────────────────────────────────
+      - name: Float-in-money guard
+        run: python scripts/check_no_float_money.py
+
+      - name: Invoice state writer guard
+        run: python scripts/check_invoice_state_writers.py
+
+      - name: JE source-id linkage guard
+        run: python scripts/check_je_source_id.py
+
+      - name: POS lock usage guard
+        run: python scripts/check_pos_lock_usage.py
+
+      - name: get_acc_id callsite guard
+        run: python scripts/check_get_acc_id_callsites.py
+
+      # ── Feature 025 guards ─────────────────────────────────────────────
+      - name: Cache keys tenant-segment guard
+        run: python scripts/check_cache_keys.py
+
+      - name: Schema sync guard (DDL vs migrations)
+        run: python scripts/check_schema_sync.py
+
+  # ─────────────────────────────────────────────────────────────────────
+  # Frontend: static analysis guards (Feature 025)
+  # ─────────────────────────────────────────────────────────────────────
+  frontend-guards:
+    name: frontend · static-analysis gates
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.12'
+
+      - name: Number format guard (.toFixed / parseFloat)
+        run: python scripts/check_frontend_number_format.py
+
+      - name: window.location allow-list guard
+        run: python scripts/check_frontend_window_location.py
+
+      - name: Hard-coded i18n strings guard
+        run: python scripts/check_frontend_i18n_strings.py
+        continue-on-error: true  # Advisory until baseline is established
+
   # ─────────────────────────────────────────────────────────────────────
   # Backend: tenant bootstrap end-to-end (creates a fresh tenant DB)
   # This validates the 301-tables-+-8-MVs invariant on every PR.
@@ -443,7 +489,7 @@ jobs:
   deploy:
     name: deploy · amanerp.me
     runs-on: ubuntu-latest
-    needs: [backend-static, backend-guards, tenant-bootstrap-e2e, alembic-roundtrip, frontend]
+    needs: [backend-static, backend-guards, frontend-guards, tenant-bootstrap-e2e, alembic-roundtrip, frontend]
     # Only deploy on direct pushes to main — not on PRs
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     steps:

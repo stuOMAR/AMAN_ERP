@@ -10,6 +10,7 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import useInvoiceCalc from '../../hooks/useInvoiceCalc';
 
 
 const SalesReturnForm = () => {
@@ -27,6 +28,7 @@ const SalesReturnForm = () => {
 
     const [formData, setFormData] = useState({
         customer_id: '',
+        party_site_id: '',
         warehouse_id: '',
         invoice_id: '',
         return_date: new Date().toISOString().split('T')[0],
@@ -45,14 +47,19 @@ const SalesReturnForm = () => {
 
     const fetchInitialData = async () => {
         try {
-            const [custRes, prodRes, whRes] = await Promise.all([
+            const [custRes, prodRes, whRes, priceRes] = await Promise.all([
                 salesAPI.listCustomers(),
                 inventoryAPI.listProducts(),
-                inventoryAPI.listWarehouses()
+                inventoryAPI.listWarehouses(),
+                inventoryAPI.getBranchPrices(currentBranch?.id)
             ]);
             setCustomers(custRes.data);
             setProducts(prodRes.data);
             setWarehouses(whRes.data);
+            
+            // Store branch prices for auto-fill
+            window.__branchPrices = priceRes.data?.prices || {};
+            window.__branchCurrency = priceRes.data?.currency || currency;
         } catch (error) {
             showToast(t('sales.orders.form.errors.fetch_failed'), 'error');
         }
@@ -60,7 +67,7 @@ const SalesReturnForm = () => {
 
     const handleCustomerChange = async (e) => {
         const customerId = e.target.value;
-        setFormData({ ...formData, customer_id: customerId, invoice_id: '', items: [] });
+        setFormData({ ...formData, customer_id: customerId, party_site_id: '', invoice_id: '', items: [] });
         setInvoices([]);
         setSelectedInvoiceInfo(null);
 
@@ -164,9 +171,12 @@ const SalesReturnForm = () => {
                     const product = products.find(p => p.id === parseInt(value));
                     if (product) {
                         updated.description = product.item_name;
-                        updated.unit_price = product.selling_price;
+                        // Use branch price if available, otherwise use product default
+                        const branchPrices = window.__branchPrices || {};
+                        const priceInfo = branchPrices[parseInt(value)];
+                        updated.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0);
                         updated.unit = product.unit || 'قطعة';
-                        updated.tax_rate = product.tax_rate !== undefined ? product.tax_rate : 15;
+                        updated.tax_rate = null // Resolved by backend engine;
                     }
                 }
 
@@ -243,6 +253,7 @@ const SalesReturnForm = () => {
             const payload = {
                 ...formData,
                 customer_id: parseInt(formData.customer_id) || null,
+                party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 invoice_id: formData.invoice_id ? parseInt(formData.invoice_id) : null,
                 items: formData.items.map(item => ({
@@ -302,7 +313,7 @@ const SalesReturnForm = () => {
                             className="form-input"
                         >
                             <option value="">{t('common.select')}</option>
-                            {warehouses.map(w => <option key={w.id} value={w.id}>{w.warehouse_name}</option>)}
+                            {warehouses.map(w => <option key={w.id} value={w.id}>{w.name || w.warehouse_name}</option>)}
                         </select>
                     </FormField>
 

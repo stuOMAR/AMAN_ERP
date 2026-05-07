@@ -1,0 +1,179 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e267]:
+    - navigation "القائمة الرئيسية" [ref=e268]:
+      - generic [ref=e269]:
+        - button "إغلاق القائمة" [expanded] [ref=e270] [cursor=pointer]:
+          - img [ref=e271]
+        - generic [ref=e273]: AMAN ERP
+      - navigation [ref=e274]:
+        - link "🏠 مساحة العمل" [ref=e275] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e277]: 🏠
+          - generic [ref=e278]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e279] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e281]: 📊
+          - generic [ref=e282]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e283] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e285]: 🏗️
+          - generic [ref=e286]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e287] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e289]: 🏦
+          - generic [ref=e290]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e291] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e293]: 💰
+          - generic [ref=e294]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e295] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e297]: 🏪
+          - generic [ref=e298]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e299] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e301]: 🛒
+          - generic [ref=e302]: المشتريات
+        - link "📦 المخزون" [ref=e303] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e305]: 📦
+          - generic [ref=e306]: المخزون
+        - link "🏭 التصنيع" [ref=e307] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e309]: 🏭
+          - generic [ref=e310]: التصنيع
+        - link "📐 المشاريع" [ref=e311] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e313]: 📐
+          - generic [ref=e314]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e315] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e317]: 🤝
+          - generic [ref=e318]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e319] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e321]: 🔧
+          - generic [ref=e322]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e323] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e325]: 💸
+          - generic [ref=e326]: المصروفات
+        - link "🧾 الضرائب" [ref=e327] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e329]: 🧾
+          - generic [ref=e330]: الضرائب
+        - link "✅ الاعتمادات" [ref=e331] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e333]: ✅
+          - generic [ref=e334]: الاعتمادات
+        - link "📈 التقارير" [ref=e335] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e337]: 📈
+          - generic [ref=e338]: التقارير
+        - link "👥 الموارد البشرية" [ref=e339] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e341]: 👥
+          - generic [ref=e342]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e343] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e345]: ⚙️
+          - generic [ref=e346]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e347] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e349]: 🎯
+          - generic [ref=e350]: إدارة المؤشرات
+    - generic [ref=e351]:
+      - banner [ref=e352]:
+        - generic [ref=e354] [cursor=pointer]:
+          - generic [ref=e355]:
+            - img [ref=e356]
+            - text: بحث...
+          - generic [ref=e359]: Ctrl+K
+        - generic [ref=e360]:
+          - button "EN" [ref=e361] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e362] [cursor=pointer]:
+            - img [ref=e363]
+          - button "🏢 مصر - فرع القاهرة EGP ▼" [ref=e370] [cursor=pointer]:
+            - generic [ref=e371]:
+              - text: 🏢
+              - generic [ref=e372]: مصر - فرع القاهرة
+            - generic [ref=e373]: EGP
+            - generic [ref=e374]: ▼
+          - button "🔔" [ref=e376] [cursor=pointer]
+          - generic [ref=e378] [cursor=pointer]:
+            - generic [ref=e379]:
+              - generic [ref=e380]: omar
+              - generic [ref=e381]: "ID: 1a134155"
+            - generic [ref=e382]: O
+      - main [ref=e384]:
+        - generic [ref=e385]:
+          - generic [ref=e387]:
+            - generic [ref=e388]:
+              - button "العودة" [ref=e389] [cursor=pointer]:
+                - img [ref=e390]
+              - generic [ref=e392]:
+                - heading "الميزانيات التقديرية" [level=1] [ref=e393]
+                - paragraph [ref=e394]: إدارة الميزانيات ومتابعة الأداء المالي
+            - button "+ ميزانية جديدة" [ref=e395] [cursor=pointer]:
+              - generic [ref=e396]: +
+              - text: ميزانية جديدة
+          - generic [ref=e398]:
+            - img [ref=e399]
+            - combobox [ref=e401]:
+              - option "جميع مراكز التكلفة" [selected]
+              - option "العمليات"
+              - option "المبيعات والتسويق"
+              - option "الإدارة العامة"
+          - generic [ref=e402]:
+            - generic [ref=e403]:
+              - img [ref=e405]
+              - generic [ref=e408]:
+                - generic [ref=e409]: إجمالي الميزانيات
+                - generic [ref=e410]: "1"
+                - generic [ref=e411]: "نشطة: 0 | مسودة: 1"
+            - generic [ref=e412]:
+              - img [ref=e414]
+              - generic [ref=e417]:
+                - generic [ref=e418]: إجمالي المخطط
+                - generic [ref=e419]: 15,600,000.00
+                - generic [ref=e420]: EGP
+            - generic [ref=e421]:
+              - img [ref=e423]
+              - generic [ref=e426]:
+                - generic [ref=e427]: إجمالي الفعلي
+                - generic [ref=e428]: 119,500.83
+                - generic [ref=e429]: EGP • 0.77%
+            - generic [ref=e430]:
+              - img [ref=e432]
+              - generic [ref=e434]:
+                - generic [ref=e435]: تجاوزات
+                - generic [ref=e436]: "0"
+                - generic [ref=e437]: جيد
+          - generic [ref=e439]:
+            - generic [ref=e440]:
+              - generic [ref=e441]:
+                - heading "ميزانية القاهرة 2026" [level=3] [ref=e442]
+                - generic [ref=e443]:
+                  - img [ref=e444]
+                  - text: مسودة
+              - button [ref=e448] [cursor=pointer]:
+                - img [ref=e449]
+            - paragraph [ref=e453]: ميزانية سنوية لفرع القاهرة
+            - generic [ref=e454]:
+              - img [ref=e455]
+              - generic [ref=e457]:
+                - generic [ref=e458]:
+                  - generic [ref=e459]: تاريخ البدء
+                  - generic [ref=e460]: 2026/01/01
+                - generic [ref=e462]:
+                  - generic [ref=e463]: تاريخ الانتهاء
+                  - generic [ref=e464]: 2026/12/31
+            - generic [ref=e465]:
+              - button "بنود الميزانية" [ref=e466] [cursor=pointer]:
+                - img [ref=e467]
+                - text: بنود الميزانية
+              - button "تقرير الانحراف" [ref=e470] [cursor=pointer]:
+                - img [ref=e471]
+                - text: تقرير الانحراف

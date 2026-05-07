@@ -19,6 +19,7 @@ export const salesAPI = {
     listQuotations: (params) => api.get('/sales/quotations', { params }),
     getQuotation: (id) => api.get(`/sales/quotations/${id}`),
     createQuotation: (data) => api.post('/sales/quotations', data),
+    sendQuotation: (id) => api.post(`/sales/quotations/${id}/send-email`),
 
     // Customer Groups
     listCustomerGroups: (params) => api.get('/sales/customer-groups', { params }),

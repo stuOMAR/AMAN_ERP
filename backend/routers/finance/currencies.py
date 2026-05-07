@@ -18,6 +18,85 @@ router = APIRouter(
 )
 
 
+def _auto_create_currency_accounts(db, currency_code: str, currency_name: str, current_user):
+    """
+    عند إنشاء عملة جديدة، يُنشئ تلقائياً:
+    1. حساب رأس المال للعملة (تحوي حساب رأس المال الأب)
+    2. يمكن إضافة حسابات أخرى لاحقاً (خزينة افتراضية مثلاً)
+    """
+    try:
+        # 1. Ensure parent capital account (31) exists
+        parent_capital = db.execute(
+            text("SELECT id FROM accounts WHERE account_number = '31' AND is_header = TRUE LIMIT 1")
+        ).fetchone()
+
+        if not parent_capital:
+            # Create parent capital account under حقوق الملكية (3000)
+            equity_parent = db.execute(
+                text("SELECT id FROM accounts WHERE account_number = '3000' LIMIT 1")
+            ).fetchone()
+            equity_parent_id = equity_parent[0] if equity_parent else None
+
+            db.execute(text("""
+                INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, is_active)
+                VALUES ('31', '31', 'رأس المال', 'Capital', 'equity', :parent_id, 'SAR', TRUE, TRUE)
+            """), {"parent_id": equity_parent_id})
+            db.commit()
+            parent_capital = db.execute(
+                text("SELECT id FROM accounts WHERE account_number = '31' LIMIT 1")
+            ).fetchone()
+
+        if not parent_capital:
+            return  # Can't create child without parent
+
+        parent_id = parent_capital[0]
+
+        # 2. Find next available account number (3101, 3102, 3103, ...)
+        existing = db.execute(text("""
+            SELECT account_number FROM accounts
+            WHERE parent_id = :parent_id AND account_number ~ '^31[0-9]{2}$'
+            ORDER BY account_number DESC LIMIT 1
+        """), {"parent_id": parent_id}).fetchone()
+
+        if existing:
+            next_num = str(int(existing[0]) + 1)
+        else:
+            next_num = "3101"
+
+        # 3. Check if capital account for this currency already exists
+        existing_currency = db.execute(text("""
+            SELECT id FROM accounts
+            WHERE parent_id = :parent_id AND currency = :currency AND account_type = 'equity'
+            LIMIT 1
+        """), {"parent_id": parent_id, "currency": currency_code}).fetchone()
+
+        if existing_currency:
+            return  # Already exists
+
+        # 4. Create capital account for this currency
+        account_name = f"رأس المال - {currency_name}"
+        account_name_en = f"Capital - {currency_code}"
+
+        db.execute(text("""
+            INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, is_active)
+            VALUES (:num, :code, :name, :name_en, 'equity', :parent_id, :currency, FALSE, TRUE)
+        """), {
+            "num": next_num,
+            "code": next_num,
+            "name": account_name,
+            "name_en": account_name_en,
+            "parent_id": parent_id,
+            "currency": currency_code,
+        })
+        db.commit()
+
+        logger.info(f"✓ Auto-created capital account {next_num}: {account_name} ({currency_code})")
+
+    except Exception as e:
+        logger.warning(f"Failed to auto-create capital account for {currency_code}: {e}")
+        db.rollback()
+
+
 def compute_fx_revaluation_diff(
     fc_balance: float,
     bc_balance: float,
@@ -161,6 +240,10 @@ def create_currency(
         """)
         result = db.execute(query, currency.model_dump()).mappings().fetchone()
         db.commit()
+
+        # ═══ Auto-create capital account for this currency ═══
+        _auto_create_currency_accounts(db, currency.code, currency.name, current_user)
+
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="create_currency", resource_type="currency",
                      resource_id=str(result["id"]),
@@ -278,12 +361,11 @@ def add_exchange_rate(
         if not curr:
             raise HTTPException(status_code=404, detail="Currency not found")
 
-        # Insert or Update (Upsert)
+        # Insert exchange rate (immutable - no update allowed by trigger)
         query = text("""
             INSERT INTO exchange_rates (currency_id, rate_date, rate, source, created_by)
             VALUES (:currency_id, :rate_date, :rate, :source, :user_id)
-            ON CONFLICT (currency_id, rate_date) 
-            DO UPDATE SET rate = :rate, source = :source, created_at = CURRENT_TIMESTAMP
+            ON CONFLICT (currency_id, rate_date) DO NOTHING
             RETURNING *
         """)
         params = rate_data.model_dump()
@@ -291,16 +373,29 @@ def add_exchange_rate(
         
         result = db.execute(query, params).mappings().fetchone()
         
-        # Also update current rate in currencies table
+        # Update current rate in currencies table (always)
         db.execute(text("UPDATE currencies SET current_rate = :rate WHERE id = :id"), 
                 {"rate": rate_data.rate, "id": rate_data.currency_id})
         
         db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="add_exchange_rate", resource_type="exchange_rate",
-                     resource_id=str(result["id"]),
+                     resource_id=str(result["id"]) if result else "0",
                      details={"currency_id": rate_data.currency_id, "rate": float(rate_data.rate)}, request=request)
-        return result
+        
+        # Return the rate record (use result if INSERT returned, otherwise construct from input)
+        if result:
+            return dict(result)
+        else:
+            # INSERT did NOT RETURNING (conflict) — return constructed record
+            return {
+                "id": 0,
+                "currency_id": rate_data.currency_id,
+                "rate": rate_data.rate,
+                "rate_date": str(rate_data.rate_date) if rate_data.rate_date else None,
+                "source": rate_data.source or "manual",
+                "created_by": current_user.id
+            }
     finally:
         db.close()
 
@@ -353,8 +448,8 @@ def get_current_rate(
     try:
         cur = db.execute(
             text(
-                "SELECT id, code, name, name_ar, symbol, is_base, "
-                "       coalesce(exchange_rate, 1.0) AS legacy_rate "
+                "SELECT id, code, name, name_en, symbol, is_base, "
+                "       coalesce(current_rate, 1.0) AS legacy_rate "
                 "FROM currencies WHERE upper(code) = :c LIMIT 1"
             ),
             {"c": code},

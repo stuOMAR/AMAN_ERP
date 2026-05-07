@@ -1,0 +1,201 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🔔 4" [ref=e110] [cursor=pointer]:
+            - text: 🔔
+            - generic [ref=e111]: "4"
+          - generic [ref=e113] [cursor=pointer]:
+            - generic [ref=e114]:
+              - generic [ref=e115]: aaaa
+              - generic [ref=e116]: "ID: e24bcd11"
+            - generic [ref=e117]: O
+      - main [ref=e119]:
+        - generic [ref=e269]:
+          - generic [ref=e270]:
+            - button "العودة" [ref=e271] [cursor=pointer]:
+              - img [ref=e272]
+            - generic [ref=e274]:
+              - heading "قيود اليومية" [level=1] [ref=e275]
+              - paragraph [ref=e276]: 6 قيود اليومية
+            - button "+ قيد جديد" [ref=e277] [cursor=pointer]
+          - generic [ref=e278]:
+            - generic [ref=e279]:
+              - img
+              - textbox "ابحث في القيود المحاسبية..." [ref=e280]
+            - combobox [ref=e281]:
+              - option "كل الحالات" [selected]
+              - option "مسودة"
+              - option "مرحّل"
+              - option "ملغي"
+          - table [ref=e283]:
+            - rowgroup [ref=e284]:
+              - row "رقم القيد التاريخ البيان المرجع مدين دائن الحالة إجراءات" [ref=e285]:
+                - columnheader "رقم القيد" [ref=e286]
+                - columnheader "التاريخ" [ref=e287]
+                - columnheader "البيان" [ref=e288]
+                - columnheader "المرجع" [ref=e289]
+                - columnheader "مدين" [ref=e290]
+                - columnheader "دائن" [ref=e291]
+                - columnheader "الحالة" [ref=e292]
+                - columnheader "إجراءات" [ref=e293]
+            - rowgroup [ref=e294]:
+              - row "JE-00006 2026/05/03 عكس القيد JE-00003 - تصحيح مصروفات متنوعة — 15,000.00 15,000.00 مرحّل إلغاء" [ref=e295] [cursor=pointer]:
+                - cell "JE-00006" [ref=e296]:
+                  - strong [ref=e297]: JE-00006
+                - cell "2026/05/03" [ref=e298]
+                - cell "عكس القيد JE-00003 - تصحيح مصروفات متنوعة" [ref=e299]
+                - cell "—" [ref=e300]
+                - cell "15,000.00" [ref=e301]
+                - cell "15,000.00" [ref=e302]
+                - cell "مرحّل" [ref=e303]
+                - cell "إلغاء" [ref=e304]:
+                  - button "إلغاء" [ref=e306]
+              - row "JE-00005 2026/05/03 إيجار شهري 20,000 SAR (2026-05-03) REC-1 20,000.00 20,000.00 مرحّل إلغاء" [ref=e307] [cursor=pointer]:
+                - cell "JE-00005" [ref=e308]:
+                  - strong [ref=e309]: JE-00005
+                - cell "2026/05/03" [ref=e310]
+                - cell "إيجار شهري 20,000 SAR (2026-05-03)" [ref=e311]
+                - cell "REC-1" [ref=e312]
+                - cell "20,000.00" [ref=e313]
+                - cell "20,000.00" [ref=e314]
+                - cell "مرحّل" [ref=e315]
+                - cell "إلغاء" [ref=e316]:
+                  - button "إلغاء" [ref=e318]
+              - row "JE-00004 2026/05/03 قيد بعملة أجنبية USD - تحويل بنكي — 37,500.00 37,500.00 مرحّل إلغاء" [ref=e319] [cursor=pointer]:
+                - cell "JE-00004" [ref=e320]:
+                  - strong [ref=e321]: JE-00004
+                - cell "2026/05/03" [ref=e322]
+                - cell "قيد بعملة أجنبية USD - تحويل بنكي" [ref=e323]
+                - cell "—" [ref=e324]
+                - cell "37,500.00" [ref=e325]
+                - cell "37,500.00" [ref=e326]
+                - cell "مرحّل" [ref=e327]
+                - cell "إلغاء" [ref=e328]:
+                  - button "إلغاء" [ref=e330]
+              - row "JE-00003 2026/05/03 مصروفات متنوعة - قيد متعدد البنود — 15,000.00 15,000.00 مرحّل إلغاء" [ref=e331] [cursor=pointer]:
+                - cell "JE-00003" [ref=e332]:
+                  - strong [ref=e333]: JE-00003
+                - cell "2026/05/03" [ref=e334]
+                - cell "مصروفات متنوعة - قيد متعدد البنود" [ref=e335]
+                - cell "—" [ref=e336]
+                - cell "15,000.00" [ref=e337]
+                - cell "15,000.00" [ref=e338]
+                - cell "مرحّل" [ref=e339]
+                - cell "إلغاء" [ref=e340]:
+                  - button "إلغاء" [ref=e342]
+              - row "JE-00002 2026/05/03 Test draft entry TEST-REF 100.00 100.00 مسودة ترحيل" [ref=e343] [cursor=pointer]:
+                - cell "JE-00002" [ref=e344]:
+                  - strong [ref=e345]: JE-00002
+                - cell "2026/05/03" [ref=e346]
+                - cell "Test draft entry" [ref=e347]
+                - cell "TEST-REF" [ref=e348]
+                - cell "100.00" [ref=e349]
+                - cell "100.00" [ref=e350]
+                - cell "مسودة" [ref=e351]
+                - cell "ترحيل" [ref=e352]:
+                  - button "ترحيل" [ref=e354]
+              - row "JE-00001 2026/01/01 رأس المال الافتتاحي — 5,000,000.00 5,000,000.00 مرحّل إلغاء" [ref=e355] [cursor=pointer]:
+                - cell "JE-00001" [ref=e356]:
+                  - strong [ref=e357]: JE-00001
+                - cell "2026/01/01" [ref=e358]
+                - cell "رأس المال الافتتاحي" [ref=e359]
+                - cell "—" [ref=e360]
+                - cell "5,000,000.00" [ref=e361]
+                - cell "5,000,000.00" [ref=e362]
+                - cell "مرحّل" [ref=e363]
+                - cell "إلغاء" [ref=e364]:
+                  - button "إلغاء" [ref=e366]

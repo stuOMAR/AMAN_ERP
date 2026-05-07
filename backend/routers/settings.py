@@ -11,7 +11,7 @@ from typing import Any, Dict, List
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
-from utils.permissions import require_permission
+from utils.permissions import require_permission, require_sensitive_permission
 from schemas.settings import SettingsUpdateRequest
 from utils.audit import log_activity
 from utils.cache import cache
@@ -71,10 +71,16 @@ SETTINGS_VALIDATION_MAP = {
     "purchases_approval_required": {"type": "bool"},
     # Inventory
     "inventory_valuation_method": {"type": "str", "allowed": ["fifo", "lifo", "average", "standard"]},
-    "inventory_negative_stock": {"type": "bool"},
-    "inventory_auto_reorder": {"type": "bool"},
+    # T10.2 #249: ``allow_negative_stock`` (further down) is the canonical key
+    # used by the frontend and read at runtime. The two below are kept ONLY
+    # for backward compatibility with old tenants that may have stored a
+    # value under these aliases; new code MUST use ``allow_negative_stock``.
+    "inventory_negative_stock": {"type": "bool"},  # DEPRECATED alias \u2014 see allow_negative_stock
+    # T10.2 #251: setting accepted here but no consumer in the codebase
+    # implements an automatic reorder flow. Tracked in P3_BACKLOG (T19).
+    "inventory_auto_reorder": {"type": "bool"},  # not yet wired \u2014 reserved
     "stock_valuation_method": {"type": "str"},
-    "stock_negative_allowed": {"type": "bool"},
+    "stock_negative_allowed": {"type": "bool"},  # DEPRECATED alias \u2014 see allow_negative_stock
     # SMTP
     "smtp_host": {"type": "str"},
     "smtp_port": {"type": "int", "min": 1, "max": 65535},
@@ -231,7 +237,7 @@ PERMISSION_MAPPING = {
     "pos_": "pos.view", # Assuming pos role, otherwise settings.view
 }
 
-@router.get("/", response_model=Dict[str, Any], dependencies=[Depends(require_permission("settings.view"))])
+@router.get("/", response_model=Dict[str, Any], dependencies=[Depends(require_sensitive_permission("settings.view"))])
 def get_company_settings(
     current_user: UserResponse = Depends(get_current_user)
 ):
@@ -302,7 +308,7 @@ def get_company_settings(
     finally:
         db.close()
 
-@router.post("/bulk", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
+@router.post("/bulk", status_code=status.HTTP_200_OK, dependencies=[Depends(require_sensitive_permission("settings.manage", critical=True))], response_model=Dict[str, Any])
 def update_settings_bulk(
     request: SettingsUpdateRequest,
     req: Request = None,
@@ -425,7 +431,7 @@ def update_settings_bulk(
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
-@router.post("/test-email", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
+@router.post("/test-email", status_code=status.HTTP_200_OK, dependencies=[Depends(require_sensitive_permission("settings.manage", critical=True))], response_model=Dict[str, Any])
 def test_email_connection(
     request: SettingsUpdateRequest,
     current_user: UserResponse = Depends(get_current_user)
@@ -455,7 +461,7 @@ def test_email_connection(
     except Exception:
         raise HTTPException(status_code=400, detail="فشل الاتصال بالخادم")
 
-@router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
+@router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_sensitive_permission("settings.manage", critical=True))], response_model=Dict[str, Any])
 def generate_csid(
     request: SettingsUpdateRequest,
     current_user: UserResponse = Depends(get_current_user)

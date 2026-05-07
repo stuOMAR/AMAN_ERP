@@ -3,8 +3,9 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
+import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
-import { hasPermission } from '../../utils/auth'
+import { hasPermission, getCurrency } from '../../utils/auth'
 import { formatDate } from '../../utils/dateUtils'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
@@ -14,10 +15,13 @@ function JournalEntryList() {
     const { t, i18n } = useTranslation()
     const navigate = useNavigate()
     const { showToast } = useToast()
+    const { currentBranch } = useBranch()
     const isRTL = i18n.language === 'ar'
     const canCreate = hasPermission('accounting.create_journal_entry')
     const canPost = hasPermission('accounting.post_journal_entry')
     const canVoid = hasPermission('accounting.void_journal_entry')
+    const canManage = hasPermission('accounting.manage')
+    const currency = getCurrency()
 
     const [entries, setEntries] = useState([])
     const [loading, setLoading] = useState(true)
@@ -27,6 +31,10 @@ function JournalEntryList() {
     const [search, setSearch] = useState('')
     const [selectedEntry, setSelectedEntry] = useState(null)
     const [detailLoading, setDetailLoading] = useState(false)
+    const [showReverseModal, setShowReverseModal] = useState(false)
+    const [reverseDate, setReverseDate] = useState(new Date().toISOString().slice(0, 10))
+    const [reverseReason, setReverseReason] = useState('')
+    const [reverseLoading, setReverseLoading] = useState(false)
     const limit = 25
 
     const fetchEntries = useCallback(async () => {
@@ -35,6 +43,7 @@ function JournalEntryList() {
             const params = { page, limit }
             if (statusFilter) params.status_filter = statusFilter
             if (search) params.search = search
+            if (currentBranch?.id) params.branch_id = currentBranch.id
             const res = await accountingAPI.listJournalEntries(params)
             setEntries(res.data.items || [])
             setTotal(res.data.total || 0)
@@ -43,7 +52,7 @@ function JournalEntryList() {
         } finally {
             setLoading(false)
         }
-    }, [page, statusFilter, search, showToast])
+    }, [page, statusFilter, search, showToast, currentBranch])
 
     useEffect(() => { fetchEntries() }, [fetchEntries])
 
@@ -68,6 +77,26 @@ function JournalEntryList() {
             setSelectedEntry(null)
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
+        }
+    }
+
+    const handleReverse = async () => {
+        if (!selectedEntry) return
+        setReverseLoading(true)
+        try {
+            const res = await accountingAPI.reverseJournalEntry(selectedEntry.id, {
+                reversal_date: reverseDate,
+                reason: reverseReason || undefined,
+            })
+            showToast(res.data.message, 'success')
+            setShowReverseModal(false)
+            setSelectedEntry(null)
+            setReverseReason('')
+            fetchEntries()
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.error'), 'error')
+        } finally {
+            setReverseLoading(false)
         }
     }
 
@@ -119,12 +148,12 @@ function JournalEntryList() {
         {
             key: 'total_debit',
             label: t('accounting.journal_entries.table.debit'),
-            render: (val) => formatNumber(val),
+            render: (val) => <span>{formatNumber(val)} <small>{currency}</small></span>,
         },
         {
             key: 'total_credit',
             label: t('accounting.journal_entries.table.credit'),
-            render: (val) => formatNumber(val),
+            render: (val) => <span>{formatNumber(val)} <small>{currency}</small></span>,
         },
         {
             key: 'status',
@@ -249,8 +278,8 @@ function JournalEntryList() {
                                     ))}
                                     <tr style={{ fontWeight: 'bold', borderTop: '2px solid var(--border)' }}>
                                         <td colSpan="2">{t('common.total')}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + l.debit, 0))}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + l.credit, 0))}</td>
+                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + parseFloat(l.debit || 0), 0))}</td>
+                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + parseFloat(l.credit || 0), 0))}</td>
                                     </tr>
                                 </tbody>
                             </table>
@@ -261,13 +290,74 @@ function JournalEntryList() {
                                     {'\u2713'} {t('accounting.journal_entries.post_entry')}
                                 </button>
                             )}
-                            {selectedEntry.status === 'posted' && canVoid && (
+                            {selectedEntry.status === 'posted' && canManage && selectedEntry.source !== 'reversal' && (
+                                <button className="btn btn-warning" onClick={() => {
+                                    setReverseDate(new Date().toISOString().slice(0, 10))
+                                    setReverseReason('')
+                                    setShowReverseModal(true)
+                                }}>
+                                    ↩ {t('accounting.journal_entries.reverse_entry', 'عكس القيد')}
+                                </button>
+                            )}
+                            {selectedEntry.status === 'posted' && canVoid && selectedEntry.source !== 'reversal' && (
                                 <button className="btn btn-danger" onClick={() => handleVoid(selectedEntry.id)}>
                                     {'\u2715'} {t('accounting.journal_entries.void_entry')}
                                 </button>
                             )}
                             <button className="btn btn-secondary" onClick={() => setSelectedEntry(null)}>
                                 {t('accounting.journal_entries.close')}
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {/* Reverse Confirmation Modal */}
+            {showReverseModal && selectedEntry && (
+                <div className="modal-overlay" onClick={() => setShowReverseModal(false)}>
+                    <div className="modal-content" onClick={ev => ev.stopPropagation()} style={{ maxWidth: '480px' }}>
+                        <div className="modal-header">
+                            <h3>↩ {t('accounting.journal_entries.reverse_entry', 'عكس القيد')}</h3>
+                            <button className="modal-close" onClick={() => setShowReverseModal(false)}>{'\u2715'}</button>
+                        </div>
+                        <div className="modal-body" style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+                            <p style={{ margin: 0 }}>
+                                {t('accounting.journal_entries.reverse_confirm_msg', 'سيتم إنشاء قيد عكسي لـ')} <strong>{selectedEntry.entry_number}</strong>.
+                                {' '}{t('accounting.journal_entries.reverse_original_kept', 'القيد الأصلي يبقى مرحَّلاً.')}
+                            </p>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 500 }}>
+                                    {t('accounting.journal_entries.reversal_date', 'تاريخ القيد العكسي')}
+                                </label>
+                                <input
+                                    type="date"
+                                    className="form-control"
+                                    value={reverseDate}
+                                    onChange={e => setReverseDate(e.target.value)}
+                                />
+                            </div>
+                            <div>
+                                <label style={{ display: 'block', marginBottom: '0.25rem', fontWeight: 500 }}>
+                                    {t('common.reason', 'السبب')} ({t('common.optional', 'اختياري')})
+                                </label>
+                                <input
+                                    type="text"
+                                    className="form-control"
+                                    value={reverseReason}
+                                    onChange={e => setReverseReason(e.target.value)}
+                                    placeholder={t('accounting.journal_entries.reverse_reason_placeholder', 'مثال: تصحيح خطأ، عكس مستحقات...')}
+                                />
+                            </div>
+                        </div>
+                        <div className="modal-footer">
+                            <button
+                                className="btn btn-warning"
+                                onClick={handleReverse}
+                                disabled={reverseLoading || !reverseDate}
+                            >
+                                {reverseLoading ? t('common.loading', '...') : `↩ ${t('accounting.journal_entries.confirm_reverse', 'تأكيد العكس')}`}
+                            </button>
+                            <button className="btn btn-secondary" onClick={() => setShowReverseModal(false)}>
+                                {t('common.cancel', 'إلغاء')}
                             </button>
                         </div>
                     </div>

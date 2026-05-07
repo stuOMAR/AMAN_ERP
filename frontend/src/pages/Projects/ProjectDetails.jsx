@@ -18,11 +18,13 @@ import DateInput from '../../components/common/DateInput';
 import { formatShortDate, formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { useBranch } from '../../context/BranchContext';
 
 export default function ProjectDetails() {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const { id } = useParams();
+    const { currentBranch } = useBranch();
 
     const fileInputRef = useRef(null);
 
@@ -73,7 +75,7 @@ export default function ProjectDetails() {
         fetchProject();
         fetchDocuments();
         fetchTreasury();
-    }, [id]);
+    }, [id, currentBranch?.id]);
 
     const fetchProject = async () => {
         try {
@@ -94,7 +96,7 @@ export default function ProjectDetails() {
 
     const fetchTreasury = async () => {
         try {
-            const res = await treasuryAPI.listAccounts();
+            const res = await treasuryAPI.listAccounts(currentBranch?.id);
             setTreasuryAccounts(res.data || []);
         } catch { }
     };
@@ -216,7 +218,6 @@ export default function ProjectDetails() {
                     description: invoiceForm.description, // Corrected field name
                     quantity: 1,
                     unit_price: parseFloat(invoiceForm.amount),
-                    tax_rate: 15, // Default VAT
                     discount: 0
                 }]
             };

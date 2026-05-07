@@ -50,6 +50,15 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         
         employee_id = emp_res[0]
         today = date.today()
+
+        conn.execute(text("""
+            UPDATE attendance
+            SET check_out = check_in + INTERVAL '16 hours',
+                notes = COALESCE(NULLIF(notes, ''), 'auto-closed after 16 hours')
+            WHERE employee_id = :eid
+              AND check_out IS NULL
+              AND check_in < NOW() - INTERVAL '16 hours'
+        """), {"eid": employee_id})
         
         # Check if already checked in today (open session without checkout)
         existing = conn.execute(

@@ -83,6 +83,26 @@ class EmployeeResponse(BaseModel):
     allowed_branches: List[int] = []
     role: Optional[str] = None
     hourly_cost: Decimal = Decimal("0")
+    # PII fields — always masked in list/detail responses
+    salary: Optional[str] = None
+    salary_masked: bool = False
+    iban: Optional[str] = None
+    iban_masked: bool = False
+    national_id: Optional[str] = None
+    national_id_masked: bool = False
+    passport_number: Optional[str] = None
+    passport_number_masked: bool = False
+    bank_account_number: Optional[str] = None
+    bank_account_number_masked: bool = False
+    gosi_number: Optional[str] = None
+    gosi_number_masked: bool = False
+
+
+class EmployeePiiOut(BaseModel):
+    """Schema for the PII unmask endpoint — returns plaintext for a single field."""
+    employee_id: int
+    field: str
+    value: str
 
 
 class DepartmentCreate(BaseModel):

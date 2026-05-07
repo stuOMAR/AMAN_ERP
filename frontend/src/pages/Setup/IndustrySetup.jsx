@@ -79,9 +79,10 @@ function IndustrySetup() {
     <>
       <style>{`
         .setup-layout {
-          min-height: 100vh;
+          height: 100vh;
+          overflow-y: auto;
           display: flex;
-          align-items: center;
+          align-items: flex-start;
           justify-content: center;
           background: var(--bg-main, #f8fafc);
           padding: 24px 16px;

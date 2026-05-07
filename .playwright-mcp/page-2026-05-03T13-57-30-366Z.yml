@@ -1,0 +1,224 @@
+- generic [ref=e2]:
+  - link "تخطّي إلى المحتوى الرئيسي" [ref=e6] [cursor=pointer]:
+    - /url: "#main-content"
+  - generic [ref=e7]:
+    - navigation "القائمة الرئيسية" [ref=e8]:
+      - generic [ref=e9]:
+        - button "إغلاق القائمة" [expanded] [ref=e10] [cursor=pointer]:
+          - img [ref=e11]
+        - generic [ref=e13]: AMAN ERP
+      - navigation [ref=e14]:
+        - link "🏠 مساحة العمل" [ref=e15] [cursor=pointer]:
+          - /url: /dashboard
+          - generic [ref=e17]: 🏠
+          - generic [ref=e18]: مساحة العمل
+        - link "📊 المحاسبة" [ref=e19] [cursor=pointer]:
+          - /url: /accounting
+          - generic [ref=e21]: 📊
+          - generic [ref=e22]: المحاسبة
+        - link "🏗️ الأصول الثابتة" [ref=e23] [cursor=pointer]:
+          - /url: /assets
+          - generic [ref=e25]: 🏗️
+          - generic [ref=e26]: الأصول الثابتة
+        - link "🏦 الخزينة والمصروفات" [ref=e27] [cursor=pointer]:
+          - /url: /treasury
+          - generic [ref=e29]: 🏦
+          - generic [ref=e30]: الخزينة والمصروفات
+        - link "💰 المبيعات" [ref=e31] [cursor=pointer]:
+          - /url: /sales
+          - generic [ref=e33]: 💰
+          - generic [ref=e34]: المبيعات
+        - link "🏪 نقاط البيع" [ref=e35] [cursor=pointer]:
+          - /url: /pos
+          - generic [ref=e37]: 🏪
+          - generic [ref=e38]: نقاط البيع
+        - link "🛒 المشتريات" [ref=e39] [cursor=pointer]:
+          - /url: /buying
+          - generic [ref=e41]: 🛒
+          - generic [ref=e42]: المشتريات
+        - link "📦 المخزون" [ref=e43] [cursor=pointer]:
+          - /url: /stock
+          - generic [ref=e45]: 📦
+          - generic [ref=e46]: المخزون
+        - link "🏭 التصنيع" [ref=e47] [cursor=pointer]:
+          - /url: /manufacturing
+          - generic [ref=e49]: 🏭
+          - generic [ref=e50]: التصنيع
+        - link "📐 المشاريع" [ref=e51] [cursor=pointer]:
+          - /url: /projects
+          - generic [ref=e53]: 📐
+          - generic [ref=e54]: المشاريع
+        - link "🤝 إدارة العلاقات" [ref=e55] [cursor=pointer]:
+          - /url: /crm
+          - generic [ref=e57]: 🤝
+          - generic [ref=e58]: إدارة العلاقات
+        - link "🔧 الخدمات والصيانة" [ref=e59] [cursor=pointer]:
+          - /url: /services
+          - generic [ref=e61]: 🔧
+          - generic [ref=e62]: الخدمات والصيانة
+        - link "💸 المصروفات" [ref=e63] [cursor=pointer]:
+          - /url: /expenses
+          - generic [ref=e65]: 💸
+          - generic [ref=e66]: المصروفات
+        - link "🧾 الضرائب" [ref=e67] [cursor=pointer]:
+          - /url: /taxes
+          - generic [ref=e69]: 🧾
+          - generic [ref=e70]: الضرائب
+        - link "✅ الاعتمادات" [ref=e71] [cursor=pointer]:
+          - /url: /approvals
+          - generic [ref=e73]: ✅
+          - generic [ref=e74]: الاعتمادات
+        - link "📈 التقارير" [ref=e75] [cursor=pointer]:
+          - /url: /reports
+          - generic [ref=e77]: 📈
+          - generic [ref=e78]: التقارير
+        - link "👥 الموارد البشرية" [ref=e79] [cursor=pointer]:
+          - /url: /hr
+          - generic [ref=e81]: 👥
+          - generic [ref=e82]: الموارد البشرية
+        - link "⚙️ الإعدادات" [ref=e83] [cursor=pointer]:
+          - /url: /settings
+          - generic [ref=e85]: ⚙️
+          - generic [ref=e86]: الإعدادات
+        - link "🎯 إدارة المؤشرات" [ref=e87] [cursor=pointer]:
+          - /url: /reports/kpi-admin
+          - generic [ref=e89]: 🎯
+          - generic [ref=e90]: إدارة المؤشرات
+    - generic [ref=e91]:
+      - banner [ref=e92]:
+        - generic [ref=e94] [cursor=pointer]:
+          - generic [ref=e95]:
+            - img [ref=e96]
+            - text: بحث...
+          - generic [ref=e99]: Ctrl+K
+        - generic [ref=e100]:
+          - button "EN" [ref=e101] [cursor=pointer]
+          - button "الوضع الفاتح" [ref=e102] [cursor=pointer]:
+            - img [ref=e103]
+          - button "🔔" [ref=e110] [cursor=pointer]
+          - generic [ref=e112] [cursor=pointer]:
+            - generic [ref=e113]:
+              - generic [ref=e114]: aaaa
+              - generic [ref=e115]: "ID: e24bcd11"
+            - generic [ref=e116]: O
+      - main [ref=e118]:
+        - generic [ref=e289]:
+          - generic [ref=e290]:
+            - button "العودة" [ref=e291] [cursor=pointer]:
+              - img [ref=e292]
+            - generic [ref=e294]:
+              - generic [ref=e295]:
+                - heading "العملات" [level=1] [ref=e296]:
+                  - img [ref=e297]
+                  - text: العملات
+                - paragraph [ref=e299]: إدارة العملات وأسعار الصرف وتاريخ التحديثات
+              - button "إضافة جديد" [ref=e300] [cursor=pointer]:
+                - img [ref=e301]
+                - text: إضافة جديد
+          - generic [ref=e302]:
+            - generic [ref=e303]:
+              - generic [ref=e304]: إجمالي العملات
+              - generic [ref=e305]: "5"
+            - generic [ref=e306]:
+              - generic [ref=e307]: العملة الأساسية
+              - generic [ref=e308]: SAR
+          - generic [ref=e310]:
+            - img
+            - textbox "بحث..." [ref=e311]
+          - table [ref=e1095]:
+            - rowgroup [ref=e1096]:
+              - row "الرمز الاسم الرمز المختصر الأساسية سعر الصرف الإجراءات" [ref=e1097]:
+                - columnheader "الرمز" [ref=e1098]
+                - columnheader "الاسم" [ref=e1099]
+                - columnheader "الرمز المختصر" [ref=e1100]
+                - columnheader "الأساسية" [ref=e1101]
+                - columnheader "سعر الصرف" [ref=e1102]
+                - columnheader "الإجراءات" [ref=e1103]
+            - rowgroup [ref=e1104]:
+              - row "SAR ريال سعودي (Saudi Riyal) ر.س أساسية 1.0000" [ref=e1105]:
+                - cell "SAR" [ref=e1106]
+                - cell "ريال سعودي (Saudi Riyal)" [ref=e1107]:
+                  - generic [ref=e1108]: ريال سعودي (Saudi Riyal)
+                - cell "ر.س" [ref=e1109]
+                - cell "أساسية" [ref=e1110]
+                - cell "1.0000" [ref=e1111]:
+                  - generic [ref=e1112]:
+                    - text: "1.0000"
+                    - button "تحديث السعر" [ref=e1113]:
+                      - img [ref=e1114]
+                - cell [ref=e1118]:
+                  - button [ref=e1120]:
+                    - img [ref=e1121]
+              - row "AED درهم إماراتي (UAE Dirham) د.إ ثانوية 1.0210" [ref=e1123]:
+                - cell "AED" [ref=e1124]
+                - cell "درهم إماراتي (UAE Dirham)" [ref=e1125]:
+                  - generic [ref=e1126]: درهم إماراتي (UAE Dirham)
+                - cell "د.إ" [ref=e1127]
+                - cell "ثانوية" [ref=e1128]
+                - cell "1.0210" [ref=e1129]:
+                  - generic [ref=e1130]:
+                    - text: "1.0210"
+                    - button "تحديث السعر" [ref=e1131]:
+                      - img [ref=e1132]
+                - cell [ref=e1136]:
+                  - generic [ref=e1137]:
+                    - button [ref=e1138]:
+                      - img [ref=e1139]
+                    - button [ref=e1141]:
+                      - img [ref=e1142]
+              - row "EGP جنيه مصري (Egyptian Pound) ج.م ثانوية 1.0000" [ref=e1145]:
+                - cell "EGP" [ref=e1146]
+                - cell "جنيه مصري (Egyptian Pound)" [ref=e1147]:
+                  - generic [ref=e1148]: جنيه مصري (Egyptian Pound)
+                - cell "ج.م" [ref=e1149]
+                - cell "ثانوية" [ref=e1150]
+                - cell "1.0000" [ref=e1151]:
+                  - generic [ref=e1152]:
+                    - text: "1.0000"
+                    - button "تحديث السعر" [ref=e1153]:
+                      - img [ref=e1154]
+                - cell [ref=e1158]:
+                  - generic [ref=e1159]:
+                    - button [ref=e1160]:
+                      - img [ref=e1161]
+                    - button [ref=e1163]:
+                      - img [ref=e1164]
+              - row "EUR يورو (Euro) € ثانوية 4.1000" [ref=e1167]:
+                - cell "EUR" [ref=e1168]
+                - cell "يورو (Euro)" [ref=e1169]:
+                  - generic [ref=e1170]: يورو (Euro)
+                - cell "€" [ref=e1171]
+                - cell "ثانوية" [ref=e1172]
+                - cell "4.1000" [ref=e1173]:
+                  - generic [ref=e1174]:
+                    - text: "4.1000"
+                    - button "تحديث السعر" [ref=e1175]:
+                      - img [ref=e1176]
+                - cell [ref=e1180]:
+                  - generic [ref=e1181]:
+                    - button [ref=e1182]:
+                      - img [ref=e1183]
+                    - button [ref=e1185]:
+                      - img [ref=e1186]
+              - row "USD دولار أمريكي (US Dollar) $ ثانوية 3.7500" [ref=e1189]:
+                - cell "USD" [ref=e1190]
+                - cell "دولار أمريكي (US Dollar)" [ref=e1191]:
+                  - generic [ref=e1192]: دولار أمريكي (US Dollar)
+                - cell "$" [ref=e1193]
+                - cell "ثانوية" [ref=e1194]
+                - cell "3.7500" [ref=e1195]:
+                  - generic [ref=e1196]:
+                    - text: "3.7500"
+                    - button "تحديث السعر" [ref=e1197]:
+                      - img [ref=e1198]
+                - cell [ref=e1202]:
+                  - generic [ref=e1203]:
+                    - button [ref=e1204]:
+                      - img [ref=e1205]
+                    - button [ref=e1207]:
+                      - img [ref=e1208]
+  - generic [ref=e1211]:
+    - img [ref=e1213]
+    - generic [ref=e1216]: تمت الإضافة بنجاح
+    - button [ref=e1217] [cursor=pointer]:
+      - img [ref=e1218]

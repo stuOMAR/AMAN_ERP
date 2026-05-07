@@ -1,0 +1,22 @@
+[Unit]
+Description=AMAN ERP Backup Service
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=oneshot
+User=aman
+Group=aman
+WorkingDirectory=/opt/aman
+ExecStart=/opt/aman/scripts/backup_postgres.sh
+Environment=PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=aman-backup
+
+# Resource limits
+MemoryMax=512M
+CPUQuota=50%
+
+[Install]
+WantedBy=multi-user.target
