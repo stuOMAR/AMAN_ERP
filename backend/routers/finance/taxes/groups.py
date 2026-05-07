@@ -31,7 +31,7 @@ router = APIRouter()
 
 from .core import _D2, _D4, _dec
 
-@router.get("/groups", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=Dict[str, Any])
+@router.get("/groups", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_groups(current_user: dict = Depends(get_current_user)):
     """جلب مجموعات الضرائب"""
     with transactional(current_user.company_id) as db:
