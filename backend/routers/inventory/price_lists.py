@@ -39,6 +39,9 @@ def list_price_lists(branch_id: Optional[int] = None, current_user: dict = Depen
             ORDER BY cpl.id
         """), params).fetchall()
         return [dict(row._mapping) for row in result]
+    except Exception:
+        logger.exception("Error listing price lists")
+        raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
 

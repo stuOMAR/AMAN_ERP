@@ -184,7 +184,7 @@ const PriceLists = () => {
                 </div>
             </div>
 
-            <div className="card">
+            <div className="card card-flush overflow-hidden">
                 <table className="data-table">
                     <thead>
                         <tr>
@@ -272,24 +272,7 @@ const PriceLists = () => {
                             </div>
 
                             <div className="form-group">
-                                <label>{t('stock.price_lists.modal.currency')}</label>
-                                <select
-                                    required
-                                    value={formData.currency}
-                                    onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
-                                    className="form-input"
-                                >
-                                    <option value="">{t('common.select_currency')}</option>
-                                    {currencies.map(c => (
-                                        <option key={c.id} value={c.code}>
-                                            {c.code} - {c.name}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
-
-                            <div className="form-group">
-                                <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
+                                <label>{t('common.branch', 'الفرع')}</label>
                                 <select
                                     required={!currentBranch?.id}
                                     onInvalid={(e) => {
@@ -312,6 +295,23 @@ const PriceLists = () => {
                                     {availableBranches.map(b => (
                                         <option key={b.id} value={b.id}>
                                             {b.branch_name}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+
+                            <div className="form-group">
+                                <label>{t('stock.price_lists.modal.currency')}</label>
+                                <select
+                                    required
+                                    value={formData.currency}
+                                    onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
+                                    className="form-input"
+                                >
+                                    <option value="">{t('common.select_currency')}</option>
+                                    {currencies.map(c => (
+                                        <option key={c.id} value={c.code}>
+                                            {c.code} - {c.name}
                                         </option>
                                     ))}
                                 </select>
@@ -378,29 +378,17 @@ const PriceLists = () => {
                             </div>
 
                             <div className="form-group">
-                                <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
+                                <label>{t('stock.price_lists.modal.currency')}</label>
                                 <select
-                                    required={!currentBranch?.id}
-                                    onInvalid={(e) => {
-                                        if(!e.target.value) {
-                                            e.target.setCustomValidity(t('stock.price_lists.modal.please_select_branch', 'الرجاء اختيار الفرع'));
-                                        }
-                                    }}
-                                    onInput={(e) => e.target.setCustomValidity('')}
-                                    value={formData.branch_id}
-                                    onChange={(e) => {
-                                        const selectedBranchId = e.target.value;
-                                        const selectedBranch = branches.find(b => b.id.toString() === selectedBranchId);
-                                        const newCurrency = selectedBranch?.default_currency || formData.currency;
-                                        setFormData({ ...formData, branch_id: selectedBranchId, currency: newCurrency });
-                                    }}
+                                    required
+                                    value={formData.currency}
+                                    onChange={(e) => setFormData({ ...formData, currency: e.target.value })}
                                     className="form-input"
                                 >
-                                    {!currentBranch?.id && <option value="">--</option>}
-                                    {!currentBranch?.id && <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>}
-                                    {availableBranches.map(b => (
-                                        <option key={b.id} value={b.id}>
-                                            {b.branch_name}
+                                    <option value="">{t('common.select_currency')}</option>
+                                    {currencies.map(c => (
+                                        <option key={c.id} value={c.code}>
+                                            {c.code} - {c.name}
                                         </option>
                                     ))}
                                 </select>
