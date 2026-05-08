@@ -287,6 +287,7 @@ def get_additional_base_tables_sql() -> str:
         price_list_name_en VARCHAR(255),
         customer_group_id INTEGER REFERENCES customer_groups(id),
         currency VARCHAR(3) DEFAULT NULL,
+        branch_id INTEGER REFERENCES branches(id),
         discount_type VARCHAR(20) DEFAULT 'percentage',
         discount_value DECIMAL(10, 4) DEFAULT 0,
         valid_from DATE,
