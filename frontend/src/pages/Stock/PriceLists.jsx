@@ -29,6 +29,7 @@ const PriceLists = () => {
         is_active: true,
         is_default: false
     });
+    const availableBranches = currentBranch?.id ? branches.filter(b => b.id === currentBranch.id) : branches;
 
     useEffect(() => {
         fetchPriceLists();
@@ -91,11 +92,24 @@ const PriceLists = () => {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const dataToSubmit = {
-                ...formData,
-                branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
-            };
-            await inventoryAPI.createPriceList(dataToSubmit);
+            if (formData.branch_id === 'all') {
+                const promises = availableBranches.map(b => {
+                    const branchCurrency = b.default_currency || formData.currency;
+                    return inventoryAPI.createPriceList({
+                        ...formData,
+                        name: `${formData.name} - ${b.branch_name}`,
+                        branch_id: b.id,
+                        currency: branchCurrency
+                    });
+                });
+                await Promise.all(promises);
+            } else {
+                const dataToSubmit = {
+                    ...formData,
+                    branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
+                };
+                await inventoryAPI.createPriceList(dataToSubmit);
+            }
             setShowModal(false);
             fetchPriceLists();
         } catch (error) {
@@ -294,8 +308,8 @@ const PriceLists = () => {
                                     className="form-input"
                                 >
                                     {!currentBranch?.id && <option value="">--</option>}
-                                    <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>
-                                    {branches.map(b => (
+                                    {!currentBranch?.id && <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>}
+                                    {availableBranches.map(b => (
                                         <option key={b.id} value={b.id}>
                                             {b.branch_name}
                                         </option>
@@ -383,8 +397,8 @@ const PriceLists = () => {
                                     className="form-input"
                                 >
                                     {!currentBranch?.id && <option value="">--</option>}
-                                    <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>
-                                    {branches.map(b => (
+                                    {!currentBranch?.id && <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>}
+                                    {availableBranches.map(b => (
                                         <option key={b.id} value={b.id}>
                                             {b.branch_name}
                                         </option>
