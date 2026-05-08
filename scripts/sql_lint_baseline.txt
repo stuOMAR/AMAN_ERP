@@ -235,9 +235,9 @@ backend/routers/reports/accounting_analysis.py:657
 backend/routers/reports/accounting_analysis.py:692
 backend/routers/reports/accounting_analysis.py:709
 backend/routers/reports/accounting_analysis.py:795
-backend/routers/reports/accounting_compare_export.py:137
-backend/routers/reports/accounting_compare_export.py:321
-backend/routers/reports/accounting_compare_export.py:56
+backend/routers/reports/accounting_compare_export.py:136
+backend/routers/reports/accounting_compare_export.py:320
+backend/routers/reports/accounting_compare_export.py:55
 backend/routers/reports/accounting_statements.py:66
 backend/routers/reports/industry.py:62
 backend/routers/reports/industry.py:75

@@ -19,7 +19,6 @@ from utils.permissions import require_permission, require_sensitive_permission, 
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 from routers.reports.accounting_statements import get_profit_loss, get_balance_sheet, get_trial_balance, get_general_ledger
-from routers.reports.accounting_analysis import get_cashflow_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -513,6 +512,7 @@ def export_cashflow(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير تقرير التدفقات النقدية"""
+    from routers.reports.accounting_analysis import get_cashflow_report
     data = get_cashflow_report(start_date=start_date, end_date=end_date, branch_id=branch_id, current_user=current_user)
     flat = []
     for item in data.get("inflows", []):
