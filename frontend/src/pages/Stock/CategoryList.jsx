@@ -175,7 +175,7 @@ function CategoryList() {
                     display: 'flex', alignItems: 'center', justifyContent: 'center'
                 }}>
                     <div className="fade-in" style={{
-                        background: 'white', padding: '24px', borderRadius: '12px',
+                        background: 'var(--bg-card)', padding: '24px', borderRadius: '12px',
                         width: '400px', maxWidth: '90%'
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '20px' }}>

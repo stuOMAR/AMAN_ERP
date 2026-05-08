@@ -298,7 +298,7 @@ function ProductList() {
                     {loadingBreakdown ? (
                         <Spinner size="sm"/>
                     ) : (
-                        <table className="table table-sm" style={{ background: 'white', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
+                        <table className="table table-sm" style={{ background: 'var(--bg-card)', borderRadius: '8px', border: '1px solid var(--border-color)' }}>
                             <thead>
                                 <tr style={{ background: 'var(--bg-secondary)' }}>
                                     <th>{t("stock.products.warehouse")}</th>

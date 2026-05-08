@@ -216,7 +216,7 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
                 </h3>
                 <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                     {/* FX Revaluation */}
-                    <div style={{ background: 'white', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
+                    <div style={{ background: 'var(--bg-card)', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
                         <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                             💱 {m('fx_revaluation')}
                         </div>
@@ -230,7 +230,7 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
                     </div>
 
                     {/* Bad Debt Provision */}
-                    <div style={{ background: 'white', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
+                    <div style={{ background: 'var(--bg-card)', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
                         <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                             ⚠️ {m('bad_debt_provision')}
                         </div>
@@ -247,7 +247,7 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
                     </div>
 
                     {/* Leave Provision */}
-                    <div style={{ background: 'white', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
+                    <div style={{ background: 'var(--bg-card)', borderRadius: 16, padding: 20, border: '1px solid var(--border-color)' }}>
                         <div style={{ fontWeight: 700, marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
                             🏖️ {m('leave_provision')}
                         </div>
