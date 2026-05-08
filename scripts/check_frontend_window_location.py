@@ -41,26 +41,27 @@ def main() -> int:
 
     violations: list[str] = []
 
-    for js_file in frontend_src.rglob("*.{js,jsx,ts,tsx}"):
-        rel = js_file.relative_to(repo_root)
-        rel_str = str(rel)
+    for ext in ("*.js", "*.jsx", "*.ts", "*.tsx"):
+        for js_file in frontend_src.rglob(ext):
+            rel = js_file.relative_to(repo_root)
+            rel_str = str(rel)
 
-        if rel_str in ALLOWED_FILES:
-            continue
-        if any(d in rel_str.parts for d in SKIP_DIRS):
-            continue
-
-        try:
-            content = js_file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-
-        for line_num, line in enumerate(content.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
+            if rel_str in ALLOWED_FILES:
                 continue
-            if WINDOW_LOCATION_PATTERN.search(line):
-                violations.append(f"{rel}:{line_num}: uses window.location")
+            if any(d in rel_str.parts for d in SKIP_DIRS):
+                continue
+
+            try:
+                content = js_file.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+
+            for line_num, line in enumerate(content.splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("*"):
+                    continue
+                if WINDOW_LOCATION_PATTERN.search(line):
+                    violations.append(f"{rel}:{line_num}: uses window.location")
 
     if violations:
         print("WINDOW LOCATION VIOLATIONS — use useNavigate() from react-router-dom:")

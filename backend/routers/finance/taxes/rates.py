@@ -56,11 +56,8 @@ def list_tax_rates(
 
         user_cc = (user_branch.country_code or "SA").upper() if user_branch else "SA"
 
-        # Allow explicit country_code filter if it matches user's country
-        if country_code and country_code.upper() == user_cc:
-            filter_cc = country_code.upper()
-        else:
-            filter_cc = user_cc
+        # Use explicit country_code if provided, otherwise fall back to user's branch
+        filter_cc = country_code.upper() if country_code else user_cc
 
         where = "WHERE (country_code = :cc OR country_code IS NULL)"
         params = {"cc": filter_cc}

@@ -17,6 +17,15 @@ export const taxesAPI = {
     // Tax Groups
     listGroups: () => api.get('/taxes/groups'),
     createGroup: (data) => api.post('/taxes/groups', data),
+    // Tax Classifications
+    listClassifications: () => api.get('/tax-compliance/classifications'),
+    listClassificationsForCountry: (countryCode) => api.get(`/tax-compliance/classifications/by-country/${countryCode}`),
+    createClassification: (data) => api.post('/tax-compliance/classifications', data),
+    updateClassification: (id, data) => api.put(`/tax-compliance/classifications/${id}`, data),
+    deleteClassification: (id) => api.delete(`/tax-compliance/classifications/${id}`),
+    getClassificationRates: (id) => api.get(`/tax-compliance/classifications/${id}/rates`),
+    addClassificationRate: (id, data) => api.post(`/tax-compliance/classifications/${id}/rates`, data),
+    deleteClassificationRate: (id, rateLinkId) => api.delete(`/tax-compliance/classifications/${id}/rates/${rateLinkId}`),
     // Tax Returns
     listReturns: (params) => api.get('/taxes/returns', { params }),
     getReturn: (id) => api.get(`/taxes/returns/${id}`),

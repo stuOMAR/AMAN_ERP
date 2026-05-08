@@ -72,6 +72,7 @@ function ProductForm() {
         tax_rate: null,
         tax_name: null,
         tax_group_id: null,
+        tax_classification_id: null,
         is_exempt: false,
     })
     const [categories, setCategories] = useState([])
@@ -92,6 +93,7 @@ function ProductForm() {
             tax_rate: null, // Resolved by tax engine
             tax_rate_id: taxMode.tax_rate_id,
             tax_group_id: taxMode.tax_group_id,
+            tax_classification_id: taxMode.tax_classification_id,
             is_exempt: taxMode.is_exempt,
             description: formData.description?.trim() || null,
             category_id: formData.category_id === '' ? null : normalizeOptionalInteger(formData.category_id, 0),
@@ -148,7 +150,7 @@ function ProductForm() {
                     })
                     // Set tax mode based on product data
                     if (data.is_exempt) {
-                        setTaxMode({ mode: 'exempt', tax_rate_id: null, tax_rate: 0, tax_name: null, tax_group_id: null, is_exempt: true })
+                        setTaxMode({ mode: 'exempt', tax_rate_id: null, tax_rate: 0, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: true })
                     } else if (data.tax_group_id) {
                         setTaxMode({
                             mode: 'group',
@@ -156,6 +158,17 @@ function ProductForm() {
                             tax_rate: null,
                             tax_name: data.tax_group_name || null,
                             tax_group_id: data.tax_group_id,
+                            tax_classification_id: null,
+                            is_exempt: false,
+                        })
+                    } else if (data.tax_classification_id) {
+                        setTaxMode({
+                            mode: 'classification',
+                            tax_rate_id: null,
+                            tax_rate: null,
+                            tax_name: data.tax_classification_name || null,
+                            tax_group_id: null,
+                            tax_classification_id: data.tax_classification_id,
                             is_exempt: false,
                         })
                     } else if (data.tax_rate_id) {
@@ -165,10 +178,11 @@ function ProductForm() {
                             tax_rate: data.tax_rate,
                             tax_name: data.tax_name || null,
                             tax_group_id: null,
+                            tax_classification_id: null,
                             is_exempt: false,
                         })
                     } else {
-                        setTaxMode({ mode: 'inherit', tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, is_exempt: false })
+                        setTaxMode({ mode: 'inherit', tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: false })
                     }
                 } catch (err) {
                     setError(t('stock.products.validation.error_load_data'))

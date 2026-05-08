@@ -33,29 +33,30 @@ def main() -> int:
 
     violations: list[str] = []
 
-    for js_file in frontend_src.rglob("*.{js,jsx,ts,tsx}"):
-        rel = js_file.relative_to(repo_root)
-        rel_str = str(rel)
+    for ext in ("*.js", "*.jsx", "*.ts", "*.tsx"):
+        for js_file in frontend_src.rglob(ext):
+            rel = js_file.relative_to(repo_root)
+            rel_str = str(rel)
 
-        # Skip allowed file and non-source dirs
-        if rel_str == ALLOWED_FILE:
-            continue
-        if any(d in rel_str.parts for d in SKIP_DIRS):
-            continue
-
-        try:
-            content = js_file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-
-        for line_num, line in enumerate(content.splitlines(), 1):
-            stripped = line.strip()
-            # Skip comments
-            if stripped.startswith("//") or stripped.startswith("*"):
+            # Skip allowed file and non-source dirs
+            if rel_str == ALLOWED_FILE:
                 continue
-            for pattern, name in FORBIDDEN_PATTERNS:
-                if pattern.search(line):
-                    violations.append(f"{rel}:{line_num}: uses {name}")
+            if any(d in rel_str.parts for d in SKIP_DIRS):
+                continue
+
+            try:
+                content = js_file.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+
+            for line_num, line in enumerate(content.splitlines(), 1):
+                stripped = line.strip()
+                # Skip comments
+                if stripped.startswith("//") or stripped.startswith("*"):
+                    continue
+                for pattern, name in FORBIDDEN_PATTERNS:
+                    if pattern.search(line):
+                        violations.append(f"{rel}:{line_num}: uses {name}")
 
     if violations:
         print("NUMBER FORMAT VIOLATIONS — use formatNumber() from utils/format.js:")

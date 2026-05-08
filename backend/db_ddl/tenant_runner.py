@@ -183,12 +183,14 @@ def _statement_kind(statement: str) -> str:
         return "ALTER TABLE"
     if re.match(r"^CREATE\s+MATERIALIZED\s+VIEW\b", upper):
         return "CREATE MATERIALIZED VIEW"
+    if upper.startswith("DO $$") or upper.startswith("DO $"):
+        return "DO BLOCK"
     return "OTHER"
 
 
 def _should_defer(statement: str, error: Exception) -> bool:
     kind = _statement_kind(statement)
-    if kind not in ("CREATE TABLE", "CREATE INDEX", "ALTER TABLE", "CREATE MATERIALIZED VIEW"):
+    if kind not in ("CREATE TABLE", "CREATE INDEX", "ALTER TABLE", "CREATE MATERIALIZED VIEW", "DO BLOCK"):
         return False
     err_text = str(error)
     if "UndefinedTable" in err_text:

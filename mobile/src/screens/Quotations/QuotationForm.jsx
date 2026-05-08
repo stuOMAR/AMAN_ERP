@@ -7,7 +7,7 @@ import {
   StyleSheet, Alert, ActivityIndicator, Modal, FlatList,
 } from 'react-native';
 import { useNetwork } from '../../../App';
-import { quotationAPI, customerAPI, inventoryAPI } from '../../services/api';
+import { quotationAPI, customerAPI, inventoryAPI, taxAPI } from '../../services/api';
 import { enqueue } from '../../services/syncService';
 import { formatAmount } from '../../utils/formatters';
 
@@ -16,13 +16,15 @@ export default function QuotationForm({ navigation }) {
   const [customers, setCustomers] = useState([]);
   const [products, setProducts] = useState([]);
   const [selectedCustomer, setSelectedCustomer] = useState(null);
-  const [items, setItems] = useState([{ product_id: null, product_name: '', quantity: '', unit_price: '', tax_rate: '15', discount: '0' }]);
+  const defaultTaxRate = branchTax?.tax_rate?.toString() || '';
+  const [items, setItems] = useState([{ product_id: null, product_name: '', quantity: '', unit_price: '', tax_rate: defaultTaxRate, discount: '0' }]);
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
   const [dataLoading, setDataLoading] = useState(true);
   const [showCustomerPicker, setShowCustomerPicker] = useState(false);
   const [showProductPicker, setShowProductPicker] = useState(null);
   const [searchText, setSearchText] = useState('');
+  const [branchTax, setBranchTax] = useState(null);
 
   useEffect(() => { loadData(); }, []);
 
@@ -34,12 +36,17 @@ export default function QuotationForm({ navigation }) {
       ]);
       if (custs.status === 'fulfilled') setCustomers(custs.value || []);
       if (prods.status === 'fulfilled') setProducts(prods.value || []);
+      // Fetch default branch tax rate
+      try {
+        const taxRes = await taxAPI.getBranchTax('default');
+        if (taxRes?.tax_rate != null) setBranchTax(taxRes);
+      } catch { /* no branch tax available */ }
     } catch { /* ignore */ }
     setDataLoading(false);
   };
 
   const addLine = () => {
-    setItems([...items, { product_id: null, product_name: '', quantity: '', unit_price: '', tax_rate: '15', discount: '0' }]);
+    setItems([...items, { product_id: null, product_name: '', quantity: '', unit_price: '', tax_rate: branchTax?.tax_rate?.toString() || '', discount: '0' }]);
   };
   const updateLine = (index, field, value) => {
     const copy = [...items];
@@ -85,7 +92,7 @@ export default function QuotationForm({ navigation }) {
         product_id: i.product_id,
         quantity: parseFloat(i.quantity),
         unit_price: parseFloat(i.unit_price),
-        tax_rate: parseFloat(i.tax_rate) || 15,
+        tax_rate: parseFloat(i.tax_rate) || branchTax?.tax_rate || 0,
         discount: parseFloat(i.discount) || 0,
       })),
     };
@@ -170,7 +177,7 @@ export default function QuotationForm({ navigation }) {
               </View>
               <View style={styles.col3}>
                 <Text style={styles.label}>الضريبة%</Text>
-                <TextInput style={styles.input} placeholder="15" value={item.tax_rate}
+                <TextInput style={styles.input} placeholder={branchTax?.tax_rate?.toString() || '0'} value={item.tax_rate}
                   onChangeText={(v) => updateLine(idx, 'tax_rate', v)} keyboardType="numeric" textAlign="right" placeholderTextColor="#90a4ae" />
               </View>
             </View>

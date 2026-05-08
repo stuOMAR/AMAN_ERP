@@ -69,7 +69,7 @@ const FinancialSettings = ({ formData, handleChange, settings, handleSettingChan
                     name="vat_rate"
                     id="vat_rate"
                     className="form-input"
-                    value={settings.vat_rate || '15'}
+                    value={settings.vat_rate || ''}
                     onChange={(e) => handleSettingChange('vat_rate', e.target.value)}
                 />
             </div>

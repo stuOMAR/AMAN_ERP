@@ -182,11 +182,38 @@ class CompanyTaxSetting(ModelBase):
     updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
+class TaxClassification(ModelBase):
+    __tablename__ = "tax_classifications"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    code: Mapped[str] = mapped_column(String(50), unique=True, nullable=False)
+    name_ar: Mapped[str] = mapped_column(String(100), nullable=False)
+    name_en: Mapped[str] = mapped_column(String(100), nullable=False)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class TaxClassificationRate(ModelBase):
+    __tablename__ = "tax_classification_rates"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    classification_id: Mapped[int] = mapped_column(ForeignKey("tax_classifications.id", ondelete="CASCADE"), nullable=False)
+    country_code: Mapped[str] = mapped_column(String(5), nullable=False)
+    tax_rate_id: Mapped[int | None] = mapped_column(ForeignKey("tax_rates.id", ondelete="SET NULL"))
+    tax_group_id: Mapped[int | None] = mapped_column(ForeignKey("tax_groups.id", ondelete="SET NULL"))
+    effective_from: Mapped[Date] = mapped_column(Date, nullable=False, server_default=func.current_date())
+    effective_to: Mapped[Date | None] = mapped_column(Date)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 __all__ = [
     "BankReconciliation",
     "BankStatementLine",
     "BranchTaxSetting",
     "CompanyTaxSetting",
+    "TaxClassification",
+    "TaxClassificationRate",
     "TaxGroup",
     "TaxPayment",
     "TaxRate",

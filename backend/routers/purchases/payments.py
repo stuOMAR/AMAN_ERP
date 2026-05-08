@@ -576,7 +576,7 @@ def create_purchase_credit_note(
                 disc = _dec(line.get("discount", 0))
                 product_id = line.get("product_id")
                 if product_id and branch_id:
-                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date)
+                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
                     tax_rate = tax_info["tax_rate"]
                 else:
                     tax_rate = _dec(line.get("tax_rate", 0))
@@ -831,7 +831,7 @@ def create_purchase_debit_note(
                 disc = _dec(line.get("discount", 0))
                 product_id = line.get("product_id")
                 if product_id and branch_id:
-                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date)
+                    tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
                     tax_rate = tax_info["tax_rate"]
                 else:
                     tax_rate = _dec(line.get("tax_rate", 0))

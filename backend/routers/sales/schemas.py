@@ -36,6 +36,7 @@ class CustomerCreate(BaseModel):
     city: Optional[str] = None
     country: Optional[str] = None
     tax_number: Optional[str] = None
+    tax_exempt: Optional[bool] = False
     contact_person: Optional[str] = None
     credit_limit: Decimal = Decimal("0")
     payment_terms: Optional[int] = 30

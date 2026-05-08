@@ -344,6 +344,7 @@ const TaxReturnDetails = React.lazy(() => import('./pages/Taxes/TaxReturnDetails
 const WithholdingTax = React.lazy(() => import('./pages/Taxes/WithholdingTax'))
 const TaxCompliance = React.lazy(() => import('./pages/Taxes/TaxCompliance'))
 const TaxCalendar = React.lazy(() => import('./pages/Taxes/TaxCalendar'))
+const TaxClassifications = React.lazy(() => import('./pages/Taxes/TaxClassifications'))
 
 // CRM
 const CRMHome = React.lazy(() => import('./pages/CRM/CRMHome'))
@@ -908,6 +909,7 @@ function App() {
                 <Route path="/taxes/wht" element={<PrivateRoute permission="taxes.view"><WithholdingTax /></PrivateRoute>} />
                 <Route path="/taxes/compliance" element={<PrivateRoute permission="taxes.view"><TaxCompliance /></PrivateRoute>} />
                 <Route path="/taxes/calendar" element={<PrivateRoute permission="taxes.view"><TaxCalendar /></PrivateRoute>} />
+                <Route path="/taxes/classifications" element={<PrivateRoute permission="taxes.manage"><TaxClassifications /></PrivateRoute>} />
 
                 {/* CRM Routes */}
                 <Route path="/crm" element={<PrivateRoute permission="sales.view"><CRMHome /></PrivateRoute>} />

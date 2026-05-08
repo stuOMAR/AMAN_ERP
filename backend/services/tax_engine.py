@@ -410,11 +410,16 @@ def resolve_line_tax(
     order line, POS line, contract item, etc.
 
     Resolution order:
-      0. If ``customer_id`` is provided and the customer is tax-exempt
+      0. If ``customer_id`` is provided and the party is tax-exempt
          → return zero rate immediately.
+         Note: ``customer_id`` accepts any party ID (customer or supplier).
+         Purchase-side callers should pass ``supplier_id`` here.
       1. If the product is exempt or not taxable → return zero rate.
-      2. If the product has ``tax_rate_id`` set → use that tax directly.
-      3. Otherwise → call :func:`get_active_tax_for_branch`.
+      2. If the product has ``tax_group_id`` set → use group (multi-tax).
+      3. If the product has ``tax_rate_id`` set → use that tax directly.
+      4. If the product has ``tax_classification_id`` set → lookup
+         ``tax_classification_rates`` for the branch's country.
+      5. Otherwise → call :func:`get_active_tax_for_branch`.
 
     Args:
         branch_id: The branch creating the document.
@@ -454,6 +459,7 @@ def resolve_line_tax(
     product = db.execute(
         text("""
             SELECT p.tax_rate_id, p.tax_rate, p.is_taxable, p.is_exempt,
+                   p.tax_group_id, p.tax_classification_id,
                    tr.rate_value, tr.tax_name, tr.is_active as tax_is_active
             FROM products p
             LEFT JOIN tax_rates tr ON p.tax_rate_id = tr.id
@@ -462,13 +468,24 @@ def resolve_line_tax(
         {"pid": product_id},
     ).fetchone()
 
-    # Priority 2: Product is explicitly exempt
+    # Priority 1: Product is explicitly exempt
     if product and product.is_exempt:
         return {"tax_rate_id": None, "tax_rate": Decimal("0"), "tax_name": "Exempt"}
 
-    # Priority 3: Product is not taxable
+    # Priority 2: Product is not taxable
     if product and not product.is_taxable:
         return {"tax_rate_id": None, "tax_rate": Decimal("0"), "tax_name": "Non-Taxable"}
+
+    # Priority 3: Product has a tax group (multi-tax) — delegate to group resolver
+    if product and product.tax_group_id:
+        from services.tax_engine import resolve_line_tax_group
+        taxes = resolve_line_tax_group(branch_id, product_id, db, as_of_date, customer_id)
+        combined = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+        return {
+            "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+            "tax_rate": combined,
+            "tax_name": " + ".join(t["tax_name"] for t in taxes if t.get("tax_name")),
+        }
 
     # Priority 4: Product has a specific tax assigned
     if product and product.tax_rate_id and product.tax_is_active:
@@ -478,7 +495,52 @@ def resolve_line_tax(
             "tax_name": product.tax_name,
         }
 
-    # ── Priority 5: fall back to branch-level resolution ──────────────────
+    # Priority 5: Product has a tax classification → lookup per-country rate
+    if product and product.tax_classification_id:
+        branch = db.execute(
+            text("SELECT country_code FROM branches WHERE id = :bid"),
+            {"bid": branch_id},
+        ).fetchone()
+        branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
+
+        class_rate = db.execute(
+            text("""
+                SELECT tcr.tax_rate_id, tcr.tax_group_id,
+                       tr.rate_value, tr.tax_name, tr.tax_code
+                FROM tax_classification_rates tcr
+                LEFT JOIN tax_rates tr ON tcr.tax_rate_id = tr.id
+                WHERE tcr.classification_id = :clid
+                  AND tcr.country_code = :cc
+                  AND tcr.effective_from <= :dt
+                  AND (tcr.effective_to IS NULL OR tcr.effective_to >= :dt)
+                ORDER BY tcr.effective_from DESC
+                LIMIT 1
+            """),
+            {"clid": product.tax_classification_id, "cc": branch_cc, "dt": as_of_date},
+        ).fetchone()
+
+        if class_rate:
+            # If classification points to a tax group, resolve it
+            if class_rate.tax_group_id:
+                taxes = _resolve_tax_group(class_rate.tax_group_id, db)
+                if taxes:
+                    combined = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+                    return {
+                        "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+                        "tax_rate": combined,
+                        "tax_name": " + ".join(t["tax_name"] for t in taxes if t.get("tax_name")),
+                    }
+            # If classification points to a specific tax rate
+            if class_rate.tax_rate_id:
+                return {
+                    "tax_rate_id": class_rate.tax_rate_id,
+                    "tax_rate": Decimal(str(class_rate.rate_value)),
+                    "tax_name": class_rate.tax_name,
+                }
+            # Classification exists but has NULL rate → exempt
+            return {"tax_rate_id": None, "tax_rate": Decimal("0"), "tax_name": "Exempt"}
+
+    # ── Priority 6: fall back to branch-level resolution ──────────────────
     tax = get_active_tax_for_branch(branch_id, db, as_of_date)
 
     return {
@@ -486,6 +548,33 @@ def resolve_line_tax(
         "tax_rate": tax["rate"],
         "tax_name": tax.get("name"),
     }
+
+
+def _resolve_tax_group(tax_group_id: int, db) -> List[Dict[str, Any]]:
+    """Internal helper: fetch all active taxes in a tax group."""
+    group = db.execute(
+        text("SELECT tax_ids FROM tax_groups WHERE id = :gid AND is_active = TRUE"),
+        {"gid": tax_group_id},
+    ).fetchone()
+    if not group:
+        return []
+    import json
+    raw_ids = group.tax_ids
+    tax_ids = raw_ids if isinstance(raw_ids, list) else json.loads(raw_ids) if raw_ids else []
+    taxes = []
+    for tid in tax_ids:
+        tax_row = db.execute(
+            text("SELECT id, tax_code, tax_name, rate_value FROM tax_rates WHERE id = :tid AND is_active = TRUE"),
+            {"tid": tid},
+        ).fetchone()
+        if tax_row:
+            taxes.append({
+                "tax_rate_id": tax_row.id,
+                "tax_rate": Decimal(str(tax_row.rate_value)),
+                "tax_name": tax_row.tax_name,
+                "tax_code": tax_row.tax_code,
+            })
+    return taxes
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -510,7 +599,9 @@ def resolve_line_tax_group(
         product_id: The product on the line.
         db: An open SQLAlchemy connection.
         as_of_date: The document date (defaults to today).
-        customer_id: Optional customer/parties ID for exemption check.
+        customer_id: Optional party ID for exemption check.
+            Accepts any party ID (customer or supplier).
+            Purchase-side callers should pass supplier_id here.
 
     Returns:
         A list of ``{ tax_rate_id, tax_rate, tax_name, tax_code }`` dicts,
@@ -542,7 +633,7 @@ def resolve_line_tax_group(
     product = db.execute(
         text("""
             SELECT p.tax_rate_id, p.tax_rate, p.is_taxable, p.is_exempt,
-                   p.tax_group_id,
+                   p.tax_group_id, p.tax_classification_id,
                    tr.rate_value, tr.tax_name, tr.is_active as tax_is_active
             FROM products p
             LEFT JOIN tax_rates tr ON p.tax_rate_id = tr.id
@@ -561,37 +652,9 @@ def resolve_line_tax_group(
 
     # ── Step 2: multi-tax group ─────────────────────────────────────────
     if product and product.tax_group_id:
-        group = db.execute(
-            text("""
-                SELECT id, group_code, group_name, tax_ids
-                FROM tax_groups
-                WHERE id = :gid AND is_active = TRUE
-            """),
-            {"gid": product.tax_group_id},
-        ).fetchone()
-
-        if group:
-            raw_ids = group.tax_ids
-            tax_ids = raw_ids if isinstance(raw_ids, list) else json.loads(raw_ids) if raw_ids else []
-            taxes: List[Dict[str, Any]] = []
-            for tid in tax_ids:
-                tax_row = db.execute(
-                    text("""
-                        SELECT id, tax_code, tax_name, rate_value
-                        FROM tax_rates
-                        WHERE id = :tid AND is_active = TRUE
-                    """),
-                    {"tid": tid},
-                ).fetchone()
-                if tax_row:
-                    taxes.append({
-                        "tax_rate_id": tax_row.id,
-                        "tax_rate": Decimal(str(tax_row.rate_value)),
-                        "tax_name": tax_row.tax_name,
-                        "tax_code": tax_row.tax_code,
-                    })
-            if taxes:
-                return taxes
+        taxes = _resolve_tax_group(product.tax_group_id, db)
+        if taxes:
+            return taxes
 
     # ── Step 3: single tax (product-specific) ───────────────────────────
     if product and product.tax_rate_id and product.tax_is_active:
@@ -602,7 +665,46 @@ def resolve_line_tax_group(
             "tax_code": None,
         }]
 
-    # ── Step 4: branch / country default ────────────────────────────────
+    # ── Step 4: tax classification → lookup per-country rate ────────────
+    if product and product.tax_classification_id:
+        branch = db.execute(
+            text("SELECT country_code FROM branches WHERE id = :bid"),
+            {"bid": branch_id},
+        ).fetchone()
+        branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
+
+        class_rate = db.execute(
+            text("""
+                SELECT tcr.tax_rate_id, tcr.tax_group_id,
+                       tr.rate_value, tr.tax_name, tr.tax_code
+                FROM tax_classification_rates tcr
+                LEFT JOIN tax_rates tr ON tcr.tax_rate_id = tr.id
+                WHERE tcr.classification_id = :clid
+                  AND tcr.country_code = :cc
+                  AND tcr.effective_from <= :dt
+                  AND (tcr.effective_to IS NULL OR tcr.effective_to >= :dt)
+                ORDER BY tcr.effective_from DESC
+                LIMIT 1
+            """),
+            {"clid": product.tax_classification_id, "cc": branch_cc, "dt": as_of_date},
+        ).fetchone()
+
+        if class_rate:
+            if class_rate.tax_group_id:
+                taxes = _resolve_tax_group(class_rate.tax_group_id, db)
+                if taxes:
+                    return taxes
+            if class_rate.tax_rate_id:
+                return [{
+                    "tax_rate_id": class_rate.tax_rate_id,
+                    "tax_rate": Decimal(str(class_rate.rate_value)),
+                    "tax_name": class_rate.tax_name,
+                    "tax_code": class_rate.tax_code,
+                }]
+            # Classification with NULL rate → exempt
+            return [{"tax_rate_id": None, "tax_rate": Decimal("0"), "tax_name": "Exempt", "tax_code": None}]
+
+    # ── Step 5: branch / country default ────────────────────────────────
     tax = get_active_tax_for_branch(branch_id, db, as_of_date)
     return [{
         "tax_rate_id": tax.get("id"),

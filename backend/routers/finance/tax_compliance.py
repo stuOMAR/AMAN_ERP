@@ -11,6 +11,7 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timezone
+from decimal import Decimal
 from pydantic import BaseModel, Field, validator
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -59,7 +60,7 @@ class BranchTaxSettingUpdate(BaseModel):
     tax_regime_id: int
     is_registered: bool = False
     registration_number: Optional[str] = None
-    custom_rate: Optional[float] = None
+    custom_rate: Optional[Decimal] = None
     is_exempt: bool = False
     exemption_reason: Optional[str] = None
     exemption_certificate: Optional[str] = None
@@ -86,6 +87,7 @@ COUNTRY_META = {
     "IQ": {"name_ar": "العراق",                   "name_en": "Iraq",               "currency": "IQD", "has_vat": False, "has_zakat": False, "has_zatca": False},
     "LB": {"name_ar": "لبنان",                   "name_en": "Lebanon",            "currency": "LBP", "has_vat": True,  "has_zakat": False, "has_zatca": False},
     "TR": {"name_ar": "تركيا",                   "name_en": "Turkey",             "currency": "TRY", "has_vat": True,  "has_zakat": False, "has_zatca": False},
+    "YE": {"name_ar": "اليمن",                   "name_en": "Yemen",              "currency": "YER", "has_vat": False, "has_zakat": False, "has_zatca": False},
 }
 
 
@@ -134,21 +136,326 @@ def list_supported_countries(current_user: dict = Depends(get_current_user)):
             ORDER BY country_code
         """)).fetchall()
 
+        # Get countries that have WHT rules
+        wht_rows = db.execute(text("""
+            SELECT DISTINCT country_code FROM wht_rules WHERE is_active = TRUE
+        """)).fetchall()
+        wht_countries = {r.country_code for r in wht_rows}
+
+        # Get tax types per country
+        regime_rows = db.execute(text("""
+            SELECT country_code, tax_type, default_rate
+            FROM tax_regimes WHERE is_active = TRUE
+            ORDER BY country_code, tax_type
+        """)).fetchall()
+
+        regimes_by_country: dict = {}
+        for rr in regime_rows:
+            regimes_by_country.setdefault(rr.country_code, []).append({
+                "tax_type": rr.tax_type,
+                "default_rate": float(rr.default_rate or 0),
+            })
+
+        # Report endpoint mapping
+        _REPORT_MAP = {
+            "SA": "/tax-compliance/reports/sa-vat",
+            "AE": "/tax-compliance/reports/ae-vat",
+            "EG": "/tax-compliance/reports/eg-vat",
+            "SY": "/tax-compliance/reports/sy-income",
+            "TR": "/tax-compliance/reports/tr-kdv",
+        }
+
         result = []
         for r in rows:
             meta = COUNTRY_META.get(r.country_code, {})
+            tax_types = regimes_by_country.get(r.country_code, [])
+            has_vat = any(t["tax_type"] in ("vat", "kdv", "sales_tax") for t in tax_types)
             result.append({
                 "country_code": r.country_code,
                 "name_ar": meta.get("name_ar", r.country_code),
                 "name_en": meta.get("name_en", r.country_code),
                 "currency": meta.get("currency", ""),
-                "has_vat": meta.get("has_vat", False),
+                "tax_types": [t["tax_type"] for t in tax_types],
+                "has_vat": has_vat,
+                "has_wht": r.country_code in wht_countries,
                 "has_zakat": meta.get("has_zakat", False),
                 "has_zatca": meta.get("has_zatca", False),
+                "report_endpoint": _REPORT_MAP.get(r.country_code),
                 "tax_types_count": r.tax_count,
                 "required_taxes": r.required_count,
             })
         return result
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# 1.5 TAX CLASSIFICATIONS — Product-type-based tax mapping
+# ═══════════════════════════════════════════════════════════════════════════════
+
+@router.get("/classifications", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
+def list_tax_classifications(current_user: dict = Depends(get_current_user)):
+    """جلب جميع التصنيفات الضريبية النشطة"""
+    with transactional(current_user.company_id) as db:
+        rows = db.execute(text("""
+            SELECT id, code, name_ar, name_en, description, is_active
+            FROM tax_classifications
+            WHERE is_active = TRUE
+            ORDER BY code
+        """)).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+@router.get("/classifications/by-country/{country_code}", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
+def list_classifications_for_country(
+    country_code: str,
+    current_user: dict = Depends(get_current_user)
+):
+    """جلب التصنيفات الضريبية مع معدلاتها لدولة محددة"""
+    with transactional(current_user.company_id) as db:
+        cc = country_code.upper()
+        rows = db.execute(text("""
+            SELECT
+                tc.id as classification_id,
+                tc.code as classification_code,
+                tc.name_ar,
+                tc.name_en,
+                tcr.tax_rate_id,
+                tcr.tax_group_id,
+                COALESCE(tr.rate_value, 0) as tax_rate,
+                tr.tax_name,
+                tr.tax_code,
+                tcr.country_code,
+                tcr.effective_from,
+                tcr.effective_to
+            FROM tax_classifications tc
+            LEFT JOIN tax_classification_rates tcr
+                ON tc.id = tcr.classification_id
+                AND tcr.country_code = :cc
+                AND tcr.effective_from <= CURRENT_DATE
+                AND (tcr.effective_to IS NULL OR tcr.effective_to >= CURRENT_DATE)
+            LEFT JOIN tax_rates tr ON tcr.tax_rate_id = tr.id
+            WHERE tc.is_active = TRUE
+            ORDER BY tc.code
+        """), {"cc": cc}).fetchall()
+
+        result = []
+        for r in rows:
+            entry = {
+                "classification_id": r.classification_id,
+                "classification_code": r.classification_code,
+                "name_ar": r.name_ar,
+                "name_en": r.name_en,
+                "country_code": cc,
+                "tax_rate_id": r.tax_rate_id,
+                "tax_group_id": r.tax_group_id,
+                "tax_rate": float(r.tax_rate or 0),
+                "tax_name": r.tax_name or ("Exempt" if r.classification_id and not r.tax_rate_id else None),
+                "tax_code": r.tax_code,
+            }
+            # If classification points to a tax group, resolve its rates
+            if r.tax_group_id:
+                group_rows = db.execute(text("""
+                    SELECT tr.rate_value, tr.tax_name, tr.tax_code
+                    FROM tax_groups tg
+                    CROSS JOIN LATERAL jsonb_array_elements_text(tg.tax_ids) AS elem(val)
+                    JOIN tax_rates tr ON tr.id = elem.val::int
+                    WHERE tg.id = :gid AND tg.is_active = TRUE AND tr.is_active = TRUE
+                """), {"gid": r.tax_group_id}).fetchall()
+                entry["tax_group_rates"] = [
+                    {"rate": float(g.rate_value), "name": g.tax_name, "code": g.tax_code}
+                    for g in group_rows
+                ]
+            result.append(entry)
+
+        return result
+
+
+class ClassificationCreate(BaseModel):
+    code: str = Field(..., min_length=2, max_length=50)
+    name_ar: str = Field(..., min_length=1, max_length=100)
+    name_en: str = Field(..., min_length=1, max_length=100)
+    description: Optional[str] = None
+
+
+@router.post("/classifications", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
+def create_tax_classification(
+    data: ClassificationCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """إنشاء تصنيف ضريبي جديد"""
+    with transactional(current_user.company_id) as db:
+        existing = db.execute(text(
+            "SELECT id FROM tax_classifications WHERE code = :code"
+        ), {"code": data.code.upper()}).fetchone()
+        if existing:
+            raise HTTPException(status_code=409, detail=f"Classification '{data.code}' already exists")
+
+        result = db.execute(text("""
+            INSERT INTO tax_classifications (code, name_ar, name_en, description)
+            VALUES (:code, :ar, :en, :desc)
+            RETURNING id, code, name_ar, name_en
+        """), {
+            "code": data.code.upper(),
+            "ar": data.name_ar,
+            "en": data.name_en,
+            "desc": data.description,
+        }).fetchone()
+
+        return dict(result._mapping)
+
+
+class ClassificationUpdate(BaseModel):
+    code: Optional[str] = Field(None, min_length=2, max_length=50)
+    name_ar: Optional[str] = Field(None, min_length=1, max_length=100)
+    name_en: Optional[str] = Field(None, min_length=1, max_length=100)
+    description: Optional[str] = None
+    is_active: Optional[bool] = None
+
+
+@router.put("/classifications/{classification_id}", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
+def update_tax_classification(
+    classification_id: int,
+    data: ClassificationUpdate,
+    current_user: dict = Depends(get_current_user)
+):
+    """تعديل تصنيف ضريبي"""
+    with transactional(current_user.company_id) as db:
+        existing = db.execute(text(
+            "SELECT id FROM tax_classifications WHERE id = :id"
+        ), {"id": classification_id}).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Classification not found")
+
+        updates = []
+        params = {"id": classification_id}
+        if data.code is not None:
+            updates.append("code = :code")
+            params["code"] = data.code.upper()
+        if data.name_ar is not None:
+            updates.append("name_ar = :ar")
+            params["ar"] = data.name_ar
+        if data.name_en is not None:
+            updates.append("name_en = :en")
+            params["en"] = data.name_en
+        if data.description is not None:
+            updates.append("description = :desc")
+            params["desc"] = data.description
+        if data.is_active is not None:
+            updates.append("is_active = :active")
+            params["active"] = data.is_active
+
+        if not updates:
+            raise HTTPException(status_code=400, detail="No fields to update")
+
+        result = db.execute(text(f"""
+            UPDATE tax_classifications SET {', '.join(updates)}
+            WHERE id = :id
+            RETURNING id, code, name_ar, name_en, description, is_active
+        """), params).fetchone()
+
+        return dict(result._mapping)
+
+
+@router.delete("/classifications/{classification_id}", dependencies=[Depends(require_permission(["taxes.manage"]))])
+def delete_tax_classification(
+    classification_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """حذف تصنيف ضريبي (soft delete)"""
+    with transactional(current_user.company_id) as db:
+        existing = db.execute(text(
+            "SELECT id, code FROM tax_classifications WHERE id = :id"
+        ), {"id": classification_id}).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Classification not found")
+
+        db.execute(text(
+            "UPDATE tax_classifications SET is_active = FALSE WHERE id = :id"
+        ), {"id": classification_id})
+
+        return {"message": f"Classification '{existing.code}' deactivated", "id": classification_id}
+
+
+@router.get("/classifications/{classification_id}/rates", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
+def get_classification_rates(
+    classification_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """جلب معدلات التصنيف الضريبي لجميع الدول"""
+    with transactional(current_user.company_id) as db:
+        rows = db.execute(text("""
+            SELECT
+                tcr.id as rate_link_id,
+                tcr.country_code,
+                tcr.tax_rate_id,
+                tcr.tax_group_id,
+                COALESCE(tr.rate_value, 0) as tax_rate,
+                tr.tax_name,
+                tr.tax_code,
+                tcr.effective_from,
+                tcr.effective_to
+            FROM tax_classification_rates tcr
+            LEFT JOIN tax_rates tr ON tcr.tax_rate_id = tr.id
+            WHERE tcr.classification_id = :cid
+            ORDER BY tcr.country_code
+        """), {"cid": classification_id}).fetchall()
+        return [dict(r._mapping) for r in rows]
+
+
+class ClassificationRateCreate(BaseModel):
+    country_code: str = Field(..., min_length=2, max_length=5)
+    tax_rate_id: Optional[int] = None
+    tax_group_id: Optional[int] = None
+
+
+@router.post("/classifications/{classification_id}/rates", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
+def add_classification_rate(
+    classification_id: int,
+    data: ClassificationRateCreate,
+    current_user: dict = Depends(get_current_user)
+):
+    """إضافة معدل ضريبي لتصنيف في دولة معينة"""
+    with transactional(current_user.company_id) as db:
+        existing = db.execute(text(
+            "SELECT id FROM tax_classifications WHERE id = :id AND is_active = TRUE"
+        ), {"id": classification_id}).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Classification not found")
+
+        duplicate = db.execute(text("""
+            SELECT id FROM tax_classification_rates
+            WHERE classification_id = :cid AND country_code = :cc AND effective_from = CURRENT_DATE
+        """), {"cid": classification_id, "cc": data.country_code.upper()}).fetchone()
+        if duplicate:
+            raise HTTPException(status_code=409, detail="Rate already exists for this country today")
+
+        result = db.execute(text("""
+            INSERT INTO tax_classification_rates
+                (classification_id, country_code, tax_rate_id, tax_group_id, effective_from)
+            VALUES (:cid, :cc, :rid, :gid, CURRENT_DATE)
+            RETURNING id, country_code, tax_rate_id, tax_group_id, effective_from
+        """), {
+            "cid": classification_id,
+            "cc": data.country_code.upper(),
+            "rid": data.tax_rate_id,
+            "gid": data.tax_group_id,
+        }).fetchone()
+
+        return dict(result._mapping)
+
+
+@router.delete("/classifications/{classification_id}/rates/{rate_link_id}", dependencies=[Depends(require_permission(["taxes.manage"]))])
+def delete_classification_rate(
+    classification_id: int,
+    rate_link_id: int,
+    current_user: dict = Depends(get_current_user)
+):
+    """حذف ربط معدل ضريبي بتصنيف"""
+    with transactional(current_user.company_id) as db:
+        db.execute(text("""
+            DELETE FROM tax_classification_rates
+            WHERE id = :rid AND classification_id = :cid
+        """), {"rid": rate_link_id, "cid": classification_id})
+        return {"message": "Rate link deleted"}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -749,6 +1056,113 @@ def uae_vat_return_report(
                 "net_vat_due": float(net_vat_due),
                 "status": "payable" if net_vat_due >= Decimal("0") else "refundable"
             }
+        }
+
+
+@router.get("/reports/tr-kdv", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
+def turkey_kdv_return_report(
+    period_start: Optional[date] = None,
+    period_end: Optional[date] = None,
+    year: Optional[int] = None,
+    period: Optional[str] = None,
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """
+    إقرار ضريبة القيمة المضافة (KDV) — تركيا
+    يتبع نموذج هيئة recep Tayyip الضرائب التركية
+    يجمع حسب معدل الضريبة: 1%، 10%، 20%
+    """
+    from datetime import date as date_cls
+    if period_start is None or period_end is None:
+        y = year or date_cls.today().year
+        if period and period.startswith("Q"):
+            q = int(period[1])
+            ms = (q - 1) * 3 + 1; me = q * 3
+            period_start = date_cls(y, ms, 1)
+            period_end = date_cls(y, me, 28 if me == 2 else 30 if me in (4,6,9,11) else 31)
+        else:
+            period_start = date_cls(y, 1, 1)
+            period_end = date_cls(y, 12, 31)
+
+    with transactional(current_user.company_id) as db:
+        params = {"start": period_start, "end": period_end}
+        bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
+
+        # KDV 20% (general goods)
+        kdv_20 = db.execute(text(f"""
+            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
+                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
+            AND il.tax_rate = 20
+            AND i.invoice_date BETWEEN :start AND :end {bf}
+        """), params).fetchone()
+
+        # KDV 10% (food, books, medicine)
+        kdv_10 = db.execute(text(f"""
+            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
+                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
+            AND il.tax_rate = 10
+            AND i.invoice_date BETWEEN :start AND :end {bf}
+        """), params).fetchone()
+
+        # KDV 1% (basic food items)
+        kdv_1 = db.execute(text(f"""
+            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
+                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
+            AND il.tax_rate = 1
+            AND i.invoice_date BETWEEN :start AND :end {bf}
+        """), params).fetchone()
+
+        # Input VAT (purchases — all KDV rates combined)
+        input_vat = db.execute(text(f"""
+            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
+            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
+            WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
+            AND il.tax_rate > 0
+            AND i.invoice_date BETWEEN :start AND :end {bf}
+        """), params).fetchone()
+
+        total_output = (
+            _dec(kdv_20.tax_amount) + _dec(kdv_10.tax_amount) + _dec(kdv_1.tax_amount)
+        ).quantize(_D2, ROUND_HALF_UP)
+        total_input = _dec(input_vat.tax_amount).quantize(_D2, ROUND_HALF_UP)
+        net_payable = (total_output - total_input).quantize(_D2, ROUND_HALF_UP)
+
+        return {
+            "report_type": "tr_kdv_return",
+            "report_name_ar": "إقرار ضريبة القيمة المضافة (KDV) — تركيا",
+            "report_name_en": "VAT Return (KDV) — Turkey",
+            "period": {"start": str(period_start), "end": str(period_end)},
+            "kdv_20": {
+                "label_ar": "ضريبة القيمة المضافة 20% (السلع العامة)",
+                "label_en": "KDV 20% (General Goods)",
+                "taxable_amount": float(kdv_20.taxable_amount or 0),
+                "tax_amount": float(kdv_20.tax_amount or 0),
+            },
+            "kdv_10": {
+                "label_ar": "ضريبة القيمة المضافة 10% (الغذاء، الكتب، الأدوية)",
+                "label_en": "KDV 10% (Food, Books, Medicine)",
+                "taxable_amount": float(kdv_10.taxable_amount or 0),
+                "tax_amount": float(kdv_10.tax_amount or 0),
+            },
+            "kdv_1": {
+                "label_ar": "ضريبة القيمة المضافة 1% (السلع الأساسية)",
+                "label_en": "KDV 1% (Basic Food Items)",
+                "taxable_amount": float(kdv_1.taxable_amount or 0),
+                "tax_amount": float(kdv_1.tax_amount or 0),
+            },
+            "totals": {
+                "total_output_vat": float(total_output),
+                "total_input_vat": float(total_input),
+                "net_payable": float(net_payable),
+                "status": "payable" if net_payable >= Decimal("0") else "refundable",
+            },
         }
 
 

@@ -35,7 +35,7 @@ class ContractItem(ModelBase):
     description: Mapped[str | None] = mapped_column(Text)
     quantity: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=1)
     unit_price: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=0)
-    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=15)
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=0)
     total: Mapped[Decimal | None] = mapped_column(Numeric(18, 4), default=0)
     created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 

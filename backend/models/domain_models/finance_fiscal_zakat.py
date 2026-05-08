@@ -53,3 +53,14 @@ class ZakatCalculation(ModelBase):
     notes: Mapped[str | None] = mapped_column(Text)
     calculated_by: Mapped[int | None] = mapped_column(ForeignKey("company_users.id"))
     calculated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class ZakatBaseItem(ModelBase):
+    __tablename__ = "zakat_base_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
+    category: Mapped[str] = mapped_column(String(30), nullable=False)
+    weight: Mapped[float | None] = mapped_column(Numeric(6, 4), default=1.0)
+    notes: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())

@@ -4033,7 +4033,7 @@
         "summary": {
           "subtotal": "Subtotal",
           "discount": "Total Discount",
-          "tax": "VAT (15%)",
+          "tax": "Tax",
           "grand_total": "Grand Total"
         },
         "submit": "Save Purchase Order",
@@ -5488,9 +5488,9 @@
       "item": "Item",
       "taxable_amount": "Taxable Amount",
       "tax_amount": "Tax Amount",
-      "sales_basic_15": "1. Sales subject to basic rate (15%)",
+      "sales_basic_15": "1. Sales subject to basic rate",
       "output_total": "Total Output Tax",
-      "purchases_basic_15": "2. Purchases subject to basic rate (15%)",
+      "purchases_basic_15": "2. Purchases subject to basic rate",
       "input_total": "Total Input Tax",
       "net_tax": "Net Tax for Period",
       "load_error": "Failed to load VAT report",

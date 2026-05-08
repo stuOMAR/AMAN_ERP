@@ -13,15 +13,6 @@ import re
 import sys
 from pathlib import Path
 
-# Patterns that construct cache keys
-KEY_PATTERNS = [
-    # f-string key construction
-    re.compile(r'f["\']([^"\']*(?:cache|key|prefix)[^"\']*)["\']', re.IGNORECASE),
-    # cache.get/set with string literal
-    re.compile(r'cache\.(?:get|set|delete)\s*\(\s*["\']([^"\']+)["\']', re.IGNORECASE),
-    # tenant_key() — always valid, skip
-]
-
 # Files/patterns to skip (known safe or infrastructure)
 SKIP_PATTERNS = [
     "node_modules/",

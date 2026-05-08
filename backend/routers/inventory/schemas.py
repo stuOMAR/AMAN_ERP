@@ -20,6 +20,8 @@ class ProductCreate(BaseModel):
     last_buying_price: float = 0.0  # Represents Last Purchase Price
     tax_rate: Optional[float] = None  # Ignored — resolved by tax engine; kept for backward compat
     tax_rate_id: Optional[int] = None  # Link to tax_rates table
+    tax_group_id: Optional[int] = None  # Link to tax_groups table (multi-tax)
+    tax_classification_id: Optional[int] = None  # Link to tax_classifications table
     is_exempt: bool = False  # If true, product is exempt from tax
     description: Optional[str] = None
     category_id: Optional[int] = None
@@ -54,6 +56,7 @@ class SupplierCreate(BaseModel):
     email: Optional[str] = None
     address: Optional[str] = None
     tax_number: Optional[str] = None
+    tax_exempt: Optional[bool] = False
     branch_id: Optional[int] = None
     currency: Optional[str] = None
     group_id: Optional[int] = None

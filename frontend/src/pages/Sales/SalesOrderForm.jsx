@@ -440,7 +440,7 @@ function SalesOrderForm() {
                             <span className="text-error">-{formatNumber(totals.discount)} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
-                            <span style={{ color: 'var(--text-secondary)' }}>{t('sales.orders.details.tax')} (15%)</span>
+                            <span style={{ color: 'var(--text-secondary)' }}>{t('sales.orders.details.tax')}</span>
                             <span>{formatNumber(totals.tax)} <small>{currency}</small></span>
                         </div>
 

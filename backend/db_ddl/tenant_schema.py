@@ -436,6 +436,7 @@ def get_additional_base_tables_sql() -> str:
         tax_rate DECIMAL(5, 2) DEFAULT NULL,
         tax_rate_id INTEGER REFERENCES tax_rates(id),
         tax_group_id INTEGER REFERENCES tax_groups(id) ON DELETE SET NULL,
+        tax_classification_id INTEGER REFERENCES tax_classifications(id) ON DELETE SET NULL,
         is_exempt BOOLEAN DEFAULT FALSE,
         is_taxable BOOLEAN DEFAULT TRUE,
         is_active BOOLEAN DEFAULT TRUE,
@@ -2170,6 +2171,32 @@ def get_financial_tables_sql() -> str:
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS tax_classifications (
+        id           SERIAL PRIMARY KEY,
+        code         VARCHAR(50) UNIQUE NOT NULL,
+        name_ar      VARCHAR(100) NOT NULL,
+        name_en      VARCHAR(100) NOT NULL,
+        description  TEXT,
+        is_active    BOOLEAN DEFAULT TRUE,
+        created_at   TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS tax_classification_rates (
+        id                    SERIAL PRIMARY KEY,
+        classification_id     INT NOT NULL REFERENCES tax_classifications(id) ON DELETE CASCADE,
+        country_code          VARCHAR(5) NOT NULL,
+        tax_rate_id           INT REFERENCES tax_rates(id) ON DELETE SET NULL,
+        tax_group_id          INT REFERENCES tax_groups(id) ON DELETE SET NULL,
+        effective_from        DATE NOT NULL DEFAULT CURRENT_DATE,
+        effective_to          DATE NULL,
+        created_at            TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(classification_id, country_code, effective_from)
+    );
+    CREATE INDEX IF NOT EXISTS idx_tcr_country
+        ON tax_classification_rates(country_code, effective_from);
+    CREATE INDEX IF NOT EXISTS idx_tcr_classification
+        ON tax_classification_rates(classification_id);
     
     CREATE TABLE IF NOT EXISTS tax_returns (
         id SERIAL PRIMARY KEY,

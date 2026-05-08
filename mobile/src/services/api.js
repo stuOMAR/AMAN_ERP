@@ -357,3 +357,8 @@ export const supplierAPI = {
     return items.map(normalizeSupplier);
   },
 };
+
+// ── Tax endpoints ──
+export const taxAPI = {
+  getBranchTax: (branchId) => api.get(`/taxes/rates/branch/${branchId}`),
+};

@@ -334,7 +334,7 @@ async def create_purchase_invoice(
             _branch_id = validated_branch_id or invoice.branch_id
             _doc_date = invoice.invoice_date if hasattr(invoice, 'invoice_date') and invoice.invoice_date else None
             for item in invoice.items:
-                tax_info = resolve_line_tax(_branch_id, item.product_id, db, _doc_date)
+                tax_info = resolve_line_tax(_branch_id, item.product_id, db, _doc_date, customer_id=invoice.supplier_id)
                 la = _cla(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
                 lines_data.append({
                     "product_id": item.product_id,

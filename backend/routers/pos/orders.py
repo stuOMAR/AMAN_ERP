@@ -735,7 +735,10 @@ def create_return(
             raise HTTPException(status_code=400, detail="Return quantity exceeds original quantity")
         
         refund_amount = (_dec(item.quantity) * _dec(orig_item.unit_price)).quantize(_D2, ROUND_HALF_UP)
-        refund_tax = (refund_amount * (_dec(orig_item.tax_rate) / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
+        # Re-resolve tax via engine (handles exemptions, rate changes since order)
+        tax_info = resolve_line_tax(branch_id, orig_item.product_id, db)
+        effective_tax_rate = tax_info["tax_rate"]
+        refund_tax = (refund_amount * (effective_tax_rate / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
         total_refund += refund_amount
         total_refund_tax += refund_tax
         

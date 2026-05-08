@@ -252,9 +252,9 @@ def create_supplier(
             result = db.execute(text("""
                 INSERT INTO parties (
                     party_code, name, name_en, 
-                    phone, email, address, tax_number, branch_id, is_supplier, status, currency
+                    phone, email, address, tax_number, tax_exempt, branch_id, is_supplier, status, currency
                 ) VALUES (
-                    :code, :name, :name_en, :phone, :email, :address, :tax, :branch_id, TRUE, 'active', :currency
+                    :code, :name, :name_en, :phone, :email, :address, :tax, :tax_exempt, :branch_id, TRUE, 'active', :currency
                 ) RETURNING id, current_balance, created_at
             """), {
                 "code": code,
@@ -264,6 +264,7 @@ def create_supplier(
                 "email": supplier.email,
                 "address": supplier.address,
                 "tax": supplier.tax_number,
+                "tax_exempt": supplier.tax_exempt or False,
                 "branch_id": supplier.branch_id,
                 "currency": supplier.currency
             }).fetchone()
@@ -349,6 +350,7 @@ def update_supplier(
                 email = :email,
                 address = :address,
                 tax_number = :tax,
+                tax_exempt = :tax_exempt,
                 branch_id = :branch_id,
                 currency = :currency,
                 updated_at = NOW()
@@ -361,6 +363,7 @@ def update_supplier(
             "email": supplier.email,
             "address": supplier.address,
             "tax": supplier.tax_number,
+            "tax_exempt": supplier.tax_exempt or False,
             "branch_id": supplier.branch_id,
             "currency": supplier.currency
         })

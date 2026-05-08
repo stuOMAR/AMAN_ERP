@@ -8,6 +8,12 @@ logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
 
+# ── Precision constants for tax calculations ─────────────────────────────
+#: Use for all tax rate and tax amount calculations (2 decimal places)
+TAX_PRECISION = Decimal("0.01")
+#: Use for storage of monetary amounts (4 decimal places)
+AMOUNT_PRECISION = Decimal("0.0001")
+
 def _to_decimal(v) -> Decimal:
     """Convert any numeric value to Decimal safely."""
     if v is None:

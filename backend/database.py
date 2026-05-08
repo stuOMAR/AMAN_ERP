@@ -850,12 +850,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     VALUES (:code, :name, :name_en, :abbr)
                 """), {"code": unit[0], "name": unit[1], "name_en": unit[2], "abbr": unit[3]})
             
-            # Default tax rate (VAT 15%) — legacy global record
-            conn.execute(text("""
-                INSERT INTO tax_rates (tax_code, tax_name, tax_name_en, rate_type, rate_value, is_active)
-                VALUES ('VAT15', 'ضريبة القيمة المضافة', 'VAT', 'percentage', 15, TRUE)
-                ON CONFLICT (tax_code) DO NOTHING
-            """))
+            # Tax rates are entered manually by the user — no auto-seed.
 
             # ── Tax Compliance: Seed tax_regimes for the company's country ───
             _tax_regimes = {
@@ -886,6 +881,21 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     ("income_tax", "ضريبة الدخل", "Corporate Income Tax", 15.00, True, "foreign_owned", "annual"),
                     ("zakat", "الزكاة", "Zakat (NLST)", 1.00, True, "all", "annual"),
                 ],
+                "OM": [
+                    ("vat", "ضريبة القيمة المضافة", "Value Added Tax (VAT)", 5.00, True, "all", "quarterly"),
+                ],
+                "TR": [
+                    ("kdv", "ضريبة القيمة المضافة (KDV)", "Value Added Tax (KDV)", 20.00, True, "all", "monthly"),
+                ],
+                "IQ": [
+                    ("sales_tax", "ضريبة المبيعات", "Sales Tax", 15.00, True, "all", "monthly"),
+                ],
+                "LB": [
+                    ("vat", "ضريبة القيمة المضافة", "Value Added Tax (VAT)", 11.00, True, "all", "monthly"),
+                ],
+                "YE": [
+                    ("exempt", "معفاة", "Exempt (War Economy)", 0.00, False, "all", "annual"),
+                ],
             }
             country_regimes = _tax_regimes.get(country, _tax_regimes.get("SA", []))
             for reg in country_regimes:
@@ -901,38 +911,54 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ON CONFLICT (country_code) DO NOTHING
             """), {"cc": country})
 
-            # Tax Engine Seed (Phase 6)
-            # ── Seed real tax rates per country with effective dates ──────────
-            # These are the actual government-mandated VAT rates.
-            # Uses INSERT ... ON CONFLICT (tax_code) DO NOTHING for idempotency.
+            # Tax rates are entered manually by the user via the UI.
+            # No auto-seed for tax_rates.
 
-            _tax_rates_seed = [
-                # (tax_code, tax_name, tax_name_en, country_code, rate_value, is_default, effective_from, effective_to)
-                ("VAT-SA-15", "ضريبة القيمة المضافة", "VAT", "SA", 15, True, "2020-07-01", None),
-                ("VAT-SA-5", "ضريبة القيمة المضافة", "VAT", "SA", 5, False, "2018-01-01", "2020-06-30"),
-                ("VAT-AE-5", "ضريبة القيمة المضافة", "VAT", "AE", 5, True, "2018-01-01", None),
-                ("VAT-EG-14", "ضريبة القيمة المضافة", "VAT", "EG", 14, True, "2017-07-01", None),
-                ("VAT-BH-10", "ضريبة القيمة المضافة", "VAT", "BH", 10, True, "2022-01-01", None),
-                ("EXEMPT-SY", "معفاة", "Exempt", "SY", 0, True, "2024-01-01", None),
-                ("NO-VAT-KW", "بدون ضريبة", "No VAT", "KW", 0, True, "2024-01-01", None),
-                ("NO-VAT-QA", "بدون ضريبة", "No VAT", "QA", 0, True, "2024-01-01", None),
+            # ── WHT Rules: Country-specific withholding tax rules ──────────
+            _wht_rules_seed = [
+                # (country_code, payment_type, rate, description)
+                # Turkey
+                ("TR", "services", 0.2000, "Turkey WHT on services"),
+                ("TR", "rent", 0.2000, "Turkey WHT on rent"),
+                ("TR", "dividends", 0.1500, "Turkey WHT on dividends"),
+                # Egypt (verify/complete existing)
+                ("EG", "services_resident", 0.0050, "Egypt WHT on resident services"),
+                ("EG", "services_non_resident", 0.2000, "Egypt WHT on non-resident services"),
+                ("EG", "rent", 0.1000, "Egypt WHT on rent"),
+                # Jordan
+                ("JO", "services", 0.0500, "Jordan WHT on services"),
+                ("JO", "rent", 0.0500, "Jordan WHT on rent"),
+                ("JO", "dividends", 0.1000, "Jordan WHT on dividends"),
             ]
-
-            for tr in _tax_rates_seed:
+            for wr in _wht_rules_seed:
                 conn.execute(text("""
-                    INSERT INTO tax_rates (
-                        tax_code, tax_name, tax_name_en, rate_type, rate_value,
-                        country_code, is_default, effective_from, effective_to, is_active
-                    ) VALUES (
-                        :code, :name, :name_en, 'percentage', :rate,
-                        :cc, :is_default, :eff_from, :eff_to, TRUE
-                    )
-                    ON CONFLICT (tax_code) DO NOTHING
-                """), {
-                    "code": tr[0], "name": tr[1], "name_en": tr[2],
-                    "cc": tr[3], "rate": tr[4], "is_default": tr[5],
-                    "eff_from": tr[6], "eff_to": tr[7],
-                })
+                    INSERT INTO wht_rules (country_code, payment_type, rate, description, is_active)
+                    VALUES (:cc, :pt, :rate, :desc, TRUE)
+                    ON CONFLICT DO NOTHING
+                """), {"cc": wr[0], "pt": wr[1], "rate": wr[2], "desc": wr[3]})
+
+            # ── Tax Classifications: Product-type-based tax mapping ────────
+            _classifications_seed = [
+                # (code, name_ar, name_en, description)
+                ("STANDARD",      "بضاعة عادية",              "Standard Goods",      "General goods subject to standard tax rate"),
+                ("MEDICINE",      "أدوية ومستلزمات طبية",     "Medicine & Medical",  "Pharmaceutical products and medical supplies"),
+                ("BASIC_FOOD",    "مواد غذائية أساسية",        "Basic Food",          "Unprocessed basic food staples"),
+                ("PROCESSED_FOOD","مواد غذائية مصنعة",        "Processed Food",      "Manufactured and processed food products"),
+                ("TOBACCO",       "منتجات التبغ",              "Tobacco Products",    "Cigarettes, tobacco, and related products"),
+                ("SERVICES",      "خدمات",                     "Services",            "Professional and general services"),
+                ("DIGITAL",       "خدمات رقمية",              "Digital Services",    "Software, SaaS, and digital services"),
+                ("EXEMPT",        "معفى",                      "Exempt",              "Products exempt from all taxes"),
+                ("ZERO_RATED",    "صفري",                      "Zero Rated",          "Products taxed at 0% rate"),
+            ]
+            for cl in _classifications_seed:
+                conn.execute(text("""
+                    INSERT INTO tax_classifications (code, name_ar, name_en, description)
+                    VALUES (:code, :ar, :en, :desc)
+                    ON CONFLICT (code) DO NOTHING
+                """), {"code": cl[0], "ar": cl[1], "en": cl[2], "desc": cl[3]})
+
+            # Tax classification rates are linked manually by the user via the UI.
+            # No auto-seed for classification-to-country rate links.
 
             # Default Costing Policy
             conn.execute(text("""

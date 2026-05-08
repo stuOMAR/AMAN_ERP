@@ -557,8 +557,8 @@ def create_sales_debit_note(
                 tax_rate = _dec(line.get("tax_rate", 0))
             line_gross = qty * price
             line_net = line_gross - disc
-            line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D4, ROUND_HALF_UP)
-            line_total = (line_net + line_tax).quantize(_D4, ROUND_HALF_UP)
+            line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+            line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
 
             subtotal += line_net
             tax_total += line_tax
@@ -571,7 +571,7 @@ def create_sales_debit_note(
                 "total": line_total,
             })
 
-        total = (subtotal + tax_total).quantize(_D4, ROUND_HALF_UP)
+        total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
 
         inv_num = generate_sequential_number(db, "SDN", "invoices", "invoice_number")
         result = db.execute(text("""

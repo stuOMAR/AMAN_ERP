@@ -1,0 +1,1 @@
+{"message":"تم إنشاء الشركة بنجاح. معرف الشركة: a23679c0","company_id":"a23679c0","company_name":"Test","admin_username":"test"}

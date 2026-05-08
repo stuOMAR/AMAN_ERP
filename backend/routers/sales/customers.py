@@ -178,19 +178,19 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
         result = db.execute(text("""
             INSERT INTO parties (
                 party_code, name, name_en, party_type, is_customer, email, phone, mobile, address, city, country,
-                tax_number, credit_limit, payment_terms, notes, status, party_group_id,
+                tax_number, tax_exempt, credit_limit, payment_terms, notes, status, party_group_id,
                 branch_id, currency
             )
             VALUES (
                 :code, :name, :name_en, 'customer', TRUE, :email, :phone, :mobile, :address, :city, :country,
-                :tax, :credit_limit, :payment_terms, :notes, :status, :group_id,
+                :tax, :tax_exempt, :credit_limit, :payment_terms, :notes, :status, :group_id,
                 :branch_id, :currency
             ) RETURNING id
         """), {
             "code": customer_code, "name": customer.name, "name_en": customer.name_en,
             "email": customer.email, "phone": customer.phone, "mobile": customer.mobile,
             "address": customer.address, "city": customer.city, "country": customer.country,
-            "tax": customer.tax_number,
+            "tax": customer.tax_number, "tax_exempt": customer.tax_exempt or False,
             "credit_limit": customer.credit_limit, "payment_terms": customer.payment_terms,
             "notes": customer.notes, "status": customer.status, "group_id": customer.group_id,
             "branch_id": customer.branch_id, "currency": customer.currency
@@ -322,6 +322,7 @@ def update_customer(customer_id: int, customer: CustomerCreate, request: Request
             UPDATE parties 
             SET name = :name, name_en = :name_en, email = :email, phone = :phone, mobile = :mobile, 
                 address = :address, city = :city, country = :country, tax_number = :tax, 
+                tax_exempt = :tax_exempt,
                 credit_limit = :credit_limit, payment_terms = :payment_terms, notes = :notes, 
                 status = :status, party_group_id = :group_id, branch_id = :branch_id, currency = :currency
             WHERE id = :id
@@ -329,7 +330,7 @@ def update_customer(customer_id: int, customer: CustomerCreate, request: Request
             "id": customer_id, "name": customer.name, "name_en": customer.name_en,
             "email": customer.email, "phone": customer.phone, "mobile": customer.mobile,
             "address": customer.address, "city": customer.city, "country": customer.country,
-            "tax": customer.tax_number,
+            "tax": customer.tax_number, "tax_exempt": customer.tax_exempt or False,
             "credit_limit": customer.credit_limit, "payment_terms": customer.payment_terms,
             "notes": customer.notes, "status": customer.status, "group_id": customer.group_id,
             "branch_id": customer.branch_id, "currency": customer.currency

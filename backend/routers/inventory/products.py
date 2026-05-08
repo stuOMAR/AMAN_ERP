@@ -192,12 +192,12 @@ def create_product(
         result = db.execute(text("""
             INSERT INTO products (
                 product_code, product_name, product_name_en, product_type, unit_id, category_id,
-                selling_price, cost_price, last_purchase_price, tax_rate, tax_rate_id, is_exempt,
+                selling_price, cost_price, last_purchase_price, tax_rate, tax_rate_id, tax_group_id, tax_classification_id, is_exempt,
                 description, is_active,
                 has_batch_tracking, has_serial_tracking, has_expiry_tracking, shelf_life_days, expiry_alert_days
             ) VALUES (
                 :code, :name, :name_en, :type, :unit_id, :cat_id,
-                :sell, :buy, :last_buy, :tax, :tax_rate_id, :is_exempt,
+                :sell, :buy, :last_buy, :tax, :tax_rate_id, :tax_group_id, :tax_classification_id, :is_exempt,
                 :desc, :active,
                 :hbt, :hst, :het, :sld, :ead
             ) RETURNING id, created_at
@@ -213,6 +213,8 @@ def create_product(
             "last_buy": product.last_buying_price,
             "tax": product.tax_rate,
             "tax_rate_id": product.tax_rate_id,
+            "tax_group_id": product.tax_group_id,
+            "tax_classification_id": product.tax_classification_id,
             "is_exempt": product.is_exempt,
             "desc": product.description,
             "active": product.is_active,
@@ -414,6 +416,8 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
                 last_purchase_price = :last,
                 tax_rate = :tax,
                 tax_rate_id = :tax_rate_id,
+                tax_group_id = :tax_group_id,
+                tax_classification_id = :tax_classification_id,
                 is_exempt = :is_exempt,
                 description = :desc,
                 category_id = :cat,
@@ -439,6 +443,8 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
             "last": product.last_buying_price,
             "tax": product.tax_rate,
             "tax_rate_id": product.tax_rate_id,
+            "tax_group_id": product.tax_group_id,
+            "tax_classification_id": product.tax_classification_id,
             "is_exempt": product.is_exempt,
             "desc": product.description,
             "cat": product.category_id,

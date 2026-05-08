@@ -74,9 +74,23 @@ class WhtTransaction(ModelBase):
     period_date: Mapped[Date | None] = mapped_column(Date)
 
 
+class WhtRule(ModelBase):
+    __tablename__ = "wht_rules"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    country_code: Mapped[str] = mapped_column(String(5), nullable=False)
+    payment_type: Mapped[str] = mapped_column(String(40), nullable=False)
+    rate: Mapped[float] = mapped_column(Numeric(6, 4), nullable=False)
+    gl_account_id: Mapped[int | None] = mapped_column(Integer)
+    description: Mapped[str | None] = mapped_column(Text)
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+    created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
 __all__ = [
     "RevenueRecognitionSchedule",
     "TaxCalendar",
     "WhtRate",
+    "WhtRule",
     "WhtTransaction",
 ]

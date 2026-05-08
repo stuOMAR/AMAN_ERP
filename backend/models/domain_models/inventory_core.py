@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy import Boolean, DateTime, ForeignKey, Integer, Numeric, String, Text, func, text as sa_text
 from sqlalchemy.orm import Mapped, mapped_column
 
@@ -63,7 +65,7 @@ class Product(ModelBase):
     min_price: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     max_price: Mapped[float | None] = mapped_column(Numeric(18, 4), default=0)
     sku: Mapped[str | None] = mapped_column(String(100), unique=True)
-    tax_rate: Mapped[float | None] = mapped_column(Numeric(5, 2), default=15)
+    tax_rate: Mapped[Decimal | None] = mapped_column(Numeric(5, 2), default=None)
     is_taxable: Mapped[bool | None] = mapped_column(Boolean, default=True)
     is_active: Mapped[bool | None] = mapped_column(Boolean, default=True)
     is_track_inventory: Mapped[bool | None] = mapped_column(Boolean, default=True)

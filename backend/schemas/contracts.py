@@ -8,7 +8,7 @@ class ContractItemBase(BaseModel):
     description: Optional[str] = None
     quantity: float
     unit_price: Decimal
-    tax_rate: float = 15.0
+    tax_rate: Optional[Decimal] = None
 
 class ContractItemCreate(ContractItemBase):
     pass

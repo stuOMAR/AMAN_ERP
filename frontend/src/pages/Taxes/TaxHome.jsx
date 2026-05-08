@@ -252,6 +252,9 @@ function TaxHome() {
                                 <button className="btn btn-outline" onClick={() => setActiveTab('rates')} style={{ textAlign: 'center', fontSize: '13px', padding: '10px 8px' }}>
                                     ⚙️ {t('taxes.manage_rates')}
                                 </button>
+                                <Link to="/taxes/classifications" className="btn btn-outline" style={{ textAlign: 'center', fontSize: '13px', padding: '10px 8px' }}>
+                                    🏷️ {t('taxes.tax_classifications', 'التصنيفات الضريبية')}
+                                </Link>
                                 <Link to="/taxes/wht" className="btn btn-outline" style={{ textAlign: 'center', fontSize: '13px', padding: '10px 8px' }}>
                                     ✂️ {t('wht.title')}
                                 </Link>

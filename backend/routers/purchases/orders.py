@@ -208,7 +208,7 @@ def create_purchase_order(
                 if line_discount > line_total_gross:
                     raise HTTPException(status_code=400, detail=f"الخصم ({line_discount}) يتجاوز إجمالي السطر ({line_total_gross}): {item.description}")
     
-                tax_info = resolve_line_tax(po.branch_id, item.product_id, db, po.order_date)
+                tax_info = resolve_line_tax(po.branch_id, item.product_id, db, po.order_date, customer_id=po.supplier_id)
                 la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
                 lines_data.append({
                     "product_id": item.product_id,

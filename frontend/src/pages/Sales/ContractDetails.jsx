@@ -132,7 +132,10 @@ export default function ContractDetails() {
 
     // Calculate item totals
     const subtotal = (contract.items || []).reduce((sum, item) => sum + (item.quantity * item.unit_price), 0)
-    const taxTotal = (contract.items || []).reduce((sum, item) => sum + (item.quantity * item.unit_price * item.tax_rate / 100), 0)
+    const taxTotal = (contract.items || []).reduce((sum, item) => {
+        const taxable = (item.quantity * item.unit_price) - (item.discount || 0)
+        return sum + (taxable * (item.tax_rate || 0) / 100)
+    }, 0)
 
     return (
         <div className="workspace fade-in">

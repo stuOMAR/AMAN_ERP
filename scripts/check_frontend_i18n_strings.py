@@ -50,32 +50,33 @@ def main() -> int:
     baseline = load_baseline(repo_root)
     violations: list[str] = []
 
-    for js_file in frontend_src.rglob("*.{js,jsx,ts,tsx}"):
-        rel = js_file.relative_to(repo_root)
-        rel_str = str(rel)
+    for ext in ("*.js", "*.jsx", "*.ts", "*.tsx"):
+        for js_file in frontend_src.rglob(ext):
+            rel = js_file.relative_to(repo_root)
+            rel_str = str(rel)
 
-        if any(d in rel_str.parts for d in SKIP_DIRS):
-            continue
-
-        try:
-            content = js_file.read_text(encoding="utf-8")
-        except (UnicodeDecodeError, OSError):
-            continue
-
-        for line_num, line in enumerate(content.splitlines(), 1):
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("*"):
+            if any(d in rel_str.parts for d in SKIP_DIRS):
                 continue
 
-            for m in ARABIC_PATTERN.finditer(line):
-                string_val = m.group()
-                # Skip if in baseline
-                if string_val in baseline:
+            try:
+                content = js_file.read_text(encoding="utf-8")
+            except (UnicodeDecodeError, OSError):
+                continue
+
+            for line_num, line in enumerate(content.splitlines(), 1):
+                stripped = line.strip()
+                if stripped.startswith("//") or stripped.startswith("*"):
                     continue
-                # Skip imports and comments
-                if "import" in stripped:
-                    continue
-                violations.append(f"{rel}:{line_num}: {string_val}")
+
+                for m in ARABIC_PATTERN.finditer(line):
+                    string_val = m.group()
+                    # Skip if in baseline
+                    if string_val in baseline:
+                        continue
+                    # Skip imports and comments
+                    if "import" in stripped:
+                        continue
+                    violations.append(f"{rel}:{line_num}: {string_val}")
 
     if violations:
         print("I18N VIOLATIONS — new hard-coded strings must be translated or added to baseline:")
