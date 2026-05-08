@@ -1036,7 +1036,6 @@ input {
 }
 
 .topbar-sidebar-toggle {
-  display: none !important;
   width: 40px !important;
   height: 40px !important;
   border-radius: 10px !important;
@@ -1045,6 +1044,12 @@ input {
   color: var(--text-secondary) !important;
   appearance: none;
   -webkit-appearance: none;
+}
+
+@media (min-width: 1025px) {
+  .topbar-sidebar-toggle {
+    display: none !important;
+  }
 }
 
 .topbar-sidebar-toggle:hover {
