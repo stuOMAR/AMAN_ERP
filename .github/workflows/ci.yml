@@ -360,6 +360,8 @@ jobs:
   backend-coverage:
     name: backend · pytest --cov (advisory)
     runs-on: ubuntu-latest
+    # Only run on PRs — too slow for push-to-main CI loop
+    if: github.event_name == 'pull_request'
     continue-on-error: true
     services:
       postgres:
@@ -467,6 +469,7 @@ jobs:
   dependency-audit:
     name: audit · pip + npm (advisory)
     runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
     continue-on-error: true
     steps:
       - uses: actions/checkout@v6
