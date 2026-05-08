@@ -19,7 +19,6 @@ from utils.permissions import require_permission, require_sensitive_permission, 
 from utils.cache import cached
 from utils.exports import generate_chart_image, generate_excel_with_chart, generate_pdf, create_export_response
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
-from routers.reports.accounting_compare_export import _parse_periods
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -32,6 +31,20 @@ def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None):
         params["branch_id"] = branch_id
         return f"AND {column} = :branch_id"
     return ""
+
+
+def _parse_periods(periods_str: str):
+    """Parse 'start:end,start:end' or 'start:end' strings into list of dicts"""
+    result = []
+    for part in periods_str.split(","):
+        part = part.strip()
+        if ":" in part:
+            s, e = part.split(":", 1)
+            result.append({"start": s.strip(), "end": e.strip()})
+        else:
+            result.append({"start": f"{part.strip()[:4]}-01-01", "end": part.strip()})
+    return result
+
 
 @router.get("/accounting/budget-vs-actual", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
 def get_budget_report(
