@@ -55,7 +55,7 @@ def main() -> int:
             rel = js_file.relative_to(repo_root)
             rel_str = str(rel)
 
-            if any(d in rel_str.parts for d in SKIP_DIRS):
+            if any(d in rel.parts for d in SKIP_DIRS):
                 continue
 
             try:

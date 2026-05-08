@@ -48,7 +48,7 @@ def main() -> int:
 
             if rel_str in ALLOWED_FILES:
                 continue
-            if any(d in rel_str.parts for d in SKIP_DIRS):
+            if any(d in rel.parts for d in SKIP_DIRS):
                 continue
 
             try:
