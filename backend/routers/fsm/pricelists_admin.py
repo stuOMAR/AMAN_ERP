@@ -58,14 +58,15 @@ def list_pricelists(
             params["iid"] = item_id
 
         where = " AND ".join(conditions)
-        rows = conn.execute(
-            text(f"""
+        query = f"""
                 SELECT id, scope, scope_ref_id, item_id, currency, price,
                        valid_from, valid_to
                 FROM service_pricelists
                 WHERE {where}
                 ORDER BY scope, item_id
-            """),
+            """
+        rows = conn.execute(
+            text(query),  # noqa: sql-lint
             params,
         ).fetchall()
 

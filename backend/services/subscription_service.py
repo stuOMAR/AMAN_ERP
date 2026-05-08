@@ -357,7 +357,7 @@ def generate_subscription_invoice(db, *, enrollment_id: int, user: str | None = 
             "bps": billing_start,
             "bpe": billing_end,
             "amt": str(amount),
-            "tr": str(tax_rate * Decimal("100")),
+            "tr": str(_tax_rate_pct * Decimal("100")),
             "ta": str(tax_amount),
             "cur": currency,
             "jeid": je_id,

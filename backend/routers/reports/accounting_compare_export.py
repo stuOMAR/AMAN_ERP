@@ -18,6 +18,8 @@ from utils.tx import transactional
 from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
+from routers.reports.accounting_statements import get_profit_loss, get_balance_sheet, get_trial_balance, get_general_ledger
+from routers.reports.accounting_analysis import get_cashflow_report
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

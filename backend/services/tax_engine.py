@@ -181,7 +181,7 @@ def get_active_tax_for_country(
             **http_error(
                 404,
                 "no_tax_found_for_country",
-                detail=f"No active default tax found for country '{cc}' on {date}",
+                detail=f"No active default tax found for country '{cc}' on {as_of_date}",
             )
         )
 

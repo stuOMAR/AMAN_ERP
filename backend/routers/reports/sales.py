@@ -17,6 +17,7 @@ from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
+from utils.exports import generate_excel, generate_excel_with_chart, generate_pdf, generate_chart_image, create_export_response
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)

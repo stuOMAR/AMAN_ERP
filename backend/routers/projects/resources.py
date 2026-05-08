@@ -2,25 +2,16 @@
 
 Mounted under the parent router via projects/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
-import os
-from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import (
-    generate_sequential_number, get_mapped_account_id,
-    get_base_currency, compute_line_amounts, compute_invoice_totals
-)
+from utils.permissions import require_permission
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
 from sqlalchemy import text
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,22 +21,11 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.projects import (
-    ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
-    ProjectExpenseCreate, ProjectRevenueCreate,
-    TimesheetCreate, TimesheetUpdate, TimesheetApprove,
-    ProjectInvoiceCreate, ChangeOrderCreate, ChangeOrderUpdate, ProjectCloseRequest,
-    ProjectRiskCreate, ProjectRiskUpdate, TaskDependencyCreate
-)
-from schemas.timetracking import (
-    TimesheetEntryCreate, TimesheetEntryUpdate,
-    WeeklySubmitRequest, RejectRequest
-)
 from schemas.resource import AllocationCreate, AllocationUpdate
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec, _fetch_allocation, _compute_total_allocation
 
 @router.get("/resources/allocation", dependencies=[Depends(require_permission("projects.view"))], response_model=Dict[str, Any])
 async def get_resource_allocation(

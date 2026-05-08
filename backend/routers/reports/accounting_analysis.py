@@ -17,7 +17,9 @@ from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
+from utils.exports import generate_chart_image, generate_excel_with_chart, generate_pdf, create_export_response
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
+from routers.reports.accounting_compare_export import _parse_periods
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

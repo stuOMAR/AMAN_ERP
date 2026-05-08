@@ -2,20 +2,17 @@
 
 Mounted under the parent router via projects/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
-import os
-from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from datetime import date, datetime, timedelta
+from datetime import date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission
 from utils.accounting import (
-    generate_sequential_number, get_mapped_account_id,
-    get_base_currency, compute_line_amounts, compute_invoice_totals
+    get_mapped_account_id,
+    get_base_currency
 )
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
@@ -31,21 +28,16 @@ def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 from schemas.projects import (
-    ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
-    ProjectExpenseCreate, ProjectRevenueCreate,
-    TimesheetCreate, TimesheetUpdate, TimesheetApprove,
-    ProjectInvoiceCreate, ChangeOrderCreate, ChangeOrderUpdate, ProjectCloseRequest,
-    ProjectRiskCreate, ProjectRiskUpdate, TaskDependencyCreate
+    TimesheetCreate, TimesheetUpdate, TimesheetApprove
 )
 from schemas.timetracking import (
     TimesheetEntryCreate, TimesheetEntryUpdate,
     WeeklySubmitRequest, RejectRequest
 )
-from schemas.resource import AllocationCreate, AllocationUpdate
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec, _fetch_timesheet_entry
 
 @router.get("/timetracking", dependencies=[Depends(require_permission("projects.time_view"))], response_model=List[Dict[str, Any]])
 async def list_own_time_entries(
@@ -477,7 +469,6 @@ async def submit_weekly_timesheet(
     current_user: dict = Depends(get_current_user)
 ):
     """رفع الجدول الزمني الأسبوعي للموافقة"""
-    from datetime import timedelta
     db = get_db_connection(current_user.company_id)
     try:
         week_end = req.week_start + timedelta(days=6)
@@ -694,6 +685,5 @@ async def get_project_profitability(
 # US18 — Resource Planning  (/projects/resources/...)
 # ═══════════════════════════════════════════════════════════
 
-from schemas.resource import AllocationCreate, AllocationUpdate
 
 

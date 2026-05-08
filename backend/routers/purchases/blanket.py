@@ -28,6 +28,7 @@ from schemas.blanket_po import BlanketPOCreate, ReleaseOrderCreate, PriceAmendRe
 
 _D2 = Decimal("0.01")
 _D4 = Decimal("0.0001")
+BLANKET_PO_STATUSES = {"draft", "active", "expired", "completed", "cancelled"}
 
 
 def _dec(v) -> Decimal:
