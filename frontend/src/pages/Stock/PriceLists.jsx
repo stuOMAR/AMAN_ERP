@@ -76,19 +76,27 @@ const PriceLists = () => {
         }
     };
 
+    const openAddModal = () => {
+        const base = currencies.find(c => c.is_base);
+        setFormData({
+            name: '',
+            currency: base ? base.code : systemCurrency || '',
+            branch_id: currentBranch?.id || '',
+            is_active: true,
+            is_default: false
+        });
+        setShowModal(true);
+    };
+
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            await inventoryAPI.createPriceList(formData);
+            const dataToSubmit = {
+                ...formData,
+                branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
+            };
+            await inventoryAPI.createPriceList(dataToSubmit);
             setShowModal(false);
-            const base = currencies.find(c => c.is_base);
-            setFormData({
-                name: '',
-                currency: base ? base.code : systemCurrency || '',
-                branch_id: '',
-                is_active: true,
-                is_default: false
-            });
             fetchPriceLists();
         } catch (error) {
             showToast(t('stock.price_lists.error_creating'), 'error');
@@ -100,7 +108,7 @@ const PriceLists = () => {
         setFormData({
             name: list.name,
             currency: list.currency,
-            branch_id: list.branch_id || '',
+            branch_id: list.branch_id || 'all',
             is_active: list.is_active,
             is_default: list.is_default
         });
@@ -110,7 +118,11 @@ const PriceLists = () => {
     const handleUpdate = async (e) => {
         e.preventDefault();
         try {
-            await inventoryAPI.updatePriceList(selectedList.id, formData);
+            const dataToSubmit = {
+                ...formData,
+                branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
+            };
+            await inventoryAPI.updatePriceList(selectedList.id, dataToSubmit);
             setShowEditModal(false);
             setSelectedList(null);
             fetchPriceLists();
@@ -149,7 +161,7 @@ const PriceLists = () => {
                     <p className="workspace-subtitle">{t('stock.price_lists.subtitle')}</p>
                 </div>
                 <div className="header-actions">
-                    <button onClick={() => setShowModal(true)} className="btn btn-primary">
+                    <button onClick={openAddModal} className="btn btn-primary">
                         + {t('stock.price_lists.new_list')}
                     </button>
                     <Link to="/stock" className="btn btn-secondary">
@@ -265,11 +277,19 @@ const PriceLists = () => {
                             <div className="form-group">
                                 <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
                                 <select
+                                    required={!currentBranch?.id}
+                                    onInvalid={(e) => {
+                                        if(!e.target.value) {
+                                            e.target.setCustomValidity(t('stock.price_lists.modal.please_select_branch', 'الرجاء اختيار الفرع'));
+                                        }
+                                    }}
+                                    onInput={(e) => e.target.setCustomValidity('')}
                                     value={formData.branch_id}
                                     onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
                                     className="form-input"
                                 >
-                                    <option value="">{t('common.all_branches', 'All Branches')}</option>
+                                    {!currentBranch?.id && <option value="">--</option>}
+                                    <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>
                                     {branches.map(b => (
                                         <option key={b.id} value={b.id}>
                                             {b.branch_name}
@@ -341,11 +361,19 @@ const PriceLists = () => {
                             <div className="form-group">
                                 <label>{t('stock.price_lists.modal.branch', 'Branch')}</label>
                                 <select
+                                    required={!currentBranch?.id}
+                                    onInvalid={(e) => {
+                                        if(!e.target.value) {
+                                            e.target.setCustomValidity(t('stock.price_lists.modal.please_select_branch', 'الرجاء اختيار الفرع'));
+                                        }
+                                    }}
+                                    onInput={(e) => e.target.setCustomValidity('')}
                                     value={formData.branch_id}
                                     onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
                                     className="form-input"
                                 >
-                                    <option value="">{t('common.all_branches', 'All Branches')}</option>
+                                    {!currentBranch?.id && <option value="">--</option>}
+                                    <option value="all">{t('common.all_branches', 'جميع الفروع')}</option>
                                     {branches.map(b => (
                                         <option key={b.id} value={b.id}>
                                             {b.branch_name}
