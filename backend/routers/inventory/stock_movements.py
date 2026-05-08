@@ -7,10 +7,16 @@ The legacy ``/receipt`` and ``/delivery`` endpoints have been removed
 and runs the fiscal-lock check, gated by ``stock.adjust`` permission.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
-from sqlalchemy import text
+from datetime import datetime
+from decimal import Decimal
+import uuid
 import logging
+from typing import List as _List, Optional as _Optional
+
+from fastapi import APIRouter, Depends, HTTPException, status, Request
+from pydantic import BaseModel, Field
+from sqlalchemy import text
+from utils.i18n import http_error
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -27,9 +33,6 @@ logger = logging.getLogger(__name__)
 # ==========================================================================
 # INV-F1: Stock adjustment with mandatory GL posting (Phase-11 Sprint-5)
 # ==========================================================================
-
-from pydantic import BaseModel, Field
-from typing import List as _List, Optional as _Optional
 
 
 class StockAdjustmentItem(BaseModel):

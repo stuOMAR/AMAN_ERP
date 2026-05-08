@@ -8,8 +8,9 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 from typing import Optional
 
 from database import get_db_connection

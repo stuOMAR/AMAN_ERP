@@ -6,13 +6,15 @@ POST /api/fsm/technicians/match      — find matching technicians
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import json
+
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 from typing import List, Optional
 
 from database import get_db_connection
 from services.fsm.technicians import (
-    get_technician,
     upsert_technician,
     technician_assignment_matcher,
 )
