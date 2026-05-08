@@ -80,7 +80,7 @@ const PriceLists = () => {
         const base = currencies.find(c => c.is_base);
         setFormData({
             name: '',
-            currency: base ? base.code : systemCurrency || '',
+            currency: currentBranch?.default_currency || (base ? base.code : systemCurrency || ''),
             branch_id: currentBranch?.id || '',
             is_active: true,
             is_default: false
@@ -285,7 +285,12 @@ const PriceLists = () => {
                                     }}
                                     onInput={(e) => e.target.setCustomValidity('')}
                                     value={formData.branch_id}
-                                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                                    onChange={(e) => {
+                                        const selectedBranchId = e.target.value;
+                                        const selectedBranch = branches.find(b => b.id.toString() === selectedBranchId);
+                                        const newCurrency = selectedBranch?.default_currency || formData.currency;
+                                        setFormData({ ...formData, branch_id: selectedBranchId, currency: newCurrency });
+                                    }}
                                     className="form-input"
                                 >
                                     {!currentBranch?.id && <option value="">--</option>}
@@ -369,7 +374,12 @@ const PriceLists = () => {
                                     }}
                                     onInput={(e) => e.target.setCustomValidity('')}
                                     value={formData.branch_id}
-                                    onChange={(e) => setFormData({ ...formData, branch_id: e.target.value })}
+                                    onChange={(e) => {
+                                        const selectedBranchId = e.target.value;
+                                        const selectedBranch = branches.find(b => b.id.toString() === selectedBranchId);
+                                        const newCurrency = selectedBranch?.default_currency || formData.currency;
+                                        setFormData({ ...formData, branch_id: selectedBranchId, currency: newCurrency });
+                                    }}
                                     className="form-input"
                                 >
                                     {!currentBranch?.id && <option value="">--</option>}
