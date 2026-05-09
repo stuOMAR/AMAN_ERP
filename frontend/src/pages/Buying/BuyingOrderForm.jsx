@@ -21,6 +21,7 @@ function BuyingOrderForm() {
     const [supplierGroups, setSupplierGroups] = useState([])
     const [products, setProducts] = useState([])
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     const [formData, setFormData] = useState({
@@ -48,9 +49,14 @@ function BuyingOrderForm() {
                 setProducts(prodRes.data)
             } catch (err) {
                 showToast(t('common.error'), 'error')
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [])
 
     const handleAddItem = () => {
@@ -285,6 +291,7 @@ function BuyingOrderForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{t('buying.orders.form.title_new')}</h1>

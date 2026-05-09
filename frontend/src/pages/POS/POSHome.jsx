@@ -16,6 +16,7 @@ const POSHome = () => {
     const isRTL = i18n.dir() === 'rtl';
 
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [openingBalance, setOpeningBalance] = useState('');
     const [warehouses, setWarehouses] = useState([]);
     const [selectedWarehouse, setSelectedWarehouse] = useState('');
@@ -29,12 +30,15 @@ const POSHome = () => {
     const showPromotions      = getIndustryFeature('pos.promotions');
 
     useEffect(() => {
-        const init = async () => {
-            await checkActiveSession();
-            await fetchWarehouses();
-            await fetchTreasuryAccounts();
-        };
-        init();
+        const timer = setTimeout(() => {
+            const init = async () => {
+                await checkActiveSession();
+                await fetchWarehouses();
+                await fetchTreasuryAccounts();
+            };
+            init();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch?.id]);
 
     const checkActiveSession = async () => {
@@ -44,10 +48,12 @@ const POSHome = () => {
                 navigate('/pos/interface');
             } else {
                 setLoading(false);
+                setInitialLoad(false);
             }
         } catch (error) {
             showToast(t('common.error_occurred'), 'error');
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -96,7 +102,7 @@ const POSHome = () => {
         }
     };
 
-    if (loading) {
+    if (initialLoad && loading) {
         return (
             <div className="workspace flex items-center justify-center fade-in">
                 <div className="text-center">
@@ -109,6 +115,7 @@ const POSHome = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>

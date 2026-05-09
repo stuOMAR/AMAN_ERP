@@ -15,6 +15,7 @@ function BuyingHome() {
     const { showToast } = useToast()
     const [stats, setStats] = useState({ supplier_count: 0, total_payables: 0, monthly_purchases: 0 })
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const currency = getCurrency()
     const { currentBranch } = useBranch()
 
@@ -25,6 +26,7 @@ function BuyingHome() {
         const fetchStats = async () => {
             if (!hasPermission('buying.reports')) {
                 setLoading(false);
+                setInitialLoad(false);
                 return;
             }
             try {
@@ -38,13 +40,18 @@ function BuyingHome() {
                 showToast(t('common.error'), 'error')
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
-        fetchStats()
+        const timer = setTimeout(() => {
+            fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <h1 className="workspace-title">{t('buying.home.title')}</h1>
                 <p className="workspace-subtitle">{t('buying.home.subtitle')}</p>

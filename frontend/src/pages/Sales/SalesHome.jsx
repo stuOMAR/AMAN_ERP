@@ -15,34 +15,41 @@ function SalesHome() {
     const navigate = useNavigate()
     const [stats, setStats] = useState({ customer_count: 0, total_receivables: 0, monthly_sales: 0, unpaid_count: 0 })
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const currency = getCurrency()
     const { currentBranch } = useBranch()
 
     const showContracts = getIndustryFeature('sales.contracts')
     useEffect(() => {
-        const fetchStats = async () => {
-            if (!hasPermission('sales.reports')) {
-                setLoading(false);
-                return;
-            }
-            try {
-                setLoading(true)
-                const params = {}
-                if (currentBranch?.id) params.branch_id = currentBranch.id
+        const timer = setTimeout(() => {
+            const fetchStats = async () => {
+                if (!hasPermission('sales.reports')) {
+                    setLoading(false);
+                    setInitialLoad(false);
+                    return;
+                }
+                try {
+                    setLoading(true)
+                    const params = {}
+                    if (currentBranch?.id) params.branch_id = currentBranch.id
 
-                const response = await salesAPI.getSummary(params)
-                setStats(response.data)
-            } catch (err) {
-                showToast(t('common.error'), 'error')
-            } finally {
-                setLoading(false)
+                    const response = await salesAPI.getSummary(params)
+                    setStats(response.data)
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setLoading(false)
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetchStats()
+            fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <h1 className="workspace-title">{t('sales.title')}</h1>
                 <p className="workspace-subtitle">{t('sales.subtitle')}</p>
@@ -53,24 +60,24 @@ function SalesHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.monthly_sales')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('sales.reports') ? '***' : (loading ? '...' : formatNumber(stats.monthly_sales))} {hasPermission('sales.reports') && <small>{currency}</small>}
+                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.monthly_sales))} {hasPermission('sales.reports') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.receivables')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('sales.reports') ? '***' : (loading ? '...' : formatNumber(stats.total_receivables))} {hasPermission('sales.reports') && <small>{currency}</small>}
+                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_receivables))} {hasPermission('sales.reports') && <small>{currency}</small>}
                     </div>
                     {hasPermission('sales.reports') && (
                         <div className="metric-change">
-                            {loading ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
+                            {initialLoad ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
                         </div>
                     )}
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.total_customers')}</div>
                     <div className="metric-value text-secondary">
-                        {!hasPermission('sales.reports') ? '***' : (loading ? '...' : stats.customer_count)}
+                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : stats.customer_count)}
                     </div>
                 </div>
             </div>

@@ -19,6 +19,7 @@ const Payslips = () => {
     const [payslips, setPayslips] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showGenerate, setShowGenerate] = useState(false);
     const [showDetail, setShowDetail] = useState(false);
     const [selectedPayslip, setSelectedPayslip] = useState(null);
@@ -30,8 +31,11 @@ const Payslips = () => {
     const printRef = useRef(null);
 
     useEffect(() => {
-        fetchPayslips();
-        fetchEmployees();
+        const timer = setTimeout(() => {
+            fetchPayslips();
+            fetchEmployees();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchEmployees = async () => {
@@ -50,7 +54,7 @@ const Payslips = () => {
             if (currentBranch?.id) params.branch_id = currentBranch.id;
             const res = await hrImprovementsAPI.listPayslips(params);
             setPayslips(res.data || []);
-        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); } finally { setLoading(false); }
+        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); } finally { setLoading(false); setInitialLoad(false); }
     };
 
     const handleGenerate = async (e) => {
@@ -208,7 +212,7 @@ const Payslips = () => {
 
             {/* Payslips Table */}
             <div className="card section-card">
-                {loading ? (
+                {initialLoad && !payslips.length ? (
                     <div style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                         <PageLoading />
                         {t('common.loading')}
@@ -251,6 +255,8 @@ const Payslips = () => {
                     </div>
                 )}
             </div>
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
             {/* Generate Payslip Modal */}
             {showGenerate && (

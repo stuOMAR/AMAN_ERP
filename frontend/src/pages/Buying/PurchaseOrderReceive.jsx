@@ -17,13 +17,17 @@ function PurchaseOrderReceive() {
     const [order, setOrder] = useState(null);
     const [warehouses, setWarehouses] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [submitting, setSubmitting] = useState(false);
     const [selectedWarehouse, setSelectedWarehouse] = useState('');
     const [receiveQtys, setReceiveQtys] = useState({});
 
 
     useEffect(() => {
-        fetchData();
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id]);
 
     const fetchData = async () => {
@@ -49,6 +53,7 @@ function PurchaseOrderReceive() {
             showToast(t('common.error_occurred'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -123,16 +128,13 @@ function PurchaseOrderReceive() {
         setReceiveQtys(allQtys);
     };
 
-    if (loading) {
+    if (initialLoad && !order) {
         return <PageLoading />;
-    }
-
-    if (!order) {
-        return <div className="workspace fade-in p-8 text-center">{t('buying.orders.not_found')}</div>;
     }
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

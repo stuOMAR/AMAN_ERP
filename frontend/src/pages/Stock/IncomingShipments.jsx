@@ -14,9 +14,13 @@ const IncomingShipments = () => {
     const { currentBranch } = useBranch();
     const [shipments, setShipments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
 
     useEffect(() => {
-        fetchIncoming();
+        const timer = setTimeout(() => {
+            fetchIncoming();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchIncoming = async () => {
@@ -28,6 +32,7 @@ const IncomingShipments = () => {
             console.error("Failed to load incoming shipments", err);
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -55,10 +60,11 @@ const IncomingShipments = () => {
         }
     };
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

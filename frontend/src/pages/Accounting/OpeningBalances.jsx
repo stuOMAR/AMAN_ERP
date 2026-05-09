@@ -17,6 +17,7 @@ export default function OpeningBalances() {
     const currency = getCurrency()
 
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [saving, setSaving] = useState(false)
     const [accounts, setAccounts] = useState([])
     const [entryInfo, setEntryInfo] = useState(null)
@@ -24,7 +25,12 @@ export default function OpeningBalances() {
     const [searchTerm, setSearchTerm] = useState('')
     const [filterType, setFilterType] = useState('')
 
-    useEffect(() => { fetchData() }, [currentBranch])
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch])
 
     const fetchData = async () => {
         setLoading(true)
@@ -45,6 +51,7 @@ export default function OpeningBalances() {
             showToast(t('opening.error_loading'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -180,7 +187,8 @@ export default function OpeningBalances() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad ? (
                 <PageLoading />
             ) : (
                 <div className="data-table-container">

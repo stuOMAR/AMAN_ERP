@@ -18,23 +18,28 @@ function CustomerList() {
     const [customers, setCustomers] = useState([])
     const [currency] = useState(getCurrency())
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState('')
 
     useEffect(() => {
-        const fetchCustomers = async () => {
-            try {
-                setLoading(true)
-                const response = await salesAPI.listCustomers({ branch_id: currentBranch?.id })
-                setCustomers(response.data)
-            } catch (err) {
-                setError(t('common.error_loading'))
-            } finally {
-                setLoading(false)
+        const timer = setTimeout(() => {
+            const fetchCustomers = async () => {
+                try {
+                    setLoading(true)
+                    const response = await salesAPI.listCustomers({ branch_id: currentBranch?.id })
+                    setCustomers(response.data)
+                } catch (err) {
+                    setError(t('common.error_loading'))
+                } finally {
+                    setLoading(false)
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetchCustomers()
+            fetchCustomers()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, t])
 
     const filteredCustomers = useMemo(() => {
@@ -147,6 +152,7 @@ function CustomerList() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -27,6 +27,7 @@ const ScheduledReports = () => {
     const getReportTypeLabel = (key) => t(`reports.report_types.${key}`, key);
     const [reports, setReports] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [editingId, setEditingId] = useState(null);
     const [branches, setBranches] = useState([]);
@@ -50,8 +51,11 @@ const ScheduledReports = () => {
     const [formData, setFormData] = useState(defaultForm);
 
     useEffect(() => {
-        fetchReports();
-        fetchBranches();
+        const timer = setTimeout(() => {
+            fetchReports();
+            fetchBranches();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch?.id]);
 
     const fetchReports = async () => {
@@ -64,6 +68,7 @@ const ScheduledReports = () => {
             showToast(t('common.error_loading'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -238,7 +243,8 @@ const ScheduledReports = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {loading ? (
+                        {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+                        {initialLoad && loading ? (
                             <tr><td colSpan="9" className="text-center">{t('common.loading')}</td></tr>
                         ) : reports.length === 0 ? (
                             <tr><td colSpan="9" className="text-center">{t('common.no_data')}</td></tr>

@@ -13,6 +13,7 @@ function CustomerGroups() {
     const { showToast } = useToast()
     const [groups, setGroups] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [showModal, setShowModal] = useState(false)
     const [currentGroup, setCurrentGroup] = useState(null)
@@ -37,11 +38,15 @@ function CustomerGroups() {
             setError(t('sales.groups.form.errors.fetch_failed'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchGroups()
+        const timer = setTimeout(() => {
+            fetchGroups()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const handleOpenModal = (group = null) => {
@@ -109,10 +114,11 @@ function CustomerGroups() {
         }
     }
 
-    if (loading && groups.length === 0) return <PageLoading />
+    if (initialLoad && groups.length === 0) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

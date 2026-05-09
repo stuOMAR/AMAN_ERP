@@ -12,6 +12,7 @@ function TreasuryHome() {
     const navigate = useNavigate()
     const [stats, setStats] = useState({ account_count: 0, cash_count: 0, bank_count: 0, total_balance: 0 })
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const currency = getCurrency() || ''
     const { currentBranch } = useBranch()
 
@@ -41,13 +42,18 @@ function TreasuryHome() {
                 console.error("Failed to fetch treasury stats", err)
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
-        fetchStats()
+        const timer = setTimeout(() => {
+            fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <h1 className="workspace-title">{t('treasury.title')}</h1>
                 <p className="workspace-subtitle">{t('treasury.subtitle')}</p>
@@ -58,28 +64,28 @@ function TreasuryHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('common.total_balance')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('reports.view') ? '***' : (loading ? '...' : formatNumber(stats.total_balance))} {hasPermission('reports.view') && <small>{currency}</small>}
+                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_balance))} {hasPermission('reports.view') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.cash_accounts')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('reports.view') ? '***' : (loading ? '...' : stats.cash_count)}
+                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.cash_count)}
                     </div>
                     {hasPermission('reports.view') && (
                         <div className="metric-change">
-                            {loading ? '' : t('common.active')}
+                            {initialLoad ? '' : t('common.active')}
                         </div>
                     )}
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.bank_accounts')}</div>
                     <div className="metric-value text-secondary">
-                        {!hasPermission('reports.view') ? '***' : (loading ? '...' : stats.bank_count)}
+                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.bank_count)}
                     </div>
                     {hasPermission('reports.view') && (
                         <div className="metric-change">
-                            {loading ? '' : t('common.active')}
+                            {initialLoad ? '' : t('common.active')}
                         </div>
                     )}
                 </div>

@@ -14,6 +14,7 @@ function CycleCounts() {
     const { currentBranch } = useBranch()
     const [cycleCounts, setCycleCounts] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [statusFilter, setStatusFilter] = useState('')
     const [warehouses, setWarehouses] = useState([])
     const [products, setProducts] = useState([])
@@ -35,9 +36,12 @@ function CycleCounts() {
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        fetchCycleCounts()
-        fetchWarehouses()
-        fetchProducts()
+        const timer = setTimeout(() => {
+            fetchCycleCounts()
+            fetchWarehouses()
+            fetchProducts()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, statusFilter])
 
     const fetchCycleCounts = async () => {
@@ -52,6 +56,7 @@ function CycleCounts() {
             console.error(err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -171,6 +176,7 @@ function CycleCounts() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

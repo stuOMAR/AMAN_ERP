@@ -17,6 +17,7 @@ export default function SupplierDetails() {
     const { currentBranch } = useBranch()
     const { showToast } = useToast()
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [data, setData] = useState({ supplier: {}, invoices: [], payments: [], receipts: [] })
     const [activeTab, setActiveTab] = useState('invoices')
     const [balanceView, setBalanceView] = useState('supplier')
@@ -31,15 +32,20 @@ export default function SupplierDetails() {
                 showToast(t('common.error'), 'error')
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id, currentBranch?.id])
 
-    if (loading) return <PageLoading />
+    if (initialLoad && !data) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>

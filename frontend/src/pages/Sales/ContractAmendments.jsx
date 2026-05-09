@@ -21,13 +21,17 @@ const ContractAmendments = () => {
     const [amendments, setAmendments] = useState([]);
     const [kpis, setKpis] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState({
         amendment_type: 'scope_change', description: '',
         old_value: '', new_value: '', effective_date: '', approved_by: ''
     });
 
-    useEffect(() => { fetchContracts(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => { fetchContracts(); }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
     useEffect(() => { if (selectedContract) fetchData(); }, [selectedContract, activeTab]);
 
     const fetchContracts = async () => {
@@ -49,7 +53,7 @@ const ContractAmendments = () => {
                 const res = await contractsAPI.getContractKPIs(selectedContract);
                 setKpis(res.data);
             }
-        } catch (err) { showToast(t('common.error'), 'error'); } finally { setLoading(false); }
+        } catch (err) { showToast(t('common.error'), 'error'); } finally { setLoading(false); setInitialLoad(false); }
     };
 
     const handleSubmit = async (e) => {
@@ -93,6 +97,7 @@ const ContractAmendments = () => {
                 </div>
             </div>
 
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {/* Contract Selector */}
             <div className="d-flex gap-3 mb-4 align-items-center">
                 <label className="form-label mb-0" style={{ whiteSpace: 'nowrap' }}>{t('sales.contract')}</label>

@@ -22,6 +22,7 @@ function SalesOrderForm() {
     const [products, setProducts] = useState([])
     const [warehouses, setWarehouses] = useState([])
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     const [formData, setFormData] = useState({
@@ -39,26 +40,31 @@ function SalesOrderForm() {
     ])
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [custRes, prodRes, whRes, priceRes] = await Promise.all([
-                    salesAPI.listCustomers(),
-                    inventoryAPI.listProducts(),
-                    inventoryAPI.listWarehouses(),
-                    inventoryAPI.getBranchPrices(currentBranch?.id)
-                ])
-                setCustomers(custRes.data)
-                setProducts(prodRes.data)
-                setWarehouses(whRes.data)
-                
-                // Store branch prices for auto-fill
-                window.__branchPrices = priceRes.data?.prices || {}
-                window.__branchCurrency = priceRes.data?.currency || currency
-            } catch (err) {
-                showToast(t('common.error'), 'error')
+        const timer = setTimeout(() => {
+            const fetchData = async () => {
+                try {
+                    const [custRes, prodRes, whRes, priceRes] = await Promise.all([
+                        salesAPI.listCustomers(),
+                        inventoryAPI.listProducts(),
+                        inventoryAPI.listWarehouses(),
+                        inventoryAPI.getBranchPrices(currentBranch?.id)
+                    ])
+                    setCustomers(custRes.data)
+                    setProducts(prodRes.data)
+                    setWarehouses(whRes.data)
+                    
+                    // Store branch prices for auto-fill
+                    window.__branchPrices = priceRes.data?.prices || {}
+                    window.__branchCurrency = priceRes.data?.currency || currency
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetchData()
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     useEffect(() => {
@@ -263,6 +269,7 @@ function SalesOrderForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

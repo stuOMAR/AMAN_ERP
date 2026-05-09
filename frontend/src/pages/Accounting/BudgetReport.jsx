@@ -17,6 +17,7 @@ function BudgetReport() {
     const [selectedBudgetId, setSelectedBudgetId] = useState('')
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [fromDate, setFromDate] = useState('')
     const [toDate, setToDate] = useState('')
@@ -59,21 +60,15 @@ function BudgetReport() {
             setError(t('errors.fetch_failed'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        if (selectedBudgetId && budgets.length > 0) {
-            const budget = budgets.find(b => b.id.toString() === selectedBudgetId.toString());
-            if (budget) {
-                setFromDate(budget.start_date);
-                setToDate(budget.end_date);
-            }
-        }
-    }, [selectedBudgetId, budgets]);
-
-    useEffect(() => {
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [selectedBudgetId, currentBranch, fromDate, toDate])
 
     return (
@@ -117,7 +112,8 @@ function BudgetReport() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad && !data ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

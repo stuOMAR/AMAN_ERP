@@ -13,6 +13,7 @@ function StockHome() {
     const navigate = useNavigate()
     const [stats, setStats] = useState({ product_count: 0, inventory_value: 0, low_stock_count: 0, currency: '' })
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const currency = stats.currency || getCurrency()
     const { currentBranch } = useBranch()
     const { showToast } = useToast()
@@ -34,13 +35,18 @@ function StockHome() {
                 showToast(t('errors.fetch_failed'), 'error')
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
-        fetchStats()
+        const timer = setTimeout(() => {
+            fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <h1 className="workspace-title">{t('stock.home.title')}</h1>
                 <p className="workspace-subtitle">{t('stock.home.subtitle')}</p>

@@ -19,6 +19,7 @@ function InvoiceForm() {
     const location = useLocation()
     const currency = getCurrency()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [customers, setCustomers] = useState([])
     const [customerGroups, setCustomerGroups] = useState([])
     const [products, setProducts] = useState([])
@@ -55,75 +56,80 @@ function InvoiceForm() {
     ])
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const params = { branch_id: currentBranch?.id }
-                const [custRes, groupsRes, prodRes, whRes, curRes, treasRes, priceRes] = await Promise.all([
-                    salesAPI.listCustomers(params),
-                    salesAPI.listCustomerGroups(params),
-                    inventoryAPI.listProducts(params),
-                    inventoryAPI.listWarehouses(params),
-                    currenciesAPI.list(),
-                    treasuryAPI.listAccounts(currentBranch?.id),
-                    inventoryAPI.getBranchPrices(currentBranch?.id)
-                ])
-                setCustomers(custRes.data)
-                setCustomerGroups(groupsRes.data)
-                setProducts(prodRes.data)
-                setWarehouses(whRes.data)
-                setCurrencies(curRes.data)
-                setTreasuryAccounts(treasRes.data)
-                
-                // Store branch prices for auto-fill
-                window.__branchPrices = priceRes.data?.prices || {}
-                window.__branchCurrency = priceRes.data?.currency || formData.currency
+        const timer = setTimeout(() => {
+            const fetchData = async () => {
+                try {
+                    const params = { branch_id: currentBranch?.id }
+                    const [custRes, groupsRes, prodRes, whRes, curRes, treasRes, priceRes] = await Promise.all([
+                        salesAPI.listCustomers(params),
+                        salesAPI.listCustomerGroups(params),
+                        inventoryAPI.listProducts(params),
+                        inventoryAPI.listWarehouses(params),
+                        currenciesAPI.list(),
+                        treasuryAPI.listAccounts(currentBranch?.id),
+                        inventoryAPI.getBranchPrices(currentBranch?.id)
+                    ])
+                    setCustomers(custRes.data)
+                    setCustomerGroups(groupsRes.data)
+                    setProducts(prodRes.data)
+                    setWarehouses(whRes.data)
+                    setCurrencies(curRes.data)
+                    setTreasuryAccounts(treasRes.data)
+                    
+                    // Store branch prices for auto-fill
+                    window.__branchPrices = priceRes.data?.prices || {}
+                    window.__branchCurrency = priceRes.data?.currency || formData.currency
 
-                const base = curRes.data.find(c => c.is_base)
-                if (base && !formData.currency) {
+                    const base = curRes.data.find(c => c.is_base)
+                    if (base && !formData.currency) {
 
-                // Fetch branch tax
-                if (currentBranch?.id) {
-                    try {
-                        const taxRes = await taxesAPI.getBranchTax(currentBranch.id)
-                        setBranchTax(taxRes.data)
-                    } catch (err) {
-                        console.warn('Failed to fetch branch tax', err)
-                    }
-                }
-                    setFormData(prev => ({ ...prev, currency: base.code }))
-                }
-
-                // Check if we have an order to pre-fill from
-                if (location.state?.fromOrder) {
-                    const order = location.state.fromOrder
-                    setFormData(prev => ({
-                        ...prev,
-                        customer_id: order.customer_id,
-                        notes: order.notes || '',
-                        due_date: order.expected_delivery_date ? new Date(order.expected_delivery_date).toISOString().split('T')[0] : ''
-                    }))
-                    setItems(order.items.map(item => {
-                        const quantity = Number(item.quantity) || 0
-                        const unitPrice = Number(item.unit_price) || 0
-                        const discount = Number(item.discount) || 0
-                        const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0
-
-                        return {
-                            product_id: item.product_id,
-                            description: item.description || '',
-                            quantity: quantity,
-                            unit_price: unitPrice,
-                            tax_rate: Number(item.tax_rate) || 0,
-                            discount: discount,
-                            discount_percent: discountPercent
+                    // Fetch branch tax
+                    if (currentBranch?.id) {
+                        try {
+                            const taxRes = await taxesAPI.getBranchTax(currentBranch.id)
+                            setBranchTax(taxRes.data)
+                        } catch (err) {
+                            console.warn('Failed to fetch branch tax', err)
                         }
-                    }))
+                    }
+                        setFormData(prev => ({ ...prev, currency: base.code }))
+                    }
+
+                    // Check if we have an order to pre-fill from
+                    if (location.state?.fromOrder) {
+                        const order = location.state.fromOrder
+                        setFormData(prev => ({
+                            ...prev,
+                            customer_id: order.customer_id,
+                            notes: order.notes || '',
+                            due_date: order.expected_delivery_date ? new Date(order.expected_delivery_date).toISOString().split('T')[0] : ''
+                        }))
+                        setItems(order.items.map(item => {
+                            const quantity = Number(item.quantity) || 0
+                            const unitPrice = Number(item.unit_price) || 0
+                            const discount = Number(item.discount) || 0
+                            const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0
+
+                            return {
+                                product_id: item.product_id,
+                                description: item.description || '',
+                                quantity: quantity,
+                                unit_price: unitPrice,
+                                tax_rate: Number(item.tax_rate) || 0,
+                                discount: discount,
+                                discount_percent: discountPercent
+                            }
+                        }))
+                    }
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setInitialLoad(false)
                 }
-            } catch (err) {
-                showToast(t('common.error'), 'error')
             }
-        }
-        fetchData()
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [location.state, currentBranch])
 
     // Filter warehouses based on current branch
@@ -376,6 +382,7 @@ function InvoiceForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{t('sales.invoices.form.title')}</h1>

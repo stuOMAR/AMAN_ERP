@@ -22,6 +22,7 @@ function PaymentForm() {
     const [exchangeRate, setExchangeRate] = useState(1.0);
     const [transactionRate, setTransactionRate] = useState(1.0); // Rate between Record and Treasury
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [suppliers, setSuppliers] = useState([]);
     const [currenciesList, setCurrenciesList] = useState([]);
     const [outstandingInvoices, setOutstandingInvoices] = useState([]);
@@ -42,7 +43,10 @@ function PaymentForm() {
     });
 
     useEffect(() => {
-        fetchInitialData();
+        const timer = setTimeout(() => {
+            fetchInitialData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchInitialData = async () => {
@@ -78,6 +82,8 @@ function PaymentForm() {
             }
         } catch (error) {
             showToast(t('common.error'), 'error');
+        } finally {
+            setInitialLoad(false);
         }
     };
 
@@ -331,6 +337,7 @@ function PaymentForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{formData.voucher_type === 'payment' ? t('buying.payments.form.create_title') : t('buying.payments.form.create_refund_title')}</h1>

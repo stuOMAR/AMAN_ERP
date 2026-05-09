@@ -18,25 +18,30 @@ function DeliveryOrders() {
     const currency = getCurrency()
     const [orders, setOrders] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [statusFilter, setStatusFilter] = useState('')
 
     useEffect(() => {
-        const fetch = async () => {
-            try {
-                const params = { branch_id: currentBranch?.id }
-                if (statusFilter) params.status = statusFilter
-                const res = await deliveryOrdersAPI.list(params)
-                setOrders(res.data)
-            } catch (err) {
-                showToast(t('common.error'), 'error')
-            } finally {
-                setLoading(false)
+        const timer = setTimeout(() => {
+            const fetch = async () => {
+                try {
+                    const params = { branch_id: currentBranch?.id }
+                    if (statusFilter) params.status = statusFilter
+                    const res = await deliveryOrdersAPI.list(params)
+                    setOrders(res.data)
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setLoading(false)
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetch()
+            fetch()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, statusFilter])
 
-    if (loading) return <PageLoading />
+    if (initialLoad) return <PageLoading />
 
     const statusColors = {
         draft: 'draft', confirmed: 'confirmed', shipped: 'info',
@@ -45,6 +50,7 @@ function DeliveryOrders() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

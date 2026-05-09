@@ -18,10 +18,14 @@ function SupplierPayments() {
     const currency = getCurrency()
     const [payments, setPayments] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        fetchPayments()
+        const timer = setTimeout(() => {
+            fetchPayments()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const fetchPayments = async () => {
@@ -34,12 +38,14 @@ function SupplierPayments() {
             setError(t('common.error_loading'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
-    if (loading) {
+    if (initialLoad && !payments.length) {
         return (
             <div className="workspace fade-in">
+                {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
                 <div className="workspace-header">
                     <BackButton />
                     <h1 className="workspace-title">{t('buying.supplier_payments.title')}</h1>
@@ -62,6 +68,7 @@ function SupplierPayments() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <h1 className="workspace-title">{t('buying.supplier_payments.title')}</h1>
                 <p className="workspace-subtitle">{t('buying.supplier_payments.subtitle')}</p>

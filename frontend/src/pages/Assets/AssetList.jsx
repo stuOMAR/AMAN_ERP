@@ -17,11 +17,15 @@ const AssetList = () => {
     const { currentBranch } = useBranch();
     const [assets, setAssets] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [filter, setFilter] = useState('');
     const [search, setSearch] = useState('');
 
     useEffect(() => {
-        fetchAssets();
+        const timer = setTimeout(() => {
+            fetchAssets()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [filter, currentBranch]);
 
     const fetchAssets = async () => {
@@ -35,6 +39,7 @@ const AssetList = () => {
             console.error("Failed to fetch assets", error);
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -97,6 +102,7 @@ const AssetList = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="d-flex align-items-center justify-content-between w-100">

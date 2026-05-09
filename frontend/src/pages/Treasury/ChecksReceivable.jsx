@@ -20,6 +20,7 @@ function ChecksReceivable() {
 
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [total, setTotal] = useState(0)
     const [page, setPage] = useState(1)
     const [search, setSearch] = useState('')
@@ -57,7 +58,7 @@ function ChecksReceivable() {
             setItems(res.data.items || [])
             setTotal(res.data.total || 0)
         } catch (err) { console.error(err) }
-        finally { setLoading(false) }
+        finally { setLoading(false); setInitialLoad(false); }
     }, [page, search, statusFilter, currentBranch])
 
     const fetchStats = useCallback(async () => {
@@ -67,7 +68,12 @@ function ChecksReceivable() {
         } catch (err) { console.error(err) }
     }, [currentBranch])
 
-    useEffect(() => { fetchList(); fetchStats() }, [fetchList, fetchStats])
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchList(); fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [fetchList, fetchStats])
 
     const loadCreateData = async () => {
         try {
@@ -184,10 +190,11 @@ function ChecksReceivable() {
         return new Date(dueDate) <= new Date()
     }
 
-    if (loading && !items.length) return <PageLoading />
+    if (initialLoad && !items.length) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>

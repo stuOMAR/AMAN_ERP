@@ -14,6 +14,7 @@ const StockAdjustmentForm = () => {
     const { currentBranch } = useBranch();
     const { showToast } = useToast();
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [warehouses, setWarehouses] = useState([]);
     const [products, setProducts] = useState([]);
     const [formData, setFormData] = useState({
@@ -26,23 +27,28 @@ const StockAdjustmentForm = () => {
     const [error, setError] = useState('');
 
     useEffect(() => {
-        const loadData = async () => {
-            try {
-                const whRes = await inventoryAPI.listWarehouses();
-                const prodRes = await inventoryAPI.listProducts();
+        const timer = setTimeout(() => {
+            const loadData = async () => {
+                try {
+                    const whRes = await inventoryAPI.listWarehouses();
+                    const prodRes = await inventoryAPI.listProducts();
 
-                setWarehouses(whRes.data || []);
-                setProducts(prodRes.data || []);
+                    setWarehouses(whRes.data || []);
+                    setProducts(prodRes.data || []);
 
-                if (whRes.data && whRes.data.length > 0) {
-                    setFormData(prev => ({ ...prev, warehouse_id: whRes.data[0].id }));
+                    if (whRes.data && whRes.data.length > 0) {
+                        setFormData(prev => ({ ...prev, warehouse_id: whRes.data[0].id }));
+                    }
+                } catch (err) {
+                    showToast(t('stock.adjustments.form.validation.error_load'), 'error');
+                } finally {
+                    setInitialLoad(false);
                 }
-            } catch (err) {
-                showToast(t('stock.adjustments.form.validation.error_load'), 'error');
-            }
-        };
-        loadData();
-    }, []);
+            };
+            loadData();
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
 
     const handleChange = (e) => {
         setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -77,6 +83,7 @@ const StockAdjustmentForm = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>

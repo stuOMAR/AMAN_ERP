@@ -26,6 +26,7 @@ const ReconciliationForm = () => {
     const [selectedStatementLine, setSelectedStatementLine] = useState(null);
     const [selectedLedgerLine, setSelectedLedgerLine] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [stmtTab, setStmtTab] = useState('unmatched'); // 'unmatched' | 'matched'
     const [showAddLine, setShowAddLine] = useState(false);
     const [showImport, setShowImport] = useState(false);
@@ -46,8 +47,11 @@ const ReconciliationForm = () => {
     });
 
     useEffect(() => {
-        if (id === 'new') { fetchAccounts(); }
-        else { fetchData(); }
+        const timer = setTimeout(() => {
+            if (id === 'new') { fetchAccounts(); }
+            else { fetchData(); }
+        }, 300)
+        return () => clearTimeout(timer);
     }, [id, currentBranch]);
 
     const fetchAccounts = async () => {
@@ -58,7 +62,7 @@ const ReconciliationForm = () => {
             setAccounts(banks);
             if (banks.length > 0) setFormData(prev => ({ ...prev, treasury_account_id: banks[0].id }));
         } catch (error) { console.error(error); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setInitialLoad(false); }
     };
 
     const fetchData = async () => {
@@ -72,7 +76,7 @@ const ReconciliationForm = () => {
             const resLedger = await reconciliationAPI.getLedger(id);
             setLedgerLines(resLedger.data);
         } catch (error) { console.error(error); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setInitialLoad(false); }
     };
 
     const handleCreate = async (e) => {
@@ -208,7 +212,7 @@ const ReconciliationForm = () => {
 
     const fmt = (n) => Number(n || 0).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
-    if (loading) return (
+    if (initialLoad) return (
         <PageLoading />
     );
 
@@ -292,6 +296,7 @@ const ReconciliationForm = () => {
 
     return (
         <div className="workspace fade-in" style={{ display: 'flex', flexDirection: 'column', height: 'calc(100vh - 60px)', padding: 0 }}>
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {/* === HEADER === */}
             <div style={{ 
                 padding: '16px 24px', borderBottom: '1px solid var(--border-color)',

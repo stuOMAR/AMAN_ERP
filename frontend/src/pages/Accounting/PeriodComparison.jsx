@@ -81,6 +81,7 @@ export default function PeriodComparison() {
     const [preset, setPreset] = useState('yoy')
     const [customPeriods, setCustomPeriods] = useState(getPresetPeriods('yoy'))
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [result, setResult] = useState(null)
 
     const handlePresetChange = (p) => {
@@ -134,6 +135,7 @@ export default function PeriodComparison() {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }, [reportType, customPeriods, currentBranch])
 
@@ -233,6 +235,7 @@ export default function PeriodComparison() {
             </div>
 
             {/* Results */}
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {loading && <PageLoading />}
 
             {!loading && result && (

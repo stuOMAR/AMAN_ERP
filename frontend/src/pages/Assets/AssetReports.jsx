@@ -13,6 +13,7 @@ function AssetReports() {
     const [activeTab, setActiveTab] = useState('register');
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState(null);
     const currency = getCurrency();
 
@@ -41,10 +42,16 @@ function AssetReports() {
             setError(t('errors.fetch_failed'));
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
-    useEffect(() => { fetchData(); }, [currentBranch, activeTab]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch, activeTab]);
 
     // Calculate totals
     const totalCost = data.reduce((s, r) => s + (r.cost || r.original_cost || 0), 0);
@@ -235,7 +242,8 @@ function AssetReports() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad && loading ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

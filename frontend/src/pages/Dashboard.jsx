@@ -30,6 +30,7 @@ const Dashboard = () => {
     const [finData, setFin]      = useState([]);
     const [prodData, setProds]   = useState([]);
     const [loading, setLoading]  = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const currency = stats?.display_currency || displayCurrency?.currency || user?.currency || '';
 
     const fetchAll = useCallback(async () => {
@@ -51,10 +52,15 @@ const Dashboard = () => {
             setFin(fR.data);
             setProds(pR.data);
         } catch (_) {}
-        finally { setLoading(false); }
+        finally { setLoading(false); setInitialLoad(false); }
     }, [currentBranch, user?.role]);
 
-    useEffect(() => { fetchAll(); }, [fetchAll]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchAll()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [fetchAll]);
 
     const greeting = () => {
         const h = new Date().getHours();
@@ -107,6 +113,7 @@ const Dashboard = () => {
 
             {/* Header */}
             <div className="workspace-header" style={{ marginBottom: '1.5rem' }}>
+                {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '0.75rem' }}>
                     <div>
                         <h1 className="workspace-title" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>

@@ -16,6 +16,7 @@ function DeliveryOrderForm() {
     const { currentBranch } = useBranch()
     const currency = getCurrency()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [salesOrders, setSalesOrders] = useState([])
     const [form, setForm] = useState({
         party_id: '', so_id: '', do_date: new Date().toISOString().split('T')[0],
@@ -24,9 +25,13 @@ function DeliveryOrderForm() {
     })
 
     useEffect(() => {
-        salesAPI.listOrders({ status: 'confirmed', branch_id: currentBranch?.id })
-            .then(res => setSalesOrders(res.data))
-            .catch(() => showToast(t('common.error'), 'error'))
+        const timer = setTimeout(() => {
+            salesAPI.listOrders({ status: 'confirmed', branch_id: currentBranch?.id })
+                .then(res => setSalesOrders(res.data))
+                .catch(() => showToast(t('common.error'), 'error'))
+                .finally(() => setInitialLoad(false))
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const handleSOChange = async (soId) => {
@@ -76,6 +81,7 @@ function DeliveryOrderForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">🚚 {t('delivery_orders.create_new')}</h1>

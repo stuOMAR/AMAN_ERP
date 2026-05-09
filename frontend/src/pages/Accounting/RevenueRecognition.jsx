@@ -19,6 +19,7 @@ function RevenueRecognition() {
     const [summary, setSummary] = useState(null)
     const [selectedSchedule, setSelectedSchedule] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [tab, setTab] = useState('list')
     const [showForm, setShowForm] = useState(false)
     const [form, setForm] = useState({
@@ -26,7 +27,12 @@ function RevenueRecognition() {
         start_date: '', end_date: '', method: 'straight_line'
     })
 
-    useEffect(() => { fetchData() }, [currentBranch])
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch])
 
     const fetchData = async () => {
         try {
@@ -43,6 +49,7 @@ function RevenueRecognition() {
             console.error('Failed to fetch revenue data', err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -101,10 +108,11 @@ function RevenueRecognition() {
         return map[method] || method
     }
 
-    if (loading) return <PageLoading />
+    if (initialLoad) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

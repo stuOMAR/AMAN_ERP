@@ -18,6 +18,7 @@ const PriceLists = () => {
     const [currencies, setCurrencies] = useState([]);
     const [branches, setBranches] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [showEditModal, setShowEditModal] = useState(false);
     const [showDeleteModal, setShowDeleteModal] = useState(false);
@@ -32,9 +33,12 @@ const PriceLists = () => {
     const availableBranches = currentBranch?.id ? branches.filter(b => b.id === currentBranch.id) : branches;
 
     useEffect(() => {
-        fetchPriceLists();
-        fetchCurrencies();
-        fetchBranches();
+        const timer = setTimeout(() => {
+            fetchPriceLists();
+            fetchCurrencies();
+            fetchBranches();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchPriceLists = async () => {
@@ -49,6 +53,7 @@ const PriceLists = () => {
             setPriceLists([]);
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -164,10 +169,11 @@ const PriceLists = () => {
         }
     };
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

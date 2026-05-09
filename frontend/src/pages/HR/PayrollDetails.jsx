@@ -25,6 +25,7 @@ const PayrollDetails = () => {
     const [period, setPeriod] = useState(null);
     const [entries, setEntries] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [processing, setProcessing] = useState(false);
 
     // Calculate totals grouped by currency
@@ -51,7 +52,10 @@ const PayrollDetails = () => {
     const hasMultiCurrency = useMemo(() => Object.keys(totalsByCurrency).length > 1, [totalsByCurrency]);
 
     useEffect(() => {
-        fetchData();
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id, currentBranch]);
 
     const fetchData = async () => {
@@ -75,6 +79,7 @@ const PayrollDetails = () => {
             toastEmitter.emit(t('common.error'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -106,7 +111,7 @@ const PayrollDetails = () => {
         }
     };
 
-    if (loading) return <PageLoading />;
+    if (initialLoad && !period) return <PageLoading />;
     if (!period) return <div className="page-center text-error">{t('hr.payroll.period_not_found', 'Payroll period not found')}</div>;
 
     const isDraft = period.status === 'draft';
@@ -276,6 +281,8 @@ const PayrollDetails = () => {
                     </table>
                 </div>
             </div>
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
         </div>
     );
 };

@@ -14,44 +14,50 @@ const AgingReport = () => {
     const { showToast } = useToast();
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [buckets, setBuckets] = useState([]);
     const currency = getCurrency();
     const { currentBranch } = useBranch();
 
     useEffect(() => {
-        const loadData = async () => {
-            if (!hasPermission('reports.view') && !hasPermission('sales.reports')) {
-                setLoading(false);
-                return;
-            }
-            try {
-                const branchId = currentBranch ? currentBranch.id : null;
-                const res = await reportsAPI.getAgingReport(branchId);
-                const rawData = res.data;
-                setData(rawData);
+        const timer = setTimeout(() => {
+            const loadData = async () => {
+                if (!hasPermission('reports.view') && !hasPermission('sales.reports')) {
+                    setLoading(false);
+                    setInitialLoad(false);
+                    return;
+                }
+                try {
+                    const branchId = currentBranch ? currentBranch.id : null;
+                    const res = await reportsAPI.getAgingReport(branchId);
+                    const rawData = res.data;
+                    setData(rawData);
 
-                // Aggregate buckets
-                const agg = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-                rawData.forEach(item => {
-                    if (agg[item.bucket] !== undefined) {
-                        agg[item.bucket] += item.amount;
-                    }
-                });
+                    // Aggregate buckets
+                    const agg = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
+                    rawData.forEach(item => {
+                        if (agg[item.bucket] !== undefined) {
+                            agg[item.bucket] += item.amount;
+                        }
+                    });
 
-                setBuckets(Object.keys(agg).map(key => ({
-                    name: key,
-                    amount: agg[key]
-                })));
-            } catch (err) {
-                showToast(t('common.error'), 'error');
-            } finally {
-                setLoading(false);
-            }
-        };
-        loadData();
+                    setBuckets(Object.keys(agg).map(key => ({
+                        name: key,
+                        amount: agg[key]
+                    })));
+                } catch (err) {
+                    showToast(t('common.error'), 'error');
+                } finally {
+                    setLoading(false);
+                    setInitialLoad(false);
+                }
+            };
+            loadData();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     const totalDue = buckets.reduce((a, b) => a + b.amount, 0);
 
@@ -131,6 +137,7 @@ const AgingReport = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

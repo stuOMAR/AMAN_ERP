@@ -16,6 +16,7 @@ const StockMovements = () => {
     const { showToast } = useToast();
     const [movements, setMovements] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [filters, setFilters] = useState({
         item_name: '',
         warehouse: '',
@@ -38,9 +39,13 @@ const StockMovements = () => {
                 showToast(t('stock.reports.movements.error_load'), 'error');
             } finally {
                 setLoading(false);
+                setInitialLoad(false);
             }
         };
-        fetchInitialData();
+        const timer = setTimeout(() => {
+            fetchInitialData();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const handleFilterChange = async (e) => {
@@ -94,6 +99,7 @@ const StockMovements = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

@@ -35,6 +35,7 @@ function ZakatCalculator() {
     const [result, setResult] = useState(null)
     const [postResult, setPostResult] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [posting, setPosting] = useState(false)
 
     const handleCalculate = async () => {

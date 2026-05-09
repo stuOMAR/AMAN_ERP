@@ -17,24 +17,29 @@ function ContractList() {
     const currency = getCurrency()
     const [contracts, setContracts] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState('')
     const [typeFilter, setTypeFilter] = useState('')
 
     useEffect(() => {
-        const fetchContracts = async () => {
-            try {
-                setLoading(true)
-                const response = await contractsAPI.listContracts({ branch_id: currentBranch?.id })
-                setContracts(response.data)
-            } catch (err) {
-                setError(t('common.error_loading'))
-            } finally {
-                setLoading(false)
+        const timer = setTimeout(() => {
+            const fetchContracts = async () => {
+                try {
+                    setLoading(true)
+                    const response = await contractsAPI.listContracts({ branch_id: currentBranch?.id })
+                    setContracts(response.data)
+                } catch (err) {
+                    setError(t('common.error_loading'))
+                } finally {
+                    setLoading(false)
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetchContracts()
+            fetchContracts()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, t])
 
     const getStatusBadge = (status) => {
@@ -103,6 +108,7 @@ function ContractList() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

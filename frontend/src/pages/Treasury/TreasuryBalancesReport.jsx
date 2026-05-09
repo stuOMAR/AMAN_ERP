@@ -13,6 +13,7 @@ function TreasuryBalancesReport() {
     const { currentBranch } = useBranch();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState(null);
     const currency = getCurrency();
     const [asOfDate, setAsOfDate] = useState(new Date().toISOString().split('T')[0]);
@@ -31,16 +32,23 @@ function TreasuryBalancesReport() {
             setError(t('errors.fetch_failed'));
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
-    useEffect(() => { fetchData(); }, [currentBranch, asOfDate]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer);
+    }, [currentBranch, asOfDate]);
 
     const cashAccounts = data?.accounts?.filter(a => a.account_type === 'cash') || [];
     const bankAccounts = data?.accounts?.filter(a => a.account_type === 'bank') || [];
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">
@@ -58,7 +66,7 @@ function TreasuryBalancesReport() {
                 </div>
             </div>
 
-            {loading ? (
+            {initialLoad ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

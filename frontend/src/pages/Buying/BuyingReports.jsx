@@ -14,6 +14,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 const BuyingReports = () => {
     const { t } = useTranslation();
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [summary, setSummary] = useState(null);
     const [trend, setTrend] = useState([]);
     const [topSuppliers, setTopSuppliers] = useState([]);
@@ -26,7 +27,10 @@ const BuyingReports = () => {
     });
 
     useEffect(() => {
-        fetchReports();
+        const timer = setTimeout(() => {
+            fetchReports();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, dates]);
 
     const fetchReports = async () => {
@@ -47,101 +51,15 @@ const BuyingReports = () => {
             showToast(t('common.error'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
-    if (loading) return <PageLoading />;
-
-    const trendChartOption = {
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'cross' },
-            formatter: (params) => {
-                const data = params[0];
-                return `${data.axisValue}<br/>${t('buying.reports.analytics.charts.purchases_series')}: <b>${formatNumber(data.value)} ${currency}</b>`;
-            }
-        },
-        legend: { data: [t('buying.reports.analytics.charts.purchases_series')], bottom: 0 },
-        grid: { left: '3%', right: '4%', bottom: '15%', top: '10%', containLabel: true },
-        xAxis: {
-            type: 'category',
-            data: trend.map(d => d.date),
-            axisLabel: { rotate: 45, fontSize: 10 }
-        },
-        yAxis: {
-            type: 'value',
-            axisLabel: { formatter: (val) => val >= 1000 ? `${val / 1000}K` : val }
-        },
-        series: [{
-            name: t('buying.reports.analytics.charts.purchases_series'),
-            type: 'line',
-            smooth: true,
-            data: trend.map(d => d.total),
-            areaStyle: {
-                color: {
-                    type: 'linear',
-                    x: 0, y: 0, x2: 0, y2: 1,
-                    colorStops: [
-                        { offset: 0, color: 'rgba(59, 130, 246, 0.4)' },
-                        { offset: 1, color: 'rgba(59, 130, 246, 0.05)' }
-                    ]
-                }
-            },
-            lineStyle: { color: '#3B82F6', width: 3 },
-            itemStyle: { color: '#3B82F6' },
-            symbol: 'circle',
-            symbolSize: 8
-        }],
-        toolbox: {
-            show: true,
-            feature: {
-                saveAsImage: { title: t('common.save') },
-                dataZoom: { title: { zoom: t('buying.reports.analytics.charts.zoom'), back: t('buying.reports.analytics.charts.back') } }
-            }
-        }
-    };
-
-    const suppliersChartOption = {
-        tooltip: {
-            trigger: 'axis',
-            axisPointer: { type: 'shadow' },
-            formatter: (params) => `${params[0].name}: <b>${formatNumber(params[0].value)} ${currency}</b>`
-        },
-        grid: { left: '3%', right: '4%', bottom: '3%', top: '10%', containLabel: true },
-        xAxis: { type: 'value' },
-        yAxis: {
-            type: 'category',
-            data: topSuppliers.map(s => s.name),
-            axisLabel: { fontSize: 11 }
-        },
-        series: [{
-            type: 'bar',
-            data: topSuppliers.map(s => s.value),
-            itemStyle: {
-                color: {
-                    type: 'linear',
-                    x: 0, y: 0, x2: 1, y2: 0,
-                    colorStops: [
-                        { offset: 0, color: '#3B82F6' },
-                        { offset: 1, color: '#6366F1' }
-                    ]
-                },
-                borderRadius: [0, 4, 4, 0]
-            },
-            label: {
-                show: true,
-                position: 'right',
-                formatter: (params) => formatNumber(params.value)
-            }
-        }],
-        toolbox: {
-            show: true,
-            feature: { saveAsImage: { title: t('common.save') } }
-        }
-    };
+    if (initialLoad && !summary) return <PageLoading />;
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

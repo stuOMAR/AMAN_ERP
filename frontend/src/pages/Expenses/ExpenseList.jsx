@@ -24,6 +24,7 @@ export default function ExpenseList() {
   const [expenses, setExpenses] = useState([]);
   const [summary, setSummary] = useState({});
   const [loading, setLoading] = useState(true);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
@@ -36,7 +37,10 @@ export default function ExpenseList() {
 
   useEffect(() => {
     if (!branchLoading) {
-      loadData();
+      const timer = setTimeout(() => {
+        loadData()
+      }, 300)
+      return () => clearTimeout(timer)
     }
   }, [currentBranch, branchLoading, filters]);
 
@@ -58,6 +62,7 @@ export default function ExpenseList() {
       showToast(t('expenses.errors.loadFailed'), 'error');
     } finally {
       setLoading(false);
+      setInitialLoad(false);
     }
   };
 
@@ -165,6 +170,7 @@ export default function ExpenseList() {
 
   return (
     <div className="workspace fade-in">
+      {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
       {/* Header */}
       <div className="workspace-header">
         <BackButton />

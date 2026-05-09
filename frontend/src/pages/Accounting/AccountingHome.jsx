@@ -12,9 +12,11 @@ function AccountingHome() {
     const { currentBranch, displayCurrency } = useBranch()
     const [stats, setStats] = useState({ total_income: 0, total_expenses: 0, net_profit: 0, cash_balance: 0 })
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const currency = stats.display_currency || displayCurrency?.currency || ''
 
     useEffect(() => {
+        const timer = setTimeout(() => {
         const fetchStats = async () => {
             if (!hasPermission('reports.view')) {
                 setLoading(false);
@@ -28,9 +30,12 @@ function AccountingHome() {
                 console.error("Failed to fetch accounting stats", err)
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
         fetchStats()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const metrics = [
@@ -134,13 +139,14 @@ function AccountingHome() {
                 </div>
             </div>
 
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {/* Metrics Section */}
             <div className="metrics-grid mb-6">
                 {metrics.map((metric, index) => (
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.label}</div>
                         <div className="metric-value">
-                            {!hasPermission('reports.view') ? '***' : (loading ? '...' : formatNumber(metric.value))} {hasPermission('reports.view') && <small>{currency}</small>}
+                            {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(metric.value))} {hasPermission('reports.view') && <small>{currency}</small>}
                         </div>
                     </div>
                 ))}

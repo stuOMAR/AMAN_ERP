@@ -64,6 +64,7 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
     const [endDate, setEndDate] = useState('');
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState(null);
 
     // Available dashboards menu
@@ -87,6 +88,7 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
             setError(err?.response?.data?.detail || (t('kpi.error_loading_data')));
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     }, [key, period, startDate, endDate, currentBranch]);
 
@@ -97,7 +99,12 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
         } catch (_) {}
     }, []);
 
-    useEffect(() => { fetchData(); }, [fetchData]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [fetchData]);
     useEffect(() => { fetchAvailable(); }, [fetchAvailable]);
 
     const handlePeriodChange = (p, s, e) => {
@@ -242,8 +249,9 @@ const RoleDashboard = ({ fixedRoleKey, backPath }) => {
                 </div>
             )}
 
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {/* Loading skeleton */}
-            {loading && !data && (
+            {initialLoad && loading && !data && (
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(220px, 1fr))', gap: '1rem', marginBottom: '1.5rem' }}>
                     {[1, 2, 3, 4, 5, 6].map(i => (
                         <div key={i} className="card animate-pulse" style={{ height: 120 }}>

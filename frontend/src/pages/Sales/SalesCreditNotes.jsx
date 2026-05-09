@@ -22,6 +22,7 @@ function SalesCreditNotes() {
 
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [total, setTotal] = useState(0)
     const [page, setPage] = useState(1)
     const [search, setSearch] = useState('')
@@ -56,10 +57,14 @@ function SalesCreditNotes() {
             showToast(t('common.error'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }, [page, search, statusFilter, currentBranch])
 
-    useEffect(() => { fetchList() }, [fetchList])
+    useEffect(() => {
+        const timer = setTimeout(() => { fetchList() }, 300)
+        return () => clearTimeout(timer)
+    }, [fetchList])
 
     const loadCreateData = async () => {
         try {
@@ -175,10 +180,11 @@ function SalesCreditNotes() {
         return <span className={`badge ${map[s] || 'badge-secondary'}`}>{labels[s] || s}</span>
     }
 
-    if (loading && !items.length) return <PageLoading />
+    if (initialLoad && !items.length) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
