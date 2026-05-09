@@ -16,7 +16,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -192,7 +192,11 @@ def create_purchase_order(
             
             # Calculate Totals (TASK-027: unified via compute_invoice_totals)
             from utils.accounting import compute_invoice_totals, compute_line_amounts
-    
+
+            validated_branch_id = validate_branch_access(current_user, po.branch_id)
+            if validated_branch_id is None:
+                raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+
             lines_data = []
             for item in po.items:
                 # Validate quantities and prices
@@ -208,7 +212,7 @@ def create_purchase_order(
                 if line_discount > line_total_gross:
                     raise HTTPException(status_code=400, detail=f"الخصم ({line_discount}) يتجاوز إجمالي السطر ({line_total_gross}): {item.description}")
     
-                tax_info = resolve_line_tax(po.branch_id, item.product_id, db, po.order_date, customer_id=po.supplier_id)
+                tax_info = resolve_line_tax(validated_branch_id, item.product_id, db, po.order_date, customer_id=po.supplier_id)
                 la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
                 lines_data.append({
                     "product_id": item.product_id,
@@ -260,7 +264,7 @@ def create_purchase_order(
             """), {
                 "num": po_num,
                 "supp": po.supplier_id,
-                "bid": po.branch_id,
+                "bid": validated_branch_id,
                 "date": po.order_date,
                 "exp": po.expected_date,
                 "sub": subtotal,

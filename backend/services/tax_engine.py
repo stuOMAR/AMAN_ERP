@@ -437,6 +437,13 @@ def resolve_line_tax(
     if as_of_date is None:
         as_of_date = _date.today()
 
+    # Compute branch country once for reuse
+    _branch = db.execute(
+        text("SELECT country_code FROM branches WHERE id = :bid"),
+        {"bid": branch_id},
+    ).fetchone()
+    _branch_country = (_branch.country_code or "SA").upper() if _branch else "SA"
+
     # ── Step 0: check customer exemption ──────────────────────────────────
     if customer_id:
         customer = db.execute(
@@ -489,20 +496,29 @@ def resolve_line_tax(
 
     # Priority 4: Product has a specific tax assigned
     if product and product.tax_rate_id and product.tax_is_active:
-        return {
-            "tax_rate_id": product.tax_rate_id,
-            "tax_rate": Decimal(str(product.rate_value)),
-            "tax_name": product.tax_name,
-        }
+        rate_row = db.execute(text("""
+            SELECT id, rate_value, tax_name, tax_code, country_code, effective_from, effective_to
+            FROM tax_rates WHERE id = :rid AND is_active = TRUE
+        """), {"rid": product.tax_rate_id}).fetchone()
+        if rate_row:
+            # Validate date range
+            if rate_row.effective_from and rate_row.effective_from > as_of_date:
+                pass  # not yet effective, fall through
+            elif rate_row.effective_to and rate_row.effective_to < as_of_date:
+                pass  # expired, fall through
+            # Validate country
+            elif rate_row.country_code:
+                branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
+                branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
+                if rate_row.country_code.upper() != branch_cc:
+                    pass  # wrong country, fall through
+                else:
+                    return {"tax_rate_id": rate_row.id, "tax_rate": Decimal(str(rate_row.rate_value)), "tax_name": rate_row.tax_name}
+            else:
+                return {"tax_rate_id": rate_row.id, "tax_rate": Decimal(str(rate_row.rate_value)), "tax_name": rate_row.tax_name}
 
     # Priority 5: Product has a tax classification → lookup per-country rate
     if product and product.tax_classification_id:
-        branch = db.execute(
-            text("SELECT country_code FROM branches WHERE id = :bid"),
-            {"bid": branch_id},
-        ).fetchone()
-        branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
-
         class_rate = db.execute(
             text("""
                 SELECT tcr.tax_rate_id, tcr.tax_group_id,
@@ -516,13 +532,13 @@ def resolve_line_tax(
                 ORDER BY tcr.effective_from DESC
                 LIMIT 1
             """),
-            {"clid": product.tax_classification_id, "cc": branch_cc, "dt": as_of_date},
+            {"clid": product.tax_classification_id, "cc": _branch_country, "dt": as_of_date},
         ).fetchone()
 
         if class_rate:
             # If classification points to a tax group, resolve it
             if class_rate.tax_group_id:
-                taxes = _resolve_tax_group(class_rate.tax_group_id, db)
+                taxes = _resolve_tax_group(class_rate.tax_group_id, db, as_of_date, _branch_country)
                 if taxes:
                     combined = sum((t["tax_rate"] for t in taxes), Decimal("0"))
                     return {
@@ -550,8 +566,8 @@ def resolve_line_tax(
     }
 
 
-def _resolve_tax_group(tax_group_id: int, db) -> List[Dict[str, Any]]:
-    """Internal helper: fetch all active taxes in a tax group."""
+def _resolve_tax_group(tax_group_id: int, db, as_of_date=None, branch_country=None) -> List[Dict[str, Any]]:
+    """Internal helper: fetch all active taxes in a tax group, filtered by date and country."""
     group = db.execute(
         text("SELECT tax_ids FROM tax_groups WHERE id = :gid AND is_active = TRUE"),
         {"gid": tax_group_id},
@@ -564,16 +580,25 @@ def _resolve_tax_group(tax_group_id: int, db) -> List[Dict[str, Any]]:
     taxes = []
     for tid in tax_ids:
         tax_row = db.execute(
-            text("SELECT id, tax_code, tax_name, rate_value FROM tax_rates WHERE id = :tid AND is_active = TRUE"),
+            text("SELECT id, tax_code, tax_name, rate_value, country_code, effective_from, effective_to FROM tax_rates WHERE id = :tid AND is_active = TRUE"),
             {"tid": tid},
         ).fetchone()
-        if tax_row:
-            taxes.append({
-                "tax_rate_id": tax_row.id,
-                "tax_rate": Decimal(str(tax_row.rate_value)),
-                "tax_name": tax_row.tax_name,
-                "tax_code": tax_row.tax_code,
-            })
+        if not tax_row:
+            continue
+        if as_of_date:
+            if tax_row.effective_from and tax_row.effective_from > as_of_date:
+                continue
+            if tax_row.effective_to and tax_row.effective_to < as_of_date:
+                continue
+        if tax_row.country_code and branch_country:
+            if tax_row.country_code.upper() != branch_country.upper():
+                continue
+        taxes.append({
+            "tax_rate_id": tax_row.id,
+            "tax_rate": Decimal(str(tax_row.rate_value)),
+            "tax_name": tax_row.tax_name,
+            "tax_code": tax_row.tax_code,
+        })
     return taxes
 
 
@@ -609,6 +634,13 @@ def resolve_line_tax_group(
     """
     if as_of_date is None:
         as_of_date = _date.today()
+
+    # Compute branch country once for reuse
+    _branch = db.execute(
+        text("SELECT country_code FROM branches WHERE id = :bid"),
+        {"bid": branch_id},
+    ).fetchone()
+    _branch_country = (_branch.country_code or "SA").upper() if _branch else "SA"
 
     # ── Step 0: check customer exemption (same as resolve_line_tax) ─────
     if customer_id:
@@ -652,27 +684,34 @@ def resolve_line_tax_group(
 
     # ── Step 2: multi-tax group ─────────────────────────────────────────
     if product and product.tax_group_id:
-        taxes = _resolve_tax_group(product.tax_group_id, db)
+        taxes = _resolve_tax_group(product.tax_group_id, db, as_of_date, _branch_country)
         if taxes:
             return taxes
 
-    # ── Step 3: single tax (product-specific) ───────────────────────────
+    # ── Step 3: single tax (product-specific) — validate date/country ────
     if product and product.tax_rate_id and product.tax_is_active:
-        return [{
-            "tax_rate_id": product.tax_rate_id,
-            "tax_rate": Decimal(str(product.rate_value)),
-            "tax_name": product.tax_name,
-            "tax_code": None,
-        }]
+        rate_row = db.execute(text("""
+            SELECT id, rate_value, tax_name, tax_code, country_code, effective_from, effective_to
+            FROM tax_rates WHERE id = :rid AND is_active = TRUE
+        """), {"rid": product.tax_rate_id}).fetchone()
+        if rate_row:
+            _skip = False
+            if rate_row.effective_from and rate_row.effective_from > as_of_date:
+                _skip = True
+            elif rate_row.effective_to and rate_row.effective_to < as_of_date:
+                _skip = True
+            elif rate_row.country_code and rate_row.country_code.upper() != _branch_country:
+                _skip = True
+            if not _skip:
+                return [{
+                    "tax_rate_id": rate_row.id,
+                    "tax_rate": Decimal(str(rate_row.rate_value)),
+                    "tax_name": rate_row.tax_name,
+                    "tax_code": rate_row.tax_code,
+                }]
 
     # ── Step 4: tax classification → lookup per-country rate ────────────
     if product and product.tax_classification_id:
-        branch = db.execute(
-            text("SELECT country_code FROM branches WHERE id = :bid"),
-            {"bid": branch_id},
-        ).fetchone()
-        branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
-
         class_rate = db.execute(
             text("""
                 SELECT tcr.tax_rate_id, tcr.tax_group_id,
@@ -686,12 +725,12 @@ def resolve_line_tax_group(
                 ORDER BY tcr.effective_from DESC
                 LIMIT 1
             """),
-            {"clid": product.tax_classification_id, "cc": branch_cc, "dt": as_of_date},
+            {"clid": product.tax_classification_id, "cc": _branch_country, "dt": as_of_date},
         ).fetchone()
 
         if class_rate:
             if class_rate.tax_group_id:
-                taxes = _resolve_tax_group(class_rate.tax_group_id, db)
+                taxes = _resolve_tax_group(class_rate.tax_group_id, db, as_of_date, _branch_country)
                 if taxes:
                     return taxes
             if class_rate.tax_rate_id:

@@ -17,9 +17,11 @@ export const externalAPI = {
     generateZatcaKeypair: () => api.post('/external/zatca/generate-keypair'),
     verifyZatca: (invoiceId) => api.get(`/external/zatca/verify/${invoiceId}`),
     // WHT
-    listWhtRates: () => api.get('/external/wht/rates'),
+    listWhtRates: (params) => api.get('/external/wht/rates', { params }),
     createWhtRate: (data) => api.post('/external/wht/rates', data),
     calculateWht: (data) => api.post('/external/wht/calculate', data),
     listWhtTransactions: (params) => api.get('/external/wht/transactions', { params }),
-    createWhtTransaction: (data) => api.post('/external/wht/transactions', data),
+    createWhtTransaction: (data, idempotencyKey) => api.post('/external/wht/transactions', data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
 }

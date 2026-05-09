@@ -13,22 +13,23 @@ from decimal import Decimal, ROUND_HALF_UP
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 from utils.accounting import compute_line_amounts, compute_invoice_totals
+from utils.tax_precision import money_str, rate_str
 
 router = APIRouter(prefix="/calculate", tags=["Calculator"])
 
 
 class LineInput(BaseModel):
-    quantity: float = 0
-    unit_price: float = 0
-    tax_rate: float = 0
-    discount: float = 0  # fixed amount (not percentage)
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    tax_rate: Decimal = Decimal("0")
+    discount: Decimal = Decimal("0")  # fixed amount (not percentage)
 
 
 class InvoicePreviewRequest(BaseModel):
     lines: List[LineInput]
-    header_discount_pct: float = 0  # percentage
-    markup_amount: float = 0  # fixed amount
-    paid_amount: float = 0
+    header_discount_pct: Decimal = Decimal("0")  # percentage
+    markup_amount: Decimal = Decimal("0")  # fixed amount
+    paid_amount: Decimal = Decimal("0")
     currency: str = "SAR"
 
 
@@ -74,36 +75,36 @@ def calculate_invoice_totals(
         la = compute_line_amounts(ln.quantity, ln.unit_price, ln.tax_rate, ln.discount, discount_is_percent=False)
         line_details.append({
             "index": i,
-            "quantity": float(ln.quantity),
-            "unit_price": float(ln.unit_price),
-            "tax_rate": float(ln.tax_rate),
-            "discount": float(ln.discount),
-            "subtotal": float(la["subtotal"]),
-            "discount_amount": float(la["discount_amount"]),
-            "taxable": float(la["taxable"]),
-            "tax_amount": float(la["tax_amount"]),
-            "line_total": float(la["line_total"]),
+            "quantity": money_str(ln.quantity),
+            "unit_price": money_str(ln.unit_price),
+            "tax_rate": rate_str(ln.tax_rate),
+            "discount": money_str(ln.discount),
+            "subtotal": money_str(la["subtotal"]),
+            "discount_amount": money_str(la["discount_amount"]),
+            "taxable": money_str(la["taxable"]),
+            "tax_amount": money_str(la["tax_amount"]),
+            "line_total": money_str(la["line_total"]),
         })
 
-    grand = float(totals["grand_total"])
-    paid = float(req.paid_amount)
+    grand = totals["grand_total"]
+    paid = Decimal(str(req.paid_amount or 0))
 
     return {
-        "subtotal": float(totals["subtotal"]),
-        "total_discount": float(totals["total_discount"]),
-        "total_tax": float(totals["total_tax"]),
-        "grand_total": grand,
-        "paid_amount": paid,
-        "remaining_balance": grand - paid,
+        "subtotal": money_str(totals["subtotal"]),
+        "total_discount": money_str(totals["total_discount"]),
+        "total_tax": money_str(totals["total_tax"]),
+        "grand_total": money_str(grand),
+        "paid_amount": money_str(paid),
+        "remaining_balance": money_str(grand - paid),
         "currency": req.currency,
         "lines": line_details,
     }
 
 
 class ContractLineInput(BaseModel):
-    quantity: float = 0
-    unit_price: float = 0
-    tax_rate: float = 0
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    tax_rate: Decimal = Decimal("0")
 
 
 class ContractPreviewRequest(BaseModel):
@@ -132,18 +133,18 @@ def calculate_contract_totals(
         la = compute_line_amounts(ln.quantity, ln.unit_price, ln.tax_rate, 0, discount_is_percent=False)
         line_details.append({
             "index": i,
-            "quantity": float(ln.quantity),
-            "unit_price": float(ln.unit_price),
-            "tax_rate": float(ln.tax_rate),
-            "subtotal": float(la["subtotal"]),
-            "tax_amount": float(la["tax_amount"]),
-            "line_total": float(la["line_total"]),
+            "quantity": money_str(ln.quantity),
+            "unit_price": money_str(ln.unit_price),
+            "tax_rate": rate_str(ln.tax_rate),
+            "subtotal": money_str(la["subtotal"]),
+            "tax_amount": money_str(la["tax_amount"]),
+            "line_total": money_str(la["line_total"]),
         })
 
     return {
-        "subtotal": float(totals["subtotal"]),
-        "total_tax": float(totals["total_tax"]),
-        "grand_total": float(totals["grand_total"]),
+        "subtotal": money_str(totals["subtotal"]),
+        "total_tax": money_str(totals["total_tax"]),
+        "grand_total": money_str(totals["grand_total"]),
         "currency": req.currency,
         "lines": line_details,
     }

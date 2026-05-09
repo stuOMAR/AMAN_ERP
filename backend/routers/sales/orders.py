@@ -10,7 +10,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from .schemas import SOCreate
 from services.tax_engine import resolve_line_tax
 
@@ -111,13 +111,16 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         so_num = generate_sequential_number(db, f"SO-{datetime.now().year}", "sales_orders", "so_number")
 
         # 2. Calculate Totals (tax resolved via engine)
+        validated_branch_id = validate_branch_access(current_user, data.branch_id)
+        if validated_branch_id is None:
+            raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
         subtotal = Decimal('0')
         total_tax = Decimal('0')
         total_discount = Decimal('0')
         items_to_save = []
 
         for item in data.items:
-            tax_info = resolve_line_tax(data.branch_id, item.product_id, db, data.order_date, customer_id=data.customer_id)
+            tax_info = resolve_line_tax(validated_branch_id, item.product_id, db, data.order_date, customer_id=data.customer_id)
             line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
             taxable = line_subtotal - _dec(item.discount)
             line_tax = taxable * (_dec(tax_info["tax_rate"]) / Decimal('100'))
@@ -153,7 +156,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
             "num": so_num, "cust": data.customer_id, "odate": data.order_date,
             "edate": data.expected_delivery_date, "sub": subtotal, "tax": total_tax,
             "disc": total_discount, "total": grand_total, "notes": data.notes, "user": current_user.id,
-            "bid": data.branch_id, "whid": data.warehouse_id, "qid": data.quotation_id,
+            "bid": validated_branch_id, "whid": data.warehouse_id, "qid": data.quotation_id,
             "currency": data.currency, "exchange_rate": data.exchange_rate,
             "party_site_id": data.party_site_id,
         }).fetchone()

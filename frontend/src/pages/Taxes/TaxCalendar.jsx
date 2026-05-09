@@ -6,6 +6,9 @@ import '../../components/ModuleStyles.css';
 import BackButton from '../../components/common/BackButton';
 import DateInput from '../../components/common/DateInput';
 import { useToast } from '../../context/ToastContext'
+import { PageLoading } from '../../components/common/LoadingStates';
+import DataTable from '../../components/common/DataTable';
+import { useBranch } from '../../context/BranchContext';
 
 const TAX_TYPES = [
     { value: 'vat', label: 'ضريبة القيمة المضافة' },
@@ -27,6 +30,7 @@ const STATUS_COLORS = {
 function TaxCalendar() {
     const { t } = useTranslation();
   const { showToast } = useToast()
+    const { currentBranch } = useBranch()
     const [items, setItems] = useState([]);
     const [summary, setSummary] = useState({});
     const [loading, setLoading] = useState(true);
@@ -45,9 +49,10 @@ function TaxCalendar() {
             const params = {};
             if (filter.status) params.status = filter.status;
             if (filter.tax_type) params.tax_type = filter.tax_type;
+            if (currentBranch?.id) params.branch_id = currentBranch.id;
             const [itemsRes, summaryRes] = await Promise.all([
                 taxesAPI.listCalendar(params),
-                taxesAPI.getCalendarSummary()
+                taxesAPI.getCalendarSummary(params)
             ]);
             setItems(itemsRes.data || []);
             setSummary(summaryRes.data || {});
@@ -57,7 +62,7 @@ function TaxCalendar() {
         } finally {
             setLoading(false);
         }
-    }, [filter, showToast, t]);
+    }, [currentBranch?.id, filter, showToast, t]);
 
     useEffect(() => { loadData(); }, [loadData]);
 
@@ -84,9 +89,9 @@ function TaxCalendar() {
     const handleSave = async () => {
         try {
             if (editItem) {
-                await taxesAPI.updateCalendarItem(editItem.id, form);
+                await taxesAPI.updateCalendarItem(editItem.id, { ...form, branch_id: currentBranch?.id || null });
             } else {
-                await taxesAPI.createCalendarItem(form);
+                await taxesAPI.createCalendarItem({ ...form, branch_id: currentBranch?.id || null });
             }
             setShowModal(false);
             loadData();
@@ -121,6 +126,57 @@ function TaxCalendar() {
         now.setHours(0, 0, 0, 0);
         return Math.ceil((d - now) / 86400000);
     };
+
+    const columns = [
+        {
+            key: 'title',
+            label: t('tax_calendar.event', 'الحدث'),
+            render: (value, item) => (
+                <div>
+                    <div style={{ fontWeight: 600 }}>{value}</div>
+                    {item.notes && <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{item.notes}</div>}
+                </div>
+            ),
+        },
+        { key: 'tax_type', label: t('tax_calendar.type', 'النوع'), render: (v) => TAX_TYPES.find(t => t.value === v)?.label || v || '-' },
+        { key: 'due_date', label: t('tax_calendar.due_date', 'تاريخ الاستحقاق'), render: (v) => formatShortDate(v) },
+        {
+            key: 'days_left',
+            label: t('tax_calendar.days_left', 'الأيام المتبقية'),
+            render: (_, item) => {
+                const days = getDaysUntil(item.due_date);
+                if (item.is_completed) return '✓';
+                return (
+                    <span style={{ color: days < 0 ? '#dc2626' : days <= 7 ? '#d97706' : '#2563eb', fontWeight: 600 }}>
+                        {days < 0 ? `متأخر ${Math.abs(days)} يوم` : days === 0 ? 'اليوم' : `${days} يوم`}
+                    </span>
+                );
+            },
+        },
+        { key: 'is_recurring', label: t('tax_calendar.recurring', 'متكرر'), render: (v, item) => v ? `كل ${item.recurrence_months} أشهر` : '-' },
+        {
+            key: 'status',
+            label: t('common.status_title', 'الحالة'),
+            render: (v) => {
+                const st = STATUS_COLORS[v] || STATUS_COLORS.pending;
+                return <span style={{ background: st.bg, color: st.color, padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600 }}>{st.label}</span>;
+            },
+        },
+        {
+            key: 'actions',
+            label: t('common.actions', 'الإجراءات'),
+            sortable: false,
+            searchable: false,
+            exportable: false,
+            render: (_, item) => (
+                <div style={{ display: 'flex', gap: 4 }}>
+                    {!item.is_completed && <button className="btn btn-sm btn-success" onClick={() => handleComplete(item)} title="إكمال">✓</button>}
+                    <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} title="تعديل">تعديل</button>
+                    <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item)} title="حذف">حذف</button>
+                </div>
+            ),
+        },
+    ];
 
     return (
         <div className="workspace fade-in">
@@ -177,67 +233,17 @@ function TaxCalendar() {
 
             {/* Calendar Table */}
             <div className="section-card">
-                {loading ? (
-                    <div style={{ textAlign: 'center', padding: 40 }}>⏳ {t('common.loading', 'جاري التحميل...')}</div>
-                ) : items.length === 0 ? (
-                    <div style={{ textAlign: 'center', padding: 40, color: '#888' }}>
-                        📅 {t('tax_calendar.empty', 'لا توجد مواعيد ضريبية')}
-                        <br /><button className="btn btn-primary" style={{ marginTop: 12 }} onClick={openNew}>{t('taxes.add_first_appointment')}</button>
-                    </div>
-                ) : (
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th>{t('tax_calendar.event', 'الحدث')}</th>
-                                <th>{t('tax_calendar.type', 'النوع')}</th>
-                                <th>{t('tax_calendar.due_date', 'تاريخ الاستحقاق')}</th>
-                                <th>{t('tax_calendar.days_left', 'الأيام المتبقية')}</th>
-                                <th>{t('tax_calendar.recurring', 'متكرر')}</th>
-                                <th>{t('common.status_title', 'الحالة')}</th>
-                                <th>{t('common.actions', 'الإجراءات')}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {items.map(item => {
-                                const days = getDaysUntil(item.due_date);
-                                const st = STATUS_COLORS[item.status] || STATUS_COLORS.pending;
-                                return (
-                                    <tr key={item.id}>
-                                        <td>
-                                            <div style={{ fontWeight: 600 }}>{item.title}</div>
-                                            {item.notes && <div style={{ fontSize: 12, color: '#888', marginTop: 2 }}>{item.notes}</div>}
-                                        </td>
-                                        <td>{TAX_TYPES.find(t => t.value === item.tax_type)?.label || item.tax_type || '-'}</td>
-                                        <td>{formatShortDate(item.due_date)}</td>
-                                        <td>
-                                            {item.is_completed ? '✅' : (
-                                                <span style={{ color: days < 0 ? '#dc2626' : days <= 7 ? '#d97706' : '#2563eb', fontWeight: 600 }}>
-                                                    {days < 0 ? `متأخر ${Math.abs(days)} يوم` : days === 0 ? 'اليوم' : `${days} يوم`}
-                                                </span>
-                                            )}
-                                        </td>
-                                        <td>{item.is_recurring ? `🔄 كل ${item.recurrence_months} أشهر` : '-'}</td>
-                                        <td>
-                                            <span style={{
-                                                background: st.bg, color: st.color, padding: '3px 10px',
-                                                borderRadius: 12, fontSize: 12, fontWeight: 600
-                                            }}>{st.label}</span>
-                                        </td>
-                                        <td>
-                                            <div style={{ display: 'flex', gap: 4 }}>
-                                                {!item.is_completed && (
-                                                    <button className="btn btn-sm btn-success" onClick={() => handleComplete(item)} title="إكمال">✓</button>
-                                                )}
-                                                <button className="btn btn-sm btn-secondary" onClick={() => openEdit(item)} title="تعديل">✏️</button>
-                                                <button className="btn btn-sm btn-danger" onClick={() => handleDelete(item)} title="حذف">🗑️</button>
-                                            </div>
-                                        </td>
-                                    </tr>
-                                );
-                            })}
-                        </tbody>
-                    </table>
-                )}
+                <DataTable
+                    columns={columns}
+                    data={items}
+                    loading={loading}
+                    rowKey="id"
+                    searchable
+                    exportable
+                    exportName="tax-calendar"
+                    emptyTitle={t('tax_calendar.empty', 'لا توجد مواعيد ضريبية')}
+                    emptyAction={{ label: t('taxes.add_first_appointment'), onClick: openNew }}
+                />
             </div>
 
             {/* Next Due Alert */}

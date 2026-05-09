@@ -8,6 +8,7 @@ import { formatShortDate } from '../../utils/dateUtils'
 import { ShieldCheck, Globe, Building2, FileText, CheckCircle } from 'lucide-react'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading, Spinner } from '../../components/common/LoadingStates'
+import DataTable from '../../components/common/DataTable'
 
 const COUNTRY_FLAGS = {
     SA: '🇸🇦', SY: '🇸🇾', AE: '🇦🇪', EG: '🇪🇬', JO: '🇯🇴',
@@ -37,8 +38,9 @@ function TaxCompliance() {
     const fetchOverview = useCallback(async () => {
         try {
             setLoading(true)
+            const params = currentBranch?.id ? { branch_id: currentBranch.id } : undefined
             const [overviewRes, countriesRes] = await Promise.all([
-                taxComplianceAPI.getOverview(),
+                taxComplianceAPI.getOverview(params),
                 taxComplianceAPI.listCountries()
             ])
             setOverview(overviewRes.data)
@@ -49,7 +51,7 @@ function TaxCompliance() {
         } finally {
             setLoading(false)
         }
-    }, [showToast, t])
+    }, [currentBranch?.id, showToast, t])
 
     const fetchRegimes = useCallback(async (cc) => {
         try {
@@ -134,6 +136,49 @@ function TaxCompliance() {
 
     if (loading && !overview) return <PageLoading />
 
+    const branchRows = (overview?.jurisdictions || []).flatMap(j =>
+        (j.branches || []).map(b => ({
+            ...b,
+            row_id: `${j.country_code}-${b.id}`,
+            country_code: j.country_code,
+            country_label: `${COUNTRY_FLAGS[j.country_code] || ''} ${j.country_code}`,
+        }))
+    )
+    const branchColumns = [
+        { key: 'name', label: t('tax_compliance.branch_name'), render: (v, row) => v || row.branch_name },
+        { key: 'country_label', label: t('tax_compliance.country') },
+        { key: 'configured_taxes', label: t('tax_compliance.configured_taxes'), render: (v) => v || 0 },
+        { key: 'registered_taxes', label: t('tax_compliance.registered_taxes'), render: (v) => v || 0 },
+    ]
+    const regimeColumns = [
+        { key: 'tax_type', label: t('tax_compliance.tax_type'), render: (v) => <code style={{ padding: '2px 6px', background: 'var(--bg-secondary)', borderRadius: 4, fontSize: 12 }}>{v}</code> },
+        { key: i18n.language === 'ar' ? 'name_ar' : 'name_en', label: t(i18n.language === 'ar' ? 'tax_compliance.name_ar' : 'tax_compliance.name_en') },
+        { key: 'default_rate', label: t('tax_compliance.default_rate'), render: (v) => <span style={{ fontWeight: 600 }}>{v}%</span> },
+        { key: 'is_required', label: t('tax_compliance.required'), render: (v) => v ? <span style={{ color: 'var(--error)', fontWeight: 600 }}>✓ {t('tax_compliance.mandatory')}</span> : <span style={{ color: 'var(--text-muted)' }}>{t('tax_compliance.optional')}</span> },
+        { key: 'applies_to', label: t('tax_compliance.applies_to'), render: (v) => t(`tax_compliance.applies_${v}`) || v },
+        { key: 'filing_frequency', label: t('tax_compliance.filing_freq'), render: (v) => t(`tax_compliance.freq_${v}`) || v },
+    ]
+    const reportBoxColumns = [
+        { key: 'box_number', label: '#', width: '60px', render: (v, row) => v || row.number || '' },
+        { key: 'description', label: t('tax_compliance.description'), render: (v, row) => i18n.language === 'ar' ? (row.description_ar || v) : (row.description_en || v) },
+        { key: 'taxable_amount', label: t('tax_compliance.taxable_amount'), headerStyle: { textAlign: 'end' }, style: { textAlign: 'end' }, render: (v) => v != null ? formatNumber(v) : '—' },
+        { key: 'tax_amount', label: t('tax_compliance.tax_amount'), headerStyle: { textAlign: 'end' }, style: { textAlign: 'end' }, render: (v, row) => v != null ? formatNumber(v) : (row.amount != null ? formatNumber(row.amount) : '—') },
+    ]
+    const companySettingsRows = companySettings ? (Array.isArray(companySettings) ? companySettings : [companySettings]) : []
+    const companySettingsColumns = [
+        { key: 'country_code', label: t('tax_compliance.country'), render: (v) => `${COUNTRY_FLAGS[v] || ''} ${v}` },
+        { key: 'tax_registration_number', label: t('tax_compliance.tax_number'), render: (v) => v || '—' },
+        { key: 'fiscal_year_start', label: t('tax_compliance.fiscal_year_start'), render: (v) => v || '01-01' },
+        { key: 'is_active', label: t('tax_compliance.is_active'), render: (v) => v ? <CheckCircle size={16} style={{ color: 'var(--success)' }} /> : '—' },
+    ]
+    const branchSettingsRows = branchSettings?.settings || branchSettings?.regimes || []
+    const branchSettingsColumns = [
+        { key: i18n.language === 'ar' ? 'name_ar' : 'name_en', label: t('tax_compliance.regime') },
+        { key: 'effective_rate', label: t('tax_compliance.effective_rate'), render: (v, row) => <span style={{ fontWeight: 600 }}>{v ?? row.override_rate ?? row.default_rate}%</span> },
+        { key: 'is_active', label: t('tax_compliance.is_active'), render: (v) => v ? <CheckCircle size={16} style={{ color: 'var(--success)' }} /> : '—' },
+        { key: 'registration_number', label: t('tax_compliance.registration_number'), render: (v) => v || '—' },
+    ]
+
     return (
         <div className="workspace fade-in">
             {/* Header */}
@@ -208,33 +253,15 @@ function TaxCompliance() {
                     {/* Branch Status */}
                     <div className="card">
                         <h3 className="section-title">{t('tax_compliance.branch_compliance_status')}</h3>
-                        <div className="table-container mt-3">
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>{t('tax_compliance.branch_name')}</th>
-                                        <th>{t('tax_compliance.country')}</th>
-                                        <th>{t('tax_compliance.configured_taxes')}</th>
-                                        <th>{t('tax_compliance.registered_taxes')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(overview.jurisdictions || []).flatMap(j =>
-                                        (j.branches || []).map(b => (
-                                            <tr key={`${j.country_code}-${b.id}`}>
-                                                <td>{b.name || b.branch_name}</td>
-                                                <td>{COUNTRY_FLAGS[j.country_code] || ''} {j.country_code}</td>
-                                                <td>{b.configured_taxes || 0}</td>
-                                                <td>{b.registered_taxes || 0}</td>
-                                            </tr>
-                                        ))
-                                    )}
-                                    {(!overview.jurisdictions || overview.jurisdictions.flatMap(j => j.branches || []).length === 0) && (
-                                        <tr><td colSpan={4} className="text-muted text-center">{t('tax_compliance.no_branches')}</td></tr>
-                                    )}
-                                </tbody>
-                            </table>
-                        </div>
+                        <DataTable
+                            columns={branchColumns}
+                            data={branchRows}
+                            rowKey="row_id"
+                            searchable
+                            exportable
+                            exportName="tax-compliance-branches"
+                            emptyTitle={t('tax_compliance.no_branches')}
+                        />
                     </div>
                 </div>
             )}
@@ -261,38 +288,15 @@ function TaxCompliance() {
                         </div>
 
                         {selectedCountry && (
-                            <div className="table-container">
-                                <table className="data-table">
-                                    <thead>
-                                        <tr>
-                                            <th>{t('tax_compliance.tax_type')}</th>
-                                            <th>{t(i18n.language === 'ar' ? 'tax_compliance.name_ar' : 'tax_compliance.name_en')}</th>
-                                            <th>{t('tax_compliance.default_rate')}</th>
-                                            <th>{t('tax_compliance.required')}</th>
-                                            <th>{t('tax_compliance.applies_to')}</th>
-                                            <th>{t('tax_compliance.filing_freq')}</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {regimes.map(r => (
-                                            <tr key={r.id}>
-                                                <td><code style={{ padding: '2px 6px', background: 'var(--bg-secondary)', borderRadius: '4px', fontSize: '12px' }}>{r.tax_type}</code></td>
-                                                <td>{i18n.language === 'ar' ? r.name_ar : r.name_en}</td>
-                                                <td style={{ fontWeight: 600 }}>{r.default_rate}%</td>
-                                                <td>{r.is_required ?
-                                                    <span style={{ color: 'var(--error)', fontWeight: 600 }}>✓ {t('tax_compliance.mandatory')}</span> :
-                                                    <span style={{ color: 'var(--text-muted)' }}>{t('tax_compliance.optional')}</span>
-                                                }</td>
-                                                <td>{t(`tax_compliance.applies_${r.applies_to}`) || r.applies_to}</td>
-                                                <td>{t(`tax_compliance.freq_${r.filing_frequency}`) || r.filing_frequency}</td>
-                                            </tr>
-                                        ))}
-                                        {regimes.length === 0 && (
-                                            <tr><td colSpan={6} className="text-muted text-center">{t('tax_compliance.no_regimes')}</td></tr>
-                                        )}
-                                    </tbody>
-                                </table>
-                            </div>
+                            <DataTable
+                                columns={regimeColumns}
+                                data={regimes}
+                                rowKey="id"
+                                searchable
+                                exportable
+                                exportName={`tax-regimes-${selectedCountry}`}
+                                emptyTitle={t('tax_compliance.no_regimes')}
+                            />
                         )}
                     </div>
                 </div>
@@ -352,35 +356,22 @@ function TaxCompliance() {
                                         <div><strong>{t('tax_compliance.company')}:</strong> {reportData.company_name}</div>
                                         {reportData.tax_number && <div><strong>{t('tax_compliance.tax_number')}:</strong> {reportData.tax_number}</div>}
                                         {reportData.period && <div><strong>{t('tax_compliance.period')}:</strong> {reportData.period}</div>}
-                                        {reportData.currency && <div><strong>{t('tax_compliance.currency')}:</strong> {reportData.currency}</div>}
+                                        {(reportData.display_currency || reportData.currency) && <div><strong>{t('tax_compliance.currency')}:</strong> {reportData.display_currency || reportData.currency}</div>}
+                                        {reportData.display_currency_mode && <div><strong>{t('taxes.currency_mode', 'نطاق العملة')}:</strong> {reportData.display_currency_mode}</div>}
                                     </div>
                                 </div>
                             )}
 
                             {/* Boxes / Line items */}
                             {reportData.boxes && (
-                                <div className="table-container">
-                                    <table className="data-table">
-                                        <thead>
-                                            <tr>
-                                                <th style={{ width: '60px' }}>#</th>
-                                                <th>{t('tax_compliance.description')}</th>
-                                                <th style={{ width: '150px', textAlign: 'end' }}>{t('tax_compliance.taxable_amount')}</th>
-                                                <th style={{ width: '150px', textAlign: 'end' }}>{t('tax_compliance.tax_amount')}</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {reportData.boxes.map((box, i) => (
-                                                <tr key={i} style={box.is_total ? { fontWeight: 700, background: 'var(--bg-secondary)' } : {}}>
-                                                    <td>{box.box_number || box.number || (i + 1)}</td>
-                                                    <td>{i18n.language === 'ar' ? (box.description_ar || box.description) : (box.description_en || box.description)}</td>
-                                                    <td style={{ textAlign: 'end' }}>{box.taxable_amount != null ? formatNumber(box.taxable_amount) : '—'}</td>
-                                                    <td style={{ textAlign: 'end' }}>{box.tax_amount != null ? formatNumber(box.tax_amount) : (box.amount != null ? formatNumber(box.amount) : '—')}</td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <DataTable
+                                    columns={reportBoxColumns}
+                                    data={reportData.boxes.map((box, i) => ({ ...box, row_id: box.box_number || box.number || i + 1 }))}
+                                    rowKey="row_id"
+                                    searchable
+                                    exportable
+                                    exportName={`tax-report-${reportType || 'report'}-${reportYear}`}
+                                />
                             )}
 
                             {/* Summary totals */}
@@ -391,7 +382,7 @@ function TaxCompliance() {
                                         {Object.entries(reportData.summary).map(([key, val]) => (
                                             <div key={key}>
                                                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t(`tax_compliance.summary_${key}`) || key.replace(/_/g, ' ')}</div>
-                                                <div style={{ fontSize: '18px', fontWeight: 700 }}>{typeof val === 'number' ? formatNumber(val) : val}</div>
+                                                <div style={{ fontSize: '18px', fontWeight: 700 }}>{typeof val === 'number' || (!Number.isNaN(Number(val)) && val !== null && val !== '') ? formatNumber(val) : String(val)}</div>
                                             </div>
                                         ))}
                                     </div>
@@ -407,28 +398,14 @@ function TaxCompliance() {
                 <div className="mt-4">
                     <div className="card">
                         <h3 className="section-title">{t('tax_compliance.company_tax_settings')}</h3>
-                        <div className="table-container mt-3">
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>{t('tax_compliance.country')}</th>
-                                        <th>{t('tax_compliance.tax_number')}</th>
-                                        <th>{t('tax_compliance.fiscal_year_start')}</th>
-                                        <th>{t('tax_compliance.is_active')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {(Array.isArray(companySettings) ? companySettings : [companySettings]).map((cs, i) => (
-                                        <tr key={i}>
-                                            <td>{COUNTRY_FLAGS[cs.country_code]} {cs.country_code}</td>
-                                            <td>{cs.tax_registration_number || '—'}</td>
-                                            <td>{cs.fiscal_year_start || '01-01'}</td>
-                                            <td>{cs.is_active ? <CheckCircle size={16} style={{ color: 'var(--success)' }} /> : '—'}</td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                        <DataTable
+                            columns={companySettingsColumns}
+                            data={companySettingsRows.map((row, i) => ({ ...row, row_id: `${row.country_code || 'country'}-${i}` }))}
+                            rowKey="row_id"
+                            searchable
+                            exportable
+                            exportName="tax-company-settings"
+                        />
                     </div>
                 </div>
             )}
@@ -440,7 +417,7 @@ function TaxCompliance() {
                         <h3 className="section-title">
                             <Building2 size={18} style={{ display: 'inline', marginInlineEnd: '8px' }} />
                             {t('tax_compliance.branch_tax_settings')}
-                            {currentBranch && <span style={{ fontWeight: 400, fontSize: '14px', color: 'var(--text-muted)', marginInlineStart: '8px' }}>— {currentBranch.name}</span>}
+                            {currentBranch && <span style={{ fontWeight: 400, fontSize: '14px', color: 'var(--text-muted)', marginInlineStart: '8px' }}>— {currentBranch.branch_name || currentBranch.name}</span>}
                         </h3>
                         {!currentBranch ? (
                             <p className="text-muted mt-3">{t('tax_compliance.select_branch_first')}</p>
@@ -449,31 +426,15 @@ function TaxCompliance() {
                                 <div style={{ background: 'var(--bg-secondary)', padding: '12px 16px', borderRadius: '8px', marginBottom: '16px' }}>
                                     <strong>{t('tax_compliance.jurisdiction')}:</strong> {COUNTRY_FLAGS[branchSettings.jurisdiction] || ''} {branchSettings.jurisdiction}
                                 </div>
-                                <div className="table-container">
-                                    <table className="data-table">
-                                        <thead>
-                                            <tr>
-                                                <th>{t('tax_compliance.regime')}</th>
-                                                <th>{t('tax_compliance.effective_rate')}</th>
-                                                <th>{t('tax_compliance.is_active')}</th>
-                                                <th>{t('tax_compliance.registration_number')}</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {(branchSettings.settings || branchSettings.regimes || []).map((s, i) => (
-                                                <tr key={i}>
-                                                    <td>{i18n.language === 'ar' ? s.name_ar : s.name_en}</td>
-                                                    <td style={{ fontWeight: 600 }}>{s.effective_rate ?? s.override_rate ?? s.default_rate}%</td>
-                                                    <td>{s.is_active ? <CheckCircle size={16} style={{ color: 'var(--success)' }} /> : '—'}</td>
-                                                    <td>{s.registration_number || '—'}</td>
-                                                </tr>
-                                            ))}
-                                            {(!branchSettings.settings?.length && !branchSettings.regimes?.length) && (
-                                                <tr><td colSpan={4} className="text-muted text-center">{t('tax_compliance.no_branch_settings')}</td></tr>
-                                            )}
-                                        </tbody>
-                                    </table>
-                                </div>
+                                <DataTable
+                                    columns={branchSettingsColumns}
+                                    data={branchSettingsRows.map((row, i) => ({ ...row, row_id: row.id || i }))}
+                                    rowKey="row_id"
+                                    searchable
+                                    exportable
+                                    exportName={`tax-branch-settings-${currentBranch.id}`}
+                                    emptyTitle={t('tax_compliance.no_branch_settings')}
+                                />
                             </div>
                         ) : (
                             <PageLoading />

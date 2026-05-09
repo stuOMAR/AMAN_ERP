@@ -17,6 +17,7 @@ from utils.permissions import require_permission, validate_branch_access, requir
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.tax_precision import rate_str
 from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
@@ -52,7 +53,7 @@ def list_tax_groups(current_user: dict = Depends(get_current_user)):
                     taxes = db.execute(text(f"SELECT id, tax_name, rate_value FROM tax_rates WHERE id IN ({placeholders})"), id_params).fetchall()  # noqa: sql-lint
                     item["taxes"] = [dict(t._mapping) for t in taxes]
                     combined_rate = sum((_dec(t.rate_value) for t in taxes), Decimal("0"))
-                    item["combined_rate"] = float(combined_rate.quantize(_D4, ROUND_HALF_UP))
+                    item["combined_rate"] = rate_str(combined_rate)
                 else:
                     item["taxes"] = []
                     item["combined_rate"] = 0
@@ -99,4 +100,3 @@ def create_tax_group(request: Request, data: TaxGroupCreate, current_user: dict 
 
 
 # ==================== TAX RETURNS (الإقرارات الضريبية) ====================
-

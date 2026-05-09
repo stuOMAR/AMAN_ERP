@@ -2,6 +2,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional
 from datetime import date
+from decimal import Decimal
 
 
 class TaxRateCreate(BaseModel):
@@ -9,7 +10,7 @@ class TaxRateCreate(BaseModel):
     tax_name: str = Field(..., min_length=1, max_length=255)
     tax_name_en: Optional[str] = None
     rate_type: str = "percentage"
-    rate_value: float = 0
+    rate_value: Decimal = Decimal("0")
     country_code: Optional[str] = None
     description: Optional[str] = None
     effective_from: Optional[date] = None
@@ -20,7 +21,7 @@ class TaxRateCreate(BaseModel):
 class TaxRateUpdate(BaseModel):
     tax_name: Optional[str] = None
     tax_name_en: Optional[str] = None
-    rate_value: Optional[float] = None
+    rate_value: Optional[Decimal] = None
     country_code: Optional[str] = None
     description: Optional[str] = None
     effective_from: Optional[date] = None
@@ -49,7 +50,7 @@ class TaxReturnCreate(BaseModel):
 class TaxPaymentCreate(BaseModel):
     tax_return_id: int
     payment_date: date
-    amount: float
+    amount: Decimal
     payment_method: str = "bank_transfer"
     reference: Optional[str] = None
     notes: Optional[str] = None

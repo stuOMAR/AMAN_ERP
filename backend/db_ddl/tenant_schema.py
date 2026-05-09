@@ -2214,24 +2214,47 @@ def get_financial_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'draft',
         branch_id INTEGER REFERENCES branches(id),
         jurisdiction_code VARCHAR(2),
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        display_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
+        idempotency_key VARCHAR(120),
+        journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_returns_idempotency
+        ON tax_returns (idempotency_key) WHERE idempotency_key IS NOT NULL;
     
     CREATE TABLE IF NOT EXISTS tax_payments (
         id SERIAL PRIMARY KEY,
         payment_number VARCHAR(50) UNIQUE,
         tax_return_id INTEGER REFERENCES tax_returns(id),
+        branch_id INTEGER REFERENCES branches(id),
+        treasury_account_id INTEGER REFERENCES treasury_accounts(id),
         payment_date DATE NOT NULL,
         amount DECIMAL(18, 4) NOT NULL,
         payment_method VARCHAR(50),
         reference VARCHAR(100),
         status VARCHAR(20) DEFAULT 'pending',
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
+        journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        idempotency_key VARCHAR(120),
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_payments_idempotency
+        ON tax_payments (idempotency_key) WHERE idempotency_key IS NOT NULL;
     
     -- ===== TAX COMPLIANCE TABLES (3) =====
     CREATE TABLE IF NOT EXISTS tax_regimes (
@@ -3872,23 +3895,24 @@ def get_security_tables_sql() -> str:
         name VARCHAR(100) NOT NULL,
         name_ar VARCHAR(100),
         rate DECIMAL(5,2) NOT NULL,
+        country_code VARCHAR(5),
         category VARCHAR(50) DEFAULT 'general',
         description TEXT,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
-    INSERT INTO wht_rates (name, name_ar, rate, category) 
+    INSERT INTO wht_rates (name, name_ar, rate, country_code, category)
     SELECT * FROM (VALUES
-        ('Services - Resident', 'خدمات - مقيم', 5.00, 'services'),
-        ('Services - Non-Resident', 'خدمات - غير مقيم', 15.00, 'services'),
-        ('Rent', 'إيجار', 5.00, 'rent'),
-        ('Consulting', 'استشارات', 5.00, 'consulting'),
-        ('Royalties', 'حقوق الملكية', 15.00, 'royalties'),
-        ('Insurance', 'تأمين', 5.00, 'insurance'),
-        ('International Transport', 'نقل دولي', 5.00, 'transport'),
-        ('Dividend', 'أرباح الأسهم', 5.00, 'dividend')
-    ) AS v(name, name_ar, rate, category)
+        ('Services - Resident', 'خدمات - مقيم', 5.00, 'SA', 'services'),
+        ('Services - Non-Resident', 'خدمات - غير مقيم', 15.00, 'SA', 'services'),
+        ('Rent', 'إيجار', 5.00, 'SA', 'rent'),
+        ('Consulting', 'استشارات', 5.00, 'SA', 'consulting'),
+        ('Royalties', 'حقوق الملكية', 15.00, 'SA', 'royalties'),
+        ('Insurance', 'تأمين', 5.00, 'SA', 'insurance'),
+        ('International Transport', 'نقل دولي', 5.00, 'SA', 'transport'),
+        ('Dividend', 'أرباح الأسهم', 5.00, 'SA', 'dividend')
+    ) AS v(name, name_ar, rate, country_code, category)
     WHERE NOT EXISTS (SELECT 1 FROM wht_rates LIMIT 1);
 
     CREATE TABLE IF NOT EXISTS wht_transactions (
@@ -3896,18 +3920,28 @@ def get_security_tables_sql() -> str:
         invoice_id INT,
         payment_id INT,
         supplier_id INT,
+        branch_id INTEGER REFERENCES branches(id),
         wht_rate_id INT REFERENCES wht_rates(id),
         gross_amount DECIMAL(18,2) NOT NULL,
         wht_rate DECIMAL(5,2) NOT NULL,
         wht_amount DECIMAL(18,2) NOT NULL,
         net_amount DECIMAL(18,2) NOT NULL,
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         certificate_number VARCHAR(50),
         status VARCHAR(20) DEFAULT 'pending',
         journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        idempotency_key VARCHAR(120),
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
         period_date DATE,
         created_by INT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_wht_transactions_idempotency
+        ON wht_transactions (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS sales_opportunities (
         id SERIAL PRIMARY KEY,
@@ -3982,16 +4016,20 @@ def get_security_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         title VARCHAR(200) NOT NULL,
         tax_type VARCHAR(50),
+        branch_id INTEGER REFERENCES branches(id),
         due_date DATE NOT NULL,
         reminder_days JSONB DEFAULT '[7, 3, 1]',
         is_recurring BOOLEAN DEFAULT FALSE,
         recurrence_months INT DEFAULT 3,
         is_completed BOOLEAN DEFAULT FALSE,
+        is_active BOOLEAN DEFAULT TRUE,
+        completed_at TIMESTAMPTZ,
         notes TEXT,
         recurrence_pattern VARCHAR(20),
         status VARCHAR(20) DEFAULT 'pending',
         created_by INT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     -- ========== CRM Advanced: Customer Segmentation (moved before marketing_campaigns) ==========
@@ -4610,18 +4648,31 @@ def get_system_completion_tables_sql() -> str:
     -- ===== ZAKAT CALCULATIONS =====
     CREATE TABLE IF NOT EXISTS zakat_calculations (
         id SERIAL PRIMARY KEY,
-        fiscal_year INTEGER NOT NULL UNIQUE,
+        fiscal_year INTEGER NOT NULL,
+        branch_id INTEGER REFERENCES branches(id),
+        branch_scope_key VARCHAR(160) NOT NULL DEFAULT 'all:company',
+        branch_ids JSONB,
         method VARCHAR(30) DEFAULT 'net_assets',
         zakat_base NUMERIC(15,4) DEFAULT 0,
-        zakat_rate NUMERIC(8,4) DEFAULT 2.5,
+        zakat_rate NUMERIC(8,4) DEFAULT 0,
         zakat_amount NUMERIC(15,4) DEFAULT 0,
         details JSONB DEFAULT '{}',
+        calculation_details JSONB DEFAULT '{}',
+        calculation_version VARCHAR(40),
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        idempotency_key VARCHAR(120),
         status VARCHAR(20) DEFAULT 'calculated',
         journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
         notes TEXT,
         calculated_by INTEGER REFERENCES company_users(id),
-        calculated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        calculated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_zakat_calculations_year_scope
+        ON zakat_calculations (fiscal_year, branch_scope_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_zakat_calculations_idempotency
+        ON zakat_calculations (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     -- ===== FISCAL PERIOD LOCKS =====
     CREATE TABLE IF NOT EXISTS fiscal_period_locks (
@@ -6917,6 +6968,10 @@ def get_audit_security_finance_tables_sql() -> str:
         ('expenses.auto_approve_threshold', '0'),
         ('expenses.cost_center_policy', 'warn'),
         ('recurring.review_threshold_default', '0')
+    ON CONFLICT (setting_key) DO NOTHING;
+
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES ('tax.zakat.gregorian_rate', '2.57764')
     ON CONFLICT (setting_key) DO NOTHING;
     """
 

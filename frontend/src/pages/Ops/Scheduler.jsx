@@ -1,4 +1,4 @@
-"T264: Scheduler monitoring page — auto-refresh + Run now button."
+// T264: Scheduler monitoring page - auto-refresh + Run now button.
 
 import React, { useState, useEffect } from 'react';
 import useApi from '../../hooks/useApi';

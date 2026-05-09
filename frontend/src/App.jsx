@@ -2,7 +2,6 @@ import React, { useEffect, useState, Suspense } from 'react'
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { useToast } from './context/ToastContext'
-import { useBranch } from './context/BranchContext'
 import { isAuthenticated, hasPermission, getUser, bootstrapAuth } from './utils/auth'
 import { hasIndustryTypeSet } from './hooks/useIndustryType'
 import { requestManager } from './utils/requestManager'
@@ -486,8 +485,6 @@ function PermissionDeniedRedirect() {
 function App() {
     const { t, i18n } = useTranslation();
     const location = useLocation();
-    const { currentBranch } = useBranch();
-    const branchRouteKey = currentBranch?.id ? `branch-${currentBranch.id}` : 'branch-all';
     // SEC-T2.8: on first render the in-memory access token is empty after a full
     // page reload. We silently refresh against the HttpOnly cookie before rendering
     // any route so authenticated users don't bounce through /login.
@@ -536,7 +533,7 @@ function App() {
             </a>
             {showFloatingThemeToggle && <FloatingThemeToggle />}
             <ErrorBoundary>
-            <Routes key={branchRouteKey}>
+            <Routes>
                 <Route path="/login" element={isAuthenticated() ? <Navigate to="/dashboard" /> : <Login />} />
                 <Route path="/register" element={<Register />} />
                 <Route path="/forgot-password" element={<ForgotPassword />} />

@@ -16,8 +16,11 @@ from pydantic import BaseModel, Field, validator
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter, branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.audit import log_activity
+from utils.currency_display import display_currency_fields, resolve_display_currency
+from utils.tax_reporting import adjusted_line_taxable_cte
+from utils.tax_precision import CALCULATION_VERSION, display_money_str, money_str, rate_str
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
@@ -29,6 +32,25 @@ _D2 = Decimal("0.01")
 
 def _dec(v: Any) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _adjusted_tax_totals(
+    db,
+    params: dict,
+    extra_where: str,
+    tax_predicate: str,
+    *,
+    join_products: bool = False,
+):
+    joins = "LEFT JOIN products p ON p.id = al.product_id" if join_products else ""
+    return db.execute(text(f"""
+        {adjusted_line_taxable_cte(extra_where)}
+        SELECT COALESCE(SUM(al.adjusted_taxable_base), 0) as amount,
+               COALESCE(SUM(al.adjusted_taxable_base * (COALESCE(al.tax_rate, 0) / 100)), 0) as tax
+        FROM adjusted_lines al
+        {joins}
+        WHERE {tax_predicate}
+    """), params).fetchone()
 
 # ═══════════════════════════════════════════════════════════════════════════════
 # Pydantic Schemas
@@ -122,7 +144,7 @@ def list_tax_regimes(
         return [dict(r._mapping) for r in rows]
 
 
-@router.get("/countries", response_model=Dict[str, Any])
+@router.get("/countries", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
 def list_supported_countries(current_user: dict = Depends(get_current_user)):
     """جلب قائمة الدول المدعومة مع خصائصها الضريبية"""
     with transactional(current_user.company_id) as db:
@@ -153,7 +175,7 @@ def list_supported_countries(current_user: dict = Depends(get_current_user)):
         for rr in regime_rows:
             regimes_by_country.setdefault(rr.country_code, []).append({
                 "tax_type": rr.tax_type,
-                "default_rate": float(rr.default_rate or 0),
+                "default_rate": rate_str(rr.default_rate or 0),
             })
 
         # Report endpoint mapping
@@ -247,7 +269,7 @@ def list_classifications_for_country(
                 "country_code": cc,
                 "tax_rate_id": r.tax_rate_id,
                 "tax_group_id": r.tax_group_id,
-                "tax_rate": float(r.tax_rate or 0),
+                "tax_rate": rate_str(r.tax_rate or 0),
                 "tax_name": r.tax_name or ("Exempt" if r.classification_id and not r.tax_rate_id else None),
                 "tax_code": r.tax_code,
             }
@@ -261,7 +283,7 @@ def list_classifications_for_country(
                     WHERE tg.id = :gid AND tg.is_active = TRUE AND tr.is_active = TRUE
                 """), {"gid": r.tax_group_id}).fetchall()
                 entry["tax_group_rates"] = [
-                    {"rate": float(g.rate_value), "name": g.tax_name, "code": g.tax_code}
+                    {"rate": rate_str(g.rate_value), "name": g.tax_name, "code": g.tax_code}
                     for g in group_rows
                 ]
             result.append(entry)
@@ -278,6 +300,7 @@ class ClassificationCreate(BaseModel):
 
 @router.post("/classifications", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
 def create_tax_classification(
+    request: Request,
     data: ClassificationCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -300,6 +323,11 @@ def create_tax_classification(
             "desc": data.description,
         }).fetchone()
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="tax_compliance.classification.create",
+                     resource_type="tax_classification", resource_id=str(result.id),
+                     details={"code": result.code}, request=request)
+
         return dict(result._mapping)
 
 
@@ -314,6 +342,7 @@ class ClassificationUpdate(BaseModel):
 @router.put("/classifications/{classification_id}", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
 def update_tax_classification(
     classification_id: int,
+    request: Request,
     data: ClassificationUpdate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -352,12 +381,18 @@ def update_tax_classification(
             RETURNING id, code, name_ar, name_en, description, is_active
         """), params).fetchone()
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="tax_compliance.classification.update",
+                     resource_type="tax_classification", resource_id=str(classification_id),
+                     details={"fields": [k for k in params.keys() if k != "id"]}, request=request)
+
         return dict(result._mapping)
 
 
 @router.delete("/classifications/{classification_id}", dependencies=[Depends(require_permission(["taxes.manage"]))])
 def delete_tax_classification(
     classification_id: int,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """حذف تصنيف ضريبي (soft delete)"""
@@ -371,6 +406,11 @@ def delete_tax_classification(
         db.execute(text(
             "UPDATE tax_classifications SET is_active = FALSE WHERE id = :id"
         ), {"id": classification_id})
+
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="tax_compliance.classification.deactivate",
+                     resource_type="tax_classification", resource_id=str(classification_id),
+                     details={"code": existing.code}, request=request)
 
         return {"message": f"Classification '{existing.code}' deactivated", "id": classification_id}
 
@@ -410,6 +450,7 @@ class ClassificationRateCreate(BaseModel):
 @router.post("/classifications/{classification_id}/rates", dependencies=[Depends(require_permission(["taxes.manage"]))], response_model=Dict[str, Any])
 def add_classification_rate(
     classification_id: int,
+    request: Request,
     data: ClassificationRateCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -440,6 +481,12 @@ def add_classification_rate(
             "gid": data.tax_group_id,
         }).fetchone()
 
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="tax_compliance.classification_rate.create",
+                     resource_type="tax_classification_rate", resource_id=str(result.id),
+                     details={"classification_id": classification_id, "country_code": data.country_code.upper()},
+                     request=request)
+
         return dict(result._mapping)
 
 
@@ -447,15 +494,23 @@ def add_classification_rate(
 def delete_classification_rate(
     classification_id: int,
     rate_link_id: int,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """حذف ربط معدل ضريبي بتصنيف"""
+    """إيقاف ربط معدل ضريبي بتصنيف بدون حذف فعلي"""
     with transactional(current_user.company_id) as db:
-        db.execute(text("""
-            DELETE FROM tax_classification_rates
-            WHERE id = :rid AND classification_id = :cid
+        result = db.execute(text("""
+            UPDATE tax_classification_rates
+               SET effective_to = CURRENT_DATE
+             WHERE id = :rid AND classification_id = :cid
         """), {"rid": rate_link_id, "cid": classification_id})
-        return {"message": "Rate link deleted"}
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Rate link not found")
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="tax_compliance.classification_rate.deactivate",
+                     resource_type="tax_classification_rate", resource_id=str(rate_link_id),
+                     details={"classification_id": classification_id}, request=request)
+        return {"message": "Rate link deactivated", "soft_deleted": True}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -535,6 +590,7 @@ def update_company_tax_settings(
 def get_branch_tax_settings(branch_id: int, current_user: dict = Depends(get_current_user)):
     """جلب إعدادات الضرائب لفرع معين مع أنظمة الدولة المطبقة"""
     with transactional(current_user.company_id) as db:
+        branch_id = validate_branch_access(current_user, branch_id)
         # Get branch info
         branch = db.execute(text(
             "SELECT id, branch_name, branch_name_en, country, country_code FROM branches WHERE id = :id"
@@ -579,8 +635,9 @@ def update_branch_tax_setting(
     """تحديث إعداد ضريبي لفرع معين"""
     db = get_db_connection(current_user.company_id)
     try:
+        branch_id = validate_branch_access(current_user, data.branch_id)
         # Verify branch exists
-        branch = db.execute(text("SELECT 1 FROM branches WHERE id = :id"), {"id": data.branch_id}).fetchone()
+        branch = db.execute(text("SELECT 1 FROM branches WHERE id = :id"), {"id": branch_id}).fetchone()
         if not branch:
             raise HTTPException(**http_error(404, "branch_not_found"))
 
@@ -602,7 +659,7 @@ def update_branch_tax_setting(
                 exemption_reason = :reason, exemption_certificate = :cert,
                 exemption_expiry = :expiry, updated_at = :now
         """), {
-            "bid": data.branch_id, "rid": data.tax_regime_id,
+            "bid": branch_id, "rid": data.tax_regime_id,
             "reg": data.is_registered, "num": data.registration_number,
             "rate": data.custom_rate, "exempt": data.is_exempt,
             "reason": data.exemption_reason, "cert": data.exemption_certificate,
@@ -613,7 +670,7 @@ def update_branch_tax_setting(
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="tax_compliance.branch_settings.update",
                      resource_type="branch_tax_settings",
-                     resource_id=f"{data.branch_id}-{data.tax_regime_id}",
+                     resource_id=f"{branch_id}-{data.tax_regime_id}",
                      details=data.model_dump(mode="json"), request=request)
 
         return {"success": True, "message": "تم تحديث إعدادات الضرائب للفرع بنجاح"}
@@ -641,6 +698,7 @@ def get_applicable_taxes(branch_id: int, current_user: dict = Depends(get_curren
     """
     with transactional(current_user.company_id) as db:
         from services.tax_engine import get_active_tax_for_branch
+        branch_id = validate_branch_access(current_user, branch_id)
 
         branch = db.execute(text(
             "SELECT id, branch_name, country_code FROM branches WHERE id = :id"
@@ -718,64 +776,79 @@ def saudi_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         params = {"start": period_start, "end": period_end}
         branch_filter = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
 
-        # ── Box 1: Standard-rated sales (15%) ────────────────────────────────
+        # ── Box 1: Standard-rated sales (15%) — use adjusted line CTE ────────
+        from utils.tax_reporting import adjusted_line_taxable_cte
+        box1_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box1 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box1_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
+                   COALESCE(SUM(adjusted_taxable_base * (tax_rate / 100)), 0) as tax
+            FROM adjusted_lines
+            WHERE tax_rate > 0
         """), params).fetchone()
 
         # ── Box 2: Zero-rated sales ──────────────────────────────────────────
+        box2_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box2 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate = 0
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box2_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount
+            FROM adjusted_lines
+            WHERE tax_rate = 0
         """), params).fetchone()
 
         # ── Box 3: Exempt sales ──────────────────────────────────────────────
+        box3_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box3 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate IS NULL
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box3_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount
+            FROM adjusted_lines
+            WHERE tax_rate IS NULL
         """), params).fetchone()
 
-        # ── Box 4: Standard-rated purchases ──────────────────────────────────
+        # ── Box 4: Standard-rated purchases — use adjusted line CTE ─────────
+        box4_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box4 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box4_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
+                   COALESCE(SUM(adjusted_taxable_base * (tax_rate / 100)), 0) as tax
+            FROM adjusted_lines
+            WHERE tax_rate > 0
         """), params).fetchone()
 
-        # ── Box 6: Sales returns deductions ──────────────────────────────────
+        # ── Box 6: Sales returns deductions — use adjusted line CTE ─────────
+        box6_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'sales_return' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box6 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales_return' AND i.status NOT IN ('draft', 'cancelled')
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box6_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
+                   COALESCE(SUM(adjusted_taxable_base * (tax_rate / 100)), 0) as tax
+            FROM adjusted_lines
         """), params).fetchone()
 
-        # ── Box 7: Purchase returns deductions ───────────────────────────────
+        # ── Box 7: Purchase returns deductions — use adjusted line CTE ──────
+        box7_cte = adjusted_line_taxable_cte(
+            f"AND i.invoice_type = 'purchase_return' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+        )
         box7 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft', 'cancelled')
-            AND i.invoice_date BETWEEN :start AND :end {branch_filter}
+            {box7_cte}
+            SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
+                   COALESCE(SUM(adjusted_taxable_base * (tax_rate / 100)), 0) as tax
+            FROM adjusted_lines
         """), params).fetchone()
 
         box1_vat = _dec(box1.tax)
@@ -792,6 +865,7 @@ def saudi_vat_return_report(
         )).fetchone()
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "sa_vat_return",
             "report_name_ar": "إقرار ضريبة القيمة المضافة — ZATCA",
             "report_name_en": "VAT Return — ZATCA Format",
@@ -801,53 +875,53 @@ def saudi_vat_return_report(
                 "box_1": {
                     "label_ar": "المبيعات الخاضعة للضريبة بالنسبة الأساسية",
                     "label_en": "Standard Rated Sales",
-                    "amount": float(box1.amount or 0),
-                    "adjustment": float(box6.amount or 0),
-                    "vat": float((box1_vat - box6_vat).quantize(_D2, ROUND_HALF_UP))
+                    "amount": display_money_str(box1.amount or 0, display_meta),
+                    "adjustment": display_money_str(box6.amount or 0, display_meta),
+                    "vat": display_money_str((box1_vat - box6_vat).quantize(_D2, ROUND_HALF_UP), display_meta)
                 },
                 "box_2": {
                     "label_ar": "المبيعات الخاضعة لنسبة صفرية",
                     "label_en": "Zero-Rated Sales",
-                    "amount": float(box2.amount or 0),
-                    "vat": 0
+                    "amount": display_money_str(box2.amount or 0, display_meta),
+                    "vat": "0.00"
                 },
                 "box_3": {
                     "label_ar": "المبيعات المعفاة",
                     "label_en": "Exempt Sales",
-                    "amount": float(box3.amount or 0),
-                    "vat": 0
+                    "amount": display_money_str(box3.amount or 0, display_meta),
+                    "vat": "0.00"
                 },
                 "box_4": {
                     "label_ar": "المشتريات الخاضعة للضريبة بالنسبة الأساسية",
                     "label_en": "Standard Rated Purchases",
-                    "amount": float(box4.amount or 0),
-                    "adjustment": float(box7.amount or 0),
-                    "vat": float((box4_vat - box7_vat).quantize(_D2, ROUND_HALF_UP))
+                    "amount": display_money_str(box4.amount or 0, display_meta),
+                    "adjustment": display_money_str(box7.amount or 0, display_meta),
+                    "vat": display_money_str((box4_vat - box7_vat).quantize(_D2, ROUND_HALF_UP), display_meta)
                 },
                 "box_5": {
                     "label_ar": "الاستيراد الخاضع لآلية الاحتساب العكسي",
                     "label_en": "Imports subject to Reverse Charge",
-                    "amount": 0,
-                    "vat": 0
+                    "amount": "0.00",
+                    "vat": "0.00"
                 },
                 "box_6": {
                     "label_ar": "تصحيحات من فترات سابقة (المبيعات)",
                     "label_en": "Corrections (Sales)",
-                    "amount": float(box6.amount or 0),
-                    "vat": float(box6.tax or 0)
+                    "amount": display_money_str(box6.amount or 0, display_meta),
+                    "vat": display_money_str(box6.tax or 0, display_meta)
                 },
                 "box_7": {
                     "label_ar": "تصحيحات من فترات سابقة (المشتريات)",
                     "label_en": "Corrections (Purchases)",
-                    "amount": float(box7.amount or 0),
-                    "vat": float(box7.tax or 0)
+                    "amount": display_money_str(box7.amount or 0, display_meta),
+                    "vat": display_money_str(box7.tax or 0, display_meta)
                 },
             },
             "totals": {
-                "total_sales": float((_dec(box1.amount) + _dec(box2.amount) + _dec(box3.amount)).quantize(_D2, ROUND_HALF_UP)),
-                "total_output_vat": float(total_output),
-                "total_input_vat": float(total_input),
-                "net_vat_due": float(net_vat),
+                "total_sales": display_money_str((_dec(box1.amount) + _dec(box2.amount) + _dec(box3.amount)).quantize(_D2, ROUND_HALF_UP), display_meta),
+                "total_output_vat": display_money_str(total_output, display_meta),
+                "total_input_vat": display_money_str(total_input, display_meta),
+                "net_vat_due": display_money_str(net_vat, display_meta),
                 "status": "payable" if net_vat >= Decimal("0") else "refundable"
             }
         }
@@ -870,11 +944,13 @@ def syrian_income_tax_report(
       3. مجمل الربح
       4. المصروفات التشغيلية
       5. صافي الربح قبل الضريبة
-      6. ضريبة الدخل المستحقة (22%)
+      6. ضريبة الدخل المستحقة حسب tax_regimes
     """
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
@@ -918,15 +994,14 @@ def syrian_income_tax_report(
         gross_profit = (revenue_dec - cogs_dec).quantize(_D2, ROUND_HALF_UP)
         net_profit = (gross_profit - op_expenses_dec).quantize(_D2, ROUND_HALF_UP)
 
-        # Syrian income tax rate = 22% for commercial/industrial activities 
-        tax_rate_dec = Decimal("22")
         regime = db.execute(text(
             "SELECT default_rate FROM tax_regimes WHERE country_code = 'SY' AND tax_type = 'income_tax' LIMIT 1"
         )).fetchone()
-        if regime:
-            tax_rate_dec = _dec(regime.default_rate)
+        if not regime:
+            raise HTTPException(status_code=400, detail="نسبة ضريبة الدخل السورية غير مهيأة في tax_regimes")
+        tax_rate_dec = _dec(regime.default_rate)
 
-        tax_rate = float(tax_rate_dec)
+        tax_rate = rate_str(tax_rate_dec)
         income_tax = max(Decimal("0"), (net_profit * (tax_rate_dec / Decimal("100"))).quantize(_D2, ROUND_HALF_UP))
 
         # Salary tax summary for the year
@@ -940,29 +1015,30 @@ def syrian_income_tax_report(
         """), params).scalar() or 0
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "sy_income_tax",
             "report_name_ar": "إقرار ضريبة الدخل — وزارة المالية السورية",
             "report_name_en": "Income Tax Return — Syrian Ministry of Finance",
             "fiscal_year": fiscal_year,
             "period": {"start": start_date, "end": end_date},
             "income_statement": {
-                "total_revenue": {"label_ar": "إجمالي الإيرادات", "label_en": "Total Revenue", "amount": float(revenue_dec)},
-                "cost_of_sales": {"label_ar": "تكلفة البضاعة المباعة", "label_en": "Cost of Goods Sold", "amount": float(cogs_dec)},
-                "gross_profit": {"label_ar": "مجمل الربح", "label_en": "Gross Profit", "amount": float(gross_profit)},
-                "operating_expenses": {"label_ar": "المصروفات التشغيلية", "label_en": "Operating Expenses", "amount": float(op_expenses_dec)},
-                "net_profit_before_tax": {"label_ar": "صافي الربح قبل الضريبة", "label_en": "Net Profit Before Tax", "amount": float(net_profit)},
+                "total_revenue": {"label_ar": "إجمالي الإيرادات", "label_en": "Total Revenue", "amount": display_money_str(revenue_dec, display_meta)},
+                "cost_of_sales": {"label_ar": "تكلفة البضاعة المباعة", "label_en": "Cost of Goods Sold", "amount": display_money_str(cogs_dec, display_meta)},
+                "gross_profit": {"label_ar": "مجمل الربح", "label_en": "Gross Profit", "amount": display_money_str(gross_profit, display_meta)},
+                "operating_expenses": {"label_ar": "المصروفات التشغيلية", "label_en": "Operating Expenses", "amount": display_money_str(op_expenses_dec, display_meta)},
+                "net_profit_before_tax": {"label_ar": "صافي الربح قبل الضريبة", "label_en": "Net Profit Before Tax", "amount": display_money_str(net_profit, display_meta)},
             },
             "tax_computation": {
-                "taxable_income": {"label_ar": "الدخل الخاضع للضريبة", "label_en": "Taxable Income", "amount": float(max(Decimal("0"), net_profit))},
+                "taxable_income": {"label_ar": "الدخل الخاضع للضريبة", "label_en": "Taxable Income", "amount": display_money_str(max(Decimal("0"), net_profit), display_meta)},
                 "tax_rate": {"label_ar": f"نسبة الضريبة ({tax_rate}%)", "label_en": f"Tax Rate ({tax_rate}%)", "rate": tax_rate},
-                "income_tax_due": {"label_ar": "ضريبة الدخل المستحقة", "label_en": "Income Tax Due", "amount": float(income_tax)},
+                "income_tax_due": {"label_ar": "ضريبة الدخل المستحقة", "label_en": "Income Tax Due", "amount": display_money_str(income_tax, display_meta)},
             },
             "supplementary": {
-                "total_salaries": {"label_ar": "إجمالي الرواتب والأجور", "label_en": "Total Salaries & Wages", "amount": float(salary_expenses)},
+                "total_salaries": {"label_ar": "إجمالي الرواتب والأجور", "label_en": "Total Salaries & Wages", "amount": display_money_str(salary_expenses, display_meta)},
             },
             "totals": {
-                "net_profit": float(net_profit),
-                "tax_due": float(income_tax),
+                "net_profit": display_money_str(net_profit, display_meta),
+                "tax_due": display_money_str(income_tax, display_meta),
             }
         }
 
@@ -991,69 +1067,48 @@ def uae_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         params = {"start": period_start, "end": period_end}
         bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
+        sales_where = f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {bf}"
+        purchase_where = f"AND i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :start AND :end {bf}"
 
         # Standard supplies (5%)
-        standard = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        standard = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate > 0")
 
         # Zero-rated
-        zero_rated = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate = 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        zero_rated = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate = 0")
 
         # Exempt
-        exempt = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate IS NULL
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        exempt = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate IS NULL")
 
         # Purchases
-        purchases = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        purchases = _adjusted_tax_totals(db, params, purchase_where, "al.tax_rate > 0")
 
         total_output = _dec(standard.tax).quantize(_D2, ROUND_HALF_UP)
         total_input = _dec(purchases.tax).quantize(_D2, ROUND_HALF_UP)
         net_vat_due = (total_output - total_input).quantize(_D2, ROUND_HALF_UP)
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "ae_vat_return",
             "report_name_ar": "إقرار ضريبة القيمة المضافة — الهيئة الاتحادية للضرائب",
             "report_name_en": "VAT Return — FTA Format",
             "period": {"start": period_start, "end": period_end},
             "supplies": {
-                "standard_rated": {"label_ar": "توريدات خاضعة للنسبة الأساسية (5%)", "amount": float(standard.amount or 0), "vat": float(standard.tax or 0)},
-                "zero_rated": {"label_ar": "توريدات خاضعة لنسبة الصفر", "amount": float(zero_rated.amount or 0), "vat": 0},
-                "exempt": {"label_ar": "توريدات معفاة", "amount": float(exempt.amount or 0), "vat": 0},
+                "standard_rated": {"label_ar": "توريدات خاضعة للنسبة الأساسية", "amount": display_money_str(standard.amount or 0, display_meta), "vat": display_money_str(standard.tax or 0, display_meta)},
+                "zero_rated": {"label_ar": "توريدات خاضعة لنسبة الصفر", "amount": display_money_str(zero_rated.amount or 0, display_meta), "vat": "0.00"},
+                "exempt": {"label_ar": "توريدات معفاة", "amount": display_money_str(exempt.amount or 0, display_meta), "vat": "0.00"},
             },
             "expenses": {
-                "standard_rated_purchases": {"label_ar": "مشتريات خاضعة للنسبة الأساسية", "amount": float(purchases.amount or 0), "vat": float(purchases.tax or 0)},
+                "standard_rated_purchases": {"label_ar": "مشتريات خاضعة للنسبة الأساسية", "amount": display_money_str(purchases.amount or 0, display_meta), "vat": display_money_str(purchases.tax or 0, display_meta)},
             },
             "totals": {
-                "total_output_vat": float(total_output),
-                "total_input_vat": float(total_input),
-                "net_vat_due": float(net_vat_due),
+                "total_output_vat": display_money_str(total_output, display_meta),
+                "total_input_vat": display_money_str(total_input, display_meta),
+                "net_vat_due": display_money_str(net_vat_due, display_meta),
                 "status": "payable" if net_vat_due >= Decimal("0") else "refundable"
             }
         }
@@ -1085,56 +1140,34 @@ def turkey_kdv_return_report(
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
 
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         params = {"start": period_start, "end": period_end}
         bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
+        sales_where = f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {bf}"
+        purchase_where = f"AND i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :start AND :end {bf}"
 
         # KDV 20% (general goods)
-        kdv_20 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate = 20
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        kdv_20 = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate = 20")
 
         # KDV 10% (food, books, medicine)
-        kdv_10 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate = 10
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        kdv_10 = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate = 10")
 
         # KDV 1% (basic food items)
-        kdv_1 = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as taxable_amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate = 1
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        kdv_1 = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate = 1")
 
         # Input VAT (purchases — all KDV rates combined)
-        input_vat = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax_amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        input_vat = _adjusted_tax_totals(db, params, purchase_where, "al.tax_rate > 0")
 
         total_output = (
-            _dec(kdv_20.tax_amount) + _dec(kdv_10.tax_amount) + _dec(kdv_1.tax_amount)
+            _dec(kdv_20.tax) + _dec(kdv_10.tax) + _dec(kdv_1.tax)
         ).quantize(_D2, ROUND_HALF_UP)
-        total_input = _dec(input_vat.tax_amount).quantize(_D2, ROUND_HALF_UP)
+        total_input = _dec(input_vat.tax).quantize(_D2, ROUND_HALF_UP)
         net_payable = (total_output - total_input).quantize(_D2, ROUND_HALF_UP)
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "tr_kdv_return",
             "report_name_ar": "إقرار ضريبة القيمة المضافة (KDV) — تركيا",
             "report_name_en": "VAT Return (KDV) — Turkey",
@@ -1142,25 +1175,25 @@ def turkey_kdv_return_report(
             "kdv_20": {
                 "label_ar": "ضريبة القيمة المضافة 20% (السلع العامة)",
                 "label_en": "KDV 20% (General Goods)",
-                "taxable_amount": float(kdv_20.taxable_amount or 0),
-                "tax_amount": float(kdv_20.tax_amount or 0),
+                "taxable_amount": display_money_str(kdv_20.amount or 0, display_meta),
+                "tax_amount": display_money_str(kdv_20.tax or 0, display_meta),
             },
             "kdv_10": {
                 "label_ar": "ضريبة القيمة المضافة 10% (الغذاء، الكتب، الأدوية)",
                 "label_en": "KDV 10% (Food, Books, Medicine)",
-                "taxable_amount": float(kdv_10.taxable_amount or 0),
-                "tax_amount": float(kdv_10.tax_amount or 0),
+                "taxable_amount": display_money_str(kdv_10.amount or 0, display_meta),
+                "tax_amount": display_money_str(kdv_10.tax or 0, display_meta),
             },
             "kdv_1": {
                 "label_ar": "ضريبة القيمة المضافة 1% (السلع الأساسية)",
                 "label_en": "KDV 1% (Basic Food Items)",
-                "taxable_amount": float(kdv_1.taxable_amount or 0),
-                "tax_amount": float(kdv_1.tax_amount or 0),
+                "taxable_amount": display_money_str(kdv_1.amount or 0, display_meta),
+                "tax_amount": display_money_str(kdv_1.tax or 0, display_meta),
             },
             "totals": {
-                "total_output_vat": float(total_output),
-                "total_input_vat": float(total_input),
-                "net_payable": float(net_payable),
+                "total_output_vat": display_money_str(total_output, display_meta),
+                "total_input_vat": display_money_str(total_input, display_meta),
+                "net_payable": display_money_str(net_payable, display_meta),
                 "status": "payable" if net_payable >= Decimal("0") else "refundable",
             },
         }
@@ -1195,42 +1228,39 @@ def egypt_vat_return_report(
         else:
             period_start = date_cls(y, 1, 1)
             period_end = date_cls(y, 12, 31)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         params = {"start": period_start, "end": period_end}
         bf = branch_scope_filter(current_user, branch_id, "i.branch_id", params)
+        sales_where = f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {bf}"
+        purchase_where = f"AND i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :start AND :end {bf}"
 
         # Output VAT (14%)
-        output = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        output = _adjusted_tax_totals(db, params, sales_where, "al.tax_rate > 0")
 
         # Input VAT
-        input_v = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount,
-                   COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate * (il.tax_rate / 100)), 0) as tax
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
-            AND il.tax_rate > 0
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        input_v = _adjusted_tax_totals(db, params, purchase_where, "al.tax_rate > 0")
 
         # Stamp duty (table tax) — applicable to some services  
         # (simplified: calculated as 0.9% of service revenue)
-        services = db.execute(text(f"""
-            SELECT COALESCE(SUM(il.quantity * il.unit_price * i.exchange_rate), 0) as amount
-            FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-            LEFT JOIN products p ON il.product_id = p.id
-            WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-            AND (p.product_type = 'service' OR p.id IS NULL)
-            AND i.invoice_date BETWEEN :start AND :end {bf}
-        """), params).fetchone()
+        services = _adjusted_tax_totals(
+            db,
+            params,
+            sales_where,
+            "(p.product_type = 'service' OR p.id IS NULL)",
+            join_products=True,
+        )
         service_revenue = _dec(services.amount).quantize(_D2, ROUND_HALF_UP)
-        stamp_duty = (service_revenue * Decimal("0.009")).quantize(_D2, ROUND_HALF_UP)  # 0.9%
+        stamp_regime = db.execute(text("""
+            SELECT default_rate FROM tax_regimes
+            WHERE country_code = 'EG' AND tax_type = 'stamp_duty' AND is_active = TRUE
+            LIMIT 1
+        """)).fetchone()
+        if service_revenue > 0 and not stamp_regime:
+            raise HTTPException(status_code=400, detail="نسبة ضريبة الدمغة المصرية غير مهيأة في tax_regimes")
+        stamp_rate = _dec(stamp_regime.default_rate if stamp_regime else 0)
+        stamp_duty = (service_revenue * (stamp_rate / Decimal("100"))).quantize(_D2, ROUND_HALF_UP)
 
         total_output = _dec(output.tax).quantize(_D2, ROUND_HALF_UP)
         total_input = _dec(input_v.tax).quantize(_D2, ROUND_HALF_UP)
@@ -1238,26 +1268,28 @@ def egypt_vat_return_report(
         total_tax_due = (net_vat_due + stamp_duty).quantize(_D2, ROUND_HALF_UP)
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "eg_vat_return",
             "report_name_ar": "إقرار ضريبة القيمة المضافة — مصلحة الضرائب المصرية",
             "report_name_en": "VAT Return — ETA Format",
             "period": {"start": period_start, "end": period_end},
             "output": {
-                "taxable_sales": {"label_ar": "مبيعات خاضعة للضريبة (14%)", "amount": float(output.amount or 0), "vat": float(total_output)},
+                "taxable_sales": {"label_ar": "مبيعات خاضعة للضريبة", "amount": display_money_str(output.amount or 0, display_meta), "vat": display_money_str(total_output, display_meta)},
             },
             "input": {
-                "taxable_purchases": {"label_ar": "مشتريات خاضعة للضريبة", "amount": float(input_v.amount or 0), "vat": float(total_input)},
+                "taxable_purchases": {"label_ar": "مشتريات خاضعة للضريبة", "amount": display_money_str(input_v.amount or 0, display_meta), "vat": display_money_str(total_input, display_meta)},
             },
             "stamp_duty": {
-                "service_revenue": float(service_revenue),
-                "stamp_duty_amount": float(stamp_duty)
+                "service_revenue": display_money_str(service_revenue, display_meta),
+                "stamp_duty_rate": rate_str(stamp_rate),
+                "stamp_duty_amount": display_money_str(stamp_duty, display_meta)
             },
             "totals": {
-                "total_output_vat": float(total_output),
-                "total_input_vat": float(total_input),
-                "net_vat_due": float(net_vat_due),
-                "stamp_duty": float(stamp_duty),
-                "total_tax_due": float(total_tax_due),
+                "total_output_vat": display_money_str(total_output, display_meta),
+                "total_input_vat": display_money_str(total_input, display_meta),
+                "net_vat_due": display_money_str(net_vat_due, display_meta),
+                "stamp_duty": display_money_str(stamp_duty, display_meta),
+                "total_tax_due": display_money_str(total_tax_due, display_meta),
                 "status": "payable" if net_vat_due >= Decimal("0") else "refundable"
             }
         }
@@ -1277,7 +1309,9 @@ def generic_income_tax_report(
     """
     from datetime import date as date_cls
     fy = fiscal_year or year or date_cls.today().year
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(current_user.company_id) as db:
+        display_meta = resolve_display_currency(db, branch_scope)
         start_date = f"{fy}-01-01"
         end_date = f"{fy}-12-31"
         params = {"start": start_date, "end": end_date}
@@ -1312,16 +1346,19 @@ def generic_income_tax_report(
             LIMIT 1
         """), {"cc": country_code.upper()}).fetchone()
 
-        tax_rate_dec = _dec(regime.default_rate) if regime else Decimal("20")
-        tax_rate = float(tax_rate_dec)
-        tax_name_ar = regime.name_ar if regime else "ضريبة الدخل"
-        tax_name_en = regime.name_en if regime else "Income Tax"
+        if not regime:
+            raise HTTPException(status_code=400, detail=f"نسبة ضريبة الدخل غير مهيأة في tax_regimes للدولة {country_code.upper()}")
+        tax_rate_dec = _dec(regime.default_rate)
+        tax_rate = rate_str(tax_rate_dec)
+        tax_name_ar = regime.name_ar
+        tax_name_en = regime.name_en
 
         income_tax = max(Decimal("0"), (net_profit * (tax_rate_dec / Decimal("100"))).quantize(_D2, ROUND_HALF_UP))
 
         country_info = COUNTRY_META.get(country_code.upper(), {})
 
         return {
+            **display_currency_fields(display_meta),
             "report_type": "generic_income_tax",
             "report_name_ar": f"إقرار {tax_name_ar} — {country_info.get('name_ar', country_code)}",
             "report_name_en": f"{tax_name_en} Return — {country_info.get('name_en', country_code)}",
@@ -1329,11 +1366,11 @@ def generic_income_tax_report(
             "fiscal_year": fiscal_year,
             "period": {"start": start_date, "end": end_date},
             "summary": {
-                "total_revenue": float(revenue_dec),
-                "total_expenses": float(expenses_dec),
-                "net_profit": float(net_profit),
+                "total_revenue": display_money_str(revenue_dec, display_meta),
+                "total_expenses": display_money_str(expenses_dec, display_meta),
+                "net_profit": display_money_str(net_profit, display_meta),
                 "tax_rate": tax_rate,
-                "tax_due": float(income_tax),
+                "tax_due": display_money_str(income_tax, display_meta),
             }
         }
 
@@ -1343,35 +1380,46 @@ def generic_income_tax_report(
 # ═══════════════════════════════════════════════════════════════════════════════
 
 @router.get("/overview", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=Dict[str, Any])
-def compliance_overview(current_user: dict = Depends(get_current_user)):
+def compliance_overview(
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user),
+):
     """
     نظرة عامة على حالة الامتثال الضريبي
     يعرض حالة التسجيل لكل فرع والضرائب المطبقة والإقرارات المعلقة
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    with transactional(current_user.company_id) as db:
+        branch_params = {}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "b.id", branch_params)
+        returns_params = {}
+        returns_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", returns_params)
+
         # Company tax settings
         company_tax = db.execute(text("SELECT * FROM company_tax_settings")).fetchall()
 
         # Branches with their jurisdictions
-        branches = db.execute(text("""
+        branches = db.execute(text(f"""
             SELECT b.id, b.branch_name, b.branch_name_en, b.country_code,
                    COUNT(bts.id) as configured_taxes,
                    COUNT(bts.id) FILTER (WHERE bts.is_registered) as registered_taxes
             FROM branches b
             LEFT JOIN branch_tax_settings bts ON b.id = bts.branch_id AND bts.is_active = TRUE
             WHERE b.is_active = TRUE
+              {branch_filter}
             GROUP BY b.id, b.branch_name, b.branch_name_en, b.country_code
             ORDER BY b.id
-        """)).fetchall()
+        """), branch_params).fetchall()
 
         # Pending tax returns
-        pending = db.execute(text("""
+        pending = db.execute(text(f"""
             SELECT COUNT(*) FILTER (WHERE status = 'draft') as draft,
                    COUNT(*) FILTER (WHERE status = 'filed') as filed,
                    COUNT(*) FILTER (WHERE status = 'filed' AND due_date < CURRENT_DATE) as overdue
-            FROM tax_returns WHERE status NOT IN ('cancelled', 'paid')
-        """)).fetchone()
+            FROM tax_returns
+            WHERE status NOT IN ('cancelled', 'paid')
+              {returns_filter}
+        """), returns_params).fetchone()
 
         # Jurisdictions breakdown
         jurisdictions = {}
@@ -1405,15 +1453,6 @@ def compliance_overview(current_user: dict = Depends(get_current_user)):
             },
             "total_branches": len(branches),
             "countries_count": len(jurisdictions),
+            "branch_id": branch_scope["branch_id"],
+            "branch_ids": branch_scope["branch_ids"],
         }
-    except Exception as e:
-        logger.error(f"Error in compliance overview: {e}")
-        return {
-            "company_settings": [],
-            "jurisdictions": [],
-            "pending_returns": {"draft": 0, "filed": 0, "overdue": 0},
-            "total_branches": 0,
-            "countries_count": 0,
-        }
-    finally:
-        db.close()

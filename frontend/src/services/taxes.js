@@ -34,7 +34,9 @@ export const taxesAPI = {
     cancelReturn: (id) => api.put(`/taxes/returns/${id}/cancel`),
     // Tax Payments
     listPayments: (params) => api.get('/taxes/payments', { params }),
-    createPayment: (data) => api.post('/taxes/payments', data),
+    createPayment: (data, idempotencyKey) => api.post('/taxes/payments', data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
     // Settlement
     settle: (data) => api.post('/taxes/settle', data),
     // Branch Tax Analysis
@@ -43,7 +45,7 @@ export const taxesAPI = {
     getEmployeeTaxes: (params) => api.get('/taxes/employee-taxes', { params }),
     // Tax Calendar
     listCalendar: (params) => api.get('/taxes/calendar', { params }),
-    getCalendarSummary: () => api.get('/taxes/calendar/summary'),
+    getCalendarSummary: (params) => api.get('/taxes/calendar/summary', { params }),
     getCalendarItem: (id) => api.get(`/taxes/calendar/${id}`),
     createCalendarItem: (data) => api.post('/taxes/calendar', data),
     updateCalendarItem: (id, data) => api.put(`/taxes/calendar/${id}`, data),
@@ -76,5 +78,5 @@ export const taxComplianceAPI = {
     getGenericIncomeReport: (params) => api.get('/tax-compliance/reports/generic-income', { params }),
 
     // Compliance overview
-    getOverview: () => api.get('/tax-compliance/overview'),
+    getOverview: (params) => api.get('/tax-compliance/overview', { params }),
 }

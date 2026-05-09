@@ -10,6 +10,7 @@ from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
 import logging
+import json
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
@@ -17,6 +18,7 @@ from utils.permissions import branch_scope_filter_from_scope, require_permission
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.tax_precision import CALCULATION_VERSION, get_idempotency_key, money_str, q_money, serialize_tax_row
 from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
@@ -76,7 +78,7 @@ def list_tax_returns(
             ORDER BY tr.created_at DESC
         """), params).fetchall()
 
-        return [dict(r._mapping) for r in rows]
+        return [serialize_tax_row(r, money_fields=["taxable_amount", "tax_amount", "total_amount", "paid_amount"]) for r in rows]
 
 
 @router.get("/returns/{return_id}", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=Dict[str, Any])
@@ -124,6 +126,22 @@ def create_tax_return(
     branch_id = validate_branch_access(current_user, data.branch_id)
     with transactional(current_user.company_id) as db:
         try:
+            idempotency_key = get_idempotency_key(
+                request,
+                fallback=f"tax-return:{data.tax_type}:{data.tax_period}:branch:{branch_id or 'all'}",
+            )
+            existing_by_key = db.execute(text(
+                "SELECT id, return_number FROM tax_returns WHERE idempotency_key = :key LIMIT 1"
+            ), {"key": idempotency_key}).fetchone()
+            if existing_by_key:
+                return {
+                    "success": True,
+                    "id": existing_by_key.id,
+                    "return_number": existing_by_key.return_number,
+                    "message": "تم العثور على الإقرار الضريبي نفسه مسبقاً",
+                    "idempotent": True,
+                }
+
             period = data.tax_period
             if "-Q" in period:
                 year, q = period.split("-Q")
@@ -143,6 +161,8 @@ def create_tax_return(
                     end_date = f"{year + 1}-01-01"
                 else:
                     end_date = f"{year}-{month + 1:02d}-01"
+
+            check_fiscal_period_open(db, end_date)
     
             params = {"start": start_date, "end": end_date}
             branch_filter = ""
@@ -152,53 +172,92 @@ def create_tax_return(
     
             # Check for duplicate
             dup = db.execute(text(
-                "SELECT 1 FROM tax_returns WHERE tax_period = :period AND tax_type = :type AND status != 'cancelled'"
-            ), {"period": period, "type": data.tax_type}).fetchone()
+                """
+                SELECT 1
+                FROM tax_returns
+                WHERE tax_period = :period
+                  AND tax_type = :type
+                  AND COALESCE(branch_id, 0) = COALESCE(:branch_id, 0)
+                  AND status != 'cancelled'
+                """
+            ), {"period": period, "type": data.tax_type, "branch_id": branch_id}).fetchone()
             if dup:
                 raise HTTPException(status_code=409, detail=f"يوجد إقرار ضريبي لنفس الفترة ({period}) بالفعل")
     
-            # Output VAT (sales)
+            # Output VAT (sales) — aggregate at invoice level to respect header discounts
             output = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable,
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft', 'cancelled')
-                AND i.invoice_date >= :start AND i.invoice_date < :end {branch_filter}
+                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
+                    COALESCE(SUM(inv.vat_amount), 0) as vat
+                FROM (
+                    SELECT
+                        i.id,
+                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
+                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
+                    FROM invoices i
+                    WHERE i.invoice_type = 'sales'
+                      AND i.status NOT IN ('draft', 'cancelled')
+                      AND i.invoice_date >= :start AND i.invoice_date < :end
+                      {branch_filter}
+                ) inv
             """), params).fetchone()
     
-            # Sales returns
+            # Sales returns — aggregate at invoice level
             output_returns = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable,
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'sales_return' AND i.status NOT IN ('draft', 'cancelled')
-                AND i.invoice_date >= :start AND i.invoice_date < :end {branch_filter}
+                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
+                    COALESCE(SUM(inv.vat_amount), 0) as vat
+                FROM (
+                    SELECT
+                        i.id,
+                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
+                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
+                    FROM invoices i
+                    WHERE i.invoice_type = 'sales_return'
+                      AND i.status NOT IN ('draft', 'cancelled')
+                      AND i.invoice_date >= :start AND i.invoice_date < :end
+                      {branch_filter}
+                ) inv
             """), params).fetchone()
     
-            # Input VAT (purchases)
+            # Input VAT (purchases) — aggregate at invoice level
             input_vat = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable,
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
-                AND i.invoice_date >= :start AND i.invoice_date < :end {branch_filter}
+                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
+                    COALESCE(SUM(inv.vat_amount), 0) as vat
+                FROM (
+                    SELECT
+                        i.id,
+                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
+                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
+                    FROM invoices i
+                    WHERE i.invoice_type = 'purchase'
+                      AND i.status NOT IN ('draft', 'cancelled')
+                      AND i.invoice_date >= :start AND i.invoice_date < :end
+                      {branch_filter}
+                ) inv
             """), params).fetchone()
     
-            # Purchase returns
+            # Purchase returns — aggregate at invoice level
             input_returns = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate), 0) as taxable,
-                    COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft', 'cancelled')
-                AND i.invoice_date >= :start AND i.invoice_date < :end {branch_filter}
+                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
+                    COALESCE(SUM(inv.vat_amount), 0) as vat
+                FROM (
+                    SELECT
+                        i.id,
+                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
+                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
+                    FROM invoices i
+                    WHERE i.invoice_type = 'purchase_return'
+                      AND i.status NOT IN ('draft', 'cancelled')
+                      AND i.invoice_date >= :start AND i.invoice_date < :end
+                      {branch_filter}
+                ) inv
             """), params).fetchone()
     
             net_output_vat = _dec(output.vat) - _dec(output_returns.vat)
@@ -218,27 +277,55 @@ def create_tax_return(
                 cs_row = db.execute(text("SELECT setting_value FROM company_settings WHERE setting_key = 'company_country'")).fetchone()
                 if cs_row:
                     jurisdiction_code = cs_row.setting_value
+
+            base_currency = get_base_currency(db)
+            details = {
+                "version": CALCULATION_VERSION,
+                "period_start": start_date,
+                "period_end": end_date,
+                "branch_id": branch_id,
+                "source": "invoice_lines",
+                "method": "net_output_vat_minus_net_input_vat",
+                "amount_currency": base_currency,
+                "currency_method": "invoice amounts converted to company base currency using locked invoice exchange_rate",
+                "inputs": {
+                    "output_vat": money_str(net_output_vat),
+                    "input_vat": money_str(net_input_vat),
+                    "taxable_amount": money_str(taxable_amount),
+                },
+            }
     
             result = db.execute(text("""
                 INSERT INTO tax_returns (return_number, tax_period, tax_type, taxable_amount, tax_amount,
                                          penalty_amount, interest_amount, total_amount, due_date,
-                                         status, notes, created_by, branch_id, jurisdiction_code)
-                VALUES (:num, :period, :type, :taxable, :tax, 0, 0, :total, :due, 'draft', :notes, :user, :bid, :jc)
+                                         status, notes, created_by, branch_id, jurisdiction_code,
+                                         currency, base_currency, display_currency, exchange_rate,
+                                         calculation_version, calculation_details, idempotency_key)
+                VALUES (:num, :period, :type, :taxable, :tax, 0, 0, :total, :due,
+                        'draft', :notes, :user, :bid, :jc,
+                        :currency, :base_currency, :display_currency, 1,
+                        :calc_version, CAST(:calc_details AS jsonb), :idempotency_key)
                 RETURNING id
             """), {
                 "num": return_number, "period": period, "type": data.tax_type,
-                "taxable": float(taxable_amount.quantize(_D2, ROUND_HALF_UP)),
-                "tax": float(tax_amount.quantize(_D2, ROUND_HALF_UP)),
-                "total": float(tax_amount.quantize(_D2, ROUND_HALF_UP)),
+                "taxable": q_money(taxable_amount),
+                "tax": q_money(tax_amount),
+                "total": q_money(tax_amount),
                 "due": data.due_date, "notes": data.notes, "user": current_user.id,
-                "bid": branch_id, "jc": jurisdiction_code
+                "bid": branch_id, "jc": jurisdiction_code,
+                "currency": base_currency,
+                "base_currency": base_currency,
+                "display_currency": base_currency,
+                "calc_version": CALCULATION_VERSION,
+                "calc_details": json.dumps(details),
+                "idempotency_key": idempotency_key,
             })
             new_id = result.fetchone()[0]
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.return.create", resource_type="tax_return",
                          resource_id=str(new_id),
-                         details={"period": period, "tax_amount": float(tax_amount.quantize(_D2, ROUND_HALF_UP)), "return_number": return_number},
+                         details={"period": period, "tax_amount": money_str(tax_amount), "return_number": return_number},
                          request=request)
     
             return {
@@ -269,13 +356,15 @@ def file_tax_return(
     """تقديم الإقرار الضريبي (تغيير الحالة من draft إلى filed)"""
     with transactional(current_user.company_id) as db:
         try:
-            row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id"), {"id": return_id}).fetchone()
+            row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id FOR UPDATE"), {"id": return_id}).fetchone()
             if not row:
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
             if row.status != "draft":
                 raise HTTPException(status_code=400, detail="لا يمكن تقديم إقرار غير في حالة مسودة")
+
+            check_fiscal_period_open(db, date.today())
     
             penalty = _dec((body or {}).get("penalty_amount", 0)).quantize(_D2, ROUND_HALF_UP)
             interest = _dec((body or {}).get("interest_amount", 0)).quantize(_D2, ROUND_HALF_UP)
@@ -283,14 +372,15 @@ def file_tax_return(
     
             db.execute(text("""
                 UPDATE tax_returns SET status = 'filed', filed_date = CURRENT_DATE,
-                    penalty_amount = :penalty, interest_amount = :interest, total_amount = :total
+                    penalty_amount = :penalty, interest_amount = :interest,
+                    total_amount = :total, updated_at = CURRENT_TIMESTAMP
                 WHERE id = :id
-            """), {"id": return_id, "penalty": float(penalty), "interest": float(interest), "total": float(total)})
+            """), {"id": return_id, "penalty": penalty, "interest": interest, "total": total})
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.return.file", resource_type="tax_return",
                          resource_id=str(return_id),
-                         details={"return_number": row.return_number, "total": float(total)},
+                         details={"return_number": row.return_number, "total": money_str(total)},
                          request=request)
     
             return {
@@ -313,7 +403,7 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
     """إلغاء إقرار ضريبي"""
     with transactional(current_user.company_id) as db:
         try:
-            row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id"), {"id": return_id}).fetchone()
+            row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id FOR UPDATE"), {"id": return_id}).fetchone()
             if not row:
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
             if row.branch_id:
@@ -327,7 +417,9 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
             if has_payments:
                 raise HTTPException(status_code=400, detail="لا يمكن إلغاء إقرار له مدفوعات مؤكدة")
     
-            db.execute(text("UPDATE tax_returns SET status = 'cancelled' WHERE id = :id"), {"id": return_id})
+            check_fiscal_period_open(db, date.today())
+
+            db.execute(text("UPDATE tax_returns SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = :id"), {"id": return_id})
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.return.cancel", resource_type="tax_return",
@@ -344,4 +436,3 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
 
 
 # ==================== TAX PAYMENTS ====================
-

@@ -120,6 +120,83 @@
   box-shadow: var(--shadow-sm);
 }
 
+.data-table-wrapper {
+  width: 100%;
+  max-width: 100%;
+  overflow-x: auto;
+  overflow-y: visible;
+  -webkit-overflow-scrolling: touch;
+}
+
+.data-table-wrapper .data-table {
+  width: 100%;
+}
+
+.data-table-header-content {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.data-table-actions-cell {
+  width: 132px;
+  min-width: 132px;
+  max-width: 132px;
+  padding-inline: 12px;
+  text-align: center;
+  white-space: nowrap;
+  background: var(--table-row-bg);
+}
+
+.data-table-sticky-cell {
+  position: sticky;
+  background: var(--table-row-bg);
+  z-index: 2;
+}
+
+.data-table-sticky-start {
+  inset-inline-start: var(--data-table-sticky-offset, 0);
+  box-shadow: 1px 0 0 var(--border-color);
+}
+
+.data-table-sticky-end {
+  inset-inline-end: var(--data-table-sticky-offset, 0);
+  box-shadow: -1px 0 0 var(--border-color);
+}
+
+[dir="rtl"] .data-table-sticky-start {
+  box-shadow: -1px 0 0 var(--border-color);
+}
+
+[dir="rtl"] .data-table-sticky-end {
+  box-shadow: 1px 0 0 var(--border-color);
+}
+
+.data-table-actions-cell .data-table-header-content {
+  width: 100%;
+  justify-content: center;
+}
+
+.data-table-actions {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-width: 0;
+}
+
+thead .data-table-sticky-cell,
+thead .data-table-actions-cell {
+  background: var(--table-header-bg);
+  z-index: 3;
+}
+
+tbody tr:hover .data-table-sticky-cell,
+tbody tr:hover .data-table-actions-cell {
+  background: var(--table-row-hover);
+}
+
 :where(.data-table, .logs-table, .table) {
   width: 100%;
   border-collapse: collapse;

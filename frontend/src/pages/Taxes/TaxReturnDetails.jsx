@@ -11,6 +11,12 @@ import BackButton from '../../components/common/BackButton';
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import { useBranch } from '../../context/BranchContext'
+import DataTable from '../../components/common/DataTable'
+
+function makeIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
+    return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
 
 function TaxReturnDetails() {
     const { t } = useTranslation()
@@ -18,14 +24,14 @@ function TaxReturnDetails() {
     const { id } = useParams()
     const navigate = useNavigate()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
+    const fallbackCurrency = getCurrency()
     const [loading, setLoading] = useState(true)
     const [data, setData] = useState(null)
     const [error, setError] = useState(null)
     const [showPayModal, setShowPayModal] = useState(false)
-    const [payForm, setPayForm] = useState({ amount: 0, payment_date: new Date().toISOString().split('T')[0], payment_method: 'bank_transfer', reference: '', notes: '' })
+    const [payForm, setPayForm] = useState({ amount: '0.00', payment_date: new Date().toISOString().split('T')[0], payment_method: 'bank_transfer', reference: '', notes: '' })
     const [showFileModal, setShowFileModal] = useState(false)
-    const [fileForm, setFileForm] = useState({ penalty_amount: 0, interest_amount: 0 })
+    const [fileForm, setFileForm] = useState({ penalty_amount: '0.00', interest_amount: '0.00' })
     const [actionLoading, setActionLoading] = useState(false)
     const [treasuryAccounts, setTreasuryAccounts] = useState([])
 
@@ -34,7 +40,7 @@ function TaxReturnDetails() {
             setLoading(true)
             const res = await taxesAPI.getReturn(id)
             setData(res.data)
-            setPayForm(prev => ({ ...prev, amount: res.data.remaining_amount || 0 }))
+            setPayForm(prev => ({ ...prev, amount: String(res.data.remaining_amount || '0.00') }))
         } catch (err) {
             setError(err.response?.data?.detail || t('common.error_loading_data'))
         } finally {
@@ -57,7 +63,10 @@ function TaxReturnDetails() {
     const handleFile = async () => {
         setActionLoading(true)
         try {
-            await taxesAPI.fileReturn(id, fileForm)
+            await taxesAPI.fileReturn(id, {
+                penalty_amount: fileForm.penalty_amount || '0.00',
+                interest_amount: fileForm.interest_amount || '0.00',
+            })
             setShowFileModal(false)
             fetchData()
         } catch (err) {
@@ -81,17 +90,19 @@ function TaxReturnDetails() {
     }
 
     const handlePay = async () => {
+        if (actionLoading) return
         setActionLoading(true)
         try {
+            const idempotencyKey = makeIdempotencyKey(`tax-payment:${id}`)
             await taxesAPI.createPayment({
                 tax_return_id: parseInt(id),
                 payment_date: payForm.payment_date,
-                amount: parseFloat(payForm.amount),
+                amount: String(payForm.amount || '0.00'),
                 payment_method: payForm.payment_method,
                 reference: payForm.reference || null,
                 notes: payForm.notes || null,
                 treasury_account_id: payForm.treasury_account_id ? parseInt(payForm.treasury_account_id) : null
-            })
+            }, idempotencyKey)
             setShowPayModal(false)
             fetchData()
         } catch (err) {
@@ -123,6 +134,18 @@ function TaxReturnDetails() {
     if (error) return <div className="alert alert-danger m-4">{error}</div>
     if (!data) return null
 
+    const currency = data.display_currency || data.currency || fallbackCurrency
+    const penaltyTotal = Number(data.penalty_amount || 0) + Number(data.interest_amount || 0)
+    const fileTotal = Number(data.tax_amount || 0) + Number(fileForm.penalty_amount || 0) + Number(fileForm.interest_amount || 0)
+    const paymentColumns = [
+        { key: 'payment_number', label: t('taxes.payment_number'), render: (v) => <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{v}</span> },
+        { key: 'payment_date', label: t('common.date'), render: (v) => formatShortDate(v) },
+        { key: 'amount', label: t('taxes.amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', fontWeight: 700, whiteSpace: 'nowrap' }, render: (v) => <>{formatNumber(v)} <span className="text-muted fw-normal small">{currency}</span></> },
+        { key: 'payment_method', label: t('taxes.payment_method'), render: (v) => <span style={{ background: 'rgba(107, 114, 128, 0.082)', color: 'rgb(107, 114, 128)', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{paymentMethodLabel(v)}</span> },
+        { key: 'reference', label: t('taxes.reference'), render: (v) => v || <span className="text-muted">-</span> },
+        { key: 'status', label: t('common.status_title'), render: (v) => <span style={{ background: 'rgb(220, 252, 231)', color: 'rgb(22, 163, 74)', padding: '4px 12px', borderRadius: 20, fontSize: 12, fontWeight: 600, whiteSpace: 'nowrap' }}>{v === 'confirmed' ? t('taxes.confirmed') : v}</span> },
+    ]
+
     return (
         <div className="workspace fade-in">
             {/* Header */}
@@ -147,7 +170,7 @@ function TaxReturnDetails() {
                                 </button>
                             </>
                         )}
-                        {data.status === 'filed' && data.remaining_amount > 0 && (
+                        {data.status === 'filed' && Number(data.remaining_amount || 0) > 0 && (
                             <>
                                 <button className="btn btn-success" onClick={() => setShowPayModal(true)} disabled={actionLoading}>
                                     💰 {t('taxes.record_payment')}
@@ -174,10 +197,10 @@ function TaxReturnDetails() {
                     <div className="metric-label">{t('taxes.tax_amount')}</div>
                     <div className="metric-value text-secondary">{formatNumber(data.tax_amount)} <small>{currency}</small></div>
                 </div>
-                {(data.penalty_amount > 0 || data.interest_amount > 0) && (
+                {(Number(data.penalty_amount || 0) > 0 || Number(data.interest_amount || 0) > 0) && (
                     <div className="metric-card">
                         <div className="metric-label">{t('taxes.penalties')}</div>
-                        <div className="metric-value text-error">{formatNumber(parseFloat(data.penalty_amount || 0) + parseFloat(data.interest_amount || 0))} <small>{currency}</small></div>
+                        <div className="metric-value text-error">{formatNumber(penaltyTotal)} <small>{currency}</small></div>
                     </div>
                 )}
                 <div className="metric-card" style={{ borderColor: 'var(--primary)' }}>
@@ -190,7 +213,7 @@ function TaxReturnDetails() {
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('taxes.remaining')}</div>
-                    <div className={`metric-value ${data.remaining_amount > 0 ? 'text-error' : 'text-success'}`}>
+                    <div className={`metric-value ${Number(data.remaining_amount || 0) > 0 ? 'text-error' : 'text-success'}`}>
                         {formatNumber(data.remaining_amount)} <small>{currency}</small>
                     </div>
                 </div>
@@ -213,48 +236,15 @@ function TaxReturnDetails() {
             {/* Payments Table */}
             <div className="card mt-4">
                 <h3 className="section-title">{t('taxes.payments')}</h3>
-                {data.payments && data.payments.length > 0 ? (
-                    <div className="data-table-container mt-3">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>{t('taxes.payment_number')}</th>
-                                    <th>{t('common.date')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.amount')}</th>
-                                    <th>{t('taxes.payment_method')}</th>
-                                    <th>{t('taxes.reference')}</th>
-                                    <th>{t('common.status_title')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {data.payments.map(p => (
-                                    <tr key={p.id}>
-                                        <td>
-                                            <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{p.payment_number}</span>
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{formatShortDate(p.payment_date)}</td>
-                                        <td style={{ textAlign: 'left', fontWeight: '700', whiteSpace: 'nowrap' }}>
-                                            {formatNumber(p.amount)} <span className="text-muted fw-normal small">{currency}</span>
-                                        </td>
-                                        <td>
-                                            <span style={{ background: 'rgba(107, 114, 128, 0.082)', color: 'rgb(107, 114, 128)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600' }}>
-                                                {paymentMethodLabel(p.payment_method)}
-                                            </span>
-                                        </td>
-                                        <td>{p.reference || <span className="text-muted">—</span>}</td>
-                                        <td>
-                                            <span style={{ background: 'rgb(220, 252, 231)', color: 'rgb(22, 163, 74)', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                                                ✅ {p.status === 'confirmed' ? (t('taxes.confirmed')) : p.status}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
-                ) : (
-                    <p className="text-muted mt-3">{t('taxes.no_payments')}</p>
-                )}
+                <DataTable
+                    columns={paymentColumns}
+                    data={data.payments || []}
+                    rowKey="id"
+                    searchable
+                    exportable
+                    exportName={`tax-return-${data.return_number}-payments`}
+                    emptyTitle={t('taxes.no_payments')}
+                />
             </div>
 
             {/* File Modal */}
@@ -271,16 +261,16 @@ function TaxReturnDetails() {
                                 <label className="form-label">{t('taxes.penalty_amount')}</label>
                                 <input type="number" className="form-input" min="0" step="0.01"
                                     value={fileForm.penalty_amount}
-                                    onChange={e => setFileForm({...fileForm, penalty_amount: parseFloat(e.target.value) || 0})} />
+                                    onChange={e => setFileForm({...fileForm, penalty_amount: e.target.value})} />
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('taxes.interest_amount')}</label>
                                 <input type="number" className="form-input" min="0" step="0.01"
                                     value={fileForm.interest_amount}
-                                    onChange={e => setFileForm({...fileForm, interest_amount: parseFloat(e.target.value) || 0})} />
+                                    onChange={e => setFileForm({...fileForm, interest_amount: e.target.value})} />
                             </div>
                             <div className="alert alert-info mt-2">
-                                {t('taxes.new_total')}: <strong>{formatNumber(parseFloat(data.tax_amount || 0) + (fileForm.penalty_amount || 0) + (fileForm.interest_amount || 0))} {currency}</strong>
+                                {t('taxes.new_total')}: <strong>{formatNumber(fileTotal)} {currency}</strong>
                             </div>
                         </div>
                         <div className="modal-footer">
@@ -310,7 +300,7 @@ function TaxReturnDetails() {
                                 <input type="number" className="form-input" min="0.01" step="0.01"
                                     max={data.remaining_amount}
                                     value={payForm.amount}
-                                    onChange={e => setPayForm({...payForm, amount: parseFloat(e.target.value) || 0})} />
+                                    onChange={e => setPayForm({...payForm, amount: e.target.value})} />
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('taxes.payment_date')} *</label>
@@ -352,7 +342,7 @@ function TaxReturnDetails() {
                         </div>
                         <div className="modal-footer">
                             <button className="btn btn-secondary" onClick={() => setShowPayModal(false)}>{t('common.cancel')}</button>
-                            <button className="btn btn-success" onClick={handlePay} disabled={actionLoading || payForm.amount <= 0}>
+                            <button className="btn btn-success" onClick={handlePay} disabled={actionLoading || Number(payForm.amount || 0) <= 0}>
                                 {actionLoading ? '...' : (t('taxes.confirm_payment'))}
                             </button>
                         </div>

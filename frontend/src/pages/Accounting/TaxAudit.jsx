@@ -13,7 +13,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 function TaxAudit() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
+    const [currency, setCurrency] = useState(getCurrency())
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
     const [endDate, setEndDate] = useState(new Date())
     const [data, setData] = useState([])
@@ -29,7 +29,14 @@ function TaxAudit() {
                 end_date: endDate.toISOString().split('T')[0],
                 branch_id: currentBranch?.id
             })
-            setData(response.data)
+            const payload = response.data
+            if (Array.isArray(payload)) {
+                setData(payload)
+                setCurrency(getCurrency())
+            } else {
+                setData(payload.items || [])
+                setCurrency(payload.display_currency || payload.currency || getCurrency())
+            }
         } catch (err) {
             console.error("Failed to fetch tax audit", err)
             setError(t('errors.fetch_failed'))

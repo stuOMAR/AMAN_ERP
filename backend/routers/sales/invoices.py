@@ -110,6 +110,7 @@ from utils.audit import log_activity
 from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import money_str, rate_str
 from .schemas import InvoiceCreate, InvoiceResponse
 
 invoices_router = APIRouter()
@@ -120,42 +121,57 @@ def preview_invoice_totals(invoice: InvoiceCreate, current_user: dict = Depends(
     """حساب إجماليات الفاتورة بدون حفظ — للاستخدام المباشر من الواجهة"""
     from utils.accounting import compute_invoice_totals, compute_line_amounts
 
-    lines_data = [
-        {"quantity": item.quantity, "unit_price": item.unit_price, "tax_rate": item.tax_rate, "discount": item.discount}
-        for item in invoice.items
-    ]
-    totals = compute_invoice_totals(lines_data, invoice.effect_percentage or 0, invoice.markup_amount or 0, discount_is_percent=False)
+    db = get_db_connection(current_user.company_id)
+    try:
+        # Validate branch
+        if not invoice.branch_id:
+            raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+        validate_branch_access(current_user, invoice.branch_id)
 
-    line_details = []
-    for item in invoice.items:
-        la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate, item.discount, discount_is_percent=False)
-        line_details.append({
-            "product_id": item.product_id,
-            "description": item.description,
-            "quantity": float(item.quantity),
-            "unit_price": float(item.unit_price),
-            "tax_rate": float(item.tax_rate),
-            "discount": float(item.discount),
-            "subtotal": float(la["subtotal"]),
-            "discount_amount": float(la["discount_amount"]),
-            "taxable": float(la["taxable"]),
-            "tax_amount": float(la["tax_amount"]),
-            "line_total": float(la["line_total"]),
-        })
+        line_details = []
+        preview_lines_data = []
+        for item in invoice.items:
+            taxes = resolve_line_tax_group(invoice.branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.customer_id)
+            effective_tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+            la = compute_line_amounts(item.quantity, item.unit_price, effective_tax_rate, item.discount, discount_is_percent=False)
+            line_details.append({
+                "product_id": item.product_id,
+                "description": item.description,
+                "quantity": money_str(item.quantity),
+                "unit_price": money_str(item.unit_price),
+                "tax_rate": rate_str(effective_tax_rate),
+                "discount": money_str(item.discount),
+                "subtotal": money_str(la["subtotal"]),
+                "discount_amount": money_str(la["discount_amount"]),
+                "taxable": money_str(la["taxable"]),
+                "tax_amount": money_str(la["tax_amount"]),
+                "line_total": money_str(la["line_total"]),
+                "applied_taxes": [{"tax_name": t["tax_name"], "tax_rate": rate_str(t["tax_rate"])} for t in taxes] if len(taxes) > 1 else None,
+            })
+            preview_lines_data.append({
+                "quantity": item.quantity,
+                "unit_price": item.unit_price,
+                "tax_rate": effective_tax_rate,
+                "discount": item.discount,
+            })
 
-    paid = float(invoice.paid_amount or 0)
-    grand = float(totals["grand_total"])
+        totals = compute_invoice_totals(preview_lines_data, invoice.effect_percentage or 0, invoice.markup_amount or 0, discount_is_percent=False)
 
-    return {
-        "lines": line_details,
-        "subtotal": float(totals["subtotal"]),
-        "total_discount": float(totals["total_discount"]),
-        "total_tax": float(totals["total_tax"]),
-        "grand_total": grand,
-        "paid_amount": paid,
-        "remaining_balance": grand - paid,
-        "currency": invoice.currency or "SAR",
-    }
+        paid = _dec(invoice.paid_amount or 0)
+        grand = totals["grand_total"]
+
+        return {
+            "lines": line_details,
+            "subtotal": money_str(totals["subtotal"]),
+            "total_discount": money_str(totals["total_discount"]),
+            "total_tax": money_str(totals["total_tax"]),
+            "grand_total": money_str(grand),
+            "paid_amount": money_str(paid),
+            "remaining_balance": money_str(grand - paid),
+            "currency": invoice.currency or "SAR",
+        }
+    finally:
+        db.close()
 
 
 @invoices_router.get("/invoices", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
@@ -804,8 +820,8 @@ def create_sales_invoice(
                 jurisdiction=jurisdiction,
                 invoice_payload={
                     "invoice_number": inv_num,
-                    "grand_total": float(grand_total),
-                    "tax_total": float(invoice.tax_amount or 0),
+                    "grand_total": money_str(grand_total),
+                    "tax_total": money_str(total_tax),
                     "uuid": inv_num,
                 },
             )

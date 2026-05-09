@@ -19,13 +19,14 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, List, Optional, Tuple
 
 from sqlalchemy import text
 
 from . import gl_service
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import money_str, q_money
 
 logger = logging.getLogger(__name__)
 
@@ -67,7 +68,7 @@ def compute(db, *, gross: Decimal, country: str, payment_type: str) -> WHTBreakd
         return WHTBreakdown(gross=gross, rate=Decimal("0"), wht_amount=Decimal("0"),
                             net=gross, country=country, payment_type=payment_type)
     rate = rule["rate"]
-    wht = (gross * rate).quantize(Decimal("0.01"))
+    wht = (gross * rate).quantize(Decimal("0.01"), ROUND_HALF_UP)
     return WHTBreakdown(
         gross=gross, rate=rate, wht_amount=wht, net=gross - wht,
         rule_id=rule["id"], country=country, payment_type=payment_type,
@@ -94,16 +95,16 @@ def augment_payment_lines(
     for ln in lines:
         new = dict(ln)
         if new.get("account_id") == bank_account_id and Decimal(str(new.get("credit", 0))) > 0:
-            new["credit"] = float(Decimal(str(new["credit"])) - breakdown.wht_amount)
+            new["credit"] = q_money(Decimal(str(new["credit"])) - breakdown.wht_amount)
             bank_line_found = True
         out.append(new)
     if not bank_line_found:   # conservative fallback: debit expense / credit bank net
-        out.append({"account_id": expense_account_id, "debit": float(breakdown.gross), "credit": 0})
-        out.append({"account_id": bank_account_id, "debit": 0, "credit": float(breakdown.net)})
+        out.append({"account_id": expense_account_id, "debit": q_money(breakdown.gross), "credit": 0})
+        out.append({"account_id": bank_account_id, "debit": 0, "credit": q_money(breakdown.net)})
     out.append({
         "account_id": breakdown.gl_account_id,
         "debit": 0,
-        "credit": float(breakdown.wht_amount),
+        "credit": q_money(breakdown.wht_amount),
         "description": f"WHT {breakdown.rate*100:.1f}% ({breakdown.country}/{breakdown.payment_type})",
     })
     return out
@@ -123,8 +124,13 @@ def post_payment_with_wht(
     )
     # Fiscal-period lock: block posting into a closed period.
     check_fiscal_period_open(db, date)
+    idempotency_key = kwargs.pop("idempotency_key", None)
+    if not idempotency_key:
+        raise ValueError("idempotency_key is required for WHT payment posting")
     jid, num = gl_service.create_journal_entry(
         db, company_id=company_id, date=date, description=description,
-        lines=full_lines, user_id=user_id, **kwargs,
+        lines=full_lines, user_id=user_id,
+        idempotency_key=idempotency_key,
+        **kwargs,
     )
     return jid, num, br

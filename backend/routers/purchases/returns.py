@@ -16,10 +16,11 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
+from utils.accounting import compute_invoice_totals, compute_line_amounts, get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.tax_engine import resolve_line_tax
 from utils.party_balance import update_party_site_balance
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
@@ -140,6 +141,13 @@ def create_purchase_return(
             supplier = db.execute(text("SELECT * FROM parties WHERE id = :id AND is_supplier = TRUE"), {"id": invoice.supplier_id}).fetchone()
             if not supplier:
                 raise HTTPException(**http_error(404, "supplier_not_found"))
+
+            branch_id = invoice.branch_id
+            if not branch_id and invoice.original_invoice_id:
+                branch_id = db.execute(text("SELECT branch_id FROM invoices WHERE id = :id"), {"id": invoice.original_invoice_id}).scalar()
+            branch_id = validate_branch_access(current_user, branch_id)
+            if branch_id is None:
+                raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
     
             # 2. Generate Return Number (PR-YYYY-XXXX)
             year = date.today().year
@@ -147,10 +155,39 @@ def create_purchase_return(
             return_number = f"PR-{year}-{str(count + 1).zfill(4)}"
     
             # 3. Create Invoice Record (Type: purchase_return)
-            # Calculate totals (including line discounts)
-            subtotal = sum((_dec(item.quantity) * _dec(item.unit_price) - _dec(getattr(item, 'discount', 0) or 0)).quantize(_D2, ROUND_HALF_UP) for item in invoice.items)
-            tax_total = sum(((_dec(item.quantity) * _dec(item.unit_price) - _dec(getattr(item, 'discount', 0) or 0)).quantize(_D2, ROUND_HALF_UP) * _dec(item.tax_rate) / Decimal('100')).quantize(_D2, ROUND_HALF_UP) for item in invoice.items)
-            total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
+            lines_to_save = []
+            for item in invoice.items:
+                tax_info = resolve_line_tax(branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.supplier_id)
+                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount, discount_is_percent=False)
+                lines_to_save.append({
+                    "item": item,
+                    "tax_rate": tax_info["tax_rate"],
+                    "tax_rate_id": tax_info.get("tax_rate_id"),
+                    "line_total": la["line_total"],
+                })
+
+            header_discount_pct = (
+                _dec(invoice.effect_percentage)
+                if getattr(invoice, "effect_type", "discount") == "discount"
+                else Decimal("0")
+            )
+            markup_amount = (
+                _dec(invoice.markup_amount)
+                if getattr(invoice, "effect_type", "discount") == "markup"
+                else Decimal("0")
+            )
+            totals = compute_invoice_totals([
+                {
+                    "quantity": line["item"].quantity,
+                    "unit_price": line["item"].unit_price,
+                    "tax_rate": line["tax_rate"],
+                    "discount": line["item"].discount,
+                }
+                for line in lines_to_save
+            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount, discount_is_percent=False)
+            subtotal = totals["subtotal"]
+            tax_total = totals["total_tax"]
+            total = totals["grand_total"]
     
             # Determine warehouse: Use original invoice's warehouse if possible
             wh_id = invoice.warehouse_id
@@ -174,15 +211,10 @@ def create_purchase_return(
                  raise HTTPException(status_code=400, detail="يجب تعريف مستودع واحد على الأقل")
     
             # 3.5 Validate Warehouse-Branch Association (for Return)
-            if wh_id and invoice.branch_id:
+            if wh_id and branch_id:
                 wh_check = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": wh_id}).fetchone()
-                if wh_check and wh_check[0] and wh_check[0] != invoice.branch_id:
+                if wh_check and wh_check[0] and wh_check[0] != branch_id:
                     raise HTTPException(status_code=400, detail="المستودع المختار لا يتبع للفرع الحالي")
-    
-            # Determine Branch
-            branch_id = invoice.branch_id
-            if not branch_id and invoice.original_invoice_id:
-                branch_id = db.execute(text("SELECT branch_id FROM invoices WHERE id = :id"), {"id": invoice.original_invoice_id}).scalar()
     
             for item in invoice.items:
                 current_stock = db.execute(text(
@@ -205,9 +237,9 @@ def create_purchase_return(
             # Note: If paid_amount > 0, we mark as 'paid' or 'partial'.
             # For returns, 'paid' means the refund was processed.
             return_status = 'posted' # Default
-            if invoice.paid_amount and invoice.paid_amount >= total - 0.01:
+            if invoice.paid_amount and _dec(invoice.paid_amount) >= total - _D2:
                 return_status = 'paid'
-            elif invoice.paid_amount and invoice.paid_amount > 0:
+            elif invoice.paid_amount and _dec(invoice.paid_amount) > 0:
                 return_status = 'partial'
     
             new_invoice_id = db.execute(text("""
@@ -233,19 +265,21 @@ def create_purchase_return(
             }).fetchone()[0]
     
             # 4. Add Items & Update Stock (DEDUCT)
-            for item in invoice.items:
-                item_total = ((_dec(item.quantity) * _dec(item.unit_price)) * (Decimal('1') + _dec(item.tax_rate) / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
+            for line in lines_to_save:
+                item = line["item"]
+                item_total = line["line_total"]
                 db.execute(text("""
                     INSERT INTO invoice_lines (
                         invoice_id, product_id, description, quantity, unit_price,
-                        tax_rate, discount, total
+                        tax_rate, tax_rate_id, discount, total
                     ) VALUES (
                         :iid, :pid, :desc, :qty, :price,
-                        :tax, :disc, :total
+                        :tax, :tax_id, :disc, :total
                     )
                 """), {
                     "iid": new_invoice_id, "pid": item.product_id, "desc": item.description,
-                    "qty": item.quantity, "price": item.unit_price, "tax": item.tax_rate,
+                    "qty": item.quantity, "price": item.unit_price, "tax": line["tax_rate"],
+                    "tax_id": line["tax_rate_id"],
                     "disc": item.discount, "total": item_total
                 })
     
@@ -342,7 +376,7 @@ def create_purchase_return(
                     reference=return_number,
                     lines=je_lines,
                     user_id=user_id,
-                    branch_id=invoice.branch_id,
+                    branch_id=branch_id,
                     currency=invoice.currency or base_currency,
                     exchange_rate=1.0,  # amounts already in base currency
                     source="purchase_return",
@@ -403,7 +437,7 @@ def create_purchase_return(
                         reference=voucher_num,
                         lines=je_lines_refund,
                         user_id=user_id,
-                        branch_id=invoice.branch_id,
+                        branch_id=branch_id,
                         currency=invoice.currency or base_currency,
                         exchange_rate=1.0,  # amounts already in base currency
                         source="payment_voucher",
@@ -420,7 +454,7 @@ def create_purchase_return(
                 resource_id=str(new_invoice_id),
                 details={"return_number": return_number, "total": total, "supplier_id": invoice.supplier_id},
                 request=request,
-                branch_id=invoice.branch_id
+                branch_id=branch_id
             )
     
             return {"id": new_invoice_id, "message": "تم إنشاء مردود المشتريات بنجاح"}
@@ -432,4 +466,3 @@ def create_purchase_return(
             pass
             logger.error(f"Error creating return: {e}")
             raise HTTPException(status_code=500, detail="حدث خطأ أثناء إنشاء مردود المشتريات")
-

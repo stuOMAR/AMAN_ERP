@@ -17,6 +17,7 @@ from utils.permissions import require_permission, validate_branch_access, requir
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.tax_precision import rate_str, serialize_tax_row
 from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 from services.tax_engine import (
     validate_tax_access, update_tax_rate as engine_update_tax_rate,
@@ -39,28 +40,33 @@ from .core import _D2, _D4
 def list_tax_rates(
     is_active: Optional[bool] = None,
     country_code: Optional[str] = None,
+    all_branches: Optional[bool] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب أنواع الضرائب — مفلترة حسب دولة فرع المستخدم (والضرائب العالمية)"""
     with transactional(current_user.company_id) as db:
-        # Get user's branch country_code
-        user_branch = db.execute(text("""
-            SELECT b.country_code
-            FROM company_users cu
-            JOIN user_branches ub ON cu.id = ub.user_id
-            JOIN branches b ON ub.branch_id = b.id
-            WHERE cu.id = :uid
-            ORDER BY b.is_default DESC
-            LIMIT 1
-        """), {"uid": current_user.id}).fetchone()
+        where = "WHERE 1=1"
+        params = {}
 
-        user_cc = (user_branch.country_code or "SA").upper() if user_branch else "SA"
+        # When all_branches=true or no country_code specified, show all taxes
+        if not all_branches and country_code:
+            where += " AND (country_code = :cc OR country_code IS NULL)"
+            params["cc"] = country_code.upper()
+        elif not all_branches:
+            # Get user's branch country_code as fallback
+            user_branch = db.execute(text("""
+                SELECT b.country_code
+                FROM company_users cu
+                JOIN user_branches ub ON cu.id = ub.user_id
+                JOIN branches b ON ub.branch_id = b.id
+                WHERE cu.id = :uid
+                ORDER BY b.is_default DESC
+                LIMIT 1
+            """), {"uid": current_user.id}).fetchone()
 
-        # Use explicit country_code if provided, otherwise fall back to user's branch
-        filter_cc = country_code.upper() if country_code else user_cc
-
-        where = "WHERE (country_code = :cc OR country_code IS NULL)"
-        params = {"cc": filter_cc}
+            user_cc = (user_branch.country_code or "SA").upper() if user_branch else "SA"
+            where += " AND (country_code = :cc OR country_code IS NULL)"
+            params["cc"] = user_cc
 
         if is_active is not None:
             where += " AND is_active = :active"
@@ -75,7 +81,7 @@ def list_tax_rates(
             ORDER BY created_at DESC
         """), params).fetchall()
 
-        return [dict(r._mapping) for r in rows]
+        return [serialize_tax_row(r, money_fields=[], rate_fields=["rate_value"]) for r in rows]
 
 
 @router.get("/rates/{rate_id}", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=Dict[str, Any])
@@ -255,12 +261,13 @@ def get_tax_for_branch(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب الضريبة النشطة لفرع معين — تُستخدم في الواجهة لجلب الضريبة تلقائياً عند اختيار الفرع"""
+    branch_id = validate_branch_access(current_user, branch_id)
     with transactional(current_user.company_id) as db:
         try:
             tax_info = get_active_tax_for_branch(branch_id, db)
             return {
                 "tax_rate_id": tax_info.get("id"),
-                "tax_rate": float(tax_info["rate"]),
+                "tax_rate": rate_str(tax_info["rate"]),
                 "tax_name": tax_info.get("name"),
                 "country_code": tax_info.get("country_code"),
             }
@@ -300,4 +307,3 @@ def get_tax_rate_history(
 
 
 # ==================== TAX GROUPS ====================
-

@@ -116,7 +116,10 @@ export const currenciesAPI = {
 // Zakat Calculator
 export const zakatAPI = {
     calculate: (data) => api.post('/accounting/zakat/calculate', data),
-    post: (year) => api.post(`/accounting/zakat/${year}/post`),
+    post: (year, params, idempotencyKey) => api.post(`/accounting/zakat/${year}/post`, {}, {
+        params,
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
 }
 
 // Fiscal Period Locks
