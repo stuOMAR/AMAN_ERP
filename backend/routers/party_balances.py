@@ -24,7 +24,7 @@ def get_party_balance_detail(
     with transactional(company_id) as db:
         party = db.execute(text("SELECT id, name, party_type FROM parties WHERE id = :pid"), {"pid": party_id}).fetchone()
         if not party:
-            raise HTTPException(status_code=404, detail="Party not found")
+            raise HTTPException(**http_error(404, "party_not_found", request))
 
         branch_scope = resolve_branch_scope(current_user, branch_id)
 

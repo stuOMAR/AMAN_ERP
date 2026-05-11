@@ -3,7 +3,7 @@ AMAN ERP — Delivery Orders Router
 أوامر التسليم: مستند وسيط بين أمر البيع والفاتورة
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -29,6 +29,7 @@ router = APIRouter(prefix="/sales/delivery-orders", tags=["Delivery Orders"])
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
+_D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
@@ -160,7 +161,7 @@ def get_delivery_order(do_id: int, current_user: dict = Depends(get_current_user
 # ─── CREATE ────────────────────────────────────────────────────────────────────
 
 @router.post("", status_code=201, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_delivery_order(body: DeliveryOrderCreate, current_user: dict = Depends(get_current_user)):
+def create_delivery_order(body: DeliveryOrderCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """إنشاء أمر تسليم — يمكن ربطه بأمر بيع"""
     company_id = current_user.get("company_id")
     user_id = current_user.get("user_id")
@@ -257,13 +258,13 @@ def create_delivery_order(body: DeliveryOrderCreate, current_user: dict = Depend
         except Exception as e:
             pass
             logger.error(f"Error creating delivery order: {e}")
-            raise HTTPException(500, "حدث خطأ في إنشاء أمر التسليم")
+            raise HTTPException(**http_error(500, "delivery_order_create_error", request))
 
 
 # ─── CONFIRM (ship) ───────────────────────────────────────────────────────────
 
 @router.post("/{do_id}/confirm", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def confirm_delivery_order(do_id: int, current_user: dict = Depends(get_current_user)):
+def confirm_delivery_order(do_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """
     تأكيد أمر التسليم — خصم المخزون من المستودع
     يُنشئ حركات مخزون ولكن ليس قيداً (القيد عند الفاتورة)
@@ -276,7 +277,7 @@ def confirm_delivery_order(do_id: int, current_user: dict = Depends(get_current_
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status != 'draft':
-                raise HTTPException(400, f"لا يمكن تأكيد أمر بحالة {order.status}")
+                raise HTTPException(**http_error(400, "delivery_order_confirm_invalid_status", request))
     
             lines = db.execute(text(
                 "SELECT * FROM delivery_order_lines WHERE delivery_order_id = :doid"
@@ -289,37 +290,68 @@ def confirm_delivery_order(do_id: int, current_user: dict = Depends(get_current_
                 if not line.product_id or delivered_qty <= 0:
                     continue
     
-                # Check stock
+                from services.costing_service import CostingService
+
+                # Check stock and lock row
                 stock = db.execute(text("""
-                    SELECT quantity FROM inventory
+                    SELECT quantity, reserved_quantity, average_cost FROM inventory
                     WHERE product_id = :pid AND warehouse_id = :wid
+                    FOR UPDATE
                 """), {"pid": line.product_id, "wid": warehouse_id}).fetchone()
     
-                available = _dec(stock.quantity) if stock else Decimal('0')
+                available = (_dec(stock.quantity) - _dec(stock.reserved_quantity)) if stock else Decimal('0')
                 if available < delivered_qty:
                     product = db.execute(text("SELECT product_name FROM products WHERE id = :id"), {"id": line.product_id}).fetchone()
                     pname = product.product_name if product else f"#{line.product_id}"
-                    raise HTTPException(400, f"المخزون غير كافٍ للمنتج {pname}: متوفر {available}, مطلوب {line.delivered_qty}")
-    
+                    raise HTTPException(**http_error(400, "delivery_order_insufficient_stock", request))
+
+                costing_method = CostingService._get_product_costing_method(db, line.product_id, warehouse_id)
+                if costing_method in ("fifo", "lifo"):
+                    try:
+                        cogs = CostingService.consume_layers(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=warehouse_id,
+                            quantity=delivered_qty,
+                            sale_document_type="delivery_order",
+                            sale_document_id=do_id,
+                            costing_method=costing_method,
+                        )
+                    except ValueError as exc:
+                        raise HTTPException(400, str(exc))
+                    unit_cost = (_dec(cogs) / delivered_qty).quantize(_D4, ROUND_HALF_UP) if delivered_qty else Decimal("0")
+                    total_cost = _dec(cogs).quantize(_D2, ROUND_HALF_UP)
+                else:
+                    unit_cost = _dec(stock.average_cost if stock else 0)
+                    if unit_cost <= 0:
+                        unit_cost = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": line.product_id}).scalar() or 0)
+                    total_cost = (unit_cost * delivered_qty).quantize(_D2, ROUND_HALF_UP)
+
                 # Deduct inventory
-                db.execute(text("""
+                deducted = db.execute(text("""
                     UPDATE inventory SET quantity = quantity - :qty, updated_at = CURRENT_TIMESTAMP
                     WHERE product_id = :pid AND warehouse_id = :wid
-                """), {"qty": delivered_qty, "pid": line.product_id, "wid": warehouse_id})
+                      AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                    RETURNING id
+                """), {"qty": delivered_qty, "pid": line.product_id, "wid": warehouse_id}).fetchone()
+                if not deducted:
+                    raise HTTPException(**http_error(400, "delivery_order_qty_changed", request))
     
                 # Record inventory transaction
                 db.execute(text("""
                     INSERT INTO inventory_transactions (
                         product_id, warehouse_id, transaction_type, quantity,
-                        reference_type, reference_id, notes, created_by
+                        reference_type, reference_id, notes, created_by,
+                        unit_cost, total_cost
                     ) VALUES (
                         :pid, :wid, 'delivery', :qty, 'delivery_order', :doid,
-                        :notes, :uid
+                        :notes, :uid, :uc, :tc
                     )
                 """), {
                     "pid": line.product_id, "wid": warehouse_id,
                     "qty": -delivered_qty, "doid": do_id,
-                    "notes": f"تسليم بموجب {order.delivery_number}", "uid": user_id
+                    "notes": f"تسليم بموجب {order.delivery_number}", "uid": user_id,
+                    "uc": float(unit_cost), "tc": float(total_cost)
                 })
     
             # Update status
@@ -331,7 +363,7 @@ def confirm_delivery_order(do_id: int, current_user: dict = Depends(get_current_
     
             log_activity(db, user_id, "delivery_order.confirm", f"تأكيد تسليم {order.delivery_number}", {"id": do_id})
     
-            return {"message": "تم تأكيد أمر التسليم وخصم المخزون", "status": "confirmed"}
+            return {"message": i18n_message("delivery_order_confirmed", request), "status": "confirmed"}
         except HTTPException:
             raise
         except Exception:
@@ -343,7 +375,7 @@ def confirm_delivery_order(do_id: int, current_user: dict = Depends(get_current_
 # ─── MARK DELIVERED ────────────────────────────────────────────────────────────
 
 @router.post("/{do_id}/deliver", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def mark_delivered(do_id: int, current_user: dict = Depends(get_current_user)):
+def mark_delivered(do_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """تسجيل وصول الشحنة / تسليم العميل"""
     company_id = current_user.get("company_id")
     with transactional(company_id) as db:
@@ -351,20 +383,20 @@ def mark_delivered(do_id: int, current_user: dict = Depends(get_current_user)):
         if not order:
             raise HTTPException(**http_error(404, "delivery_order_not_found"))
         if order.status not in ('confirmed', 'shipped'):
-            raise HTTPException(400, f"لا يمكن وضع حالة تسليم لأمر بحالة {order.status}")
+            raise HTTPException(**http_error(400, "delivery_status_invalid", request))
 
         db.execute(text("""
             UPDATE delivery_orders SET status = 'delivered', delivered_at = CURRENT_TIMESTAMP
             WHERE id = :id
         """), {"id": do_id})
 
-        return {"message": "تم تسجيل التسليم بنجاح", "status": "delivered"}
+        return {"message": i18n_message("delivery_completed_success", request), "status": "delivered"}
 
 
 # ─── CREATE INVOICE FROM DO ───────────────────────────────────────────────────
 
 @router.post("/{do_id}/create-invoice", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_current_user)):
+def create_invoice_from_delivery(do_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """إنشاء فاتورة مبيعات من أمر التسليم"""
     company_id = current_user.get("company_id")
     user_id = current_user.get("user_id")
@@ -374,9 +406,9 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status not in ('confirmed', 'delivered'):
-                raise HTTPException(400, "يجب تأكيد أمر التسليم أولاً")
+                raise HTTPException(**http_error(400, "delivery_order_must_confirm_first", request))
             if order.invoice_id:
-                raise HTTPException(400, f"يوجد فاتورة مرتبطة بالفعل: #{order.invoice_id}")
+                raise HTTPException(**http_error(400, "delivery_order_invoice_already_linked", request))
     
             lines = db.execute(text("""
                 SELECT dol.*, p.selling_price, p.tax_rate, p.product_name, p.cost_price
@@ -386,7 +418,7 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
             """), {"doid": do_id}).fetchall()
     
             if not lines:
-                raise HTTPException(400, "لا توجد أصناف للفوترة")
+                raise HTTPException(**http_error(400, "delivery_order_no_items_to_invoice", request))
     
             # Generate invoice number
             year = datetime.now().year
@@ -468,10 +500,13 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
             cogs_account = get_mapped_account_id(db, "acc_map_cogs")
             inventory_account = get_mapped_account_id(db, "acc_map_inventory")
     
-            total_cogs = sum(
-                (_dec(l.delivered_qty) * _dec(l.cost_price or 0)).quantize(_D2, ROUND_HALF_UP)
-                for l in lines
-            )
+            total_cogs = _dec(db.execute(text("""
+                SELECT COALESCE(SUM(ABS(total_cost)), 0)
+                FROM inventory_transactions
+                WHERE reference_type = 'delivery_order'
+                  AND reference_id = :doid
+                  AND transaction_type = 'delivery'
+            """), {"doid": do_id}).scalar()).quantize(_D2, ROUND_HALF_UP)
     
             je_lines = []
             if ar_account:
@@ -490,7 +525,7 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
                                  "description": "خصم مخزون (COGS)"})
     
             if not je_lines:
-                raise HTTPException(400, "خريطة الحسابات غير مكتملة للمبيعات")
+                raise HTTPException(**http_error(400, "ar_sales_revenue_accounts_incomplete", request))
     
             je_id, je_number = create_journal_entry(
                 db=db,
@@ -524,7 +559,7 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
     
     
             return {
-                "message": "تم إنشاء الفاتورة بنجاح",
+                "message": i18n_message("delivery_invoice_created", request),
                 "invoice_id": inv_id,
                 "invoice_number": inv_number,
                 "journal_entry_id": je_id
@@ -541,7 +576,7 @@ def create_invoice_from_delivery(do_id: int, current_user: dict = Depends(get_cu
 # ─── CANCEL ───────────────────────────────────────────────────────────────────
 
 @router.post("/{do_id}/cancel", dependencies=[Depends(require_sensitive_permission("sales.void"))], response_model=Dict[str, Any])
-def cancel_delivery_order(do_id: int, current_user: dict = Depends(get_current_user)):
+def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """إلغاء أمر التسليم — إعادة المخزون إذا كان مؤكداً"""
     company_id = current_user.get("company_id")
     user_id = current_user.get("user_id")
@@ -551,9 +586,9 @@ def cancel_delivery_order(do_id: int, current_user: dict = Depends(get_current_u
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status == 'cancelled':
-                raise HTTPException(400, "أمر التسليم ملغى بالفعل")
+                raise HTTPException(**http_error(400, "delivery_order_already_cancelled", request))
             if order.invoice_id:
-                raise HTTPException(400, "لا يمكن إلغاء أمر تسليم مرتبط بفاتورة")
+                raise HTTPException(**http_error(400, "delivery_order_cannot_cancel_with_invoice", request))
     
             # If confirmed, reverse inventory
             if order.status in ('confirmed', 'shipped', 'delivered'):
@@ -565,25 +600,80 @@ def cancel_delivery_order(do_id: int, current_user: dict = Depends(get_current_u
                     delivered_qty = _dec(line.delivered_qty)
                     if not line.product_id or delivered_qty <= 0:
                         continue
+
+                    from services.costing_service import CostingService
+                    original_cost = db.execute(text("""
+                        SELECT unit_cost
+                        FROM inventory_transactions
+                        WHERE reference_type = 'delivery_order'
+                          AND reference_id = :doid
+                          AND product_id = :pid
+                          AND quantity < 0
+                        ORDER BY id DESC
+                        LIMIT 1
+                    """), {"doid": do_id, "pid": line.product_id}).scalar()
+                    unit_cost = _dec(original_cost)
+                    if unit_cost <= 0:
+                        unit_cost = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": line.product_id}).scalar() or 0)
+
+                    costing_method = CostingService._get_product_costing_method(db, line.product_id, order.warehouse_id)
+                    if costing_method in ("fifo", "lifo"):
+                        try:
+                            return_result = CostingService.handle_return(
+                                db,
+                                product_id=line.product_id,
+                                warehouse_id=order.warehouse_id,
+                                quantity=delivered_qty,
+                                unit_cost=float(unit_cost),
+                                source_document_type="delivery_cancel",
+                                source_document_id=do_id,
+                                costing_method=costing_method,
+                                original_source_document_type="delivery_order",
+                                original_source_document_id=do_id,
+                            )
+                        except ValueError as exc:
+                            raise HTTPException(400, str(exc))
+                        unit_cost = _dec(return_result.get("restored_unit_cost", unit_cost))
+                        total_cost = _dec(return_result.get("restored_total_cost", unit_cost * delivered_qty)).quantize(_D2, ROUND_HALF_UP)
+                    else:
+                        total_cost = (unit_cost * delivered_qty).quantize(_D2, ROUND_HALF_UP)
+                        CostingService.update_cost(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=order.warehouse_id,
+                            new_qty=float(delivered_qty),
+                            new_price=float(unit_cost),
+                        )
+
                     db.execute(text("""
-                        UPDATE inventory SET quantity = quantity + :qty
-                        WHERE product_id = :pid AND warehouse_id = :wid
-                    """), {"qty": delivered_qty, "pid": line.product_id, "wid": order.warehouse_id})
+                        INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                        VALUES (:pid, :wid, :qty, :cost, NOW())
+                        ON CONFLICT (product_id, warehouse_id)
+                        DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                      updated_at = NOW()
+                    """), {
+                        "qty": delivered_qty,
+                        "pid": line.product_id,
+                        "wid": order.warehouse_id,
+                        "cost": float(unit_cost),
+                    })
     
                     db.execute(text("""
                         INSERT INTO inventory_transactions (
                             product_id, warehouse_id, transaction_type, quantity,
-                            reference_type, reference_id, notes, created_by
-                        ) VALUES (:pid, :wid, 'delivery_cancel', :qty, 'delivery_order', :doid, :notes, :uid)
+                            reference_type, reference_id, notes, created_by,
+                            unit_cost, total_cost
+                        ) VALUES (:pid, :wid, 'delivery_cancel', :qty, 'delivery_order', :doid, :notes, :uid, :uc, :tc)
                     """), {
                         "pid": line.product_id, "wid": order.warehouse_id,
                         "qty": delivered_qty, "doid": do_id,
-                        "notes": f"إلغاء أمر تسليم {order.delivery_number}", "uid": user_id
+                        "notes": f"إلغاء أمر تسليم {order.delivery_number}", "uid": user_id,
+                        "uc": float(unit_cost), "tc": float(total_cost)
                     })
     
             db.execute(text("UPDATE delivery_orders SET status = 'cancelled' WHERE id = :id"), {"id": do_id})
     
-            return {"message": "تم إلغاء أمر التسليم", "status": "cancelled"}
+            return {"message": i18n_message("delivery_cancelled_success", request), "status": "cancelled"}
         except HTTPException:
             raise
         except Exception:
@@ -595,7 +685,7 @@ def cancel_delivery_order(do_id: int, current_user: dict = Depends(get_current_u
 # ─── UPDATE ───────────────────────────────────────────────────────────────────
 
 @router.put("/{do_id}", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, current_user: dict = Depends(get_current_user)):
+def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, request: Request, current_user: dict = Depends(get_current_user)):
     """تعديل بيانات الشحن في أمر التسليم"""
     company_id = current_user.get("company_id")
     with transactional(company_id) as db:
@@ -603,7 +693,7 @@ def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, current_user: d
         if not order:
             raise HTTPException(**http_error(404, "delivery_order_not_found"))
         if order.status == 'cancelled':
-            raise HTTPException(400, "لا يمكن تعديل أمر ملغى")
+            raise HTTPException(**http_error(400, "delivery_order_cannot_edit_cancelled", request))
 
         updates = {}
         data = body.dict(exclude_none=True)
@@ -618,4 +708,4 @@ def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, current_user: d
 
         db.execute(text(f"UPDATE delivery_orders SET {', '.join(set_parts)} WHERE id = :id"), updates)
 
-        return {"message": "تم تحديث أمر التسليم"}
+        return {"message": i18n_message(("delivery_order_updated", request))}

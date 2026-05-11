@@ -66,13 +66,13 @@ def cancel_invoice(
     ).fetchone()
 
     if not inv:
-        raise HTTPException(status_code=404, detail="Invoice not found")
+        raise HTTPException(**http_error(404, ("invoice_not_found", request)))
 
     inv = dict(inv._mapping)
     if inv.get("state") not in ("posted", "submitted"):
         raise HTTPException(status_code=409, detail={
             "code": "sales.invoice.state_invalid_transition",
-            "message": f"Cannot cancel invoice in state '{inv.get('state')}'",
+            "message": i18n_message("cannot_cancel_invoice_state", request),
         })
 
     # Get invoice lines
@@ -88,7 +88,7 @@ def cancel_invoice(
         if shortages:
             raise HTTPException(status_code=409, detail={
                 "code": "inventory.preflight_failed",
-                "message": "Insufficient stock for one or more items",
+                "message": i18n_message("inventory.preflight_failed", request),
                 "shortages": shortages,
             })
 

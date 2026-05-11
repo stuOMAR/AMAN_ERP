@@ -86,6 +86,15 @@ def resolve_display_currency(db, branch_scope: Any = None) -> dict[str, Any]:
 
     unique = sorted(set(currencies))
     display_currency = unique[0] if len(unique) == 1 else base_currency
+    mode = "company_base"
+    if branch_id:
+        mode = "branch"
+    elif branch_ids is not None:
+        mode = "all_branches_consolidated" if len(unique) > 1 else "all_branches_single_currency"
+    elif len(unique) > 1:
+        mode = "company_consolidated"
+    elif len(unique) == 1:
+        mode = "company_single_currency"
     if len(unique) > 1:
         default_filter = ""
         params = {"base": base_currency}
@@ -123,21 +132,28 @@ def resolve_display_currency(db, branch_scope: Any = None) -> dict[str, Any]:
         "base_currency": base_currency,
         "rate": rate,
         "is_multi_currency_scope": len(unique) > 1,
+        "display_currency_mode": mode,
     }
 
 
-def base_to_display_amount(value: Any, display_meta: Mapping[str, Any]) -> float:
+def base_to_display_decimal(value: Any, display_meta: Mapping[str, Any]) -> Decimal:
     amount = _dec(value)
     rate = display_meta.get("rate") or Decimal("1")
     if display_meta.get("currency") != display_meta.get("base_currency") and rate:
         amount = amount / _dec(rate)
-    return float(amount)
+    return amount
+
+
+def base_to_display_amount(value: Any, display_meta: Mapping[str, Any]) -> float:
+    return float(base_to_display_decimal(value, display_meta))
 
 
 def display_currency_fields(display_meta: Mapping[str, Any]) -> dict[str, Any]:
     return {
         "display_currency": display_meta.get("currency"),
         "base_currency": display_meta.get("base_currency"),
+        "display_currency_mode": display_meta.get("display_currency_mode"),
+        "display_exchange_rate": str(_dec(display_meta.get("rate") or 1)),
         "is_multi_currency_scope": bool(display_meta.get("is_multi_currency_scope")),
     }
 

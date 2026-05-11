@@ -63,7 +63,7 @@ def create_revaluation(data: AssetRevaluationCreate, current_user: dict = Depend
         try:
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
             if not asset:
-                raise HTTPException(status_code=404, detail="Asset not found")
+                raise HTTPException(**http_error(404, "asset_not_found", request))
             dep_sum = conn.execute(text(
                 "SELECT COALESCE(SUM(amount),0) FROM asset_depreciation_schedule WHERE asset_id = :id AND posted = true"
             ), {"id": data.asset_id}).scalar()
@@ -101,7 +101,7 @@ def revalue_asset(asset_id: int, reval: AssetRevaluation, current_user: dict = D
 
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id FOR UPDATE"), {"id": asset_id}).fetchone()
         if not asset or asset.status == 'disposed':
-            raise HTTPException(status_code=400, detail="الأصل غير موجود أو مستبعد")
+            raise HTTPException(**http_error(400, "asset_not_found_or_disposed", request))
 
         acc_depr_recorded = _dec(conn.execute(text("""
             SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule WHERE asset_id = :id AND posted = TRUE
@@ -113,16 +113,16 @@ def revalue_asset(asset_id: int, reval: AssetRevaluation, current_user: dict = D
         diff = (_dec(reval.new_value) - old_book).quantize(_D2, ROUND_HALF_UP)
 
         if diff.copy_abs() < _D2:
-            return {"success": True, "message": "لا يوجد فرق في القيمة"}
+            return {"success": True, "message": i18n_message("no_value_difference", request)}
 
         base_currency = get_base_currency(conn)
         acc_fixed = get_mapped_account_id(conn, "acc_map_fixed_assets")
         acc_reval = get_mapped_account_id(conn, "acc_map_revaluation_reserve")
         acc_loss = get_mapped_account_id(conn, "acc_map_asset_loss")
         if diff > 0 and not acc_reval:
-            raise HTTPException(status_code=400, detail="لم يتم تعيين حساب احتياطي إعادة التقييم في الإعدادات")
+            raise HTTPException(**http_error(400, "revaluation_reserve_account_not_configured", request))
         if diff < 0 and not acc_loss:
-            raise HTTPException(status_code=400, detail="لم يتم تعيين حساب خسائر الأصول في الإعدادات")
+            raise HTTPException(**http_error(400, "asset_loss_account_not_configured", request))
 
         check_fiscal_period_open(conn, date.today())
 

@@ -6,6 +6,8 @@ Prevents SQL injection in DDL statements and dynamic queries.
 import re
 import logging
 
+from utils.i18n import http_error
+
 logger = logging.getLogger("aman.sql_safety")
 
 # Pattern: alphanumeric + underscore only, starting with letter or underscore
@@ -76,7 +78,7 @@ def validate_aman_identifier(name: str, label: str = "identifier") -> str:
     return name
 
 
-def validate_password_strength(password: str) -> None:
+def validate_password_strength(password: str, request=None) -> None:
     """
     SEC-302: Validate password meets security requirements.
     Raises HTTPException if password is too weak.
@@ -91,15 +93,15 @@ def validate_password_strength(password: str) -> None:
     from fastapi import HTTPException
     
     if len(password) < 10:
-        raise HTTPException(400, "كلمة المرور يجب أن تكون 10 أحرف على الأقل")
+        raise HTTPException(**http_error(400, "password_min_length", request))
     if not re.search(r'[A-Z]', password):
-        raise HTTPException(400, "كلمة المرور يجب أن تحتوي على حرف كبير واحد على الأقل")
+        raise HTTPException(**http_error(400, "password_requires_uppercase", request))
     if not re.search(r'[a-z]', password):
-        raise HTTPException(400, "كلمة المرور يجب أن تحتوي على حرف صغير واحد على الأقل")
+        raise HTTPException(**http_error(400, "password_requires_lowercase", request))
     if not re.search(r'[0-9]', password):
-        raise HTTPException(400, "كلمة المرور يجب أن تحتوي على رقم واحد على الأقل")
+        raise HTTPException(**http_error(400, "password_requires_digit", request))
     if not re.search(r'[^A-Za-z0-9]', password):
-        raise HTTPException(400, "كلمة المرور يجب أن تحتوي على رمز خاص واحد على الأقل (!@#$%^&*)")
+        raise HTTPException(**http_error(400, "password_requires_special", request))
 
 
 # File upload security constants
@@ -163,15 +165,15 @@ _SIGNATURES_BY_EXT = {
 }
 
 
-def validate_file_size(content: bytes, max_size: int, label: str = "الملف") -> None:
+def validate_file_size(content: bytes, max_size: int, label: str = "الملف", request=None) -> None:
     """Validate uploaded file doesn't exceed maximum size"""
     from fastapi import HTTPException
     if len(content) > max_size:
         max_mb = max_size / (1024 * 1024)
-        raise HTTPException(413, f"حجم {label} يتجاوز الحد الأقصى المسموح ({max_mb:.0f} ميجابايت)")
+        raise HTTPException(**http_error(413, "file_size_exceeded", request, max_mb=f"{max_mb:.0f}"))
 
 
-def validate_file_extension(filename: str, allowed: set = None, label: str = "الملف") -> str:
+def validate_file_extension(filename: str, allowed: set = None, label: str = "الملف", request=None) -> str:
     """
     Validate file extension is safe.
     
@@ -187,11 +189,11 @@ def validate_file_extension(filename: str, allowed: set = None, label: str = "ا
     from fastapi import HTTPException
     
     if not filename:
-        raise HTTPException(400, f"اسم {label} مطلوب")
+        raise HTTPException(**http_error(400, "file_name_required", request))
 
     safe_name = os.path.basename(filename)
     if len(safe_name.encode("utf-8")) > MAX_FILENAME_BYTES:
-        raise HTTPException(400, f"اسم {label} يتجاوز {MAX_FILENAME_BYTES} بايت")
+        raise HTTPException(**http_error(400, "file_name_too_long", request, max=MAX_FILENAME_BYTES))
     
     ext = os.path.splitext(filename)[1].lower()
 
@@ -212,11 +214,11 @@ def validate_file_extension(filename: str, allowed: set = None, label: str = "ا
 
     # Always block dangerous extensions
     if ext in BLOCKED_FILE_EXTENSIONS:
-        raise HTTPException(400, f"نوع {label} غير مسموح ({ext})")
+        raise HTTPException(**http_error(400, "file_type_not_allowed", request, ext=ext))
     
     # If allowed set provided, check against it
     if allowed and ext not in allowed:
-        raise HTTPException(400, f"نوع {label} غير مدعوم ({ext}). الأنواع المسموحة: {', '.join(sorted(allowed))}")
+        raise HTTPException(**http_error(400, "file_type_not_supported", request, types=", ".join(sorted(allowed))))
     
     return ext
 
@@ -238,7 +240,8 @@ def validate_file_mime_and_signature(
     filename: str,
     content_type: str,
     content: bytes,
-    label: str = "الملف"
+    label: str = "الملف",
+    request=None,
 ) -> str:
     """
     Validate uploaded file MIME type and binary signature (magic bytes).
@@ -248,33 +251,30 @@ def validate_file_mime_and_signature(
     import os
 
     if not content:
-        raise HTTPException(400, f"{label} فارغ")
+        raise HTTPException(**http_error(400, "file_empty", request))
 
     ext = os.path.splitext(filename or "")[1].lower()
     if not ext:
-        raise HTTPException(400, f"امتداد {label} غير واضح")
+        raise HTTPException(**http_error(400, "file_extension_unclear", request))
 
     # MIME validation (if provided by client/proxy).
     normalized_ct = (content_type or "").split(";")[0].strip().lower()
     allowed_mimes = _ALLOWED_MIME_BY_EXT.get(ext)
     if normalized_ct and allowed_mimes and normalized_ct not in allowed_mimes:
-        raise HTTPException(
-            400,
-            f"MIME غير مطابق لامتداد {label}: ({normalized_ct}) مع ({ext})"
-        )
+        raise HTTPException(**http_error(400, "file_signature_mismatch", request, ext=ext))
 
     # Signature validation for binary formats we can confidently detect.
     if ext == ".webp":
         if not (len(content) >= 12 and content.startswith(b"RIFF") and content[8:12] == b"WEBP"):
-            raise HTTPException(400, f"توقيع {label} غير صالح لملف WEBP")
+            raise HTTPException(**http_error(400, "file_invalid_webp_signature", request))
         return ext
 
     signatures = _SIGNATURES_BY_EXT.get(ext, [])
     if signatures and not any(content.startswith(sig) for sig in signatures):
-        raise HTTPException(400, f"توقيع {label} لا يطابق الامتداد ({ext})")
+        raise HTTPException(**http_error(400, "file_signature_mismatch", request, ext=ext))
 
     # Text formats: block NUL-bytes to reduce disguised binaries.
     if ext in {".txt", ".csv", ".svg"} and b"\x00" in content:
-        raise HTTPException(400, f"محتوى {label} غير صالح كملف نصي")
+        raise HTTPException(**http_error(400, "file_invalid_text_content", request))
 
     return ext

@@ -18,6 +18,7 @@ function PurchaseInvoiceForm() {
     const location = useLocation()
     const { showToast } = useToast()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const currency = getCurrency()
 
@@ -79,19 +80,27 @@ function PurchaseInvoiceForm() {
                     const order = location.state.fromOrder
                     setFormData(prev => ({
                         ...prev,
-                        supplier_id: order.supplier_id,
-                        notes: order.notes || '',
-                        due_date: order.expected_date ? new Date(order.expected_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-                        is_prepayment: false
-                    }))
-                    setItems(order.items.map(item => {
-                        const quantity = Number(item.received_quantity) > 0 ? Number(item.received_quantity) : (Number(item.quantity) || 0)
+	                        supplier_id: order.supplier_id,
+	                        notes: order.notes || '',
+	                        due_date: order.expected_date ? new Date(order.expected_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+	                        currency: order.currency || prev.currency,
+	                        exchange_rate: order.exchange_rate || prev.exchange_rate || 1,
+	                        is_prepayment: false
+	                    }))
+                    setItems(order.items
+                        .filter(item => Number(item.remaining_to_invoice || 0) > 0)
+                        .map(item => {
+                        // T040: Use remaining_to_invoice (received - invoiced) instead of received_quantity
+                        const remainingToInvoice = Number(item.remaining_to_invoice || 0)
+                        const quantity = remainingToInvoice
                         const unitPrice = Number(item.unit_price) || 0
                         const discount = Number(item.discount) || 0
                         const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0
 
                         return {
                             product_id: item.product_id,
+                            po_line_id: item.id,
+                            max_remaining_to_invoice: remainingToInvoice,
                             description: item.description || '',
                             quantity: quantity,
                             unit_price: unitPrice,
@@ -103,9 +112,14 @@ function PurchaseInvoiceForm() {
                 }
             } catch (err) {
                 showToast(t('common.error'), 'error')
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchResources()
+        const timer = setTimeout(() => {
+            fetchResources()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [location.state, currentBranch])
 
     // Auto-select warehouse and Reset if branch mismatch
@@ -204,15 +218,18 @@ function PurchaseInvoiceForm() {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             previewDebounced({
                 lines: items.map(i => ({
+                    product_id: i.product_id ? Number(i.product_id) : null,
                     quantity: Number(i.quantity) || 0,
                     unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
                     discount: Number(i.discount) || 0,
                 })),
+                branch_id: currentBranch?.id || null,
+                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
+                document_date: formData.invoice_date,
                 currency,
             })
         }
-    }, [items])
+    }, [items, formData.supplier_id, formData.invoice_date, currentBranch])
 
     const totals = calculateTotals()
 
@@ -308,6 +325,14 @@ function PurchaseInvoiceForm() {
             window.scrollTo(0, 0)
             return
         }
+        const overRemaining = items.find(item =>
+            item.po_line_id && Number(item.quantity || 0) > Number(item.max_remaining_to_invoice || 0)
+        )
+        if (overRemaining) {
+            setError(t('buying.purchase_invoices.form.error_qty_exceeds_remaining', 'Quantity exceeds remaining to invoice'))
+            window.scrollTo(0, 0)
+            return
+        }
 
         setLoading(true)
         setError(null)
@@ -333,6 +358,7 @@ function PurchaseInvoiceForm() {
                 markup_amount: totals.globalMarkupAmount,
                 items: items.map(item => ({
                     product_id: parseInt(item.product_id) || null,
+                    po_line_id: item.po_line_id ? parseInt(item.po_line_id) : null,
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
@@ -355,6 +381,7 @@ function PurchaseInvoiceForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <BackButton />
                 <div>
@@ -521,6 +548,7 @@ function PurchaseInvoiceForm() {
                                         <td>
                                             <input
                                                 type="number" className="form-input" min="1" step={getStep()}
+                                                max={item.max_remaining_to_invoice || undefined}
                                                 value={item.quantity || ''}
                                                 onChange={e => handleItemChange(index, 'quantity', e.target.value)}
                                             />

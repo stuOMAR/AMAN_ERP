@@ -59,7 +59,7 @@ def validate_configuration(conn, configuration_id: int, selected_option_ids: lis
                 "rule_type": "required_group",
                 "source_option": gd["name"],
                 "target_option": "",
-                "message": f"Group '{gd['name']}' requires at least one selection",
+                "message": i18n_message("cpq_group_requires_selection", request),
             })
 
     return {"valid": len(errors) == 0, "errors": errors}

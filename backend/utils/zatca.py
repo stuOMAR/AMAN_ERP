@@ -8,11 +8,13 @@ import base64
 import hashlib
 import io
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional, Dict, Any
 
 import qrcode
 
 import logging
+from utils.tax_precision import money_str, q_money
 
 logger = logging.getLogger(__name__)
 
@@ -83,8 +85,8 @@ def generate_zatca_qr_base64(
     seller_name: str,
     vat_number: str,
     timestamp: str,
-    total_with_vat: float,
-    vat_amount: float,
+    total_with_vat,
+    vat_amount,
     invoice_hash: Optional[str] = None,
     digital_signature: Optional[str] = None,
     size: int = 200
@@ -98,8 +100,8 @@ def generate_zatca_qr_base64(
         seller_name=seller_name,
         vat_number=vat_number,
         timestamp=timestamp,
-        total_with_vat=f"{total_with_vat:.2f}",
-        vat_amount=f"{vat_amount:.2f}",
+        total_with_vat=money_str(total_with_vat),
+        vat_amount=money_str(vat_amount),
         invoice_hash=invoice_hash,
         digital_signature=digital_signature
     )
@@ -130,8 +132,8 @@ def generate_zatca_qr_base64(
 def compute_invoice_hash(
     invoice_number: str,
     invoice_date: str,
-    total: float,
-    vat: float,
+    total,
+    vat,
     seller_vat: str,
     previous_hash: Optional[str] = None
 ) -> str:
@@ -139,7 +141,7 @@ def compute_invoice_hash(
     ZATCA-002: Compute SHA-256 hash of an invoice.
     Implements hash chaining — each invoice hash includes the previous invoice's hash.
     """
-    data = f"{previous_hash or '0'}|{invoice_number}|{invoice_date}|{total:.2f}|{vat:.2f}|{seller_vat}"
+    data = f"{previous_hash or '0'}|{invoice_number}|{invoice_date}|{money_str(total)}|{money_str(vat)}|{seller_vat}"
     return hashlib.sha256(data.encode("utf-8")).hexdigest()
 
 
@@ -222,8 +224,8 @@ def process_invoice_for_zatca(
     vat_number: str = None,
     invoice_number: str = None,
     invoice_date: str = None,
-    total: float = None,
-    vat_amount: float = None,
+    total=None,
+    vat_amount=None,
     private_key_pem: Optional[str] = None
 ) -> Dict[str, Any]:
     """
@@ -249,8 +251,11 @@ def process_invoice_for_zatca(
             return None
         invoice_number = invoice_number or inv[0]
         invoice_date = invoice_date or str(inv[1])
-        total = total if total is not None else float(inv[2] or 0)
-        vat_amount = vat_amount if vat_amount is not None else float(inv[3] or 0)
+        total = q_money(total if total is not None else Decimal(str(inv[2] or 0)))
+        vat_amount = q_money(vat_amount if vat_amount is not None else Decimal(str(inv[3] or 0)))
+    else:
+        total = q_money(total)
+        vat_amount = q_money(vat_amount)
     
     # Auto-fetch company info if not provided
     if not seller_name or not vat_number:

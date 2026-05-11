@@ -19,6 +19,7 @@ export default function RecurringTemplates() {
 
     const [templates, setTemplates] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [accounts, setAccounts] = useState([])
     const [showModal, setShowModal] = useState(false)
     const [showDetailModal, setShowDetailModal] = useState(false)
@@ -50,6 +51,7 @@ export default function RecurringTemplates() {
             showToast(t('recurring.error_loading'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }, [filterActive, currentBranch])
 
@@ -60,7 +62,12 @@ export default function RecurringTemplates() {
         } catch { /* ignore */ }
     }
 
-    useEffect(() => { fetchTemplates() }, [fetchTemplates])
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchTemplates()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [fetchTemplates])
     useEffect(() => { fetchAccounts() }, [])
 
     const resetForm = () => {
@@ -246,7 +253,8 @@ export default function RecurringTemplates() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad ? (
                 <PageLoading />
             ) : templates.length === 0 ? (
                 <div className="text-center text-muted p-5">

@@ -17,6 +17,7 @@ function CustomerForm() {
     const navigate = useNavigate()
     const { currentBranch } = useBranch()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [initialLoading, setInitialLoading] = useState(isEdit)
     const [error, setError] = useState(null)
     const [groups, setGroups] = useState([])
@@ -34,37 +35,41 @@ function CustomerForm() {
     })
 
     useEffect(() => {
-        const fetchInitialData = async () => {
-            try {
-                if (isEdit) setInitialLoading(true)
-                const [groupsRes] = await Promise.all([
-                    salesAPI.listCustomerGroups()
-                ])
-                setGroups(groupsRes.data)
+        const timer = setTimeout(() => {
+            const fetchInitialData = async () => {
+                try {
+                    if (isEdit) setInitialLoading(true)
+                    const [groupsRes] = await Promise.all([
+                        salesAPI.listCustomerGroups()
+                    ])
+                    setGroups(groupsRes.data)
 
-                if (isEdit) {
-                    const customerRes = await salesAPI.getCustomer(id)
-                    const c = customerRes.data;
-                    setFormData({
-                        name: c.name || '',
-                        name_en: c.name_en || '',
-                        email: c.email || '',
-                        phone: c.phone || '',
-                        tax_number: c.tax_number || '',
-                        address: c.address || '',
-                        credit_limit: c.credit_limit ? formatNumber(c.credit_limit) : formatNumber(0),
-                        group_id: c.group_id || '',
-                        currency: c.currency || '',
-                        status: c.status || 'active'
-                    })
+                    if (isEdit) {
+                        const customerRes = await salesAPI.getCustomer(id)
+                        const c = customerRes.data;
+                        setFormData({
+                            name: c.name || '',
+                            name_en: c.name_en || '',
+                            email: c.email || '',
+                            phone: c.phone || '',
+                            tax_number: c.tax_number || '',
+                            address: c.address || '',
+                            credit_limit: c.credit_limit ? formatNumber(c.credit_limit) : formatNumber(0),
+                            group_id: c.group_id || '',
+                            currency: c.currency || '',
+                            status: c.status || 'active'
+                        })
+                    }
+                } catch (err) {
+                    setError(t('common.error_loading'))
+                } finally {
+                    setInitialLoading(false)
+                    setInitialLoad(false)
                 }
-            } catch (err) {
-                setError(t('common.error_loading'))
-            } finally {
-                setInitialLoading(false)
             }
-        }
-        fetchInitialData()
+            fetchInitialData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id, isEdit, t])
 
     const handleSubmit = async (e) => {
@@ -108,6 +113,7 @@ function CustomerForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

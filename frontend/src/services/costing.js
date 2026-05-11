@@ -1,4 +1,4 @@
-import api from '../utils/api'
+import api from './apiClient'
 
 export const costingLayerAPI = {
     listLayers: (params) => api.get('/inventory/costing/layers', { params }),

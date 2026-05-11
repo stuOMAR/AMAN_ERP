@@ -52,7 +52,7 @@ def _resolve_employee(conn, user, raise_on_missing: bool = True) -> dict | None:
     """), {"uid": uid}).mappings().fetchone()
     if not row:
         if raise_on_missing:
-            raise HTTPException(status_code=400, detail="User is not linked to an employee record")
+            raise HTTPException(**http_error(400, "user_not_linked_employee", request))
         return None
     return dict(row)
 
@@ -81,7 +81,7 @@ def get_own_profile(
     try:
         emp = _resolve_employee(conn, current_user, raise_on_missing=False)
         if not emp:
-            return {"success": True, "data": None, "message": "No employee record linked to this user"}
+            return {"success": True, "data": None, "message": i18n_message("no_employee_record", request)}
         return {
             "success": True,
             "data": {
@@ -124,7 +124,7 @@ def update_own_profile(
             params["email"] = body.email
 
         if not sets:
-            raise HTTPException(status_code=400, detail="No updatable fields provided")
+            raise HTTPException(**http_error(400, ("no_updatable_fields", request)))
 
         conn.execute(text(f"UPDATE employees SET {', '.join(sets)} WHERE id = :eid"), params)
 
@@ -146,7 +146,7 @@ def update_own_profile(
             action="hr.self_service.profile_update", resource_type="employee",
             resource_id=str(emp["id"]), details=body.model_dump(exclude_none=True), request=request
         )
-        return {"success": True, "message": "Profile updated"}
+        return {"success": True, "message": i18n_message("profile_updated", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -233,7 +233,7 @@ def get_payslip_detail(
         """), {"pid": payslip_id, "eid": emp["id"]}).mappings().fetchone()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Payslip not found")
+            raise HTTPException(**http_error(404, ("payslip_not_found", request)))
 
         uid = current_user.get("id") if isinstance(current_user, dict) else current_user.id
         log_activity(
@@ -325,7 +325,7 @@ def submit_leave_request(
         uid = current_user.get("id") if isinstance(current_user, dict) else current_user.id
 
         if body.start_date > body.end_date:
-            raise HTTPException(status_code=400, detail="تاريخ البداية لا يمكن أن يكون بعد تاريخ النهاية")
+            raise HTTPException(**http_error(400, ("start_date_after_end", request)))
 
         leave_days = (body.end_date - body.start_date).days + 1
 
@@ -336,7 +336,7 @@ def submit_leave_request(
               AND start_date <= :end AND end_date >= :start
         """), {"eid": eid, "start": body.start_date, "end": body.end_date}).fetchone()
         if overlap:
-            raise HTTPException(status_code=400, detail="يوجد طلب إجازة متداخل مع هذه الفترة")
+            raise HTTPException(**http_error(400, ("overlapping_leave_request", request)))
 
         # Balance check for annual leave
         if body.leave_type in ("annual", "سنوية"):
@@ -425,8 +425,8 @@ def submit_leave_request(
             """SELECT DISTINCT u.id, 'leave_request', :title, :message, :link, FALSE, NOW()
                FROM company_users u WHERE u.is_active = TRUE AND u.role IN ('admin','superuser','manager')""",
             {
-                "title": "🌴 طلب إجازة جديد",
-                "message": f"{emp_name} طلب إجازة {body.leave_type} من {body.start_date} إلى {body.end_date} ({leave_days} يوم)",
+                "title": i18n_message("notif_leave_request", request),
+                "message": i18n_message("leave_request_notification", request),
                 "link": "/hr/self-service/team-requests",
             },
         )
@@ -547,9 +547,9 @@ def approve_leave_request(
         """), {"rid": request_id}).mappings().fetchone()
 
         if not lr:
-            raise HTTPException(status_code=404, detail="Leave request not found")
+            raise HTTPException(**http_error(404, ("leave_request_not_found", request)))
         if lr["status"] != "pending":
-            raise HTTPException(status_code=400, detail=f"Cannot approve request in '{lr['status']}' status")
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_approve_status", request))
 
         conn.execute(text("""
             UPDATE leave_requests SET status = 'approved' WHERE id = :rid
@@ -579,13 +579,13 @@ def approve_leave_request(
                 "SELECT :uid, 'leave_approved', :title, :message, :link, FALSE, NOW()",
                 {
                     "uid": lr["emp_user_id"],
-                    "title": "✅ تمت الموافقة على طلب الإجازة",
-                    "message": f"تمت الموافقة على إجازتك ({lr['leave_type']}) من {lr['start_date']} إلى {lr['end_date']}",
+                    "title": i18n_message("notif_leave_approved", request),
+                    "message": i18n_message("leave_approved_details", request, type=lr['leave_type'], start=lr['start_date'], end=lr['end_date']),
                     "link": "/hr/self-service/leave-requests",
                 },
             )
 
-        return {"success": True, "message": "Leave request approved"}
+        return {"success": True, "message": i18n_message("leave_approved", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -619,9 +619,9 @@ def reject_leave_request(
         """), {"rid": request_id}).mappings().fetchone()
 
         if not lr:
-            raise HTTPException(status_code=404, detail="Leave request not found")
+            raise HTTPException(**http_error(404, ("leave_request_not_found", request)))
         if lr["status"] != "pending":
-            raise HTTPException(status_code=400, detail=f"Cannot reject request in '{lr['status']}' status")
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_reject_status", request))
 
         conn.execute(text("UPDATE leave_requests SET status = 'rejected' WHERE id = :rid"), {"rid": request_id})
 
@@ -648,14 +648,14 @@ def reject_leave_request(
                 "SELECT :uid, 'leave_rejected', :title, :message, :link, FALSE, NOW()",
                 {
                     "uid": lr["emp_user_id"],
-                    "title": "❌ تم رفض طلب الإجازة",
-                    "message": f"تم رفض إجازتك ({lr['leave_type']}) من {lr['start_date']} إلى {lr['end_date']}"
+                    "title": i18n_message("notif_leave_rejected", request),
+                    "message": i18n_message("leave_status_update", request)
                              + (f"\nالسبب: {reason}" if reason else ""),
                     "link": "/hr/self-service/leave-requests",
                 },
             )
 
-        return {"success": True, "message": "Leave request rejected"}
+        return {"success": True, "message": i18n_message("leave_rejected", request)}
     except HTTPException:
         raise
     except Exception as e:

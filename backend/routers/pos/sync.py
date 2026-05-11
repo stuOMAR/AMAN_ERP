@@ -84,7 +84,7 @@ def get_conflict(conflict_id: int, current_user=Depends(get_current_user)):
             "SELECT * FROM pos_sync_conflicts WHERE id = :id"
         ), {"id": conflict_id}).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Conflict not found")
+            raise HTTPException(**http_error(404, ("pos_conflict_not_found", request)))
         return dict(row._mapping)
     finally:
         db.close()
@@ -107,12 +107,9 @@ def resolve_conflict(conflict_id: int, payload: ConflictResolve,
             "SELECT id, resolution FROM pos_sync_conflicts WHERE id = :id FOR UPDATE"
         ), {"id": conflict_id}).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Conflict not found")
+            raise HTTPException(**http_error(404, ("pos_conflict_not_found", request)))
         if row.resolution and row.resolution != "pending":
-            raise HTTPException(
-                status_code=400,
-                detail=f"Conflict already resolved (status={row.resolution})"
-            )
+            raise HTTPException(**http_error(400, "pos_conflict_already_resolved", request, status=row.resolution))
 
         db.execute(text("""
             UPDATE pos_sync_conflicts

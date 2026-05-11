@@ -37,7 +37,7 @@ def sync_prices_from_base(
         """), {"cur": base_cur}).fetchone()
         
         if not base_pl:
-            return {"message": "لا توجد قائمة أسعار أساسية", "updated": 0}
+            return {"message": i18n_message("no_base_price_list", request), "updated": 0}
         
         # Get base prices
         base_items = db.execute(text("""
@@ -94,7 +94,7 @@ def sync_prices_from_base(
                 total_updated += 1
         
         db.commit()
-        return {"message": f"تم تحديث {total_updated} سعر", "updated": total_updated}
+        return {"message": i18n_message("prices_bulk_updated", request), "updated": total_updated}
     finally:
         db.close()
 
@@ -116,10 +116,10 @@ def sync_single_price_list(
         """), {"id": list_id}).fetchone()
         
         if not target_pl:
-            raise HTTPException(status_code=404, detail="قائمة الأسعار غير موجودة")
+            raise HTTPException(**http_error(404, "price_list_not_found", request))
         
         if target_pl.currency == base_cur:
-            return {"message": "هذه القائمة بالعملة الأساسية - لا حاجة للتحديث"}
+            return {"message": i18n_message("already_base_currency", request)}
         
         # Get exchange rate
         rate = db.execute(text("""
@@ -127,7 +127,7 @@ def sync_single_price_list(
         """), {"code": target_pl.currency}).scalar()
         
         if not rate:
-            raise HTTPException(status_code=400, detail=f"لا يوجد سعر صرف لعملة {target_pl.currency}")
+            raise HTTPException(status_code=400, detail=i18n_message("no_exchange_rate", request))
         
         # Get base price list
         base_pl = db.execute(text("""
@@ -137,7 +137,7 @@ def sync_single_price_list(
         """), {"cur": base_cur}).fetchone()
         
         if not base_pl:
-            raise HTTPException(status_code=400, detail="لا توجد قائمة أسعار أساسية")
+            raise HTTPException(**http_error(400, "no_base_price_list", request))
         
         # Get base prices
         base_items = db.execute(text("""
@@ -157,6 +157,6 @@ def sync_single_price_list(
             updated += 1
         
         db.commit()
-        return {"message": f"تم تحديث {updated} سعر", "updated": updated}
+        return {"message": i18n_message("prices_bulk_updated", request), "updated": updated}
     finally:
         db.close()

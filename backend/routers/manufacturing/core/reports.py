@@ -538,6 +538,7 @@ def cost_variance_report(
 
 @router.get("/oee", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def calculate_oee(
+    request: Request,
     work_center_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -590,7 +591,7 @@ def calculate_oee(
         return results
     except Exception as e:
         logger.error(f"Error calculating OEE: {e}")
-        raise HTTPException(500, "فشل في حساب الفعالية الشاملة")
+        raise HTTPException(**http_error(500, "oee_calc_failed", request))
     finally:
         conn.close()
 

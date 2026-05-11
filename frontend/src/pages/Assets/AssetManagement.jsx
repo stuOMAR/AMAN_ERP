@@ -21,6 +21,7 @@ const AssetManagement = () => {
     const [assets, setAssets] = useState([]);
     const [branches, setBranches] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [modalType, setModalType] = useState('transfer');
 
@@ -28,8 +29,11 @@ const AssetManagement = () => {
     const [revalForm, setRevalForm] = useState({ asset_id: '', new_value: '', reason: '' });
 
     useEffect(() => {
-        fetchData();
-        fetchMetadata();
+        const timer = setTimeout(() => {
+            fetchData();
+            fetchMetadata();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [activeTab, currentBranch]);
 
     const fetchMetadata = async () => {
@@ -61,6 +65,7 @@ const AssetManagement = () => {
             console.error(err);
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -152,7 +157,8 @@ const AssetManagement = () => {
             </div>
 
             <div className="card section-card">
-                {loading ? (
+                {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+                {initialLoad && loading ? (
                      <div className="text-center p-5 text-muted">
                         <Spinner size="md"/>
                         {t('common.loading')}

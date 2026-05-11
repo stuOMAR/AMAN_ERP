@@ -176,9 +176,9 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
                 "SELECT id FROM accounts WHERE account_code IN ('1201', '1200') AND is_active = TRUE ORDER BY account_code LIMIT 1"
             )).fetchone()
             if not nr_account:
-                raise HTTPException(status_code=500, detail="حساب أوراق القبض 1210 غير موجود")
+                raise HTTPException(**http_error(500, "notes_receivable_account_not_found", request))
             if not ar_account:
-                raise HTTPException(status_code=500, detail="حساب العملاء (1200/1201) غير موجود")
+                raise HTTPException(**http_error(500, "customer_ar_account_not_found", request))
     
             # Create journal entry
             check_fiscal_period_open(db, data.issue_date or date.today().isoformat())
@@ -226,7 +226,7 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
                          resource_type="note_receivable", resource_id=str(note_id),
                          details={"note_number": data.note_number, "amount": amt},
                          branch_id=branch_id)
-            return {"id": note_id, "journal_entry_id": je_id, "message": "تم إنشاء ورقة القبض بنجاح"}
+            return {"id": note_id, "journal_entry_id": je_id, "message": i18n_message("receipt_note_created", request)}
         except HTTPException:
             raise
         except Exception:
@@ -254,7 +254,7 @@ def collect_note_receivable(note_id: int, data: dict = None,
             branch_id = validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'pending':
-                raise HTTPException(status_code=400, detail="لا يمكن تحصيل ورقة غير معلقة")
+                raise HTTPException(**http_error(400, "note_not_in_pending_status", request))
     
             tid = treasury_account_id or note.treasury_account_id
             if not tid:
@@ -302,7 +302,7 @@ def collect_note_receivable(note_id: int, data: dict = None,
                          resource_type="note_receivable", resource_id=str(note_id),
                          details={"note_number": note.note_number, "amount": amt},
                          branch_id=note.branch_id)
-            return {"message": "تم تحصيل ورقة القبض بنجاح", "journal_entry_id": je_id}
+            return {"message": i18n_message("receipt_note_collected_success", request), "journal_entry_id": je_id}
         except HTTPException:
             raise
         except Exception:
@@ -329,14 +329,14 @@ def protest_note_receivable(note_id: int, data: dict = None,
             validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'pending':
-                raise HTTPException(status_code=400, detail="لا يمكن رفض ورقة غير معلقة")
+                raise HTTPException(**http_error(400, "note_not_in_pending_status_reject", request))
     
             nr_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1210'")).fetchone()
             ar_account = db.execute(text(
                 "SELECT id FROM accounts WHERE account_code IN ('1201', '1200') AND is_active = TRUE ORDER BY account_code LIMIT 1"
             )).fetchone()
             if not nr_account or not ar_account:
-                raise HTTPException(status_code=500, detail="حسابات أوراق القبض أو العملاء غير موجودة")
+                raise HTTPException(**http_error(500, "notes_receivable_or_customer_accounts_missing", request))
             pdate = protest_date or date.today().isoformat()
     
             check_fiscal_period_open(db, pdate)
@@ -372,7 +372,7 @@ def protest_note_receivable(note_id: int, data: dict = None,
                          resource_type="note_receivable", resource_id=str(note_id),
                          details={"note_number": note.note_number, "reason": reason},
                          branch_id=note.branch_id)
-            return {"message": "تم رفض ورقة القبض", "journal_entry_id": je_id}
+            return {"message": i18n_message("receipt_note_rejected_success", request), "journal_entry_id": je_id}
         except HTTPException:
             raise
         except Exception:
@@ -468,9 +468,9 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
                 "SELECT id FROM accounts WHERE account_code IN ('2101', '2100') AND is_active = TRUE ORDER BY account_code LIMIT 1"
             )).fetchone()
             if not np_account:
-                raise HTTPException(status_code=500, detail="حساب أوراق الدفع 2110 غير موجود")
+                raise HTTPException(**http_error(500, "notes_payable_account_not_found", request))
             if not ap_account:
-                raise HTTPException(status_code=500, detail="حساب الموردين (2100/2101) غير موجود")
+                raise HTTPException(**http_error(500, "supplier_ap_account_not_found", request))
     
             check_fiscal_period_open(db, data.issue_date or date.today().isoformat())
     
@@ -517,7 +517,7 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
                          resource_type="note_payable", resource_id=str(note_id),
                          details={"note_number": data.note_number, "amount": amt},
                          branch_id=branch_id)
-            return {"id": note_id, "journal_entry_id": je_id, "message": "تم إنشاء ورقة الدفع بنجاح"}
+            return {"id": note_id, "journal_entry_id": je_id, "message": i18n_message("payment_note_created", request)}
         except HTTPException:
             raise
         except Exception:
@@ -545,7 +545,7 @@ def pay_note_payable(note_id: int, data: dict = None,
             branch_id = validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'issued':
-                raise HTTPException(status_code=400, detail="لا يمكن سداد ورقة غير صادرة")
+                raise HTTPException(**http_error(400, "note_not_issued_cannot_pay", request))
     
             tid = treasury_account_id or note.treasury_account_id
             if not tid:
@@ -593,7 +593,7 @@ def pay_note_payable(note_id: int, data: dict = None,
                          resource_type="note_payable", resource_id=str(note_id),
                          details={"note_number": note.note_number, "amount": amt},
                          branch_id=note.branch_id)
-            return {"message": "تم سداد ورقة الدفع بنجاح", "journal_entry_id": je_id}
+            return {"message": i18n_message("payment_note_settled_success", request), "journal_entry_id": je_id}
         except HTTPException:
             raise
         except Exception:
@@ -620,14 +620,14 @@ def protest_note_payable(note_id: int, data: dict = None,
             validate_branch_access(current_user, note.branch_id)
             
             if note.status != 'issued':
-                raise HTTPException(status_code=400, detail="لا يمكن رفض ورقة غير صادرة")
+                raise HTTPException(**http_error(400, "note_not_issued_cannot_reject", request))
     
             np_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2110'")).fetchone()
             ap_account = db.execute(text(
                 "SELECT id FROM accounts WHERE account_code IN ('2101', '2100') AND is_active = TRUE ORDER BY account_code LIMIT 1"
             )).fetchone()
             if not np_account or not ap_account:
-                raise HTTPException(status_code=500, detail="حسابات أوراق الدفع أو الموردين غير موجودة")
+                raise HTTPException(**http_error(500, "notes_payable_or_supplier_accounts_missing", request))
             pdate = protest_date or date.today().isoformat()
     
             check_fiscal_period_open(db, pdate)
@@ -663,7 +663,7 @@ def protest_note_payable(note_id: int, data: dict = None,
                          resource_type="note_payable", resource_id=str(note_id),
                          details={"note_number": note.note_number, "reason": reason},
                          branch_id=note.branch_id)
-            return {"message": "تم رفض ورقة الدفع", "journal_entry_id": je_id}
+            return {"message": i18n_message("payment_note_rejected_success", request), "journal_entry_id": je_id}
         except HTTPException:
             raise
         except Exception:

@@ -13,6 +13,7 @@ from schemas.contracts import ContractCreate, ContractUpdate, ContractAmendmentC
 from utils.permissions import branch_scope_filter, require_permission
 from utils.accounting import get_base_currency, compute_line_amounts, compute_invoice_totals
 from utils.audit import log_activity
+from utils.tax_precision import money_str
 from services.tax_engine import resolve_line_tax
 
 logger = logging.getLogger(__name__)
@@ -53,7 +54,7 @@ def create_contract(
                 calculated_total += la['line_total']
             
             # Use calculated total (override client-provided total)
-            final_total = float(calculated_total)
+            final_total = calculated_total
     
             # Create Contract Header
             contract_id = db.execute(
@@ -100,7 +101,7 @@ def create_contract(
                         "qty": item.quantity,
                         "price": item.unit_price,
                         "tax": item.tax_rate,
-                        "total": float(la['line_total'])
+                        "total": la["line_total"]
                     }
                 )
             
@@ -110,7 +111,7 @@ def create_contract(
                 db, user_id=current_user.id, username=current_user.username,
                 action="contract.create", resource_type="contracts",
                 resource_id=str(contract_id),
-                details={"contract_number": contract.contract_number, "total": final_total},
+                details={"contract_number": contract.contract_number, "total": money_str(final_total)},
                 request=request
             )
     
@@ -124,8 +125,8 @@ def create_contract(
                     WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                     AND u.id != :current_uid
                 """), {
-                    "title": "📝 عقد جديد",
-                    "message": f"تم إنشاء عقد {contract.contract_number or ''} — {party_name or ''} — {final_total:,.2f}",
+                    "title": i18n_message("notif_new_contract", request),
+                    "message": i18n_message("contract_created_details", request),
                     "link": f"/contracts/{contract_id}",
                     "current_uid": current_user.id
                 })
@@ -339,10 +340,10 @@ def update_contract(
                     VALUES (:cid, :pid, :desc, :qty, :price, :tax, :total)
                 """), {
                     "cid": contract_id, "pid": item.product_id, "desc": item.description,
-                    "qty": item.quantity, "price": item.unit_price, "tax": item.tax_rate, "total": float(la['line_total'])
+                    "qty": item.quantity, "price": item.unit_price, "tax": item.tax_rate, "total": la["line_total"]
                 })
             set_parts.append("total_amount = :total_amount")
-            params["total_amount"] = float(calculated_total)
+            params["total_amount"] = calculated_total
 
         if set_parts:
             set_parts.append("updated_at = CURRENT_TIMESTAMP")
@@ -486,9 +487,9 @@ def generate_contract_invoice(
                 line_dicts.append({"quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": tax_info["tax_rate"]})
                 resolved_items.append({"item": i, "tax_info": tax_info})
             totals = compute_invoice_totals(line_dicts)
-            subtotal = float(totals["subtotal"])
-            tax_total = float(totals["total_tax"])
-            total = float(totals["grand_total"])
+            subtotal = totals["subtotal"]
+            tax_total = totals["total_tax"]
+            total = totals["grand_total"]
             
             inv_id = db.execute(text("""
                 INSERT INTO invoices (
@@ -521,7 +522,7 @@ def generate_contract_invoice(
                     "iid": inv_id, "pid": item.product_id, "desc": item.description,
                     "qty": item.quantity, "price": item.unit_price,
                     "tax": tax_info["tax_rate"], "tax_id": tax_info.get("tax_rate_id"),
-                    "total": float(la['line_total'])
+                    "total": la["line_total"]
                 })
             
     
@@ -530,11 +531,11 @@ def generate_contract_invoice(
                 db, user_id=current_user.id, username=current_user.username,
                 action="contract.generate_invoice", resource_type="contracts",
                 resource_id=str(contract_id),
-                details={"invoice_id": inv_id, "invoice_number": inv_num, "total": total},
+                details={"invoice_id": inv_id, "invoice_number": inv_num, "total": money_str(total)},
                 request=request
             )
     
-            return {"success": True, "invoice_id": inv_id, "invoice_number": inv_num, "total": total}
+            return {"success": True, "invoice_id": inv_id, "invoice_number": inv_num, "total": money_str(total)}
         except HTTPException:
             raise
         except Exception as e:

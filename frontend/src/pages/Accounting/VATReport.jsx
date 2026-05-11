@@ -11,6 +11,7 @@ function VATReport() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [report, setReport] = useState(null)
     const [currency, setCurrency] = useState('')
@@ -37,17 +38,22 @@ function VATReport() {
             console.error(err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchReport()
+        const timer = setTimeout(() => {
+            fetchReport()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, dates])
 
-    if (loading && !report) return <PageLoading />
+    if (initialLoad && !report) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' }}>

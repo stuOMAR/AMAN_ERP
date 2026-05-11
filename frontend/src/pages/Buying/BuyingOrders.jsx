@@ -17,6 +17,7 @@ function BuyingOrders() {
     const currency = getCurrency()
     const [orders, setOrders] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [approving, setApproving] = useState(null)
 
     const fetchOrders = async () => {
@@ -28,11 +29,15 @@ function BuyingOrders() {
             showToast(t('common.error'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchOrders()
+        const timer = setTimeout(() => {
+            fetchOrders()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const handleApprove = async (id) => {
@@ -71,10 +76,11 @@ function BuyingOrders() {
         )
     }
 
-    if (loading) return <PageLoading />
+    if (initialLoad && !orders.length) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

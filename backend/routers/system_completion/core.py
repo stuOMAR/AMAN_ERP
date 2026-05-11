@@ -24,6 +24,7 @@ from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.fiscal_lock import create_fiscal_lock_table, check_fiscal_period_open
 from utils.duplicate_detection import find_duplicate_parties, find_duplicate_products
 from services.gl_service import create_journal_entry
+from utils.tax_precision import money_str
 
 logger = logging.getLogger(__name__)
 
@@ -56,10 +57,25 @@ class BankImportLineUpdate(BaseModel):
 class ZakatCalculateRequest(BaseModel):
     fiscal_year: int
     method: str = "net_assets"  # net_assets (ZATCA, default), net_current_assets, adjusted_profit
-    zakat_rate: float = 2.5  # standard Hijri rate (2.5%)
-    use_gregorian_rate: bool = False  # If True, uses 2.5775% for Gregorian year
+    zakat_rate: Optional[Decimal] = None
+    use_gregorian_rate: bool = False
     branch_id: Optional[int] = None  # Filter by branch (None = all branches)
     notes: Optional[str] = None
+
+
+def _zakat_scope_filter(branch_scope) -> tuple[str, dict, bool]:
+    if isinstance(branch_scope, dict):
+        if branch_scope.get("branch_id") is not None:
+            return "AND je.branch_id = :branch_id", {"branch_id": branch_scope["branch_id"]}, True
+        if branch_scope.get("branch_ids") is not None:
+            ids = list(branch_scope.get("branch_ids") or [])
+            if not ids:
+                return "AND 1=0", {}, True
+            return "AND je.branch_id = ANY(:branch_ids)", {"branch_ids": ids}, True
+        return "", {}, False
+    if branch_scope:
+        return "AND je.branch_id = :branch_id", {"branch_id": branch_scope}, True
+    return "", {}, False
 
 
 def _zakat_balance_query(account_filter: str, account_types: list, branch_id=None, sign="debit"):
@@ -71,7 +87,8 @@ def _zakat_balance_query(account_filter: str, account_types: list, branch_id=Non
     Returns (sql_string, params_dict).
     """
     type_list = "','".join(account_types)
-    if branch_id:
+    branch_filter, branch_params, scoped = _zakat_scope_filter(branch_id)
+    if scoped:
         if sign == "debit":
             agg = "SUM(jl.debit - jl.credit)"
         else:
@@ -81,11 +98,11 @@ def _zakat_balance_query(account_filter: str, account_types: list, branch_id=Non
             FROM journal_lines jl
             JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
             JOIN accounts a ON jl.account_id = a.id
-            WHERE je.branch_id = :branch_id
-            AND a.account_type IN ('{type_list}')
+            WHERE a.account_type IN ('{type_list}')
             AND ({account_filter})
+            {branch_filter}
         """
-        return sql, {"branch_id": branch_id}
+        return sql, branch_params
     else:
         # For all branches: use ABS(balance) for credit-normal accounts
         if sign == "credit":
@@ -109,7 +126,8 @@ def _zakat_account_breakdown(db, account_filter: str, account_types: list, branc
     Used for debugging/audit to show which accounts contributed.
     """
     type_list = "','".join(account_types)
-    if branch_id:
+    branch_filter, branch_params, scoped = _zakat_scope_filter(branch_id)
+    if scoped:
         if sign == "debit":
             agg = "SUM(jl.debit - jl.credit)"
         else:
@@ -119,14 +137,14 @@ def _zakat_account_breakdown(db, account_filter: str, account_types: list, branc
             FROM journal_lines jl
             JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
             JOIN accounts a ON jl.account_id = a.id
-            WHERE je.branch_id = :branch_id
-            AND a.account_type IN ('{type_list}')
+            WHERE a.account_type IN ('{type_list}')
             AND ({account_filter})
+            {branch_filter}
             GROUP BY a.id, a.account_code, a.name, a.name_en
             HAVING {agg} != 0
             ORDER BY a.account_code
         """
-        rows = db.execute(text(sql), {"branch_id": branch_id}).fetchall()
+        rows = db.execute(text(sql), branch_params).fetchall()
     else:
         sql = f"""
             SELECT a.account_code, a.name, a.name_en, a.balance
@@ -136,7 +154,7 @@ def _zakat_account_breakdown(db, account_filter: str, account_types: list, branc
             ORDER BY a.account_code
         """
         rows = db.execute(text(sql)).fetchall()
-    return [{"code": r.account_code, "name": r.name, "name_en": r.name_en, "balance": float(r.balance)} for r in rows]
+    return [{"code": r.account_code, "name": r.name, "name_en": r.name_en, "balance": money_str(r.balance)} for r in rows]
 
 
 class FiscalPeriodLockRequest(BaseModel):
@@ -212,5 +230,4 @@ class PrintTemplateCreate(BaseModel):
     is_default: bool = False
     paper_size: str = "A4"
     orientation: str = "portrait"
-
 

@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -46,13 +46,13 @@ def list_asset_impairments(asset_id: int, current_user: dict = Depends(get_curre
 
 
 @router.post("/{asset_id}/impairment-test", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, current_user: dict = Depends(get_current_user)):
+def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, request: Request, current_user: dict = Depends(get_current_user)):
     """إجراء اختبار انخفاض القيمة IAS 36 مع قيد محاسبي تلقائي"""
     with transactional(current_user.company_id) as conn:
         try:
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
             if not asset:
-                raise HTTPException(404, "Asset not found")
+                raise HTTPException(**http_error(404, "asset_not_found", request))
             asset = dict(asset._mapping)
     
             carrying = _dec(asset.get("current_value") or asset.get("cost", 0)).quantize(_D2, ROUND_HALF_UP)
@@ -123,7 +123,7 @@ def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, current_u
                 "impairment_loss": impairment_loss,
                 "impaired": impairment_loss > 0,
                 "journal_entry_id": journal_entry_id,
-                "message": "تم إجراء اختبار الانخفاض" + (" - تم تسجيل خسارة انخفاض وقيد محاسبي" if impairment_loss > 0 else " - لا يوجد انخفاض")
+                "message": i18n_message("impairment_test_completed", request) + (" - تم تسجيل خسارة انخفاض وقيد محاسبي" if impairment_loss > 0 else " - لا يوجد انخفاض")
             }
         except HTTPException:
             raise

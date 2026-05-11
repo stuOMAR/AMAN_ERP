@@ -18,6 +18,7 @@ const ImpairmentTest = () => {
     const [impairments, setImpairments] = useState([]);
     const [testResult, setTestResult] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [testing, setTesting] = useState(false);
     const [form, setForm] = useState({
         recoverable_amount: '',
@@ -27,7 +28,12 @@ const ImpairmentTest = () => {
         notes: ''
     });
 
-    useEffect(() => { fetchAssets(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchAssets()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
     useEffect(() => { if (selectedAsset) fetchImpairments(); }, [selectedAsset]);
 
     const fetchAssets = async () => {
@@ -38,7 +44,7 @@ const ImpairmentTest = () => {
             const list = res.data?.assets || res.data || [];
             setAssets(list);
             if (list.length > 0) setSelectedAsset(list[0].id);
-        } catch (err) { console.error(err); } finally { setLoading(false); }
+        } catch (err) { console.error(err); } finally { setLoading(false); setInitialLoad(false); }
     };
 
     const fetchImpairments = async () => {
@@ -83,6 +89,7 @@ const ImpairmentTest = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

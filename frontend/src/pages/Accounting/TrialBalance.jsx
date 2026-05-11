@@ -12,6 +12,7 @@ function TrialBalance() {
     const { currentBranch } = useBranch()
     const [accounts, setAccounts] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState('')
     const [totals, setTotals] = useState({ debit: 0, credit: 0, balance: 0 })
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1))
@@ -20,7 +21,8 @@ function TrialBalance() {
     const [currency, setCurrency] = useState('SAR')
 
     useEffect(() => {
-        const fetchData = async () => {
+        const timer = setTimeout(() => {
+            const fetchData = async () => {
             try {
                 setLoading(true)
                 const startStr = startDate.toISOString().split('T')[0]
@@ -63,15 +65,19 @@ function TrialBalance() {
                 setError(t('common.error'))
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
         fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, startDate, endDate])
 
-    if (loading) return <PageLoading />
+    if (initialLoad) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

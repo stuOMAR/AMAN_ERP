@@ -72,7 +72,7 @@ async def reprocess_outbox(
     )
     row = result.fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Outbox row not found or not in reprocessable state")
+        raise HTTPException(**http_error(404, "outbox_row_not_found_or_not_in_reprocessable_state", request))
 
     db.commit()
     return {"id": row.id, "state": row.state}

@@ -1,5 +1,6 @@
 import React, { useState, useCallback } from 'react';
 import { useMutation } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * BulkSalaryIncrement — CSV upload + dry-run preview + per-row outcome table.
@@ -10,6 +11,7 @@ import { useMutation } from '@tanstack/react-query';
  *   3. Confirm applies the increments
  */
 export default function BulkSalaryIncrement() {
+  const { t } = useTranslation();
   const [csvData, setCsvData] = useState(null);
   const [rows, setRows] = useState([]);
   const [effectiveDate, setEffectiveDate] = useState('');
@@ -69,15 +71,15 @@ export default function BulkSalaryIncrement() {
 
   return (
     <div className="bulk-salary-increment">
-      <h2>Bulk Salary Increment</h2>
+        <h2>{t('payroll.bulk_salary_increment.title')}</h2>
 
       <div className="form-group">
-        <label>CSV File (employee_id, new_salary)</label>
+        <label>{t('payroll.bulk_salary_increment.csv_label')}</label>
         <input type="file" accept=".csv" onChange={handleFileUpload} />
       </div>
 
       <div className="form-group">
-        <label>Effective Date</label>
+        <label>{t('payroll.bulk_salary_increment.effective_date')}</label>
         <input
           type="date"
           className="form-control"
@@ -87,24 +89,24 @@ export default function BulkSalaryIncrement() {
       </div>
 
       <div className="form-group">
-        <label>Reason</label>
+        <label>{t('payroll.bulk_salary_increment.reason')}</label>
         <input
           type="text"
           className="form-control"
           value={reason}
           onChange={(e) => setReason(e.target.value)}
-          placeholder="Annual increment, promotion, etc."
+          placeholder={t('payroll.bulk_salary_increment.reason_placeholder')}
         />
       </div>
 
       {rows.length > 0 && (
         <div className="preview-section">
-          <h3>Preview ({rows.length} employees)</h3>
+          <h3>{t('payroll.bulk_salary_increment.preview_title', { count: rows.length })}</h3>
           <table className="table table-sm">
             <thead>
               <tr>
-                <th>Employee ID</th>
-                <th>New Salary</th>
+                <th>{t('payroll.bulk_salary_increment.table.employee_id')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.new_salary')}</th>
               </tr>
             </thead>
             <tbody>
@@ -130,14 +132,14 @@ export default function BulkSalaryIncrement() {
               onClick={() => mutation.mutate(true)}
               disabled={mutation.isLoading || !effectiveDate || !reason}
             >
-              {mutation.isLoading ? 'Previewing...' : 'Dry Run Preview'}
+              {mutation.isLoading ? t('payroll.bulk_salary_increment.buttons.previewing') : t('payroll.bulk_salary_increment.buttons.dry_run')}
             </button>
             <button
               className="btn btn-primary"
               onClick={() => mutation.mutate(false)}
               disabled={mutation.isLoading || !effectiveDate || !reason}
             >
-              {mutation.isLoading ? 'Applying...' : 'Apply Increments'}
+              {mutation.isLoading ? t('payroll.bulk_salary_increment.buttons.applying') : t('payroll.bulk_salary_increment.buttons.apply')}
             </button>
           </div>
         </div>
@@ -150,27 +152,27 @@ export default function BulkSalaryIncrement() {
       {result && (
         <div className="result-section">
           <h3>
-            Results {result.dry_run ? '(Dry Run)' : ''}
+            {t('payroll.bulk_salary_increment.results.title')} {result.dry_run ? t('payroll.bulk_salary_increment.results.dry_run_suffix') : ''}
           </h3>
           <div className="summary">
             <span className="badge badge-success">
-              Success: {result.success_count}
+              {t('payroll.bulk_salary_increment.results.success')} {result.success_count}
             </span>
             <span className="badge badge-danger">
-              Errors: {result.error_count}
+              {t('payroll.bulk_salary_increment.results.errors')} {result.error_count}
             </span>
-            <span>Total Increment: {result.total_increment}</span>
+            <span>{t('payroll.bulk_salary_increment.results.total_increment')} {result.total_increment}</span>
           </div>
 
           <table className="table table-sm">
             <thead>
               <tr>
-                <th>Employee ID</th>
-                <th>Old Salary</th>
-                <th>New Salary</th>
-                <th>Increment</th>
-                <th>Status</th>
-                <th>Error</th>
+                <th>{t('payroll.bulk_salary_increment.table.employee_id')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.old_salary')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.new_salary')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.increment')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.status')}</th>
+                <th>{t('payroll.bulk_salary_increment.table.error')}</th>
               </tr>
             </thead>
             <tbody>

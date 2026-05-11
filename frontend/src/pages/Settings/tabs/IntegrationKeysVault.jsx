@@ -53,34 +53,34 @@ function IntegrationKeysVault() {
                 ...form,
                 valid_to: form.valid_to || null,
             })
-            toastEmitter.emit('تم حفظ المفتاح', 'success')
+            toastEmitter.emit(t('settings.integration_keys_vault.toast.saved'), 'success')
             setShowCreate(false)
             setForm({ integration_type: '', provider: '', key_name: '', plaintext_value: '', valid_to: '', activate: true })
             loadKeys()
         } catch (err) {
-            toastEmitter.emit(err.response?.data?.detail || 'فشل الحفظ', 'error')
+            toastEmitter.emit(err.response?.data?.detail || t('settings.integration_keys_vault.toast.save_failed'), 'error')
         }
     }
 
     const handleRevoke = async (id, keyName) => {
-        if (!window.confirm(`هل تريد إلغاء المفتاح "${keyName}"؟`)) return
+        if (!window.confirm(`${t('settings.integration_keys_vault.confirm_revoke').replace('{{name}}', keyName)}`)) return
         try {
             await integrationKeysAPI.revoke(id)
-            toastEmitter.emit('تم إلغاء المفتاح', 'success')
+            toastEmitter.emit(t('settings.integration_keys_vault.toast.revoked'), 'success')
             loadKeys()
         } catch (err) {
-            toastEmitter.emit(err.response?.data?.detail || 'فشل الإلغاء', 'error')
+            toastEmitter.emit(err.response?.data?.detail || t('settings.integration_keys_vault.toast.revoke_failed'), 'error')
         }
     }
 
     const handleResetBreaker = async (id, label) => {
-        if (!window.confirm(`إعادة ضبط القاطع "${label}"؟`)) return
+        if (!window.confirm(`${t('settings.integration_keys_vault.confirm_reset').replace('{{label}}', label)}`)) return
         try {
             await integrationKeysAPI.resetCircuitBreaker(id)
-            toastEmitter.emit('تم إعادة ضبط القاطع', 'success')
+            toastEmitter.emit(t('settings.integration_keys_vault.toast.reset_success'), 'success')
             loadBreakers()
         } catch (err) {
-            toastEmitter.emit(err.response?.data?.detail || 'فشل الإعادة', 'error')
+            toastEmitter.emit(err.response?.data?.detail || t('settings.integration_keys_vault.toast.reset_failed'), 'error')
         }
     }
 
@@ -91,16 +91,16 @@ function IntegrationKeysVault() {
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-bold flex items-center gap-2">
                         <Key size={20} className="text-primary" />
-                        مخزن مفاتيح التكاملات
+                        {t('settings.integration_keys_vault.title')}
                     </h3>
                     <div className="flex gap-2 items-center">
                         <label className="flex items-center gap-1 text-sm text-muted cursor-pointer">
                             <input type="checkbox" checked={includeRevoked}
                                 onChange={e => setIncludeRevoked(e.target.checked)} />
-                            عرض الملغية
+                            {t('settings.integration_keys_vault.show_revoked')}
                         </label>
                         <button className="btn btn-primary btn-sm" onClick={() => setShowCreate(true)}>
-                            <Plus size={14} /> مفتاح جديد / تدوير
+                            <Plus size={14} /> {t('settings.integration_keys_vault.new_key')}
                         </button>
                     </div>
                 </div>
@@ -108,35 +108,35 @@ function IntegrationKeysVault() {
                 {showCreate && (
                     <form onSubmit={handleCreate} className="card p-4 mb-4 border border-primary-200">
                         <div className="flex justify-between mb-3">
-                            <strong>إضافة / تدوير مفتاح</strong>
+                            <strong>{t('settings.integration_keys_vault.add_rotate')}</strong>
                             <button type="button" onClick={() => setShowCreate(false)}><X size={16} /></button>
                         </div>
                         <div className="grid grid-cols-2 gap-3">
                             <div className="form-group">
-                                <label>نوع التكامل</label>
+                                <label>{t('settings.integration_keys_vault.integration_type')}</label>
                                 <input className="form-input ltr" required value={form.integration_type}
                                     placeholder="payment / sms / einvoice …"
                                     onChange={e => setForm(f => ({ ...f, integration_type: e.target.value }))} />
                             </div>
                             <div className="form-group">
-                                <label>المزود (Provider)</label>
+                                <label>{t('settings.integration_keys_vault.provider')}</label>
                                 <input className="form-input ltr" required value={form.provider}
                                     placeholder="stripe / twilio / eta …"
                                     onChange={e => setForm(f => ({ ...f, provider: e.target.value }))} />
                             </div>
                             <div className="form-group">
-                                <label>اسم المفتاح</label>
+                                <label>{t('settings.integration_keys_vault.key_name')}</label>
                                 <input className="form-input ltr" required value={form.key_name}
                                     placeholder="api_key / client_secret …"
                                     onChange={e => setForm(f => ({ ...f, key_name: e.target.value }))} />
                             </div>
                             <div className="form-group">
-                                <label>القيمة (ستُشفَّر)</label>
+                                <label>{t('settings.integration_keys_vault.value')}</label>
                                 <input className="form-input ltr" type="password" required value={form.plaintext_value}
                                     onChange={e => setForm(f => ({ ...f, plaintext_value: e.target.value }))} />
                             </div>
                             <div className="form-group">
-                                <label>صالح حتى (اختياري)</label>
+                                <label>{t('settings.integration_keys_vault.valid_until')}</label>
                                 <input className="form-input ltr" type="datetime-local" value={form.valid_to}
                                     onChange={e => setForm(f => ({ ...f, valid_to: e.target.value }))} />
                             </div>
@@ -144,32 +144,32 @@ function IntegrationKeysVault() {
                                 <label className="flex items-center gap-2 cursor-pointer">
                                     <input type="checkbox" checked={form.activate}
                                         onChange={e => setForm(f => ({ ...f, activate: e.target.checked }))} />
-                                    تفعيل فوري (يُلغي القديم)
+                                    {t('settings.integration_keys_vault.activate_immediately')}
                                 </label>
                             </div>
                         </div>
                         <div className="flex justify-end gap-2 mt-3">
-                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCreate(false)}>إلغاء</button>
-                            <button type="submit" className="btn btn-primary btn-sm">حفظ وتشفير</button>
+                            <button type="button" className="btn btn-secondary btn-sm" onClick={() => setShowCreate(false)}>{t('settings.integration_keys_vault.cancel')}</button>
+                            <button type="submit" className="btn btn-primary btn-sm">{t('settings.integration_keys_vault.save_encrypt')}</button>
                         </div>
                     </form>
                 )}
 
                 {loading ? (
-                    <div className="text-center py-4 text-muted">جارٍ التحميل…</div>
+                    <div className="text-center py-4 text-muted">{t('settings.integration_keys_vault.loading')}</div>
                 ) : keys.length === 0 ? (
-                    <div className="text-center py-6 text-muted">لا توجد مفاتيح مسجّلة</div>
+                    <div className="text-center py-6 text-muted">{t('settings.integration_keys_vault.no_keys')}</div>
                 ) : (
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th>النوع</th>
-                                <th>المزود</th>
-                                <th>المفتاح</th>
-                                <th>الحالة</th>
-                                <th>صالح من</th>
-                                <th>صالح حتى</th>
-                                <th>إجراء</th>
+                                <th>{t('settings.integration_keys_vault.table.type')}</th>
+                                <th>{t('settings.integration_keys_vault.table.provider')}</th>
+                                <th>{t('settings.integration_keys_vault.table.key')}</th>
+                                <th>{t('settings.integration_keys_vault.table.status')}</th>
+                                <th>{t('settings.integration_keys_vault.table.valid_from')}</th>
+                                <th>{t('settings.integration_keys_vault.table.valid_until')}</th>
+                                <th>{t('settings.integration_keys_vault.table.action')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -190,7 +190,7 @@ function IntegrationKeysVault() {
                                             <button
                                                 className="btn btn-sm btn-danger"
                                                 onClick={() => handleRevoke(k.id, k.key_name)}
-                                                title="إلغاء"
+                                                title={t('settings.integration_keys_vault.table.revoke')}
                                             >
                                                 <ShieldOff size={13} />
                                             </button>
@@ -208,10 +208,10 @@ function IntegrationKeysVault() {
                 <div className="flex items-center justify-between mb-4">
                     <h3 className="text-lg font-bold flex items-center gap-2">
                         <Activity size={20} className="text-warning" />
-                        حالة قواطع الدوائر (Circuit Breakers)
+                        {t('settings.integration_keys_vault.circuit_breaker.title')}
                     </h3>
                     <button className="btn btn-secondary btn-sm" onClick={loadBreakers}>
-                        <RefreshCcw size={14} /> تحديث
+                        <RefreshCcw size={14} /> {t('common.refresh')}
                     </button>
                 </div>
 
@@ -221,13 +221,13 @@ function IntegrationKeysVault() {
                     <table className="data-table">
                         <thead>
                             <tr>
-                                <th>التكامل</th>
-                                <th>المزود</th>
-                                <th>الحالة</th>
-                                <th>عدد الأخطاء</th>
-                                <th>مفتوح حتى</th>
-                                <th>آخر خطأ</th>
-                                <th>إجراء</th>
+                                <th>{t('settings.integration_keys_vault.circuit_breaker.integration')}</th>
+                                <th>{t('settings.integration_keys_vault.circuit_breaker.provider')}</th>
+                                <th>{t('settings.integration_keys_vault.table.status')}</th>
+                                <th>{t('settings.integration_keys_vault.circuit_breaker.error_count')}</th>
+                                <th>{t('settings.integration_keys_vault.circuit_breaker.open_until')}</th>
+                                <th>{t('settings.integration_keys_vault.circuit_breaker.last_error')}</th>
+                                <th>{t('settings.integration_keys_vault.table.action')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -240,8 +240,8 @@ function IntegrationKeysVault() {
                                             b.state === 'open' ? 'text-danger font-bold' :
                                             b.state === 'half_open' ? 'text-warning' : 'text-success'
                                         }>
-                                            {b.state === 'open' ? '🔴 مفتوح' :
-                                             b.state === 'half_open' ? '🟡 نصف مفتوح' : '🟢 مغلق'}
+                                             {b.state === 'open' ? t('settings.integration_keys_vault.status_badges.open') :
+                                              b.state === 'half_open' ? t('settings.integration_keys_vault.status_badges.half_open') : t('settings.integration_keys_vault.status_badges.closed')}
                                         </span>
                                     </td>
                                     <td>{b.failure_count}</td>
@@ -253,7 +253,7 @@ function IntegrationKeysVault() {
                                             <button
                                                 className="btn btn-sm btn-warning"
                                                 onClick={() => handleResetBreaker(b.id, `${b.integration_type}/${b.provider}`)}
-                                                title="إعادة ضبط"
+                                                title={t('settings.integration_keys_vault.circuit_breaker.reset')}
                                             >
                                                 <RefreshCcw size={13} />
                                             </button>

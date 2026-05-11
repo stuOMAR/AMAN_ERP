@@ -19,6 +19,7 @@ function ContractForm() {
     const { id } = useParams()
     const currency = getCurrency()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [customers, setCustomers] = useState([])
     const [products, setProducts] = useState([])
     const { currentBranch } = useBranch()
@@ -41,34 +42,39 @@ function ContractForm() {
     ])
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [custRes, prodRes] = await Promise.all([
-                    salesAPI.listCustomers({ branch_id: currentBranch?.id }),
-                    inventoryAPI.listProducts({ branch_id: currentBranch?.id })
-                ])
-                setCustomers(custRes.data)
-                setProducts(prodRes.data)
+        const timer = setTimeout(() => {
+            const fetchData = async () => {
+                try {
+                    const [custRes, prodRes] = await Promise.all([
+                        salesAPI.listCustomers({ branch_id: currentBranch?.id }),
+                        inventoryAPI.listProducts({ branch_id: currentBranch?.id })
+                    ])
+                    setCustomers(custRes.data)
+                    setProducts(prodRes.data)
 
-                if (id) {
-                    setLoading(true)
-                    const res = await contractsAPI.getContract(id)
-                    const c = res.data
-                    setFormData({
-                        ...c,
-                        party_id: c.party_id.toString()
-                    })
-                    setItems(c.items.map(item => ({
-                        ...item,
-                        product_id: item.product_id.toString()
-                    })))
-                    setLoading(false)
+                    if (id) {
+                        setLoading(true)
+                        const res = await contractsAPI.getContract(id)
+                        const c = res.data
+                        setFormData({
+                            ...c,
+                            party_id: c.party_id.toString()
+                        })
+                        setItems(c.items.map(item => ({
+                            ...item,
+                            product_id: item.product_id.toString()
+                        })))
+                        setLoading(false)
+                    }
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setInitialLoad(false)
                 }
-            } catch (err) {
-                showToast(t('common.error'), 'error')
             }
-        }
-        fetchData()
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id, currentBranch])
 
     const handleItemChange = (index, field, value) => {
@@ -161,10 +167,11 @@ function ContractForm() {
         }
     }
 
-    if (loading && id) return <PageLoading />
+    if (initialLoad && id) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{id ? t("sales.contracts.form.edit") : t("sales.contracts.form.create")}</h1>

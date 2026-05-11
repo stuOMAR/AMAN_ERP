@@ -46,7 +46,7 @@ def get_notifications(
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Failed to fetch inventory notifications")
-        raise HTTPException(status_code=500, detail="تعذّر جلب الإشعارات")
+        raise HTTPException(**http_error(500, ("notifications_load_failed", request)))
     finally:
         db.close()
 
@@ -70,7 +70,7 @@ def get_unread_count(
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Failed to fetch unread notification count")
-        raise HTTPException(status_code=500, detail="تعذّر جلب عدد الإشعارات")
+        raise HTTPException(**http_error(500, ("notifications_count_failed", request)))
     finally:
         db.close()
 
@@ -90,7 +90,7 @@ def mark_notification_read(
             UPDATE notifications SET is_read = TRUE, read_at = NOW() WHERE id = :id
         """), {"id": id})
         db.commit()
-        return {"message": "تم تحديد الإشعار كمقروء"}
+        return {"message": i18n_message(("notification_marked_read", request))}
     finally:
         db.close()
 
@@ -109,6 +109,6 @@ def mark_all_notifications_read(
             WHERE (user_id = :user OR user_id IS NULL) AND is_read = FALSE
         """), {"user": user_id})
         db.commit()
-        return {"message": "تم تحديد جميع الإشعارات كمقروءة"}
+        return {"message": i18n_message(("all_notifications_marked_read", request))}
     finally:
         db.close()

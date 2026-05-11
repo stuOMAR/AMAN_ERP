@@ -26,6 +26,7 @@ function ChartOfAccounts() {
     const { currentBranch, loading: branchLoading, displayCurrency } = useBranch()
     const [accounts, setAccounts] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState('')
     const [currency, setCurrency] = useState('')
 
@@ -54,11 +55,15 @@ function ChartOfAccounts() {
             setError(t('accounting.coa.errors.fetch_failed'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchAccounts()
+        const timer = setTimeout(() => {
+            fetchAccounts()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, branchLoading])
 
     const suggestNextNumber = (node) => {
@@ -253,7 +258,7 @@ function ChartOfAccounts() {
     const enabledModules = user?.enabled_modules || []
     const isRTL = i18n?.language === 'ar' || i18n?.dir?.() === 'rtl'
 
-    if (loading && accounts.length === 0) return <PageLoading />
+    if (initialLoad && accounts.length === 0) return <PageLoading />
 
     const filteredAccounts = enabledModules.length > 0
         ? accounts.filter(acc => {
@@ -268,6 +273,8 @@ function ChartOfAccounts() {
     const accountTree = buildTree(filteredAccounts)
 
     return (
+        <>
+        {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
         <div className="workspace fade-in">
             <div className="workspace-header">
                 <BackButton />
@@ -582,6 +589,7 @@ function ChartOfAccounts() {
                 }
             `}</style>
         </div>
+        </>
     )
 }
 

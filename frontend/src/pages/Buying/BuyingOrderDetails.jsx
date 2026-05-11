@@ -53,12 +53,15 @@ function BuyingOrderDetails() {
                     <p className="workspace-subtitle">{t('buying.orders.subtitle')}</p>
                 </div>
                 <div className="header-actions">
-                    <button
-                        className="btn btn-primary"
-                        onClick={() => navigate('/buying/invoices/new', { state: { fromOrder: order } })}
-                    >
-                        📝 {t('buying.orders.details.convert_to_invoice')}
-                    </button>
+                    {/* T039: Disable convert-to-invoice when no uninvoiced received qty remains */}
+                    {order.items && order.items.some(item => Number(item.remaining_to_invoice || 0) > 0) && (
+                        <button
+                            className="btn btn-primary"
+                            onClick={() => navigate('/buying/invoices/new', { state: { fromOrder: order } })}
+                        >
+                            📝 {t('buying.orders.details.convert_to_invoice')}
+                        </button>
+                    )}
                     <button className="btn btn-secondary" onClick={() => window.print()}>
                         🖨️ {t('buying.orders.details.print')}
                     </button>

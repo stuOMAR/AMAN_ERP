@@ -10,10 +10,13 @@ from typing import Any, Optional
 
 from fastapi import HTTPException, status
 
+from utils.i18n import http_error
+
 
 def resolve_target_company_id(
     requested_company_id: Optional[str],
     current_user: Any,
+    request: Any = None,
 ) -> str:
     """Resolve the effective tenant for an authenticated request.
 
@@ -38,11 +41,8 @@ def resolve_target_company_id(
         return requested_company_id or own or ""
 
     if requested_company_id and requested_company_id != own:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Cross-tenant access is forbidden",
-        )
+        raise HTTPException(**http_error(403, "cross_tenant_access_forbidden", request))
 
     if not own:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
     return own

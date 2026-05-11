@@ -10,6 +10,7 @@ import { formatShortDate } from '../../utils/dateUtils';
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import SimpleModal from '../../components/common/SimpleModal'
+import DataTable from '../../components/common/DataTable'
 
 
 function TaxHome() {
@@ -19,12 +20,13 @@ function TaxHome() {
     const { currentBranch } = useBranch()
     const fallbackCurrency = getCurrency()
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [summary, setSummary] = useState(null)
     const [rates, setRates] = useState([])
     const [returns, setReturns] = useState([])
     const [activeTab, setActiveTab] = useState('overview')
     const [showRateModal, setShowRateModal] = useState(false)
-    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' })
+    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '' })
     const [editingRate, setEditingRate] = useState(null)
     const [branchAnalysis, setBranchAnalysis] = useState(null)
     const [employeeTaxes, setEmployeeTaxes] = useState(null)
@@ -39,7 +41,7 @@ function TaxHome() {
             
             const [summaryRes, ratesRes, returnsRes] = await Promise.all([
                 taxesAPI.getSummary(params),
-                taxesAPI.listRates(currentBranch ? { country_code: currentBranch.country_code } : {}),
+                taxesAPI.listRates(currentBranch ? { country_code: currentBranch.country_code } : { all_branches: true }),
                 taxesAPI.listReturns(params)
             ])
             setSummary(summaryRes.data)
@@ -50,6 +52,7 @@ function TaxHome() {
             showToast(err.response?.data?.detail || t('common.error', 'حدث خطأ في تحميل بيانات الضرائب'), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -88,11 +91,11 @@ function TaxHome() {
                     description: rateForm.description
                 })
             } else {
-                await taxesAPI.createRate(rateForm)
+                await taxesAPI.createRate({ ...rateForm, rate_value: String(rateForm.rate_value) })
             }
             setShowRateModal(false)
             setEditingRate(null)
-            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' })
+            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '' })
             fetchAll()
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error', 'error'))
@@ -136,7 +139,73 @@ function TaxHome() {
         </span>
     }
 
-    if (loading && !summary) return <PageLoading />
+    const recentReturnColumns = [
+        { key: 'return_number', label: t('taxes.return_number'), render: (v) => <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{v}</span> },
+        { key: 'tax_period', label: t('taxes.period') },
+        { key: 'total_amount', label: t('taxes.amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', fontWeight: 700, whiteSpace: 'nowrap' }, render: (v) => <>{formatNumber(v)} <span className="text-muted fw-normal small">{currency}</span></> },
+        { key: 'status', label: t('common.status_title'), render: (v) => getStatusBadge(v) },
+    ]
+
+    const rateColumns = [
+        { key: 'tax_code', label: t('taxes.tax_code'), render: (v) => <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{v}</span> },
+        { key: 'tax_name', label: t('taxes.tax_name') },
+        { key: 'tax_name_en', label: t('taxes.tax_name_en'), render: (v) => v || <span className="text-muted">-</span> },
+        { key: 'rate_value', label: t('taxes.rate_value'), render: (v) => <span style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{v}%</span> },
+        { key: 'country_code', label: t('taxes.country_code'), render: (v) => v ? <span style={{ background: 'rgba(59, 130, 246, 0.08)', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: 600 }}>{v}</span> : <span className="text-muted" style={{ fontSize: '11px' }}>{t('taxes.global')}</span> },
+        { key: 'effective_from', label: t('taxes.effective_from'), render: (v) => v ? formatShortDate(v) : <span className="text-muted">-</span> },
+        { key: 'effective_to', label: t('taxes.effective_to'), render: (v) => v ? formatShortDate(v) : <span className="text-muted">-</span> },
+        { key: 'is_active', label: t('common.status_title'), render: (v) => <span style={{ background: v ? 'rgb(220, 252, 231)' : 'rgb(254, 226, 226)', color: v ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: 600, whiteSpace: 'nowrap' }}>{v ? t('common.active') : t('common.inactive')}</span> },
+        { key: 'actions', label: t('common.actions'), width: '132px', sticky: 'end', sortable: false, searchable: false, exportable: false, render: (_, rate) => (
+            <div style={{ display: 'flex', gap: 4 }}>
+                <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => handleEditRate(rate)}>{t('common.edit')}</button>
+                {rate.is_active && <button className="btn btn-sm btn-outline-danger" style={{ borderRadius: 8, fontSize: 12 }} onClick={() => handleDeleteRate(rate.id)}>{t('common.delete')}</button>}
+            </div>
+        ) },
+    ]
+
+    const returnColumns = [
+        { key: 'return_number', label: t('taxes.return_number'), render: (v) => <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{v}</span> },
+        { key: 'tax_period', label: t('taxes.period') },
+        { key: 'tax_type', label: t('taxes.tax_type'), render: (v) => <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '4px 10px', borderRadius: 6, fontSize: 12, fontWeight: 600 }}>{v === 'vat' ? 'ض.ق.م' : v}</span> },
+        { key: 'branch_name', label: t('common.branch'), render: (v) => v || <span className="text-muted">-</span> },
+        { key: 'taxable_amount', label: t('taxes.taxable_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v) => formatNumber(v) },
+        { key: 'tax_amount', label: t('taxes.tax_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v) => formatNumber(v) },
+        { key: 'total_amount', label: t('taxes.total_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', fontWeight: 700, whiteSpace: 'nowrap' }, render: (v) => <>{formatNumber(v)} <span className="text-muted fw-normal small">{currency}</span></> },
+        { key: 'paid_amount', label: t('taxes.paid_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v) => formatNumber(v || 0) },
+        { key: 'due_date', label: t('taxes.due_date'), render: (v) => v ? formatShortDate(v) : <span className="text-muted">-</span> },
+        { key: 'status', label: t('common.status_title'), render: (v) => getStatusBadge(v) },
+        { key: 'actions', label: t('common.actions'), sortable: false, searchable: false, exportable: false, render: (_, r) => (
+            <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: 8, fontSize: 12 }} onClick={(e) => { e.stopPropagation(); navigate(`/taxes/returns/${r.id}`); }}>
+                {t('common.view')}
+            </button>
+        ) },
+    ]
+
+    const branchAnalysisColumns = [
+        { key: 'branch_name', label: t('common.branch'), render: (v) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        { key: 'jurisdiction', label: t('taxes.jurisdiction'), render: (v) => <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '3px 8px', borderRadius: 6, fontSize: 11, fontWeight: 600 }}>{v}</span> },
+        { key: 'taxable_sales', label: t('taxes.taxable_sales'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
+        { key: 'output_vat', label: t('taxes.output_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
+        { key: 'input_vat', label: t('taxes.input_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--primary)' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
+        { key: 'net_vat', label: t('taxes.net_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }, render: (v, b) => <span style={{ color: Number(v || 0) >= 0 ? 'var(--error)' : 'var(--success)' }}>{formatNumber(Math.abs(Number(v || 0)))} <small>{b.currency || currency}</small></span> },
+        { key: 'invoice_count', label: t('taxes.invoices'), style: { textAlign: 'center' } },
+        { key: 'returns_count', label: t('taxes.returns_filed'), style: { textAlign: 'center' }, render: (_, b) => b.returns_count || <span className="text-muted">-</span> },
+    ]
+
+    const employeeTaxColumns = [
+        { key: 'employee_code', label: t('hr.employee_code'), render: (v) => <span style={{ fontFamily: 'monospace', color: 'var(--primary)', fontWeight: 600 }}>{v}</span> },
+        { key: 'employee_name', label: t('hr.employee_name'), render: (v) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        { key: 'branch_name', label: t('common.branch'), render: (v) => v || '-' },
+        { key: 'jurisdiction', label: t('taxes.jurisdiction'), render: (v) => <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '3px 8px', borderRadius: 6, fontSize: 11 }}>{v}</span> },
+        { key: 'total_gross', label: t('taxes.total_gross'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v) => formatNumber(v) },
+        { key: 'gosi_employee', label: t('taxes.gosi_employee'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--warning)' }, render: (v) => formatNumber(v) },
+        { key: 'gosi_employer', label: t('taxes.gosi_employer'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }, render: (v) => formatNumber(v) },
+        { key: 'income_tax_due', label: t('taxes.income_tax'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v, emp) => Number(v || 0) > 0 ? <span style={{ color: 'var(--error)', fontWeight: 600 }}>{formatNumber(v)} ({emp.income_tax_rate}%)</span> : <span className="text-muted">-</span> },
+        { key: 'total_net', label: t('taxes.total_net'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }, render: (v) => formatNumber(v) },
+        { key: 'payslip_count', label: t('taxes.payslips'), style: { textAlign: 'center' } },
+    ]
+
+    if (initialLoad && !summary) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
@@ -268,36 +337,17 @@ function TaxHome() {
                     {/* Recent Returns Table */}
                     <div className="card">
                         <h3 className="section-title">{t('taxes.recent_returns')}</h3>
-                        {returns.length === 0 ? (
-                            <p className="text-muted mt-3">{t('taxes.no_returns')}</p>
-                        ) : (
-                            <div className="data-table-container mt-3">
-                                <table className="data-table">
-                                    <thead>
-                                        <tr>
-                                            <th>{t('taxes.return_number')}</th>
-                                            <th>{t('taxes.period')}</th>
-                                            <th style={{ textAlign: 'left' }}>{t('taxes.amount')}</th>
-                                            <th>{t('common.status_title')}</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {returns.slice(0, 5).map(r => (
-                                            <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/taxes/returns/${r.id}`)}>
-                                                <td>
-                                                    <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{r.return_number}</span>
-                                                </td>
-                                                <td style={{ whiteSpace: 'nowrap' }}>{r.tax_period}</td>
-                                                <td style={{ textAlign: 'left', fontWeight: '700', whiteSpace: 'nowrap' }}>
-                                                    {formatNumber(r.total_amount)} <span className="text-muted fw-normal small">{currency}</span>
-                                                </td>
-                                                <td>{getStatusBadge(r.status)}</td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
+                        <DataTable
+                            columns={recentReturnColumns}
+                            data={returns.slice(0, 5)}
+                            rowKey="id"
+                            paginate={false}
+                            searchable
+                            exportable
+                            exportName="tax-recent-returns"
+                            emptyTitle={t('taxes.no_returns')}
+                            onRowClick={(r) => navigate(`/taxes/returns/${r.id}`)}
+                        />
                     </div>
                 </div>
             )}
@@ -307,61 +357,19 @@ function TaxHome() {
                 <div className="card mt-4">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
                         <h3 className="section-title" style={{ margin: 0 }}>{t('taxes.tax_rates')}</h3>
-                        <button className="btn btn-primary btn-sm" onClick={() => { setEditingRate(null); setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: 0, description: '', country_code: '' }); setShowRateModal(true) }}>
+                        <button className="btn btn-primary btn-sm" onClick={() => { setEditingRate(null); setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '' }); setShowRateModal(true) }}>
                             + {t('taxes.add_rate')}
                         </button>
                     </div>
-                    <div className="data-table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>{t('taxes.tax_code')}</th>
-                                    <th>{t('taxes.tax_name')}</th>
-                                    <th>{t('taxes.tax_name_en')}</th>
-                                    <th>{t('taxes.rate_value')}</th>
-                                    <th>{t('taxes.country_code')}</th>
-                                    <th>{t('taxes.effective_from')}</th>
-                                    <th>{t('taxes.effective_to')}</th>
-                                    <th>{t('common.status_title')}</th>
-                                    <th>{t('common.actions')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {rates.length === 0 ? (
-                                    <tr><td colSpan="9" className="text-center text-muted">{t('taxes.no_rates')}</td></tr>
-                                ) : rates.map(rate => (
-                                    <tr key={rate.id}>
-                                        <td>
-                                            <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{rate.tax_code}</span>
-                                        </td>
-                                        <td>{rate.tax_name}</td>
-                                        <td>{rate.tax_name_en || <span className="text-muted">—</span>}</td>
-                                        <td style={{ fontWeight: 'bold', color: 'var(--primary)' }}>{rate.rate_value}%</td>
-                                        <td>
-                                            {rate.country_code ? (
-                                                <span style={{ background: 'rgba(59, 130, 246, 0.08)', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' }}>
-                                                    {rate.country_code}
-                                                </span>
-                                            ) : <span className="text-muted" style={{ fontSize: '11px' }}>🌍 {t('taxes.global')}</span>}
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{rate.effective_from ? formatShortDate(rate.effective_from) : <span className="text-muted">—</span>}</td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{rate.effective_to ? formatShortDate(rate.effective_to) : <span className="text-muted">—</span>}</td>
-                                        <td>
-                                            <span style={{ background: rate.is_active ? 'rgb(220, 252, 231)' : 'rgb(254, 226, 226)', color: rate.is_active ? 'rgb(22, 163, 74)' : 'rgb(220, 38, 38)', padding: '4px 12px', borderRadius: '20px', fontSize: '12px', fontWeight: '600', whiteSpace: 'nowrap' }}>
-                                                {rate.is_active ? '✅ ' + (t('common.active')) : '❌ ' + (t('common.inactive'))}
-                                            </span>
-                                        </td>
-                                        <td>
-                                            <div style={{ display: 'flex', gap: '4px' }}>
-                                                <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: '8px', fontSize: '12px' }} onClick={() => handleEditRate(rate)}>✏️</button>
-                                                {rate.is_active && <button className="btn btn-sm btn-outline-danger" style={{ borderRadius: '8px', fontSize: '12px' }} onClick={() => handleDeleteRate(rate.id)}>🗑️</button>}
-                                            </div>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <DataTable
+                        columns={rateColumns}
+                        data={rates}
+                        rowKey="id"
+                        searchable
+                        exportable
+                        exportName="tax-rates"
+                        emptyTitle={t('taxes.no_rates')}
+                    />
                 </div>
             )}
 
@@ -374,56 +382,16 @@ function TaxHome() {
                             + {t('taxes.new_return')}
                         </button>
                     </div>
-                    <div className="data-table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>{t('taxes.return_number')}</th>
-                                    <th>{t('taxes.period')}</th>
-                                    <th>{t('taxes.tax_type')}</th>
-                                    <th>{t('common.branch')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.taxable_amount')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.tax_amount')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.total_amount')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.paid_amount')}</th>
-                                    <th>{t('taxes.due_date')}</th>
-                                    <th>{t('common.status_title')}</th>
-                                    <th>{t('common.actions')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {returns.length === 0 ? (
-                                    <tr><td colSpan="11" className="text-center text-muted">{t('taxes.no_returns')}</td></tr>
-                                ) : returns.map(r => (
-                                    <tr key={r.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/taxes/returns/${r.id}`)}>
-                                        <td>
-                                            <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{r.return_number}</span>
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{r.tax_period}</td>
-                                        <td>
-                                            <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '4px 10px', borderRadius: '6px', fontSize: '12px', fontWeight: '600' }}>
-                                                {r.tax_type === 'vat' ? 'ض.ق.م' : r.tax_type}
-                                            </span>
-                                        </td>
-                                        <td style={{ whiteSpace: 'nowrap', fontSize: '12px' }}>{r.branch_name || <span className="text-muted">—</span>}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(r.taxable_amount)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(r.tax_amount)}</td>
-                                        <td style={{ textAlign: 'left', fontWeight: '700', whiteSpace: 'nowrap' }}>
-                                            {formatNumber(r.total_amount)} <span className="text-muted fw-normal small">{currency}</span>
-                                        </td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(r.paid_amount || 0)}</td>
-                                        <td style={{ whiteSpace: 'nowrap' }}>{r.due_date ? formatShortDate(r.due_date) : <span className="text-muted">—</span>}</td>
-                                        <td>{getStatusBadge(r.status)}</td>
-                                        <td>
-                                            <button className="btn btn-sm btn-outline-primary" style={{ borderRadius: '8px', fontSize: '12px' }} onClick={(e) => { e.stopPropagation(); navigate(`/taxes/returns/${r.id}`); }}>
-                                                👁️ {t('common.view')}
-                                            </button>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <DataTable
+                        columns={returnColumns}
+                        data={returns}
+                        rowKey="id"
+                        searchable
+                        exportable
+                        exportName="tax-returns"
+                        emptyTitle={t('taxes.no_returns')}
+                        onRowClick={(r) => navigate(`/taxes/returns/${r.id}`)}
+                    />
                 </div>
             )}
 
@@ -469,7 +437,7 @@ function TaxHome() {
                     <label className="form-label">{t('taxes.rate_value')} *</label>
                     <input className="form-input" type="number" min="0" max="100" step="0.01"
                         value={rateForm.rate_value}
-                        onChange={e => setRateForm({...rateForm, rate_value: parseFloat(e.target.value) || 0})} />
+                        onChange={e => setRateForm({...rateForm, rate_value: e.target.value})} />
                 </div>
                 <div className="form-group mb-3">
                     <label className="form-label">{t('taxes.country_code')}</label>
@@ -537,51 +505,15 @@ function TaxHome() {
                         </div>
                     )}
 
-                    <div className="data-table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>{t('common.branch')}</th>
-                                    <th>{t('taxes.jurisdiction')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.taxable_sales')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.output_vat')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.input_vat')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.net_vat')}</th>
-                                    <th>{t('taxes.invoices')}</th>
-                                    <th>{t('taxes.returns_filed')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(!branchAnalysis || !branchAnalysis.branches || branchAnalysis.branches.length === 0) ? (
-                                    <tr><td colSpan="8" className="text-center text-muted">{t('taxes.no_branch_data')}</td></tr>
-                                ) : branchAnalysis.branches.map(b => (
-                                    <tr key={b.branch_id}>
-                                        <td style={{ fontWeight: '600' }}>{b.branch_name}</td>
-                                        <td>
-                                            <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '3px 8px', borderRadius: '6px', fontSize: '11px', fontWeight: '600' }}>
-                                                {b.jurisdiction}
-                                            </span>
-                                        </td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(b.taxable_sales)} <small>{b.currency || currency}</small></td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }}>{formatNumber(b.output_vat)} <small>{b.currency || currency}</small></td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--primary)' }}>{formatNumber(b.input_vat)} <small>{b.currency || currency}</small></td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', fontWeight: '700', color: b.net_vat >= 0 ? 'var(--error)' : 'var(--success)' }}>
-                                            {formatNumber(Math.abs(b.net_vat))} <small>{b.currency || currency}</small> {b.net_vat >= 0 ? '↑' : '↓'}
-                                        </td>
-                                        <td style={{ textAlign: 'center' }}>{b.invoice_count}</td>
-                                        <td style={{ textAlign: 'center' }}>
-                                            <span style={{ fontSize: '12px' }}>
-                                                {b.returns_paid > 0 && <span style={{ color: 'var(--success)' }}>✅{b.returns_paid}</span>}
-                                                {b.returns_filed > 0 && <span style={{ color: 'var(--primary)', marginInlineStart: '4px' }}>📤{b.returns_filed}</span>}
-                                                {b.returns_draft > 0 && <span style={{ color: 'var(--warning)', marginInlineStart: '4px' }}>⏳{b.returns_draft}</span>}
-                                                {!b.returns_count && <span className="text-muted">—</span>}
-                                            </span>
-                                        </td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <DataTable
+                        columns={branchAnalysisColumns}
+                        data={branchAnalysis?.branches || []}
+                        rowKey="branch_id"
+                        searchable
+                        exportable
+                        exportName="tax-branch-analysis"
+                        emptyTitle={t('taxes.no_branch_data')}
+                    />
                 </div>
             )}
 
@@ -632,52 +564,15 @@ function TaxHome() {
                         </div>
                     )}
 
-                    <div className="data-table-container">
-                        <table className="data-table">
-                            <thead>
-                                <tr>
-                                    <th>{t('hr.employee_code')}</th>
-                                    <th>{t('hr.employee_name')}</th>
-                                    <th>{t('common.branch')}</th>
-                                    <th>{t('taxes.jurisdiction')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.total_gross')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.gosi_employee')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.gosi_employer')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.income_tax')}</th>
-                                    <th style={{ textAlign: 'left' }}>{t('taxes.total_net')}</th>
-                                    <th>{t('taxes.payslips')}</th>
-                                </tr>
-                            </thead>
-                            <tbody>
-                                {(!employeeTaxes || !employeeTaxes.employees || employeeTaxes.employees.length === 0) ? (
-                                    <tr><td colSpan="10" className="text-center text-muted">{t('taxes.no_employee_data')}</td></tr>
-                                ) : employeeTaxes.employees.map(emp => (
-                                    <tr key={emp.employee_id}>
-                                        <td><span style={{ fontFamily: 'monospace', color: 'var(--primary)', fontWeight: '600' }}>{emp.employee_code}</span></td>
-                                        <td style={{ fontWeight: '600' }}>{emp.employee_name}</td>
-                                        <td style={{ whiteSpace: 'nowrap', fontSize: '12px' }}>{emp.branch_name || '—'}</td>
-                                        <td>
-                                            <span style={{ background: 'rgba(59, 130, 246, 0.1)', color: 'rgb(59, 130, 246)', padding: '3px 8px', borderRadius: '6px', fontSize: '11px' }}>
-                                                {emp.jurisdiction}
-                                            </span>
-                                        </td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>{formatNumber(emp.total_gross)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--warning)' }}>{formatNumber(emp.gosi_employee)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }}>{formatNumber(emp.gosi_employer)}</td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap' }}>
-                                            {emp.income_tax_due > 0 ? (
-                                                <span style={{ color: 'var(--error)', fontWeight: '600' }}>{formatNumber(emp.income_tax_due)} ({emp.income_tax_rate}%)</span>
-                                            ) : (
-                                                <span className="text-muted">—</span>
-                                            )}
-                                        </td>
-                                        <td style={{ textAlign: 'left', whiteSpace: 'nowrap', fontWeight: '700' }}>{formatNumber(emp.total_net)}</td>
-                                        <td style={{ textAlign: 'center' }}>{emp.payslip_count}</td>
-                                    </tr>
-                                ))}
-                            </tbody>
-                        </table>
-                    </div>
+                    <DataTable
+                        columns={employeeTaxColumns}
+                        data={employeeTaxes?.employees || []}
+                        rowKey="employee_id"
+                        searchable
+                        exportable
+                        exportName="tax-employee-obligations"
+                        emptyTitle={t('taxes.no_employee_data')}
+                    />
                 </div>
             )}
         </div>

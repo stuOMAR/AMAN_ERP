@@ -17,6 +17,7 @@ function ExpenseForm() {
     const currency = getCurrency() || ''
 
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [accounts, setAccounts] = useState([])
     const [glAccounts, setGlAccounts] = useState([])
     const [error, setError] = useState(null)
@@ -43,9 +44,14 @@ function ExpenseForm() {
                 }
             } catch (err) {
                 console.error("Failed to load global data", err)
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     useEffect(() => {
@@ -100,6 +106,7 @@ function ExpenseForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{t('treasury.menu.expense')}</h1>

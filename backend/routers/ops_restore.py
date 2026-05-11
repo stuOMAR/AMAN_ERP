@@ -8,8 +8,10 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
+
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -51,22 +53,22 @@ async def list_backups():
 
 
 @router.post("/restore/dry-run")
-async def restore_dry_run(body: RestoreDryRunRequest):
+async def restore_dry_run(body: RestoreDryRunRequest, request: Request):
     """Step 1: Validate backup + compute missing/extra tenants."""
     from services.ops.restore import dry_run_restore
 
     result = await dry_run_restore(body.backup_id)
     if not result:
-        raise HTTPException(404, f"Backup {body.backup_id} not found")
+        raise HTTPException(**http_error(404, "backup_not_found", request))
     return result
 
 
 @router.post("/restore")
-async def restore_execute(body: RestoreConfirmRequest):
+async def restore_execute(body: RestoreConfirmRequest, request: Request):
     """Step 2: Execute restore with confirm token. Audited."""
     from services.ops.restore import execute_restore
 
     result = await execute_restore(body.backup_id, body.confirm_token)
     if not result.get("success"):
-        raise HTTPException(400, result.get("error", "Restore failed"))
+        raise HTTPException(**http_error(400, "restore_failed", request))
     return result

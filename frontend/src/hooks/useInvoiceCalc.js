@@ -7,7 +7,9 @@
  * Usage:
  *   const { totals, lines, preview, loading } = useInvoiceCalc();
  *   preview({
- *     lines: [{ quantity: 10, unit_price: 1200, discount: 500 }],
+ *     branch_id: 1,
+ *     customer_id: 25,
+ *     lines: [{ product_id: 7, quantity: 10, unit_price: 1200, discount: 500 }],
  *     currency: 'SAR',
  *     paid_amount: 5000,
  *   });

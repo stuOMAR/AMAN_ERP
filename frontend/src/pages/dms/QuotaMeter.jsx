@@ -1,10 +1,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * QuotaMeter — displays DMS storage quota usage.
  */
 export default function QuotaMeter() {
+  const { t } = useTranslation();
   const { data, isLoading } = useQuery({
     queryKey: ['dms-quotas'],
     queryFn: async () => {
@@ -14,7 +16,7 @@ export default function QuotaMeter() {
     },
   });
 
-  if (isLoading) return <div>Loading quota...</div>;
+  if (isLoading) return <div>{t('dms.quota_meter.loading')}</div>;
   if (!data) return null;
 
   const pct = data.quota_mb > 0 ? ((data.used_mb / data.quota_mb) * 100).toFixed(1) : 0;
@@ -22,10 +24,10 @@ export default function QuotaMeter() {
 
   return (
     <div className="quota-meter card p-3">
-      <h4>Storage Quota</h4>
+      <h4>{t('dms.quota_meter.title')}</h4>
       <div className="d-flex justify-content-between mb-1">
-        <span>{data.used_mb} MB used</span>
-        <span>{data.remaining_mb} MB remaining of {data.quota_mb} MB</span>
+        <span>{data.used_mb} {t('dms.quota_meter.mb_used')}</span>
+        <span>{t('dms.quota_meter.mb_remaining', { remaining: data.remaining_mb, total: data.quota_mb })}</span>
       </div>
       <div className="progress" style={{ height: 20 }}>
         <div
@@ -39,7 +41,7 @@ export default function QuotaMeter() {
           {pct}%
         </div>
       </div>
-      <small className="text-muted mt-1">{data.document_count} documents</small>
+      <small className="text-muted mt-1">{data.document_count} {t('dms.quota_meter.documents')}</small>
     </div>
   );
 }

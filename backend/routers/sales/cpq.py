@@ -52,7 +52,7 @@ def get_configuration(
             WHERE pc.id = :cid
         """), {"cid": config_id}).fetchone()
         if not cfg:
-            raise HTTPException(status_code=404, detail="Configuration not found")
+            raise HTTPException(**http_error(404, "configuration_not_found", request))
         result = dict(cfg._mapping)
 
         # Groups + options
@@ -222,7 +222,7 @@ def get_quote(
             WHERE q.id = :qid
         """), {"qid": quote_id}).fetchone()
         if not q:
-            raise HTTPException(status_code=404, detail="Quote not found")
+            raise HTTPException(**http_error(404, "quote_not_found", request))
         result = dict(q._mapping)
 
         lines = db.execute(text("""
@@ -291,11 +291,11 @@ def convert_to_quotation(
             "SELECT * FROM cpq_quotes WHERE id = :qid"
         ), {"qid": quote_id}).fetchone()
         if not q:
-            raise HTTPException(status_code=404, detail="Quote not found")
+            raise HTTPException(**http_error(404, "quote_not_found", request))
         qd = dict(q._mapping)
 
         if qd.get("quotation_id"):
-            raise HTTPException(status_code=400, detail="Quote already converted")
+            raise HTTPException(**http_error(400, "quote_already_converted", request))
 
         # Find customer record
         cust = db.execute(text(

@@ -47,7 +47,7 @@ def create_cycle(
     conn = get_db_connection(company_id)
     try:
         if data.period_end <= data.period_start:
-            raise HTTPException(status_code=400, detail="Period end must be after period start")
+            raise HTTPException(**http_error(400, "period_end_must_be_after_period_start", request))
 
         row = conn.execute(text("""
             INSERT INTO review_cycles (name, period_start, period_end,
@@ -65,13 +65,13 @@ def create_cycle(
             action="hr.performance.cycle_create", resource_type="review_cycle",
             resource_id=str(row[0]), details={"name": data.name}, request=request
         )
-        return {"id": row[0], "message": "Review cycle created"}
+        return {"id": row[0], "message": i18n_message("review_cycle_created", request)}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Create cycle error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to create review cycle")
+        raise HTTPException(**http_error(500, "failed_to_create_review_cycle", request))
     finally:
         conn.close()
 
@@ -140,18 +140,18 @@ def launch_cycle(
         ), {"id": cycle_id}).fetchone()
 
         if not cycle:
-            raise HTTPException(status_code=404, detail="Cycle not found")
+            raise HTTPException(**http_error(404, "cycle_not_found", request))
 
         c = dict(cycle._mapping)
         if c["status"] != "draft":
-            raise HTTPException(status_code=400, detail="Only draft cycles can be launched")
+            raise HTTPException(**http_error(400, "only_draft_cycles_can_be_launched", request))
 
         # Check idempotency
         existing = conn.execute(text(
             "SELECT COUNT(*) FROM performance_reviews WHERE cycle_id = :cid"
         ), {"cid": cycle_id}).scalar()
         if existing > 0:
-            raise HTTPException(status_code=400, detail="Reviews already exist for this cycle")
+            raise HTTPException(**http_error(400, "reviews_already_exist_for_this_cycle", request))
 
         # Fetch active employees with their managers
         emp_query = """
@@ -171,7 +171,7 @@ def launch_cycle(
         employees = conn.execute(text(emp_query), emp_params).fetchall()
 
         if not employees:
-            raise HTTPException(status_code=400, detail="No active employees found")
+            raise HTTPException(**http_error(400, "no_active_employees_found", request))
 
         review_period = f"{c['period_start']} - {c['period_end']}"
         total_created = 0
@@ -201,13 +201,13 @@ def launch_cycle(
             action="hr.performance.cycle_launch", resource_type="review_cycle",
             resource_id=str(cycle_id), details={"total_reviews": total_created}, request=request
         )
-        return {"message": f"Cycle launched with {total_created} reviews", "total_reviews": total_created}
+        return {"message": i18n_message("performance_cycle_launched", request), "total_reviews": total_created}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Launch cycle error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to launch cycle")
+        raise HTTPException(**http_error(500, "failed_to_launch_cycle", request))
     finally:
         conn.close()
 
@@ -291,14 +291,14 @@ def submit_self_assessment(
         """), {"rid": review_id}).fetchone()
 
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(**http_error(404, "review_not_found", request))
 
         rv = dict(review._mapping)
         if rv["user_id"] != current_user.id:
-            raise HTTPException(status_code=403, detail="You can only submit your own self-assessment")
+            raise HTTPException(**http_error(403, "you_can_only_submit_your_own_self_assessment", request))
 
         if rv["status"] != "pending_self":
-            raise HTTPException(status_code=400, detail="Self-assessment already submitted or review is not in the correct state")
+            raise HTTPException(**http_error(400, "self_assessment_already_submitted_or_review_is_not", request))
 
         assessment_data = [s.model_dump() for s in data.scores]
 
@@ -320,13 +320,13 @@ def submit_self_assessment(
             action="hr.performance.self_assessment", resource_type="performance_review",
             resource_id=str(review_id), details={}, request=request
         )
-        return {"message": "Self-assessment submitted successfully"}
+        return {"message": i18n_message(("self_assessment_submitted", request))}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Self-assessment error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit self-assessment")
+        raise HTTPException(**http_error(500, "failed_to_submit_self_assessment", request))
     finally:
         conn.close()
 
@@ -414,7 +414,7 @@ def submit_manager_assessment(
         """), {"rid": review_id}).fetchone()
 
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(**http_error(404, "review_not_found", request))
 
         rv = dict(review._mapping)
 
@@ -422,10 +422,10 @@ def submit_manager_assessment(
         is_admin = current_user.role in ("admin", "system_admin")
         is_reviewer = rv.get("reviewer_user_id") == current_user.id
         if not is_admin and not is_reviewer:
-            raise HTTPException(status_code=403, detail="Only the assigned reviewer can submit manager assessment")
+            raise HTTPException(**http_error(403, "only_the_assigned_reviewer_can_submit_manager_asse", request))
 
         if rv["status"] != "pending_manager":
-            raise HTTPException(status_code=400, detail="Review must be pending manager assessment")
+            raise HTTPException(**http_error(400, "review_must_be_pending_manager_assessment", request))
 
         assessment_data = [s.model_dump() for s in data.scores]
 
@@ -446,13 +446,13 @@ def submit_manager_assessment(
             action="hr.performance.manager_assessment", resource_type="performance_review",
             resource_id=str(review_id), details={}, request=request
         )
-        return {"message": "Manager assessment submitted successfully"}
+        return {"message": i18n_message(("manager_assessment_submitted", request))}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Manager assessment error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to submit manager assessment")
+        raise HTTPException(**http_error(500, "failed_to_submit_manager_assessment", request))
     finally:
         conn.close()
 
@@ -477,16 +477,16 @@ def finalize_review(
         """), {"rid": review_id}).fetchone()
 
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(**http_error(404, "review_not_found", request))
 
         rv = dict(review._mapping)
 
         if rv["status"] == "completed":
-            raise HTTPException(status_code=400, detail="Review already finalized")
+            raise HTTPException(**http_error(400, "review_already_finalized", request))
 
         manager_scores = rv.get("manager_assessment")
         if not manager_scores:
-            raise HTTPException(status_code=400, detail="Manager assessment not submitted yet")
+            raise HTTPException(**http_error(400, "manager_assessment_not_submitted_yet", request))
 
         # Fetch goals with weights for this review
         goals = conn.execute(text(
@@ -536,13 +536,13 @@ def finalize_review(
             action="hr.performance.finalize", resource_type="performance_review",
             resource_id=str(review_id), details={"composite_score": composite}, request=request
         )
-        return {"message": "Review finalized", "composite_score": composite}
+        return {"message": i18n_message("review_finalized", request), "composite_score": composite}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Finalize review error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to finalize review")
+        raise HTTPException(**http_error(500, "failed_to_finalize_review", request))
     finally:
         conn.close()
 
@@ -567,7 +567,7 @@ def add_goal(
             "SELECT id FROM performance_reviews WHERE id = :rid"
         ), {"rid": review_id}).fetchone()
         if not review:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(**http_error(404, "review_not_found", request))
 
         row = conn.execute(text("""
             INSERT INTO performance_goals (review_id, title, description, weight, target)
@@ -584,13 +584,13 @@ def add_goal(
             action="hr.performance.goal_add", resource_type="performance_goal",
             resource_id=str(row[0]), details={"review_id": review_id, "title": data.title}, request=request
         )
-        return {"id": row[0], "message": "Goal added"}
+        return {"id": row[0], "message": i18n_message("goal_added", request)}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Add goal error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to add goal")
+        raise HTTPException(**http_error(500, "failed_to_add_goal", request))
     finally:
         conn.close()
 
@@ -626,18 +626,18 @@ def delete_goal(
         ), {"gid": goal_id})
         conn.commit()
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Goal not found")
+            raise HTTPException(**http_error(404, "goal_not_found", request))
         log_activity(
             conn, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="hr.performance.goal_delete", resource_type="performance_goal",
             resource_id=str(goal_id), details={}, request=request
         )
-        return {"message": "Goal deleted"}
+        return {"message": i18n_message(("goal_deleted", request))}
     except HTTPException:
         raise
     except Exception:
         conn.rollback()
-        raise HTTPException(status_code=500, detail="Failed to delete goal")
+        raise HTTPException(**http_error(500, "failed_to_delete_goal", request))
     finally:
         conn.close()
 
@@ -668,7 +668,7 @@ def get_review_detail(
         """), {"rid": review_id}).fetchone()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Review not found")
+            raise HTTPException(**http_error(404, "review_not_found", request))
 
         d = dict(row._mapping)
         # Validate branch access if employee has a branch

@@ -31,44 +31,78 @@ def _dec(v) -> Decimal:
 @router.get("/inventory/valuation", dependencies=[Depends(require_permission(["stock.view", "reports.view"]))], response_model=Dict[str, Any])
 def inventory_valuation_report(
     warehouse_id: Optional[int] = None,
+    branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """تقييم المخزون بالتكلفة وسعر البيع"""
+    """تقييم المخزون بالتكلفة وسعر البيع — T067: uses CostingService"""
     db = get_db_connection(current_user.company_id)
     try:
+        from services.costing_service import CostingService
+        from utils.permissions import validate_branch_access
+
+        # T067: Validate branch access
+        if warehouse_id:
+            wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()
+            if wh_branch:
+                validate_branch_access(current_user, wh_branch)
+
+        # T067: Use CostingService for valuation
+        branch_ids = None
+        if branch_id:
+            branch_ids = [branch_id]
+        elif hasattr(current_user, 'allowed_branches'):
+            allowed = getattr(current_user, 'allowed_branches', []) or []
+            if allowed and "*" not in getattr(current_user, 'permissions', []):
+                branch_ids = allowed
+
+        valuation = CostingService.calculate_inventory_valuation(
+            db,
+            warehouse_id=warehouse_id,
+            branch_id=branch_id,
+            branch_ids=branch_ids,
+        )
+
+        # Get selling price data
         wh_filter = "AND i.warehouse_id = :wh" if warehouse_id else ""
         params = {}
         if warehouse_id:
             params["wh"] = warehouse_id
 
         rows = db.execute(text(f"""
-            SELECT p.id, p.sku, p.product_name, p.cost_price, p.selling_price,
+            SELECT p.id, p.sku, p.product_name, p.selling_price,
                    COALESCE(SUM(i.quantity), 0) as total_qty,
-                   COALESCE(SUM(i.quantity), 0) * COALESCE(p.cost_price, 0) as total_value_cost,
-                   COALESCE(SUM(i.quantity), 0) * COALESCE(p.selling_price, 0) as total_value_sell,
                    w.warehouse_name
             FROM products p
             LEFT JOIN inventory i ON p.id = i.product_id {wh_filter}
             LEFT JOIN warehouses w ON i.warehouse_id = w.id
             WHERE p.product_type != 'service'
-            GROUP BY p.id, p.sku, p.product_name, p.cost_price, p.selling_price, w.warehouse_name
+            GROUP BY p.id, p.sku, p.product_name, p.selling_price, w.warehouse_name
             HAVING COALESCE(SUM(i.quantity), 0) != 0
-            ORDER BY total_value_cost DESC
+            ORDER BY p.product_name
         """), params).fetchall()
+
+        # Build lookup from costing service
+        cost_lookup = {}
+        for item in valuation.get("items", []):
+            cost_lookup[item["product_id"]] = item
 
         items = []
         grand_total_cost = Decimal("0")
         grand_total_sell = Decimal("0")
         for r in rows:
             m = r._mapping
-            val_cost = Decimal(str(m["total_value_cost"] or 0))
-            val_sell = Decimal(str(m["total_value_sell"] or 0))
+            pid = m["id"]
+            cost_data = cost_lookup.get(pid, {})
+            cost_price = Decimal(str(cost_data.get("weighted_avg_cost", 0)))
+            qty = Decimal(str(m["total_qty"]))
+            val_cost = qty * cost_price
+            val_sell = qty * Decimal(str(m["selling_price"] or 0))
             grand_total_cost += val_cost
             grand_total_sell += val_sell
             items.append({
-                "product_id": m["id"], "sku": m["sku"], "product_name": m["product_name"],
-                "warehouse": m["warehouse_name"], "quantity": float(m["total_qty"]),
-                "cost_price": Decimal(str(m["cost_price"] or 0)),
+                "product_id": pid, "sku": m["sku"], "product_name": m["product_name"],
+                "warehouse": m["warehouse_name"], "quantity": float(qty),
+                "cost_price": cost_price,
                 "selling_price": Decimal(str(m["selling_price"] or 0)),
                 "total_value_cost": round(val_cost, 2),
                 "total_value_sell": round(val_sell, 2),

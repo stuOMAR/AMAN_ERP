@@ -12,7 +12,7 @@ import json
 import logging
 from typing import List, Optional
 
-from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
 from sqlalchemy import text
 
 from database import get_db_connection
@@ -21,6 +21,7 @@ from integrations.bank_feeds import (
 )
 from routers.auth import get_current_user
 from utils.permissions import require_permission, validate_treasury_account_access, _is_branch_privileged
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/finance/bank-feeds", tags=["bank-feeds"])
@@ -42,6 +43,7 @@ async def import_statement(
     source_format: str = Form(...),          # mt940 | csv
     bank_account_id: Optional[int] = Form(None),
     csv_config: Optional[str] = Form(None),  # JSON override for CSVStatementConfig
+    request: Request = None,
     current_user=Depends(get_current_user),
 ):
     """Import Statement.
@@ -68,7 +70,7 @@ async def import_statement(
         if bank_account_id:
             validate_treasury_account_access(db, current_user, bank_account_id)
         elif not _is_branch_privileged(current_user):
-            raise HTTPException(status_code=400, detail="يرجى تحديد حساب بنكي مرتبط بفرعك قبل استيراد كشف البنك")
+            raise HTTPException(**http_error(400, "select_bank_account_for_import", request))
 
         created: List[int] = []
         if fmt == "mt940":
@@ -105,10 +107,10 @@ async def import_statement(
                     override = json.loads(csv_config)
                     cfg = CSVStatementConfig(**{**cfg.__dict__, **override})
                 except Exception as e:
-                    raise HTTPException(400, f"invalid csv_config JSON: {e}")
+                    raise HTTPException(**http_error(400, "bank_feed_invalid_csv_config", request))
             rows = parse_csv_statement(raw, cfg)
             if not rows:
-                raise HTTPException(400, "CSV produced no transactions")
+                raise HTTPException(**http_error(400, "bank_feed_csv_no_transactions", request))
             stmt_id = _insert_statement(
                 db, bank_account_id=bank_account_id, iban=None,
                 statement_number=None, currency=rows[0]["currency"],
@@ -137,7 +139,7 @@ async def import_statement(
             try:
                 statements = parse_camt053(raw)
             except ValueError as e:
-                raise HTTPException(400, f"CAMT.053 parse failed: {e}")
+                raise HTTPException(**http_error(400, "bank_feed_camt_parse_failed", request))
             for st in statements:
                 stmt_id = _insert_statement(
                     db, bank_account_id=bank_account_id, iban=st.account,
@@ -164,7 +166,7 @@ async def import_statement(
                     )
                 created.append(stmt_id)
         else:
-            raise HTTPException(400, f"unsupported source_format: {source_format!r}")
+            raise HTTPException(**http_error(400, "bank_feed_unsupported_format", request))
         db.commit()
         return {"imported_statement_ids": created, "count": len(created)}
     except HTTPException:
@@ -173,7 +175,7 @@ async def import_statement(
     except Exception as e:
         db.rollback()
         logger.exception("bank-feed import failed")
-        raise HTTPException(500, f"bank feed import failed: {e}")
+        raise HTTPException(**http_error(500, "bank_feed_import_failed", request))
     finally:
         _close(db)
 
@@ -252,11 +254,11 @@ def list_lines(statement_id: int, current_user=Depends(get_current_user)):
             {"sid": statement_id},
         ).fetchone()
         if not statement:
-            raise HTTPException(status_code=404, detail="كشف البنك غير موجود")
+            raise HTTPException(**http_error(404, "bank_statement_not_found", request))
         if statement.bank_account_id:
             validate_treasury_account_access(db, current_user, statement.bank_account_id)
         elif not _is_branch_privileged(current_user):
-            raise HTTPException(status_code=403, detail="ليس لديك صلاحية للوصول إلى كشف غير مرتبط بفرع")
+            raise HTTPException(**http_error(403, "no_permission_unlinked_statement", request))
 
         rows = db.execute(
             text("""SELECT id, line_no, value_date, posting_date, amount,

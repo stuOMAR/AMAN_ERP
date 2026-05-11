@@ -126,7 +126,7 @@ async def list_variants(
         return {"data": rows, "total": len(rows)}
     except Exception as e:
         if "does not exist" in str(e):
-            return {"data": [], "total": 0, "message": "Table not migrated yet"}
+            return {"data": [], "total": 0, "message": i18n_message("table_not_migrated", request)}
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -160,7 +160,7 @@ async def create_variant(data: ProductVariantCreate, request: Request, current_u
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="variant.create", resource_type="product_variant",
                      resource_id=str(variant_id), details={"product_id": data.product_id, "sku": data.variant_sku}, request=request)
-        return {"id": variant_id, "message": "Variant created successfully"}
+        return {"id": variant_id, "message": i18n_message("variant_created", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -180,7 +180,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
         
         db.execute(text(f"UPDATE product_variants SET {', '.join(fields)} WHERE id = :vid"), params)
         db.commit()
@@ -188,7 +188,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="variant.update", resource_type="product_variant",
                      resource_id=str(variant_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": "Variant updated successfully"}
+        return {"message": i18n_message(("variant_updated", request))}
     except HTTPException:
         raise
     except Exception:
@@ -233,7 +233,7 @@ async def list_bins(
         return {"data": rows, "total": len(rows)}
     except Exception as e:
         if "does not exist" in str(e):
-            return {"data": [], "total": 0, "message": "Table not migrated yet"}
+            return {"data": [], "total": 0, "message": i18n_message("table_not_migrated", request)}
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -256,7 +256,7 @@ async def create_bin(data: BinLocationCreate, request: Request, current_user: di
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="bin.create", resource_type="bin_location",
                      resource_id=str(bin_id), details={"warehouse_id": data.warehouse_id, "aisle": data.aisle, "rack": data.rack}, request=request)
-        return {"id": bin_id, "message": "Bin location created successfully"}
+        return {"id": bin_id, "message": i18n_message("bin_location_created", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -276,7 +276,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
         
         db.execute(text(f"UPDATE bin_locations SET {', '.join(fields)} WHERE id = :bid"), params)
         db.commit()
@@ -284,7 +284,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="bin.update", resource_type="bin_location",
                      resource_id=str(bin_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": "Bin location updated successfully"}
+        return {"message": i18n_message(("bin_location_updated", request))}
     except HTTPException:
         raise
     except Exception:
@@ -317,7 +317,7 @@ async def list_kits(
         return {"data": rows, "total": len(rows)}
     except Exception as e:
         if "does not exist" in str(e):
-            return {"data": [], "total": 0, "message": "Table not migrated yet"}
+            return {"data": [], "total": 0, "message": i18n_message("table_not_migrated", request)}
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -337,7 +337,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
         """), {"kit_id": kit_id})
         row = result.fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Kit not found")
+            raise HTTPException(**http_error(404, ("kit_not_found", request)))
         
         kit = dict(row._mapping)
         items = db.execute(text("""
@@ -352,7 +352,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
         raise
     except Exception as e:
         if "does not exist" in str(e):
-            raise HTTPException(status_code=404, detail="Table not migrated yet")
+            raise HTTPException(**http_error(404, ("table_not_migrated", request)))
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -382,7 +382,7 @@ async def create_kit(data: ProductKitCreate, request: Request, current_user: dic
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="kit.create", resource_type="product_kit",
                      resource_id=str(kit_id), details={"kit_product_id": data.kit_product_id, "components": len(data.components)}, request=request)
-        return {"id": kit_id, "message": "Kit created successfully"}
+        return {"id": kit_id, "message": i18n_message("kit_created", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -402,7 +402,7 @@ async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, curr
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
         
         db.execute(text(f"UPDATE product_kits SET {', '.join(fields)} WHERE id = :kid"), params)
         db.commit()
@@ -410,7 +410,7 @@ async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, curr
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="kit.update", resource_type="product_kit",
                      resource_id=str(kit_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": "Kit updated successfully"}
+        return {"message": i18n_message(("kit_updated", request))}
     except HTTPException:
         raise
     except Exception:

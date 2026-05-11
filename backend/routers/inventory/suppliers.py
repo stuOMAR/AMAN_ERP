@@ -417,7 +417,7 @@ def delete_supplier(
         # Check if supplier has balance
         balance = db.execute(text("SELECT COALESCE(current_balance, 0) FROM parties WHERE id = :id"), {"id": id}).scalar()
         if balance and abs(balance) > 0.01:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف مورد له رصيد مستحق")
+            raise HTTPException(**http_error(400, ("cannot_delete_supplier_with_balance", request)))
 
         # Check if supplier has transactions
         usage = db.execute(text("""
@@ -429,7 +429,7 @@ def delete_supplier(
         """), {"id": id}).scalar()
 
         if usage and usage > 0:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف مورد له معاملات سابقة")
+            raise HTTPException(**http_error(400, ("cannot_delete_supplier_with_transactions", request)))
 
         # Delete supplier (set is_supplier to FALSE instead of actual delete to preserve data integrity)
         db.execute(text("UPDATE parties SET is_supplier = FALSE, status = 'inactive' WHERE id = :id"), {"id": id})
@@ -448,7 +448,7 @@ def delete_supplier(
             branch_id=None
         )
 
-        return {"message": "تم حذف المورد بنجاح"}
+        return {"message": i18n_message(("supplier_deleted_success", request))}
     except HTTPException:
         raise
     except Exception as e:

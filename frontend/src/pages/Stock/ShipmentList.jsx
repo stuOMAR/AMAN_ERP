@@ -17,11 +17,15 @@ const ShipmentList = () => {
     const { showToast } = useToast();
     const [shipments, setShipments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [search, setSearch] = useState('');
     const [statusFilter, setStatusFilter] = useState('');
 
     useEffect(() => {
-        fetchShipments();
+        const timer = setTimeout(() => {
+            fetchShipments();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [statusFilter, currentBranch]);
 
     const fetchShipments = async () => {
@@ -33,12 +37,14 @@ const ShipmentList = () => {
             showToast(t('stock.shipments.validation.error_load'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
     const getStatusBadge = (status) => {
         const styles = {
             pending: { bg: '#FEF3C7', color: '#D97706', label: t('stock.shipments.status.pending') },
+            dispatched: { bg: '#DBEAFE', color: '#2563EB', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
             received: { bg: '#D1FAE5', color: '#059669', label: t('stock.shipments.status.received') },
             cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') }
         };
@@ -113,6 +119,7 @@ const ShipmentList = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">
@@ -138,6 +145,7 @@ const ShipmentList = () => {
                     label: t('stock.shipments.filter_status'),
                     options: [
                         { value: 'pending', label: t('stock.shipments.status.pending') },
+                        { value: 'dispatched', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
                         { value: 'received', label: t('stock.shipments.status.received') },
                         { value: 'cancelled', label: t('stock.shipments.status.cancelled') },
                     ],

@@ -17,6 +17,7 @@ function TransferForm() {
     const currency = getCurrency() || ''
 
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [accounts, setAccounts] = useState([])
     const [error, setError] = useState(null)
 
@@ -38,9 +39,14 @@ function TransferForm() {
                 setAccounts(res.data)
             } catch (err) {
                 console.error("Failed to fetch accounts", err)
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchAccounts()
+        const timer = setTimeout(() => {
+            fetchAccounts()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const handleSubmit = async (e) => {
@@ -79,6 +85,7 @@ function TransferForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{t('treasury.menu.transfer')}</h1>

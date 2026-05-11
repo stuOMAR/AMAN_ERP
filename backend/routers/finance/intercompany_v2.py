@@ -115,7 +115,7 @@ def get_transaction(request: Request, txn_id: int, current_user=Depends(get_curr
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     result = intercompany_service.get_transaction_by_id(txn_id, str(company_id))
     if not result:
-        raise HTTPException(status_code=404, detail="Transaction not found")
+        raise HTTPException(**http_error(404, "transaction_not_found", request))
     return result
 
 

@@ -117,7 +117,7 @@ def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
             {"fid": forecast_id},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Forecast not found")
+            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
 
         lines = db.execute(
             text(
@@ -153,7 +153,7 @@ def delete_forecast(forecast_id: int, current_user=Depends(get_current_user)):
             {"fid": forecast_id},
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Forecast not found")
+            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
         db.commit()
     except HTTPException:
         raise

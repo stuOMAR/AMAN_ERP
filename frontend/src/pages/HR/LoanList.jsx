@@ -20,6 +20,7 @@ const LoanList = () => {
     const [loans, setLoans] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [isModalOpen, setIsModalOpen] = useState(false);
     const [actionLoading, setActionLoading] = useState(false);
     const [search, setSearch] = useState('');
@@ -47,7 +48,10 @@ const LoanList = () => {
     }, []);
 
     useEffect(() => {
-        fetchData();
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchData = async () => {
@@ -71,6 +75,7 @@ const LoanList = () => {
             if (detail) toastEmitter.emit(detail, 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -225,11 +230,13 @@ const LoanList = () => {
             <DataTable
                 columns={columns}
                 data={filteredData}
-                loading={loading}
+                loading={initialLoad && !loans.length}
                 emptyIcon={<DollarSign size={48} className="text-light" />}
                 emptyTitle={t('common.no_records_found')}
                 emptyAction={canManageLoans ? { label: t('hr.loans.add'), onClick: () => setIsModalOpen(true) } : undefined}
             />
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
             {/* Create Modal */}
             {isModalOpen && (

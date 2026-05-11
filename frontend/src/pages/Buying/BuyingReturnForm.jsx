@@ -17,6 +17,7 @@ function BuyingReturnForm() {
     const navigate = useNavigate()
     const { showToast } = useToast()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [receiveRefund, setReceiveRefund] = useState(false)
     const [paymentMethod, setPaymentMethod] = useState('cash')
@@ -37,6 +38,8 @@ function BuyingReturnForm() {
         invoice_id: '', // Linked invoice
         invoice_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
+        currency: currency || '',
+        exchange_rate: 1,
         notes: ''
     })
 
@@ -58,9 +61,14 @@ function BuyingReturnForm() {
                 setWarehouses(whRes.data)
             } catch (err) {
                 showToast(t('common.error'), 'error')
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchResources()
+        const timer = setTimeout(() => {
+            fetchResources()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     // Fetch Invoices when Supplier Selected
@@ -82,6 +90,11 @@ function BuyingReturnForm() {
         try {
             const res = await purchasesAPI.getInvoice(invoiceId)
             const invoice = res.data
+            setFormData(prev => ({
+                ...prev,
+                currency: invoice.currency || prev.currency,
+                exchange_rate: invoice.exchange_rate || prev.exchange_rate || 1,
+            }))
 
             // Map items with max_quantity
             const returnItems = invoice.items.map(item => {
@@ -155,15 +168,17 @@ function BuyingReturnForm() {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             previewDebounced({
                 lines: items.map(i => ({
+                    product_id: i.product_id ? Number(i.product_id) : null,
                     quantity: Number(i.quantity) || 0,
                     unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
                     discount: Number(i.discount) || 0,
                 })),
+                branch_id: currentBranch?.id || null,
+                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
                 currency,
             })
         }
-    }, [items])
+    }, [items, formData.supplier_id, currentBranch])
 
     // Handlers
     const handleItemChange = (index, field, value) => {
@@ -253,8 +268,10 @@ function BuyingReturnForm() {
                 invoice_date: formData.invoice_date,
                 due_date: formData.due_date,
                 payment_method: receiveRefund ? paymentMethod : null,
-                paid_amount: receiveRefund ? totals.total : 0,
-                original_invoice_id: formData.invoice_id ? parseInt(formData.invoice_id) : null,
+	                paid_amount: receiveRefund ? totals.total : 0,
+	                currency: formData.currency || currency,
+	                exchange_rate: String(formData.exchange_rate || 1),
+	                original_invoice_id: formData.invoice_id ? parseInt(formData.invoice_id) : null,
                 notes: formData.notes + (formData.invoice_id ? ` (Return for Invoice #${formData.invoice_id})` : ''),
                 items: items.map(item => ({
                     product_id: parseInt(item.product_id) || null,
@@ -279,6 +296,7 @@ function BuyingReturnForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title" style={{ color: 'var(--error)' }}>{t('buying.returns.form.title_new')}</h1>

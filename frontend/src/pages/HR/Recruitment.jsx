@@ -16,6 +16,7 @@ const Recruitment = () => {
     const [openings, setOpenings] = useState([]);
     const [applications, setApplications] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [modalType, setModalType] = useState('opening');
     const [filterStatus, setFilterStatus] = useState('all');
@@ -27,7 +28,12 @@ const Recruitment = () => {
 
     const [filterStage, setFilterStage] = useState('all');
 
-    useEffect(() => { fetchData(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
     useEffect(() => { if (activeTab === 'applications' && applications.length === 0) fetchApplications(); }, [activeTab]);
 
     const fetchData = async () => {
@@ -41,7 +47,7 @@ const Recruitment = () => {
             ]);
             setOpenings(openRes.data || []);
             setApplications(appRes.data || []);
-        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); } finally { setLoading(false); }
+        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); } finally { setLoading(false); setInitialLoad(false); }
     };
 
     const fetchApplications = async () => {
@@ -189,7 +195,7 @@ const Recruitment = () => {
             </div>
 
             <div className="card section-card">
-                {loading ? <PageLoading /> : activeTab === 'openings' ? (
+                {initialLoad && !openings.length ? <PageLoading /> : activeTab === 'openings' ? (
                     <div className="data-table-container">
                         <table className="data-table">
                             <thead><tr>
@@ -268,6 +274,8 @@ const Recruitment = () => {
                     </div>
                 )}
             </div>
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
             {/* Application Detail Modal */}
             {showDetailModal && selectedApp && (

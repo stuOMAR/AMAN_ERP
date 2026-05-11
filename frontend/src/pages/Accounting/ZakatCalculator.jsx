@@ -17,6 +17,11 @@ const COUNTRY_FLAGS = {
     LB: '🇱🇧', TR: '🇹🇷'
 }
 
+function makeIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
+    return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
 function ZakatCalculator() {
     const { t } = useTranslation()
     const { showToast } = useToast()
@@ -30,6 +35,7 @@ function ZakatCalculator() {
     const [result, setResult] = useState(null)
     const [postResult, setPostResult] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [posting, setPosting] = useState(false)
 
     const handleCalculate = async () => {
@@ -47,9 +53,11 @@ function ZakatCalculator() {
     }
 
     const handlePost = async () => {
+        if (posting) return
         setPosting(true)
         try {
-            const res = await zakatAPI.post(fiscalYear)
+            const params = currentBranch?.id ? { branch_id: currentBranch.id } : {}
+            const res = await zakatAPI.post(fiscalYear, params, makeIdempotencyKey(`zakat-post:${fiscalYear}`))
             setPostResult(res.data)
             showToast(t('zakat.posted_success'), 'success')
         } catch (err) {
@@ -118,7 +126,7 @@ function ZakatCalculator() {
                         <label>{t('zakat.year_type')}</label>
                         <div className="flex items-center gap-2 mt-2">
                             <input type="checkbox" id="gregorian" checked={useGregorian} onChange={e => setUseGregorian(e.target.checked)} />
-                            <label htmlFor="gregorian">{t('zakat.use_gregorian')} (2.5775%)</label>
+                            <label htmlFor="gregorian">{t('zakat.use_gregorian')}</label>
                         </div>
                     </div>
                     <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
@@ -145,31 +153,35 @@ function ZakatCalculator() {
 
             {result && (
                 <>
+                    {(() => {
+                        const displayCurrency = result.display_currency || currency
+                        return (
+                            <>
                     {/* Zakat Base Details */}
                     <div className="grid grid-2 mt-4" style={{ gap: 16 }}>
                         <div className="card p-4">
                             <h3 className="card-title text-success mb-3">
                                 ➕ {t('zakat.additions')}
                             </h3>
-                            {result.additions && result.additions.filter(a => a.amount !== 0 || a.is_subtotal).map((a, i) => (
+                            {result.additions && result.additions.filter(a => Number(a.amount || 0) !== 0 || a.is_subtotal).map((a, i) => (
                                 <div key={i} className="flex justify-between py-1 border-bottom" style={a.is_subtotal ? { fontWeight: 'bold', borderTop: '2px solid var(--border)', paddingTop: '8px' } : {}}>
                                     <span>{a.label_ar || a.label}</span>
-                                    <span className="font-medium" style={a.amount < 0 ? { color: 'var(--danger)' } : {}}>{formatNumber(a.amount)} {currency}</span>
+                                    <span className="font-medium" style={Number(a.amount || 0) < 0 ? { color: 'var(--danger)' } : {}}>{formatNumber(a.amount)} {displayCurrency}</span>
                                 </div>
                             ))}
                             <div className="flex justify-between py-2 font-bold mt-2" style={{ borderTop: '3px double var(--border)', paddingTop: '10px' }}>
                                 <span>{t('zakat.total_additions')}</span>
-                                <span className="text-success">{formatNumber(result.total_additions || 0)} {currency}</span>
+                                <span className="text-success">{formatNumber(result.total_additions || 0)} {displayCurrency}</span>
                             </div>
                         </div>
                         <div className="card p-4">
                             <h3 className="card-title text-danger mb-3">
                                 ➖ {t('zakat.deductions')}
                             </h3>
-                            {result.deductions && result.deductions.filter(d => d.amount !== 0).length > 0 ? result.deductions.filter(d => d.amount !== 0).map((d, i) => (
+                            {result.deductions && result.deductions.filter(d => Number(d.amount || 0) !== 0).length > 0 ? result.deductions.filter(d => Number(d.amount || 0) !== 0).map((d, i) => (
                                 <div key={i} className="flex justify-between py-1 border-bottom">
                                     <span style={{ color: 'var(--text-muted)' }}>{d.label_ar || d.label}</span>
-                                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}>{formatNumber(d.amount)} {currency}</span>
+                                    <span className="font-medium" style={{ color: 'var(--text-muted)' }}>{formatNumber(d.amount)} {displayCurrency}</span>
                                 </div>
                             )) : (
                                 <div className="text-muted py-2">{t('zakat.no_deductions', 'لا توجد حسميات')}</div>
@@ -177,7 +189,7 @@ function ZakatCalculator() {
                             {result.deductions && result.deductions.length > 0 && (
                                 <div className="flex justify-between py-2 font-bold mt-2" style={{ borderTop: '3px double var(--border)', paddingTop: '10px' }}>
                                     <span>{t('zakat.total_deductions')}</span>
-                                    <span className="text-danger">{formatNumber(result.total_deductions || 0)} {currency}</span>
+                                    <span className="text-danger">{formatNumber(result.total_deductions || 0)} {displayCurrency}</span>
                                 </div>
                             )}
                             {result.details?.excluded_assets && result.details.excluded_assets.length > 0 && (
@@ -186,7 +198,7 @@ function ZakatCalculator() {
                                     {result.details.excluded_assets.map((ea, i) => (
                                         <div key={i} className="flex justify-between mt-1">
                                             <span>{ea.label_ar || ea.label}</span>
-                                            <span>{formatNumber(ea.amount)} {currency}</span>
+                                            <span>{formatNumber(ea.amount)} {displayCurrency}</span>
                                         </div>
                                     ))}
                                 </div>
@@ -199,15 +211,15 @@ function ZakatCalculator() {
                         <div className="grid grid-3" style={{ gap: 16, textAlign: 'center' }}>
                             <div>
                                 <div className="text-muted">{t('zakat.zakat_base')}</div>
-                                <div className="text-xl font-bold">{formatNumber(result.zakat_base)} {currency}</div>
+                                <div className="text-xl font-bold">{formatNumber(result.zakat_base)} {displayCurrency}</div>
                             </div>
                             <div>
                                 <div className="text-muted">{t('zakat.rate')}</div>
-                                <div className="text-xl font-bold">{result.rate_display || (useGregorian ? '2.5775%' : '2.5%')}</div>
+                                <div className="text-xl font-bold">{result.rate_display || '-'}</div>
                             </div>
                             <div>
                                 <div className="text-muted">{t('zakat.zakat_amount')}</div>
-                                <div className="text-2xl font-bold text-primary">{formatNumber(result.zakat_amount)} {currency}</div>
+                                <div className="text-2xl font-bold text-primary">{formatNumber(result.zakat_amount)} {displayCurrency}</div>
                             </div>
                         </div>
 
@@ -223,6 +235,9 @@ function ZakatCalculator() {
                             )}
                         </div>
                     </div>
+                            </>
+                        )
+                    })()}
                 </>
             )}
         </div>

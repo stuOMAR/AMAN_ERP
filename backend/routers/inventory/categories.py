@@ -74,7 +74,7 @@ def create_category(
         # Check duplicate code
         exists = db.execute(text("SELECT 1 FROM product_categories WHERE category_code = :code"), {"code": category.code}).scalar()
         if exists:
-            raise HTTPException(status_code=400, detail="كود الفئة موجود مسبقاً")
+            raise HTTPException(**http_error(400, ("category_code_duplicate", request)))
 
         result = db.execute(text("""
             INSERT INTO product_categories (category_name, category_code, branch_id) 
@@ -167,7 +167,7 @@ def delete_category(
         # INV-008: Check for linked products before deletion
         product_count = db.execute(text("SELECT COUNT(*) FROM products WHERE category_id = :id"), {"id": id}).scalar()
         if product_count and product_count > 0:
-            raise HTTPException(status_code=400, detail=f"لا يمكن حذف الفئة لأنها مرتبطة بـ {product_count} منتج")
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_delete_category_with_products", request))
 
         db.execute(text("DELETE FROM product_categories WHERE id = :id"), {"id": id})
         db.commit()
@@ -183,7 +183,7 @@ def delete_category(
             request=request
         )
 
-        return {"message": "top deleted"}
+        return {"message": i18n_message(("category_deleted", request))}
     except Exception:
         db.rollback()
         logger.exception("Internal error")

@@ -19,10 +19,14 @@ function CustomerReceipts() {
     const currency = getCurrency();
     const [vouchers, setVouchers] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [search, setSearch] = useState('');
 
     useEffect(() => {
-        fetchVouchers();
+        const timer = setTimeout(() => {
+            fetchVouchers();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchVouchers = async () => {
@@ -43,6 +47,7 @@ function CustomerReceipts() {
             showToast(t('sales.receipts.form.errors.fetch_failed'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -51,10 +56,11 @@ function CustomerReceipts() {
         (v.customer_name && v.customer_name.toLowerCase().includes(search.toLowerCase()))
     );
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -19,6 +19,7 @@ export default function TreasuryAccountList() {
     const [baseCurrency] = useState(getCurrency() || '')
     const [currencies, setCurrencies] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [saving, setSaving] = useState(false)
     const [accountError, setAccountError] = useState('')
     const [showAdd, setShowAdd] = useState(false)
@@ -95,12 +96,16 @@ export default function TreasuryAccountList() {
             toastEmitter.emit(getErrorMessage(err, t('treasury.error_loading_accounts', 'تعذر تحميل حسابات الخزينة')), 'error')
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchAccounts()
-        fetchCurrencies()
+        const timer = setTimeout(() => {
+            fetchAccounts()
+            fetchCurrencies()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     const fetchCurrencies = async () => {
@@ -302,6 +307,7 @@ export default function TreasuryAccountList() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
@@ -335,7 +341,7 @@ export default function TreasuryAccountList() {
             <DataTable
                 columns={columns}
                 data={filteredAccounts}
-                loading={loading}
+                loading={initialLoad}
                 emptyIcon={'\uD83C\uDFE6'}
                 emptyTitle={t('treasury.no_accounts')}
                 emptyAction={{ label: t('common.add_new'), onClick: openAddModal }}

@@ -20,6 +20,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from services.permissions.sensitive import require_sensitive_permission
 from utils.audit import log_activity
+from utils.i18n import http_error
 from utils.tx import transactional
 
 logger = logging.getLogger(__name__)
@@ -106,7 +107,7 @@ def create_credential(
             {"tnt": current_user.get("tenant_id") or current_user.get("company_id"), "name": payload.name},
         ).fetchone()
         if existing:
-            raise HTTPException(status_code=409, detail="duplicate_name")
+            raise HTTPException(**http_error(409, "duplicate_name", request))
 
         import json as _json
 
@@ -198,7 +199,7 @@ def get_credential(
             {"cid": credential_id, "tnt": current_user.get("tenant_id") or current_user.get("company_id")},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="not_found")
+            raise HTTPException(**http_error(404, "not_found", request))
         return dict(row._mapping)
     finally:
         conn.close()
@@ -222,7 +223,7 @@ def rotate_credential(
             {"cid": credential_id, "tnt": current_user.get("tenant_id") or current_user.get("company_id")},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="not_found")
+            raise HTTPException(**http_error(404, "not_found", request))
 
         try:
             from services.credentials_vault import rotate_credential as vault_rotate
@@ -282,7 +283,7 @@ def soft_delete_credential(
             {"cid": credential_id, "tnt": current_user.get("tenant_id") or current_user.get("company_id")},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="not_found")
+            raise HTTPException(**http_error(404, "not_found", request))
 
         conn.execute(
             text("""
@@ -328,9 +329,9 @@ def restore_credential(
             {"cid": credential_id, "tnt": current_user.get("tenant_id") or current_user.get("company_id")},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="not_found")
+            raise HTTPException(**http_error(404, "not_found", request))
         if dict(row._mapping).get("status") != "soft_deleted":
-            raise HTTPException(status_code=400, detail="Credential is not soft-deleted")
+            raise HTTPException(**http_error(400, "credential_is_not_soft_deleted", request))
 
         conn.execute(
             text("""

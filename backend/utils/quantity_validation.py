@@ -8,6 +8,8 @@ Continuous units (kg, meter, liter) allow decimal quantities.
 from sqlalchemy import text
 from fastapi import HTTPException
 
+from utils.i18n import http_error
+
 # Units that require integer (whole number) quantities
 DISCRETE_UNITS = {"قطعة", "علبة", "كرتون", "piece", "box", "carton", "unit"}
 
@@ -19,7 +21,7 @@ def is_discrete_unit(unit_name: str) -> bool:
     return unit_name.strip().lower() in {u.lower() for u in DISCRETE_UNITS}
 
 
-def validate_quantity_for_product(db, product_id: int, quantity: float) -> None:
+def validate_quantity_for_product(db, product_id: int, quantity: float, request=None) -> None:
     """
     Validate that quantity is an integer if the product's unit is discrete.
     Raises HTTPException(400) if validation fails.
@@ -36,13 +38,10 @@ def validate_quantity_for_product(db, product_id: int, quantity: float) -> None:
 
     if is_discrete_unit(row.unit_name):
         if quantity != int(quantity):
-            raise HTTPException(
-                status_code=400,
-                detail=f"الكمية يجب أن تكون عدداً صحيحاً للمنتج بوحدة '{row.unit_name}'. القيمة المدخلة: {quantity}"
-            )
+            raise HTTPException(**http_error(400, "qty_must_be_integer_for_unit", request, unit=row.unit_name, quantity=quantity))
 
 
-def validate_quantities_for_products(db, items) -> None:
+def validate_quantities_for_products(db, items, request=None) -> None:
     """
     Batch version of quantity validation.
     `items` is an iterable of objects/dicts with product_id and quantity.
@@ -75,7 +74,4 @@ def validate_quantities_for_products(db, items) -> None:
         if not unit_name:
             continue
         if is_discrete_unit(unit_name) and quantity != int(quantity):
-            raise HTTPException(
-                status_code=400,
-                detail=f"الكمية يجب أن تكون عدداً صحيحاً للمنتج بوحدة '{unit_name}'. القيمة المدخلة: {quantity}"
-            )
+            raise HTTPException(**http_error(400, "qty_must_be_integer_for_unit", request, unit=unit_name, quantity=quantity))

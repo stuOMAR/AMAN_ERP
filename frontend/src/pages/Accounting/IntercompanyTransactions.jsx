@@ -43,6 +43,7 @@ function IntercompanyTransactions() {
     const [transactions, setTransactions] = useState([])
     const [eliminationReport, setEliminationReport] = useState(null)
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [tab, setTab] = useState('list')
     const [showForm, setShowForm] = useState(false)
     const [entities, setEntities] = useState([])
@@ -65,7 +66,14 @@ function IntercompanyTransactions() {
         reference: '',
     })
 
-    useEffect(() => { fetchData(); fetchEntities(); fetchCurrencies() }, [currentBranch])
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData();
+            fetchEntities();
+            fetchCurrencies();
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch])
 
     const fetchEntities = async () => {
         try {
@@ -160,6 +168,7 @@ function IntercompanyTransactions() {
             console.error('Failed to fetch intercompany transactions', err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -243,10 +252,11 @@ function IntercompanyTransactions() {
         return map[status] || 'badge-secondary'
     }
 
-    if (loading) return <PageLoading />
+    if (initialLoad) return <PageLoading />
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

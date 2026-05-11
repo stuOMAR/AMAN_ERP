@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
 from typing import Any, Dict, List
 from database import get_db_connection
@@ -7,6 +7,7 @@ from utils.tx import transactional
 from schemas import BranchCreate, BranchResponse
 from utils.permissions import require_permission
 from utils.audit import log_activity
+from utils.i18n import http_error
 import logging
 logger = logging.getLogger(__name__)
 
@@ -17,6 +18,7 @@ router = APIRouter(
 
 @router.get("", response_model=List[BranchResponse], dependencies=[Depends(require_permission("branches.view"))])
 def list_branches(
+    request: Request,
     current_user = Depends(get_current_user)
 ):
     """List all branches for the current company"""
@@ -24,7 +26,7 @@ def list_branches(
     if not company_id:
         if getattr(current_user, 'role', None) == 'system_admin' or (isinstance(current_user, dict) and current_user.get('role') == 'system_admin'):
             return []
-        raise HTTPException(status_code=400, detail="User not associated with any company")
+        raise HTTPException(**http_error(400, "user_not_associated_with_any_company", request))
         
     with transactional(company_id) as conn:
         try:
@@ -80,10 +82,11 @@ def list_branches(
             return branches
         except Exception:
             logger.exception("Operation failed")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(**http_error(500, "internal_error", request))
 
 @router.post("", response_model=BranchResponse)
 def create_branch(
+    request: Request,
     branch: BranchCreate,
     current_user = Depends(require_permission("branches.manage"))
 ):
@@ -92,10 +95,7 @@ def create_branch(
         try:
             # Validate country_code — required for tax calculation
             if not branch.country_code or not branch.country_code.strip():
-                raise HTTPException(
-                    status_code=422,
-                    detail="Branch country_code is required for tax calculation"
-                )
+                raise HTTPException(**http_error(400, "branch_country_code_required", request))
     
             # Check if this is the first branch
             count_res = conn.execute(text("SELECT COUNT(*) FROM branches")).scalar()
@@ -114,7 +114,7 @@ def create_branch(
                 {"code": branch.branch_code}
             ).fetchone()
             if existing:
-                raise HTTPException(status_code=400, detail="Branch code already exists")
+                raise HTTPException(**http_error(400, "branch_code_already_exists", request))
             
             query = text("""
                 INSERT INTO branches (
@@ -196,10 +196,11 @@ def create_branch(
         except Exception:
             pass
             logger.exception("Operation failed")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(**http_error(500, "internal_error", request))
 
 @router.put("/{branch_id}", response_model=BranchResponse)
 def update_branch(
+    request: Request,
     branch_id: int,
     branch: BranchCreate,
     current_user = Depends(require_permission("branches.manage"))
@@ -214,14 +215,11 @@ def update_branch(
             ).fetchone()
             
             if not existing:
-                raise HTTPException(status_code=404, detail="Branch not found")
+                raise HTTPException(**http_error(404, "branch_not_found", request))
     
             # Validate country_code — required for tax calculation
             if not branch.country_code or not branch.country_code.strip():
-                raise HTTPException(
-                    status_code=422,
-                    detail="Branch country_code is required for tax calculation"
-                )
+                raise HTTPException(**http_error(400, "branch_country_code_required", request))
     
             # Check duplicate code if changed
             if branch.branch_code:
@@ -230,7 +228,7 @@ def update_branch(
                     {"code": branch.branch_code, "id": branch_id}
                 ).fetchone()
                 if duplicate:
-                    raise HTTPException(status_code=400, detail="Branch code already used by another branch")
+                    raise HTTPException(**http_error(400, "branch_code_already_used_by_another_branch", request))
     
             query = text("""
                 UPDATE branches SET
@@ -304,10 +302,11 @@ def update_branch(
         except Exception:
             pass
             logger.exception("Operation failed")
-            raise HTTPException(status_code=500, detail="Internal server error")
+            raise HTTPException(**http_error(500, "internal_error", request))
 
 @router.delete("/{branch_id}", response_model=Dict[str, Any])
 def delete_branch(
+    request: Request,
     branch_id: int,
     current_user = Depends(require_permission("branches.manage"))
 ):
@@ -322,13 +321,13 @@ def delete_branch(
         ).fetchone()
         
         if not check:
-            raise HTTPException(status_code=404, detail="الفرع غير موجود")
+            raise HTTPException(**http_error(404, "branch_not_found", request))
             
         if check.is_default:
-            raise HTTPException(status_code=400, detail="Cannot delete the default branch")
+            raise HTTPException(**http_error(400, "cannot_delete_the_default_branch", request))
             
         if check.is_active:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف الفرع لأنه نشط. الرجاء إيقاف تنشيط الفرع أولاً.")
+            raise HTTPException(**http_error(400, "cannot_delete_active_branch", request))
         
         # T011: Check for dependent records across all tables with branch_id FK
         fk_query = text("""
@@ -353,10 +352,7 @@ def delete_branch(
                 {"bid": branch_id}
             ).scalar() or 0
             if count > 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"لا يمكن حذف الفرع لارتباطه بـ {count} سجل في النظام ({fk.tbl})"
-                )
+                raise HTTPException(**http_error(400, "branch_has_linked_records", request, count=count))
         
         # Clean up user_branches and detach audit_logs before deleting
         conn.execute(text("DELETE FROM user_branches WHERE branch_id = :bid"), {"bid": branch_id})
@@ -383,7 +379,7 @@ def delete_branch(
             logger.warning("Failed to write branch delete audit log")
         
         conn.commit()
-        return {"success": True, "message": "Branch deleted"}
+        return {"success": True, "message": i18n_message("branch_deleted", request)}
         
     except HTTPException:
         raise
@@ -391,8 +387,8 @@ def delete_branch(
         conn.rollback()
         # Postgres Foreign Key violation will raise IntegrityError
         if "foreign key constraint" in str(e).lower():
-            raise HTTPException(status_code=400, detail="Cannot delete branch because it is used by other records (Invoices, Users, etc.)")
+            raise HTTPException(**http_error(400, "cannot_delete_branch_because_it_is_used_by_other_r", request))
         logger.exception("Operation failed")
-        raise HTTPException(status_code=500, detail="Internal server error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         conn.close()

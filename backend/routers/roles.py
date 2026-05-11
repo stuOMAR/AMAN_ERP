@@ -751,7 +751,7 @@ def init_default_roles(
     """
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     db = get_db_connection(target_company_id)
     try:
@@ -802,7 +802,7 @@ def init_default_roles(
             details={"created": created, "updated": updated},
             critical=True,
         )
-        return {"message": f"تم تحديث الأدوار الافتراضية: {created} جديد، {updated} محدث", "created": created, "updated": updated}
+        return {"message": i18n_message("default_roles_updated", request), "created": created, "updated": updated}
     except Exception as e:
         db.rollback()
         logger.error(f"Error initializing default roles: {e}")
@@ -854,7 +854,7 @@ def get_role(
     """جلب تفاصيل دور محدد"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     with transactional(target_company_id) as db:
         row = db.execute(text("""
@@ -886,15 +886,15 @@ def create_role(
     """إنشاء دور جديد"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     db = get_db_connection(target_company_id)
     try:
         # Check name uniqueness
         exists = db.execute(text("SELECT 1 FROM roles WHERE role_name = :name"), {"name": role.role_name}).fetchone()
         if exists:
-            raise HTTPException(status_code=400, detail="اسم الدور موجود بالفعل")
-        
+            raise HTTPException(**http_error(400, ("role_name_duplicate", request)))
+
         import json
         result = db.execute(text("""
             INSERT INTO roles (role_name, role_name_ar, description, permissions, is_system_role)
@@ -916,7 +916,7 @@ def create_role(
             details={"role_name": role.role_name, "permissions_count": len(role.permissions)},
             critical=True,
         )
-        return {"id": result[0], "message": "تم إنشاء الدور بنجاح"}
+        return {"id": result[0], "message": i18n_message("role_created_success", request)}
     except HTTPException:
         raise
     except Exception:
@@ -937,7 +937,7 @@ def update_role(
     """تحديث دور"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     db = get_db_connection(target_company_id)
     try:
@@ -981,7 +981,7 @@ def update_role(
                 critical=True,
             )
         
-        return {"message": "تم تحديث الدور بنجاح"}
+        return {"message": i18n_message("role_updated_success", request)}
     except HTTPException:
         raise
     except Exception:
@@ -1001,7 +1001,7 @@ def delete_role(
     """حذف دور"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     db = get_db_connection(target_company_id)
     try:
@@ -1012,12 +1012,12 @@ def delete_role(
             raise HTTPException(**http_error(404, "role_not_found"))
         
         if existing.is_system_role:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف الأدوار الافتراضية للنظام")
+            raise HTTPException(**http_error(400, ("cannot_delete_system_roles", request)))
         
         # Check if any users are using this role
         usage = db.execute(text("SELECT COUNT(*) FROM company_users WHERE role = (SELECT role_name FROM roles WHERE id = :id)"), {"id": role_id}).scalar()
         if usage > 0:
-            raise HTTPException(status_code=400, detail=f"لا يمكن حذف الدور لأنه مستخدم من قبل {usage} مستخدم")
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_delete_role_in_use", request))
         
         role_name = db.execute(text("SELECT role_name FROM roles WHERE id = :id"), {"id": role_id}).scalar()
         db.execute(text("DELETE FROM roles WHERE id = :id"), {"id": role_id})
@@ -1031,7 +1031,7 @@ def delete_role(
             critical=True,
         )
         
-        return {"message": "تم حذف الدور بنجاح"}
+        return {"message": i18n_message("role_deleted_success", request)}
     except HTTPException:
         raise
     except Exception:

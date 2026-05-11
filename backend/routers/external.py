@@ -6,7 +6,7 @@ ZATCA: QR code + signing endpoints
 TAX-001: Withholding Tax (WHT)
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -21,8 +21,11 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 from utils.audit import log_activity
+from utils.accounting import get_base_currency, get_mapped_account_id
+from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import CALCULATION_VERSION, money_str, rate_str, require_idempotency_key
 from utils.sql_builder import validate_update_keys
 from utils.zatca import (
     verify_invoice_signature,
@@ -66,7 +69,8 @@ class WebhookUpdate(BaseModel):
 class WHTRateCreate(BaseModel):
     name: str
     name_ar: Optional[str] = None
-    rate: float
+    rate: Decimal
+    country_code: Optional[str] = None
     category: str = "general"
     description: Optional[str] = None
 
@@ -75,7 +79,16 @@ class WHTTransactionCreate(BaseModel):
     payment_id: Optional[int] = None
     supplier_id: int
     wht_rate_id: int
-    gross_amount: float
+    gross_amount: Decimal
+    branch_id: Optional[int] = None
+
+class WHTCalculateRequest(BaseModel):
+    wht_rate_id: int
+    gross_amount: Decimal
+    branch_id: Optional[int] = None
+
+class ZatcaRequest(BaseModel):
+    invoice_id: int
 
 
 # ======================== API-001: API Keys ========================
@@ -99,14 +112,14 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
         raw_key = f"aman_{secrets.token_hex(32)}"
         key_hash = hashlib.sha256(raw_key.encode()).hexdigest()
         key_prefix = raw_key[:12]
-        
+
         expires_at = None
         if data.expires_in_days:
             from datetime import timedelta
             expires_at = datetime.now() + timedelta(days=data.expires_in_days)
-        
+
         row = db.execute(text("""
-            INSERT INTO api_keys (name, key_hash, key_prefix, permissions, rate_limit_per_minute, 
+            INSERT INTO api_keys (name, key_hash, key_prefix, permissions, rate_limit_per_minute,
                                   created_by, expires_at, notes)
             VALUES (:name, :hash, :prefix, :perms, :rate, :user, :expires, :notes)
             RETURNING id
@@ -120,18 +133,18 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
             "expires": expires_at,
             "notes": data.notes
         }).scalar()
-        
+
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="create", resource_type="api_keys",
             resource_id=str(row), details={"name": data.name, "prefix": key_prefix}
         )
-        
+
         return {
             "id": row,
             "api_key": raw_key,
             "prefix": key_prefix,
-            "message": "احفظ المفتاح الآن — لن يظهر مرة أخرى"
+            "message": i18n_message("api_key_save_warning", request)
         }
 
 
@@ -145,7 +158,7 @@ def revoke_api_key(key_id: int, current_user=Depends(get_current_user)):
             action="revoke", resource_type="api_keys",
             resource_id=str(key_id), details={}
         )
-        return {"message": "تم إلغاء المفتاح"}
+        return {"message": i18n_message("api_key_revoked_success", request)}
 
 
 # ======================== API-002: Webhooks ========================
@@ -165,12 +178,12 @@ def list_webhooks(current_user=Depends(get_current_user)):
 
 
 @router.post("/webhooks", status_code=201, dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
-def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
+def create_webhook(data: WebhookCreate, request: Request, current_user=Depends(get_current_user)):
     """Create Webhook."""
     # Validate events
     invalid = [e for e in data.events if e not in WEBHOOK_EVENTS]
     if invalid:
-        raise HTTPException(400, f"أحداث غير معروفة: {invalid}")
+        raise HTTPException(**http_error(400, "zatca_unknown_events", request, events=", ".join(invalid)))
 
     try:
         validate_webhook_url(data.url)
@@ -198,7 +211,7 @@ def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
             action="create", resource_type="webhook",
             resource_id=str(row), details={"name": data.name, "url": data.url}
         )
-        return {"id": row, "secret": auto_secret, "message": "تم إنشاء الـ webhook"}
+        return {"id": row, "secret": auto_secret, "message": i18n_message("webhook_created", request)}
 
 
 @router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
@@ -217,10 +230,10 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
         if data.is_active is not None: updates["is_active"] = data.is_active
         if data.retry_count is not None: updates["retry_count"] = data.retry_count
         if data.timeout_seconds is not None: updates["timeout_seconds"] = data.timeout_seconds
-        
+
         if not updates:
             raise HTTPException(**http_error(400, "no_data_to_update"))
-        
+
         validate_update_keys(updates.keys())  # T2.2 defense-in-depth
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
         updates["id"] = webhook_id
@@ -230,7 +243,7 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
             action="update", resource_type="webhook",
             resource_id=str(webhook_id), details={k: v for k, v in updates.items() if k != "id"}
         )
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
 
 
 @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
@@ -243,7 +256,7 @@ def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
             action="delete", resource_type="webhook",
             resource_id=str(webhook_id), details={}
         )
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
 
 
 @router.get("/webhooks/{webhook_id}/logs", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
@@ -261,40 +274,46 @@ def get_webhook_logs(webhook_id: int, limit: int = 50, current_user=Depends(get_
 
 @router.post("/zatca/generate-qr", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
 def generate_qr_code(
-    invoice_id: int,
+    body: ZatcaRequest,
+    request: Request,
     current_user=Depends(get_current_user)
 ):
     """Generate ZATCA QR code for an invoice."""
+    invoice_id = body.invoice_id
     with transactional(current_user.company_id) as db:
         try:
             # Get invoice details
             inv = db.execute(text("""
                 SELECT i.id, i.invoice_number, i.invoice_date, i.total, i.tax_amount,
-                       p.name as customer_name
+                       i.branch_id, p.name as customer_name
                 FROM invoices i
                 LEFT JOIN parties p ON i.party_id = p.id
                 WHERE i.id = :id
             """), {"id": invoice_id}).fetchone()
-            
+
             if not inv:
                 raise HTTPException(**http_error(404, "invoice_not_found"))
-            
+
+            # Branch access validation
+            if inv.branch_id:
+                validate_branch_access(current_user, inv.branch_id)
+
             # Get company info
             seller_name = db.execute(text(
                 "SELECT setting_value FROM company_settings WHERE setting_key = 'company_name'"
             )).scalar() or "AMAN ERP"
-            
+
             vat_number = db.execute(text(
                 "SELECT setting_value FROM company_settings WHERE setting_key = 'zatca_vat_number'"
             )).scalar() or db.execute(text(
                 "SELECT setting_value FROM company_settings WHERE setting_key = 'tax_number'"
             )).scalar() or "000000000000000"
-            
+
             # Get private key for signing (optional)
             # T2.5: read via secret_settings helper so legacy plaintext or new ciphertext both work.
             from utils.secret_settings import get_secret_setting
             private_key = get_secret_setting(db, "zatca_private_key", tenant_id=current_user.company_id)
-            
+
             result = process_invoice_for_zatca(
                 db=db,
                 invoice_id=inv.id,
@@ -303,11 +322,11 @@ def generate_qr_code(
                 vat_number=vat_number,
                 invoice_number=inv.invoice_number,
                 invoice_date=str(inv.invoice_date),
-                total=float(inv.total),
-                vat_amount=float(inv.tax_amount or 0),
+                total=inv.total,
+                vat_amount=inv.tax_amount or Decimal("0"),
                 private_key_pem=private_key
             )
-            
+
             return {
                 "invoice_id": invoice_id,
                 "invoice_number": inv.invoice_number,
@@ -318,7 +337,7 @@ def generate_qr_code(
         except Exception:
             pass
             logger.exception("ZATCA QR generation failed")
-            raise HTTPException(500, "خطأ في توليد QR")
+            raise HTTPException(**http_error(500, "qr_generation_error", request))
 
 
 @router.post("/zatca/generate-keypair", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
@@ -326,7 +345,7 @@ def generate_keypair(current_user=Depends(get_current_user)):
     """Generate RSA keypair for ZATCA signing and store in company settings."""
     with transactional(current_user.company_id) as db:
         private_pem, public_pem = generate_rsa_keypair()
-        
+
         # Store in company settings — T2.5: encrypt private key at rest.
         from utils.secret_settings import set_secret_setting, is_secret_key
         for key, val in [("zatca_private_key", private_pem), ("zatca_public_key", public_pem)]:
@@ -343,25 +362,29 @@ def generate_keypair(current_user=Depends(get_current_user)):
                     VALUES (:key, :val, 'zatca')
                     ON CONFLICT (setting_key) DO UPDATE SET setting_value = :val
                 """), {"key": key, "val": val})
-        
+
         return {
-            "message": "تم توليد مفتاح التوقيع الرقمي",
+            "message": i18n_message("signing_key_generated", request),
             "public_key": public_pem
         }
 
 
 @router.get("/zatca/verify/{invoice_id}", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
-def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
+def verify_invoice_qr(invoice_id: int, request: Request, current_user=Depends(get_current_user)):
     """Verify a ZATCA QR code and signature for an invoice."""
     with transactional(current_user.company_id) as db:
         inv = db.execute(text("""
-            SELECT zatca_hash, zatca_signature, zatca_qr, zatca_status
+            SELECT zatca_hash, zatca_signature, zatca_qr, zatca_status, branch_id
             FROM invoices WHERE id = :id
         """), {"id": invoice_id}).fetchone()
-        
+
         if not inv or not inv.zatca_hash:
-            raise HTTPException(404, "لم يتم توليد بيانات ZATCA لهذه الفاتورة")
-        
+            raise HTTPException(**http_error(404, "zatca_data_not_found", request))
+
+        # Branch access validation
+        if inv.branch_id:
+            validate_branch_access(current_user, inv.branch_id)
+
         result = {
             "invoice_id": invoice_id,
             "hash": inv.zatca_hash,
@@ -370,7 +393,7 @@ def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
             "status": inv.zatca_status,
             "signature_valid": None
         }
-        
+
         if inv.zatca_signature:
             public_key = db.execute(text(
                 "SELECT setting_value FROM company_settings WHERE setting_key = 'zatca_public_key'"
@@ -379,102 +402,289 @@ def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
                 result["signature_valid"] = verify_invoice_signature(
                     inv.zatca_hash, inv.zatca_signature, public_key
                 )
-        
+
         return result
 
 
 # ======================== TAX-001: Withholding Tax ========================
 
 @router.get("/wht/rates", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
-def list_wht_rates(current_user=Depends(get_current_user)):
+def list_wht_rates(
+    country_code: Optional[str] = None,
+    branch_id: Optional[int] = None,
+    current_user=Depends(get_current_user)
+):
     """List WHT Rates."""
     with transactional(current_user.company_id) as db:
-        rows = db.execute(text("SELECT * FROM wht_rates WHERE is_active = TRUE ORDER BY category, name")).fetchall()
-        return [dict(r._mapping) for r in rows]
+        params = {}
+        country_filter = ""
+        if branch_id:
+            branch_id = validate_branch_access(current_user, branch_id)
+            row = db.execute(text("SELECT country_code FROM branches WHERE id = :id"), {"id": branch_id}).fetchone()
+            if row and row.country_code:
+                country_code = row.country_code
+        if country_code:
+            country_filter = "AND (country_code = :cc OR country_code IS NULL)"
+            params["cc"] = country_code.upper()
+        rows = db.execute(text(f"""
+            SELECT * FROM wht_rates
+            WHERE is_active = TRUE {country_filter}
+            ORDER BY category, name
+        """), params).fetchall()
+        result = []
+        for r in rows:
+            item = dict(r._mapping)
+            item["rate"] = rate_str(item.get("rate"))
+            result.append(item)
+        return result
 
 
 @router.post("/wht/rates", status_code=201, dependencies=[Depends(require_permission(["accounting.manage", "taxes.manage"]))], response_model=Dict[str, Any])
-def create_wht_rate(data: WHTRateCreate, current_user=Depends(get_current_user)):
+def create_wht_rate(request: Request, data: WHTRateCreate, current_user=Depends(get_current_user)):
     """Create WHT Rate."""
     with transactional(current_user.company_id) as db:
         rid = db.execute(text("""
-            INSERT INTO wht_rates (name, name_ar, rate, category, description)
-            VALUES (:name, :name_ar, :rate, :cat, :desc) RETURNING id
+            INSERT INTO wht_rates (name, name_ar, rate, country_code, category, description)
+            VALUES (:name, :name_ar, :rate, :cc, :cat, :desc) RETURNING id
         """), {
             "name": data.name, "name_ar": data.name_ar, "rate": data.rate,
+            "cc": data.country_code.upper() if data.country_code else None,
             "cat": data.category, "desc": data.description
         }).scalar()
+        log_activity(db, user_id=current_user.id, username=current_user.username,
+                     action="wht.rate.create", resource_type="wht_rate",
+                     resource_id=str(rid), details={"rate": rate_str(data.rate), "country_code": data.country_code},
+                     request=request)
         return {"id": rid}
 
 
 @router.post("/wht/calculate", dependencies=[Depends(require_permission(["accounting.view", "buying.view"]))], response_model=Dict[str, Any])
-def calculate_wht(data: WHTTransactionCreate, current_user=Depends(get_current_user)):
+def calculate_wht(data: WHTCalculateRequest, current_user=Depends(get_current_user)):
     """Calculate WHT amount without creating a transaction."""
     with transactional(current_user.company_id) as db:
-        rate_row = db.execute(text("SELECT rate FROM wht_rates WHERE id = :id AND is_active = TRUE"),
+        branch_id = validate_branch_access(current_user, data.branch_id)
+        if branch_id is None:
+            raise HTTPException(**http_error(400, ("branch_required", request)))
+        rate_row = db.execute(text("SELECT rate, country_code FROM wht_rates WHERE id = :id AND is_active = TRUE"),
                               {"id": data.wht_rate_id}).fetchone()
         if not rate_row:
             raise HTTPException(**http_error(404, "wht_rate_not_found"))
-        
+        if rate_row.country_code:
+            branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
+            branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
+            if rate_row.country_code.upper() != branch_cc:
+                raise HTTPException(**http_error(400, "wht_rate_not_found", request))
+
         wht_rate = _dec(rate_row.rate)
         gross_amount = _dec(data.gross_amount)
         wht_amount = (gross_amount * wht_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
         net_amount = (gross_amount - wht_amount).quantize(_D2, ROUND_HALF_UP)
-        
+
         return {
-            "gross_amount": data.gross_amount,
-            "wht_rate": float(wht_rate),
-            "wht_amount": wht_amount,
-            "net_amount": net_amount
+            "gross_amount": money_str(data.gross_amount),
+            "wht_rate": rate_str(wht_rate),
+            "wht_amount": money_str(wht_amount),
+            "net_amount": money_str(net_amount),
+            "branch_id": branch_id,
+            "calculation_version": CALCULATION_VERSION,
         }
 
 
-@router.post("/wht/transactions", status_code=201, 
+@router.post("/wht/transactions", status_code=201,
              dependencies=[Depends(require_permission(["accounting.edit", "taxes.manage"]))], response_model=Dict[str, Any])
-def create_wht_transaction(data: WHTTransactionCreate, current_user=Depends(get_current_user)):
+def create_wht_transaction(request: Request, data: WHTTransactionCreate, current_user=Depends(get_current_user)):
     """Create a WHT transaction and optionally post GL entries."""
     with transactional(current_user.company_id) as db:
         try:
-            rate_row = db.execute(text("SELECT rate, name FROM wht_rates WHERE id = :id"),
+            branch_id = validate_branch_access(current_user, data.branch_id)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, ("branch_required", request)))
+            idempotency_key = require_idempotency_key(
+                request,
+                operation="WHT transaction",
+            )
+            existing_by_key = db.execute(text("""
+                SELECT id, certificate_number
+                FROM wht_transactions
+                WHERE idempotency_key = :key
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing_by_key:
+                return {
+                    "id": existing_by_key.id,
+                    "certificate_number": existing_by_key.certificate_number,
+                    "idempotent": True,
+                }
+            rate_row = db.execute(text("SELECT rate, name, country_code FROM wht_rates WHERE id = :id AND is_active = TRUE"),
                                   {"id": data.wht_rate_id}).fetchone()
             if not rate_row:
-                raise HTTPException(**http_error(404, "wht_rate_not_found"))
-            
+                raise HTTPException(**http_error(404, "wht_rate_not_found_or_inactive"))
+
+            # Validate country match
+            if rate_row.country_code:
+                branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
+                branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
+                if rate_row.country_code.upper() != branch_cc:
+                    raise HTTPException(**http_error(400, "wht_rate_not_found", request))
+
+            supplier = db.execute(text("""
+                SELECT id, branch_id
+                FROM parties
+                WHERE id = :sid
+                  AND COALESCE(is_supplier, FALSE) = TRUE
+            """), {"sid": data.supplier_id}).fetchone()
+            if not supplier:
+                raise HTTPException(**http_error(400, "supplier_not_found_or_inactive", request))
+            if supplier.branch_id is not None and int(supplier.branch_id) != int(branch_id):
+                raise HTTPException(**http_error(400, "supplier_not_in_selected_branch", request))
+
+            if data.invoice_id:
+                invoice = db.execute(text("""
+                    SELECT id, party_id, branch_id, invoice_type, total
+                    FROM invoices
+                    WHERE id = :id
+                """), {"id": data.invoice_id}).fetchone()
+                if not invoice:
+                    raise HTTPException(**http_error(404, "withholding_invoice_not_found", request))
+                if invoice.invoice_type != "purchase":
+                    raise HTTPException(**http_error(400, "withholding_only_purchase_invoices", request))
+                if int(invoice.party_id) != int(data.supplier_id):
+                    raise HTTPException(**http_error(400, "invoice_not_from_selected_supplier", request))
+                if invoice.branch_id is not None and int(invoice.branch_id) != int(branch_id):
+                    raise HTTPException(**http_error(400, "invoice_not_in_selected_branch", request))
+
+            if data.payment_id:
+                payment = db.execute(text("""
+                    SELECT id, party_id, branch_id, party_type, amount
+                    FROM payment_vouchers
+                    WHERE id = :id
+                """), {"id": data.payment_id}).fetchone()
+                if not payment:
+                    raise HTTPException(**http_error(404, "withholding_payment_not_found", request))
+                if payment.party_type != "supplier":
+                    raise HTTPException(**http_error(400, "withholding_only_supplier_payments", request))
+                if int(payment.party_id) != int(data.supplier_id):
+                    raise HTTPException(**http_error(400, "invoice_not_from_selected_supplier", request))
+                if payment.branch_id is not None and int(payment.branch_id) != int(branch_id):
+                    raise HTTPException(**http_error(400, "invoice_not_in_selected_branch", request))
+                if data.invoice_id:
+                    allocation = db.execute(text("""
+                        SELECT 1
+                        FROM payment_allocations
+                        WHERE voucher_id = :pay_id
+                          AND invoice_id = :inv_id
+                        LIMIT 1
+                    """), {"pay_id": data.payment_id, "inv_id": data.invoice_id}).fetchone()
+                    if not allocation:
+                        raise HTTPException(**http_error(400, "batch_not_assigned_to_invoice", request))
+
             wht_rate = _dec(rate_row.rate)
             gross_amount = _dec(data.gross_amount)
             wht_amount = (gross_amount * wht_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
             net_amount = (gross_amount - wht_amount).quantize(_D2, ROUND_HALF_UP)
-            
+            base_currency = get_base_currency(db)
+            calc_details = {
+                "version": CALCULATION_VERSION,
+                "gross_amount": money_str(gross_amount),
+                "wht_rate": rate_str(wht_rate),
+                "wht_amount": money_str(wht_amount),
+                "net_amount": money_str(net_amount),
+                "branch_id": branch_id,
+            }
+
+            period_date = datetime.now().date()
+            check_fiscal_period_open(db, period_date)
+            if wht_amount > Decimal("0"):
+                ap_account_id = get_mapped_account_id(db, "acc_map_ap")
+                withholding_account_id = get_mapped_account_id(db, "acc_map_withholding_tax")
+                if not ap_account_id or not withholding_account_id:
+                    raise HTTPException(**http_error(400, "ap_wht_accounts_not_configured", request))
+
             # Generate certificate number
             cert_num = f"WHT-{datetime.now().year}-{datetime.now().strftime('%m%d%H%M%S')}"
-            
+
             tid = db.execute(text("""
                 INSERT INTO wht_transactions (
-                    invoice_id, payment_id, supplier_id, wht_rate_id,
+                    invoice_id, payment_id, supplier_id, branch_id, wht_rate_id,
                     gross_amount, wht_rate, wht_amount, net_amount,
-                    certificate_number, period_date, created_by
+                    currency, base_currency, exchange_rate,
+                    certificate_number, period_date, created_by,
+                    idempotency_key, calculation_version, calculation_details
                 ) VALUES (
-                    :inv, :pay, :sup, :rate_id,
+                    :inv, :pay, :sup, :branch_id, :rate_id,
                     :gross, :rate, :wht, :net,
-                    :cert, :period, :user
+                    :currency, :base_currency, 1,
+                    :cert, :period, :user,
+                    :idempotency_key, :calc_version, CAST(:calc_details AS jsonb)
                 ) RETURNING id
             """), {
                 "inv": data.invoice_id, "pay": data.payment_id,
-                "sup": data.supplier_id, "rate_id": data.wht_rate_id,
+                "sup": data.supplier_id, "branch_id": branch_id, "rate_id": data.wht_rate_id,
                 "gross": gross_amount, "rate": wht_rate,
                 "wht": wht_amount, "net": net_amount,
-                "cert": cert_num, "period": datetime.now().date(),
-                "user": current_user.id
+                "currency": base_currency, "base_currency": base_currency,
+                "cert": cert_num, "period": period_date,
+                "user": current_user.id,
+                "idempotency_key": idempotency_key,
+                "calc_version": CALCULATION_VERSION,
+                "calc_details": json.dumps(calc_details),
             }).scalar()
-            
-            
+
+            journal_entry_id = None
+            journal_entry_number = None
+            if wht_amount > Decimal("0"):
+                from services.gl_service import create_journal_entry
+
+                journal_entry_id, journal_entry_number = create_journal_entry(
+                    db=db,
+                    company_id=current_user.company_id,
+                    date=period_date,
+                    description=f"إثبات ضريبة استقطاع — {cert_num}",
+                    lines=[
+                        {
+                            "account_id": ap_account_id,
+                            "debit": wht_amount,
+                            "credit": Decimal("0"),
+                            "description": f"تخفيض ذمة المورد مقابل ضريبة استقطاع {cert_num}",
+                        },
+                        {
+                            "account_id": withholding_account_id,
+                            "debit": Decimal("0"),
+                            "credit": wht_amount,
+                            "description": f"ضريبة استقطاع مستحقة {cert_num}",
+                        },
+                    ],
+                    user_id=current_user.id,
+                    branch_id=branch_id,
+                    reference=cert_num,
+                    currency=base_currency,
+                    exchange_rate=Decimal("1"),
+                    source="wht_transaction",
+                    source_id=tid,
+                    idempotency_key=f"wht-tx-je:{idempotency_key}",
+                )
+                db.execute(
+                    text("UPDATE wht_transactions SET journal_entry_id = :jeid, updated_at = NOW() WHERE id = :id"),
+                    {"jeid": journal_entry_id, "id": tid},
+                )
+
+            log_activity(db, user_id=current_user.id, username=current_user.username,
+                         action="wht.transaction.create", resource_type="wht_transaction",
+                         resource_id=str(tid),
+                         details={**calc_details, "journal_entry": journal_entry_number},
+                         request=request)
+
             return {
                 "id": tid,
                 "certificate_number": cert_num,
-                "gross_amount": data.gross_amount,
-                "wht_rate": wht_rate,
-                "wht_amount": wht_amount,
-                "net_amount": net_amount
+                "gross_amount": money_str(gross_amount),
+                "wht_rate": rate_str(wht_rate),
+                "wht_amount": money_str(wht_amount),
+                "net_amount": money_str(net_amount),
+                "branch_id": branch_id,
+                "journal_entry_id": journal_entry_id,
+                "journal_entry": journal_entry_number,
+                "calculation_version": CALCULATION_VERSION,
             }
         except HTTPException:
             raise
@@ -489,6 +699,7 @@ def list_wht_transactions(
     supplier_id: Optional[int] = None,
     from_date: Optional[str] = None,
     to_date: Optional[str] = None,
+    branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
     """List WHT Transactions."""
@@ -501,6 +712,8 @@ def list_wht_transactions(
             WHERE 1=1
         """
         params = {}
+        branch_filter = branch_scope_filter(current_user, branch_id, "wt.branch_id", params)
+        query += f" {branch_filter}"
         if supplier_id:
             query += " AND wt.supplier_id = :sup"
             params["sup"] = supplier_id
@@ -510,10 +723,19 @@ def list_wht_transactions(
         if to_date:
             query += " AND wt.period_date <= :to"
             params["to"] = to_date
-        
+
         query += " ORDER BY wt.created_at DESC"
         rows = db.execute(text(query), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+        result = []
+        for r in rows:
+            item = dict(r._mapping)
+            for key in ("gross_amount", "wht_amount", "net_amount"):
+                if key in item:
+                    item[key] = money_str(item[key])
+            if "wht_rate" in item:
+                item["wht_rate"] = rate_str(item["wht_rate"])
+            result.append(item)
+        return result
 
 
 # ==========================================================================
@@ -529,13 +751,14 @@ def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
         from reportlab.pdfgen import canvas
         from reportlab.lib.units import cm
     except ImportError:
-        raise HTTPException(status_code=500, detail="reportlab not installed")
+        raise HTTPException(**http_error(500, "reportlab_not_installed", request))
     from fastapi.responses import StreamingResponse
 
     with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             SELECT wt.id, wt.certificate_number, wt.gross_amount, wt.wht_amount,
                    wt.net_amount, wt.wht_rate, wt.period_date, wt.created_at,
+                   wt.branch_id,
                    wr.name AS rate_name,
                    p.name AS supplier_name, p.tax_number AS supplier_tax_number,
                    p.address AS supplier_address
@@ -546,6 +769,8 @@ def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
         """), {"id": tid}).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "wht_transaction_not_found"))
+        if row.branch_id:
+            validate_branch_access(current_user, row.branch_id)
 
         company = db.execute(text("""
             SELECT setting_value FROM company_settings WHERE setting_key IN

@@ -179,7 +179,7 @@ def create_bom(bom: BOMCreate, request: Request, current_user: UserResponse = De
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating BOM: {e}")
-        raise HTTPException(status_code=400, detail="فشل في إنشاء قائمة المواد")
+        raise HTTPException(**http_error(400, ("bom_create_failed", request)))
     finally:
         conn.close()
 
@@ -196,7 +196,7 @@ def get_bom(bom_id: int, current_user: UserResponse = Depends(get_current_user))
             WHERE b.id = :bid AND b.is_deleted = false
         """), {"bid": bom_id}).fetchone()
         if not b:
-            raise HTTPException(status_code=404, detail="BOM not found")
+            raise HTTPException(**http_error(404, ("bom_not_found", request)))
         bom_dict = dict(b._mapping)
         comps = conn.execute(text("""
             SELECT bc.*, p.product_name as component_name, u.unit_name as component_uom
@@ -223,7 +223,7 @@ def update_bom(bom_id: int, bom: BOMCreate, request: Request, current_user: User
     try:
         existing = conn.execute(text("SELECT * FROM bill_of_materials WHERE id = :id AND is_deleted = false"), {"id": bom_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="BOM not found")
+            raise HTTPException(**http_error(404, ("bom_not_found", request)))
 
         conn.execute(text("""
             UPDATE bill_of_materials SET product_id=:pid, code=:code, name=:name, yield_quantity=:yield_q,
@@ -285,7 +285,7 @@ def update_bom(bom_id: int, bom: BOMCreate, request: Request, current_user: User
     except Exception as e:
         trans.rollback()
         logger.error(f"Error updating BOM {bom_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في تحديث قائمة المواد")
+        raise HTTPException(**http_error(400, ("bom_update_failed", request)))
     finally:
         conn.close()
 
@@ -307,26 +307,26 @@ def delete_bom(bom_id: int, request: Request, current_user: UserResponse = Depen
         """), {"id": bom_id}).scalar()
         if in_use > 0:
             logger.warning(f"Cannot delete BOM {bom_id}: used in {in_use} active order(s)")
-            raise HTTPException(status_code=400, detail="لا يمكن حذف قائمة المواد لارتباطها بأوامر إنتاج نشطة")
+            raise HTTPException(**http_error(400, ("bom_has_active_orders", request)))
         
         conn.execute(text("UPDATE bom_outputs SET is_deleted = true, deleted_at = NOW() WHERE bom_id = :id"), {"id": bom_id})
         conn.execute(text("UPDATE bom_components SET is_deleted = true, deleted_at = NOW() WHERE bom_id = :id"), {"id": bom_id})
         result = conn.execute(text("UPDATE bill_of_materials SET is_deleted = true, deleted_at = NOW(), updated_at = NOW() WHERE id = :id AND is_deleted = false"), {"id": bom_id})
         
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="BOM not found")
+            raise HTTPException(**http_error(404, ("bom_not_found", request)))
         
         trans.commit()
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_bom", resource_type="bill_of_materials",
                      resource_id=str(bom_id), request=request)
-        return {"message": "BOM deleted successfully"}
+        return {"message": i18n_message(("bom_deleted_success", request))}
     except HTTPException:
         raise
     except Exception as e:
         trans.rollback()
         logger.error(f"Error deleting BOM {bom_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في حذف قائمة المواد")
+        raise HTTPException(**http_error(400, ("bom_delete_failed", request)))
     finally:
         conn.close()
 
@@ -347,7 +347,7 @@ def compute_bom_materials(
     try:
         bom = conn.execute(text("SELECT * FROM bill_of_materials WHERE id = :id AND is_deleted = false"), {"id": bom_id}).fetchone()
         if not bom:
-            raise HTTPException(status_code=404, detail="BOM غير موجود")
+            raise HTTPException(**http_error(404, ("bom_not_found", request)))
 
         components = conn.execute(text("""
             SELECT bc.*, p.product_name, p.cost_price, u.unit_name
@@ -406,7 +406,7 @@ def compute_bom_materials(
         raise
     except Exception as e:
         logger.error(f"Error computing BOM materials: {e}")
-        raise HTTPException(status_code=500, detail="فشل في حساب المواد")
+        raise HTTPException(**http_error(500, ("bom_materials_calc_failed", request)))
     finally:
         conn.close()
 

@@ -48,7 +48,7 @@ def create_bad_debt_provision(request: Request, req: ProvisionRequest, current_u
         acc_bad_debt_exp = get_mapped_account_id(db, "acc_map_bad_debt_expense")
         acc_prov_doubtful = get_mapped_account_id(db, "acc_map_provision_doubtful")
         if not acc_bad_debt_exp or not acc_prov_doubtful:
-            raise HTTPException(status_code=400, detail="لم يتم تعيين حسابات الديون المعدومة في الإعدادات")
+            raise HTTPException(**http_error(400, ("bad_debt_accounts_not_configured", request)))
 
         # Fiscal-period lock: provisions post at today's date.
         check_fiscal_period_open(db, date.today())
@@ -117,7 +117,7 @@ def create_leave_provision(request: Request, req: ProvisionRequest, current_user
         acc_leave_exp = get_mapped_account_id(db, "acc_map_leave_expense")
         acc_leave_prov = get_mapped_account_id(db, "acc_map_provision_holiday")
         if not acc_leave_exp or not acc_leave_prov:
-            raise HTTPException(status_code=400, detail="لم يتم تعيين حسابات الإجازات في الإعدادات")
+            raise HTTPException(**http_error(400, ("leave_accounts_not_configured", request)))
 
         # Fiscal-period lock: provisions post at today's date.
         check_fiscal_period_open(db, date.today())

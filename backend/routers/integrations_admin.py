@@ -16,13 +16,14 @@ import logging
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from services import integration_keys_service as ks
+from utils.i18n import http_error
 from utils.permissions import require_permission
 from utils.tx import transactional
 from integrations.circuit_breaker import CircuitBreaker
@@ -68,6 +69,7 @@ def list_integration_keys(
 )
 def create_or_rotate_key(
     body: IntegrationKeyCreate,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
     """Create Or Rotate Key."""
@@ -91,14 +93,14 @@ def create_or_rotate_key(
         raise
     except Exception as e:
         logger.exception("integration key create failed")
-        raise HTTPException(500, f"failed to store key: {e}")
+        raise HTTPException(**http_error(500, "integration_key_store_failed", request))
 
 
 @router.post(
     "/keys/{key_id}/revoke",
     dependencies=[Depends(require_permission("admin"))],
 )
-def revoke_integration_key(key_id: int, current_user=Depends(get_current_user)):
+def revoke_integration_key(key_id: int, request: Request, current_user=Depends(get_current_user)):
     """Revoke Integration Key."""
     company_id = current_user.company_id
     try:
@@ -108,7 +110,7 @@ def revoke_integration_key(key_id: int, current_user=Depends(get_current_user)):
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"failed to revoke key: {e}")
+        raise HTTPException(**http_error(500, "integration_key_revoke_failed", request))
 
 
 @router.get(
@@ -148,7 +150,7 @@ def list_circuit_breakers(current_user=Depends(get_current_user)):
     "/circuit-breakers/{breaker_id}/reset",
     dependencies=[Depends(require_permission("admin"))],
 )
-def reset_circuit_breaker(breaker_id: int, current_user=Depends(get_current_user)):
+def reset_circuit_breaker(breaker_id: int, request: Request, current_user=Depends(get_current_user)):
     """Force a breaker back to ``closed`` (operator override)."""
     company_id = current_user.company_id
     try:
@@ -159,7 +161,7 @@ def reset_circuit_breaker(breaker_id: int, current_user=Depends(get_current_user
                 {"id": breaker_id},
             ).fetchone()
             if not row:
-                raise HTTPException(404, "breaker not found")
+                raise HTTPException(**http_error(404, "circuit_breaker_not_found", request))
             db.execute(
                 text("""UPDATE integration_circuit_state
                            SET state = 'closed', failure_count = 0,
@@ -176,7 +178,7 @@ def reset_circuit_breaker(breaker_id: int, current_user=Depends(get_current_user
     except HTTPException:
         raise
     except Exception as e:
-        raise HTTPException(500, f"failed to reset breaker: {e}")
+        raise HTTPException(**http_error(500, "circuit_breaker_reset_failed", request))
 
 
 # ─── T5.4 — Retry Queues & DLQ viewer ─────────────────────────────────────────
@@ -308,7 +310,7 @@ def list_dlq(
     "/dlq/{dlq_id}",
     dependencies=[Depends(require_permission("admin"))],
 )
-def get_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
+def get_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Return a DLQ row with full payload + gateway response."""
     company_id = current_user.company_id
     with transactional(company_id) as db:
@@ -321,7 +323,7 @@ def get_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
             {"id": dlq_id},
         ).fetchone()
     if not row:
-        raise HTTPException(404, "DLQ item not found")
+        raise HTTPException(**http_error(404, "dlq_item_not_found", request))
     return {
         "id": row[0], "queue_type": row[1], "queue_item_id": row[2],
         "provider": row[3], "final_status": row[4], "reason": row[5],
@@ -335,7 +337,7 @@ def get_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
     "/dlq/{dlq_id}/replay",
     dependencies=[Depends(require_permission("admin"))],
 )
-def replay_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
+def replay_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Re-enqueue a DLQ item back into its source queue (resets retry_count=0)
     and archives the DLQ row."""
     company_id = current_user.company_id
@@ -346,9 +348,9 @@ def replay_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
             {"id": dlq_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "DLQ item not found")
+            raise HTTPException(**http_error(404, "dlq_item_not_found", request))
         if row[3] is not None:
-            raise HTTPException(400, "DLQ item already archived")
+            raise HTTPException(**http_error(400, "dlq_item_already_archived", request))
 
         queue_type, queue_item_id = row[1], row[2]
         if queue_type == "payment":
@@ -372,10 +374,10 @@ def replay_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
                 {"id": queue_item_id},
             ).fetchone()
         else:
-            raise HTTPException(400, f"Unknown queue_type: {queue_type}")
+            raise HTTPException(**http_error(400, "dlq_unknown_queue_type", request, queue_type=queue_type))
 
         if not updated:
-            raise HTTPException(404, "Source queue item not found")
+            raise HTTPException(**http_error(404, "dlq_source_item_not_found", request))
 
         db.execute(
             text("""UPDATE integration_dlq
@@ -390,7 +392,7 @@ def replay_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
     "/dlq/{dlq_id}/archive",
     dependencies=[Depends(require_permission("admin"))],
 )
-def archive_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
+def archive_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Mark a DLQ item as resolved (no replay)."""
     company_id = current_user.company_id
     with transactional(company_id) as db:
@@ -399,7 +401,7 @@ def archive_dlq_item(dlq_id: int, current_user=Depends(get_current_user)):
             {"id": dlq_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "DLQ item not found")
+            raise HTTPException(**http_error(404, "dlq_item_not_found", request))
         if row[1] is not None:
             return {"id": dlq_id, "archived": True}
         db.execute(

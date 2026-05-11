@@ -85,7 +85,7 @@ def get_ticket_stats(current_user=Depends(get_current_user)):
 
 
 @router.get("/tickets/{ticket_id}", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=Dict[str, Any])
-def get_ticket(ticket_id: int, current_user=Depends(get_current_user)):
+def get_ticket(ticket_id: int, request: Request, current_user=Depends(get_current_user)):
     """Get Ticket."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -97,7 +97,7 @@ def get_ticket(ticket_id: int, current_user=Depends(get_current_user)):
             WHERE t.id = :id
         """), {"id": ticket_id}).fetchone()
         if not ticket:
-            raise HTTPException(404, "التذكرة غير موجودة")
+            raise HTTPException(**http_error(404, "ticket_not_found", request))
         
         comments = db.execute(text("""
             SELECT tc.*, cu.username as author_name
@@ -155,7 +155,7 @@ def create_ticket(data: TicketCreate, request: Request, current_user=Depends(get
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_ticket", resource_type="ticket", resource_id=str(tid), details={"ticket_number": ticket_num, "subject": data.subject, "priority": data.priority}, request=request)
         
-        return {"id": tid, "ticket_number": ticket_num, "message": "تم إنشاء التذكرة"}
+        return {"id": tid, "ticket_number": ticket_num, "message": i18n_message("ticket_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating ticket: {e}")
@@ -205,7 +205,7 @@ async def update_ticket(ticket_id: int, data: TicketUpdate, request: Request, cu
             except Exception as notif_err:
                 logger.warning("Failed to dispatch ticket assignment notification: %s", notif_err)
 
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
     finally:
         db.close()
 

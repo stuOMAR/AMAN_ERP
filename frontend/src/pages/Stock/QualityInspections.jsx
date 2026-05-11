@@ -11,6 +11,7 @@ function QualityInspections() {
     const { currentBranch } = useBranch()
     const [inspections, setInspections] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [statusFilter, setStatusFilter] = useState('')
     const [typeFilter, setTypeFilter] = useState('')
     const [products, setProducts] = useState([])
@@ -41,9 +42,12 @@ function QualityInspections() {
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        fetchInspections()
-        fetchProducts()
-        fetchWarehouses()
+        const timer = setTimeout(() => {
+            fetchInspections()
+            fetchProducts()
+            fetchWarehouses()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, statusFilter, typeFilter])
 
     const fetchInspections = async () => {
@@ -59,6 +63,7 @@ function QualityInspections() {
             console.error(err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -178,6 +183,7 @@ function QualityInspections() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

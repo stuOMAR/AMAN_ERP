@@ -84,7 +84,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         for alloc in data.allocations:
             alloc_amt = _dec(alloc.allocated_amount).quantize(_D2, ROUND_HALF_UP)
             if alloc_amt <= 0:
-                raise HTTPException(status_code=400, detail="مبلغ التخصيص يجب أن يكون أكبر من صفر")
+                raise HTTPException(**http_error(400, "voucher_allocation_must_be_positive", request))
 
             # Lock invoice row to prevent concurrent over-allocation
             inv_info = db.execute(text("""
@@ -94,13 +94,13 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                 FOR UPDATE
             """), {"iid": alloc.invoice_id}).fetchone()
             if not inv_info:
-                raise HTTPException(status_code=404, detail=f"الفاتورة {alloc.invoice_id} غير موجودة")
+                raise HTTPException(status_code=404, detail=i18n_message("allocation_invoice_not_found", request))
             if int(inv_info.party_id) != int(data.customer_id):
-                raise HTTPException(status_code=400, detail=f"الفاتورة {alloc.invoice_id} لا تتبع العميل المحدد")
+                raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_not_for_customer", request))
 
             remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(_D2, ROUND_HALF_UP)
             if alloc_amt > remaining + _D2:
-                raise HTTPException(status_code=400, detail=f"مبلغ التخصيص ({alloc_amt:.2f}) يتجاوز المتبقي على الفاتورة ({remaining:.2f})")
+                raise HTTPException(status_code=400, detail=i18n_message("allocation_exceeds_remaining", request))
 
             total_allocated = (total_allocated + alloc_amt).quantize(_D2, ROUND_HALF_UP)
 
@@ -153,7 +153,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                              "amount_currency": data.amount, "currency": currency})
 
         if not je_lines:
-            raise HTTPException(400, "خريطة حسابات القبض غير مكتملة")
+            raise HTTPException(**http_error(400, "cash_receipt_map_incomplete", request))
 
         je_id, je_num = create_journal_entry(
             db=db,
@@ -208,8 +208,8 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                 WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                 AND u.id != :current_uid
             """), {
-                "title": "💵 تم تحصيل دفعة من عميل",
-                "message": f"تم تحصيل {data.amount:,.2f} من العميل {cust_name or ''} — سند {voucher_num}",
+                "title": i18n_message("notif_payment_collected", request),
+                "message": i18n_message("payment_collected_details", request),
                 "link": f"/sales/receipts/{voucher_id}",
                 "current_uid": current_user.id
             })
@@ -286,7 +286,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
         for alloc in data.allocations:
             alloc_amt = _dec(alloc.allocated_amount).quantize(_D2, ROUND_HALF_UP)
             if alloc_amt <= 0:
-                raise HTTPException(status_code=400, detail="مبلغ التخصيص يجب أن يكون أكبر من صفر")
+                raise HTTPException(**http_error(400, "voucher_allocation_must_be_positive", request))
 
             inv_info = db.execute(text("""
                 SELECT party_id, total, COALESCE(paid_amount, 0) AS paid_amount
@@ -295,13 +295,13 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
                 FOR UPDATE
             """), {"iid": alloc.invoice_id}).fetchone()
             if not inv_info:
-                raise HTTPException(status_code=404, detail=f"الفاتورة {alloc.invoice_id} غير موجودة")
+                raise HTTPException(status_code=404, detail=i18n_message("allocation_invoice_not_found", request))
             if int(inv_info.party_id) != int(data.customer_id):
-                raise HTTPException(status_code=400, detail=f"الفاتورة {alloc.invoice_id} لا تتبع العميل المحدد")
+                raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_not_for_customer", request))
 
             remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(_D2, ROUND_HALF_UP)
             if alloc_amt > remaining + _D2:
-                raise HTTPException(status_code=400, detail=f"مبلغ التخصيص ({alloc_amt:.2f}) يتجاوز المتبقي على الفاتورة ({remaining:.2f})")
+                raise HTTPException(status_code=400, detail=i18n_message("allocation_exceeds_remaining", request))
 
             total_allocated = (total_allocated + alloc_amt).quantize(_D2, ROUND_HALF_UP)
 
@@ -482,7 +482,7 @@ def get_payment_details(voucher_id: int, current_user: dict = Depends(get_curren
         """), {"id": voucher_id}).fetchone()
 
         if not header:
-            raise HTTPException(status_code=404, detail="Payment not found")
+            raise HTTPException(**http_error(404, "payment_not_found", request))
 
         # Enforce branch access for single resource
         from utils.permissions import validate_branch_access
@@ -510,7 +510,7 @@ def get_receipt_details(voucher_id: int, current_user: dict = Depends(get_curren
         """), {"id": voucher_id}).fetchone()
 
         if not header:
-            raise HTTPException(status_code=404, detail="Receipt not found")
+            raise HTTPException(**http_error(404, "receipt_not_found", request))
 
         # Enforce branch access for single resource
         from utils.permissions import validate_branch_access

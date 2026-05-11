@@ -5,36 +5,58 @@ Endpoint واحد يُحسب إجماليات أي نوع فاتورة/عقد/إ
 يُستخدم من كل الصفحات بدلاً من الحساب في frontend.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
 from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
+from sqlalchemy import text
 
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.i18n import http_error
+from utils.permissions import require_permission, validate_branch_access
+from utils.tx import transactional
 from utils.accounting import compute_line_amounts, compute_invoice_totals
+from utils.tax_precision import money_str, rate_str
+from services.tax_engine import resolve_line_tax_group
 
 router = APIRouter(prefix="/calculate", tags=["Calculator"])
 
 
 class LineInput(BaseModel):
-    quantity: float = 0
-    unit_price: float = 0
-    tax_rate: float = 0
-    discount: float = 0  # fixed amount (not percentage)
+    product_id: Optional[int] = None
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    tax_rate: Optional[Decimal] = None
+    discount: Decimal = Decimal("0")  # fixed amount (not percentage)
 
 
 class InvoicePreviewRequest(BaseModel):
     lines: List[LineInput]
-    header_discount_pct: float = 0  # percentage
-    markup_amount: float = 0  # fixed amount
-    paid_amount: float = 0
+    branch_id: Optional[int] = None
+    party_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    supplier_id: Optional[int] = None
+    document_date: Optional[date] = None
+    header_discount_pct: Decimal = Decimal("0")  # percentage
+    markup_amount: Decimal = Decimal("0")  # fixed amount
+    paid_amount: Decimal = Decimal("0")
     currency: str = "SAR"
+
+
+def _is_empty_preview_line(ln: LineInput) -> bool:
+    return (
+        ln.product_id is None
+        and ln.tax_rate is None
+        and Decimal(str(ln.unit_price or 0)) == 0
+        and Decimal(str(ln.discount or 0)) == 0
+    )
 
 
 @router.post("/invoice-totals")
 def calculate_invoice_totals(
     req: InvoicePreviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
@@ -42,7 +64,8 @@ def calculate_invoice_totals(
     يُستخدم من كل الصفحات في frontend.
     
     المدخلات:
-      - lines: قائمة الأسطر (quantity, unit_price, tax_rate, discount)
+      - lines: قائمة الأسطر (product_id, quantity, unit_price, discount)
+      - branch_id + party/customer/supplier: لحل الضريبة من محرك الضرائب
       - header_discount_pct: خصم على مستوى الفاتورة (نسبة مئوية)
       - markup_amount: هامش ربح (مبلغ ثابت)
       - paid_amount: المبلغ المدفوع
@@ -57,53 +80,106 @@ def calculate_invoice_totals(
       - remaining_balance: المتبقي
       - lines: تفاصيل كل سطر
     """
-    lines_data = [
-        {"quantity": ln.quantity, "unit_price": ln.unit_price, "tax_rate": ln.tax_rate, "discount": ln.discount}
-        for ln in req.lines
-    ]
+    branch_id = validate_branch_access(current_user, req.branch_id) if req.branch_id else None
+    party_id = req.party_id or req.customer_id or req.supplier_id
+    doc_date = req.document_date
 
-    totals = compute_invoice_totals(
-        lines_data,
-        header_discount_pct=req.header_discount_pct,
-        markup_amount=req.markup_amount,
-        discount_is_percent=False,  # frontend sends fixed amounts
-    )
-
+    lines_data = []
     line_details = []
-    for i, ln in enumerate(req.lines):
-        la = compute_line_amounts(ln.quantity, ln.unit_price, ln.tax_rate, ln.discount, discount_is_percent=False)
-        line_details.append({
-            "index": i,
-            "quantity": float(ln.quantity),
-            "unit_price": float(ln.unit_price),
-            "tax_rate": float(ln.tax_rate),
-            "discount": float(ln.discount),
-            "subtotal": float(la["subtotal"]),
-            "discount_amount": float(la["discount_amount"]),
-            "taxable": float(la["taxable"]),
-            "tax_amount": float(la["tax_amount"]),
-            "line_total": float(la["line_total"]),
-        })
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    with transactional(company_id) as db:
+        if branch_id is None and any(ln.product_id for ln in req.lines):
+            default_branch_id = db.execute(text("""
+                SELECT id
+                FROM branches
+                WHERE is_default = TRUE
+                  AND is_active = TRUE
+                LIMIT 1
+            """)).scalar()
+            if default_branch_id:
+                branch_id = validate_branch_access(current_user, default_branch_id)
 
-    grand = float(totals["grand_total"])
-    paid = float(req.paid_amount)
+        for i, ln in enumerate(req.lines):
+            if _is_empty_preview_line(ln):
+                continue
+            if branch_id and ln.product_id:
+                taxes = resolve_line_tax_group(branch_id, ln.product_id, db, doc_date, customer_id=party_id)
+                tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+                tax_rate_id = taxes[0]["tax_rate_id"] if len(taxes) == 1 else None
+                applied_taxes = [
+                    {
+                        "tax_rate_id": t.get("tax_rate_id"),
+                        "tax_name": t.get("tax_name"),
+                        "tax_rate": rate_str(t.get("tax_rate", 0)),
+                    }
+                    for t in taxes
+                ] if len(taxes) > 1 else None
+            elif ln.tax_rate is not None:
+                # Compatibility fallback for older screens that have not yet
+                # supplied branch/product context. Saved documents must still
+                # resolve tax server-side in their own routers.
+                tax_rate = ln.tax_rate
+                tax_rate_id = None
+                applied_taxes = None
+            else:
+                raise HTTPException(**http_error(400, "calculator_tax_rate_required", request))
+
+            line_payload = {
+                "quantity": ln.quantity,
+                "unit_price": ln.unit_price,
+                "tax_rate": tax_rate,
+                "discount": ln.discount,
+            }
+            lines_data.append(line_payload)
+            la = compute_line_amounts(
+                ln.quantity,
+                ln.unit_price,
+                tax_rate,
+                ln.discount,
+                discount_is_percent=False,
+            )
+            line_details.append({
+                "index": i,
+                "product_id": ln.product_id,
+                "quantity": money_str(ln.quantity),
+                "unit_price": money_str(ln.unit_price),
+                "tax_rate": rate_str(tax_rate),
+                "tax_rate_id": tax_rate_id,
+                "applied_taxes": applied_taxes,
+                "discount": money_str(ln.discount),
+                "subtotal": money_str(la["subtotal"]),
+                "discount_amount": money_str(la["discount_amount"]),
+                "taxable": money_str(la["taxable"]),
+                "tax_amount": money_str(la["tax_amount"]),
+                "line_total": money_str(la["line_total"]),
+            })
+
+        totals = compute_invoice_totals(
+            lines_data,
+            header_discount_pct=req.header_discount_pct,
+            markup_amount=req.markup_amount,
+            discount_is_percent=False,  # frontend sends fixed amounts
+        )
+
+    grand = totals["grand_total"]
+    paid = Decimal(str(req.paid_amount or 0))
 
     return {
-        "subtotal": float(totals["subtotal"]),
-        "total_discount": float(totals["total_discount"]),
-        "total_tax": float(totals["total_tax"]),
-        "grand_total": grand,
-        "paid_amount": paid,
-        "remaining_balance": grand - paid,
+        "subtotal": money_str(totals["subtotal"]),
+        "total_discount": money_str(totals["total_discount"]),
+        "total_tax": money_str(totals["total_tax"]),
+        "grand_total": money_str(grand),
+        "paid_amount": money_str(paid),
+        "remaining_balance": money_str(grand - paid),
         "currency": req.currency,
         "lines": line_details,
     }
 
 
 class ContractLineInput(BaseModel):
-    quantity: float = 0
-    unit_price: float = 0
-    tax_rate: float = 0
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    tax_rate: Decimal = Decimal("0")
 
 
 class ContractPreviewRequest(BaseModel):
@@ -132,18 +208,18 @@ def calculate_contract_totals(
         la = compute_line_amounts(ln.quantity, ln.unit_price, ln.tax_rate, 0, discount_is_percent=False)
         line_details.append({
             "index": i,
-            "quantity": float(ln.quantity),
-            "unit_price": float(ln.unit_price),
-            "tax_rate": float(ln.tax_rate),
-            "subtotal": float(la["subtotal"]),
-            "tax_amount": float(la["tax_amount"]),
-            "line_total": float(la["line_total"]),
+            "quantity": money_str(ln.quantity),
+            "unit_price": money_str(ln.unit_price),
+            "tax_rate": rate_str(ln.tax_rate),
+            "subtotal": money_str(la["subtotal"]),
+            "tax_amount": money_str(la["tax_amount"]),
+            "line_total": money_str(la["line_total"]),
         })
 
     return {
-        "subtotal": float(totals["subtotal"]),
-        "total_tax": float(totals["total_tax"]),
-        "grand_total": float(totals["grand_total"]),
+        "subtotal": money_str(totals["subtotal"]),
+        "total_tax": money_str(totals["total_tax"]),
+        "grand_total": money_str(totals["grand_total"]),
         "currency": req.currency,
         "lines": line_details,
     }

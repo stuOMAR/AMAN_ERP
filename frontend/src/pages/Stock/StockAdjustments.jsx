@@ -16,10 +16,14 @@ const StockAdjustments = () => {
     const { showToast } = useToast();
     const [adjustments, setAdjustments] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [searchTerm, setSearchTerm] = useState('');
 
     useEffect(() => {
-        fetchAdjustments();
+        const timer = setTimeout(() => {
+            fetchAdjustments();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchAdjustments = async () => {
@@ -31,6 +35,7 @@ const StockAdjustments = () => {
             showToast(t('stock.adjustments.validation.error_fetch'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -42,6 +47,7 @@ const StockAdjustments = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div style={{ display: 'flex', alignItems: 'center', gap: '16px' }}>

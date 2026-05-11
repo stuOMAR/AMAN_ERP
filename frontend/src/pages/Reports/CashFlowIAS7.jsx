@@ -13,6 +13,7 @@ function CashFlowIAS7() {
     const { currentBranch } = useBranch();
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState(null);
     const [dateRange, setDateRange] = useState({
         start_date: new Date(new Date().getFullYear(), 0, 1).toISOString().split('T')[0],
@@ -34,10 +35,16 @@ function CashFlowIAS7() {
             setError(t('errors.fetch_failed'));
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
-    useEffect(() => { fetchData(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
 
     const sections = [
         { key: 'operating', label: t('cashflow_ias7.operating'), icon: '⚙️', color: 'var(--primary)' },
@@ -82,7 +89,8 @@ function CashFlowIAS7() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad && loading ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

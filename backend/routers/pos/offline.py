@@ -55,7 +55,7 @@ async def submit_batch(body: OfflineBatchSubmit, request: Request,
         db.commit()
         return {"id": row.id, "status": "queued"}
     else:
-        return {"status": "duplicate", "message": "Batch already submitted"}
+        return {"status": "duplicate", "message": i18n_message("batch_already_submitted", request)}
 
 
 @router.get("/pos/offline/batches")
@@ -99,4 +99,4 @@ async def retry_batch(batch_id: int, request: Request,
     if result.fetchone():
         db.commit()
         return {"status": "queued", "id": batch_id}
-    raise HTTPException(status_code=404, detail="Batch not found or not in retryable state")
+    raise HTTPException(**http_error(404, "batch_not_found_or_not_in_retryable_state", request))

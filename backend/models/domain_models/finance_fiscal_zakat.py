@@ -1,3 +1,5 @@
+from decimal import Decimal
+
 from sqlalchemy import Boolean, Date, DateTime, ForeignKey, Integer, Numeric, String, Text, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -42,17 +44,26 @@ class ZakatCalculation(ModelBase):
     __tablename__ = "zakat_calculations"
 
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False, unique=True)
+    fiscal_year: Mapped[int] = mapped_column(Integer, nullable=False)
+    branch_id: Mapped[int | None] = mapped_column(ForeignKey("branches.id"))
+    branch_scope_key: Mapped[str] = mapped_column(String(160), nullable=False, default="all:company")
+    branch_ids: Mapped[list | None] = mapped_column(JSONB, default=None)
     method: Mapped[str | None] = mapped_column(String(30), default="net_assets")
-    zakat_base: Mapped[float | None] = mapped_column(Numeric(15, 4), default=0)
-    zakat_rate: Mapped[float | None] = mapped_column(Numeric(8, 4), default=2.5)
-    zakat_amount: Mapped[float | None] = mapped_column(Numeric(15, 4), default=0)
+    zakat_base: Mapped[Decimal | None] = mapped_column(Numeric(15, 4), default=0)
+    zakat_rate: Mapped[Decimal | None] = mapped_column(Numeric(8, 4), default=0)
+    zakat_amount: Mapped[Decimal | None] = mapped_column(Numeric(15, 4), default=0)
     details: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    calculation_details: Mapped[dict | None] = mapped_column(JSONB, default=dict)
+    calculation_version: Mapped[str | None] = mapped_column(String(40))
+    currency: Mapped[str | None] = mapped_column(String(3))
+    base_currency: Mapped[str | None] = mapped_column(String(3))
+    idempotency_key: Mapped[str | None] = mapped_column(String(120))
     status: Mapped[str | None] = mapped_column(String(20), default="calculated")
     journal_entry_id: Mapped[int | None] = mapped_column(ForeignKey("journal_entries.id", ondelete="SET NULL"))
     notes: Mapped[str | None] = mapped_column(Text)
     calculated_by: Mapped[int | None] = mapped_column(ForeignKey("company_users.id"))
     calculated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    updated_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class ZakatBaseItem(ModelBase):
@@ -61,6 +72,6 @@ class ZakatBaseItem(ModelBase):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     account_id: Mapped[int] = mapped_column(ForeignKey("accounts.id", ondelete="CASCADE"), nullable=False)
     category: Mapped[str] = mapped_column(String(30), nullable=False)
-    weight: Mapped[float | None] = mapped_column(Numeric(6, 4), default=1.0)
+    weight: Mapped[Decimal | None] = mapped_column(Numeric(6, 4), default=1.0)
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[DateTime | None] = mapped_column(DateTime(timezone=True), server_default=func.now())

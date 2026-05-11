@@ -16,7 +16,7 @@ async def deprecated_transfer(request: Request):
         status_code=410,
         content={
             "code": "endpoint_gone",
-            "message": "This endpoint has been removed. Use /inventory/transfers instead.",
+            "message": i18n_message("endpoint_removed", request),
             "moved_to": "/inventory/transfers",
         },
     )

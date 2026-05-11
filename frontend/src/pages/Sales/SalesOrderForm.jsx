@@ -22,6 +22,7 @@ function SalesOrderForm() {
     const [products, setProducts] = useState([])
     const [warehouses, setWarehouses] = useState([])
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     const [formData, setFormData] = useState({
@@ -39,26 +40,31 @@ function SalesOrderForm() {
     ])
 
     useEffect(() => {
-        const fetchData = async () => {
-            try {
-                const [custRes, prodRes, whRes, priceRes] = await Promise.all([
-                    salesAPI.listCustomers(),
-                    inventoryAPI.listProducts(),
-                    inventoryAPI.listWarehouses(),
-                    inventoryAPI.getBranchPrices(currentBranch?.id)
-                ])
-                setCustomers(custRes.data)
-                setProducts(prodRes.data)
-                setWarehouses(whRes.data)
-                
-                // Store branch prices for auto-fill
-                window.__branchPrices = priceRes.data?.prices || {}
-                window.__branchCurrency = priceRes.data?.currency || currency
-            } catch (err) {
-                showToast(t('common.error'), 'error')
+        const timer = setTimeout(() => {
+            const fetchData = async () => {
+                try {
+                    const [custRes, prodRes, whRes, priceRes] = await Promise.all([
+                        salesAPI.listCustomers(),
+                        inventoryAPI.listProducts(),
+                        inventoryAPI.listWarehouses(),
+                        inventoryAPI.getBranchPrices(currentBranch?.id)
+                    ])
+                    setCustomers(custRes.data)
+                    setProducts(prodRes.data)
+                    setWarehouses(whRes.data)
+                    
+                    // Store branch prices for auto-fill
+                    window.__branchPrices = priceRes.data?.prices || {}
+                    window.__branchCurrency = priceRes.data?.currency || currency
+                } catch (err) {
+                    showToast(t('common.error'), 'error')
+                } finally {
+                    setInitialLoad(false)
+                }
             }
-        }
-        fetchData()
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch])
 
     useEffect(() => {
@@ -186,15 +192,17 @@ function SalesOrderForm() {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             previewDebounced({
                 lines: items.map(i => ({
+                    product_id: i.product_id ? Number(i.product_id) : null,
                     quantity: Number(i.quantity) || 0,
                     unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
                     discount: Number(i.discount) || 0,
                 })),
+                branch_id: currentBranch?.id || null,
+                customer_id: formData.customer_id ? Number(formData.customer_id) : null,
                 currency,
             })
         }
-    }, [items])
+    }, [items, formData.customer_id, currentBranch])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -263,6 +271,7 @@ function SalesOrderForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

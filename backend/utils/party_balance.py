@@ -4,28 +4,48 @@ party_balance.py — Helper to update per-site, per-branch party balances.
 Usage:
     from utils.party_balance import update_party_site_balance
 
-    update_party_site_balance(db, party_id=4, site_id=2, branch_id=1, currency="SAR", amount=-92000)
-    # Decreases supplier balance by 92,000 SAR in branch 1 for site 2
+    update_party_site_balance(db, party_id=4, branch_id=1, currency="SAR", amount=-92000)
+    # Decreases supplier balance by 92,000 SAR in branch 1
 """
 
 from sqlalchemy import text
+from decimal import Decimal
 
 
-def update_party_site_balance(db, party_id: int, branch_id: int, currency: str, amount: float, account_type: str = None):
+_POSITIVE_BALANCE_DOCUMENTS = {
+    "supplier_payment",
+    "purchase_return",
+    "purchase_credit_note",
+}
+
+_NEGATIVE_BALANCE_DOCUMENTS = {
+    "purchase_invoice",
+    "purchase_debit_note",
+    "landed_cost",
+    "supplier_refund",
+}
+
+
+def update_party_site_balance(db, party_id: int, branch_id: int, currency: str, amount, account_type: str = None, document_type: str = None):
     """
     Update (or create) a party's balance for a specific site, branch and currency.
 
-    Positive amount = party owes us more (customer debit / supplier credit increase)
-    Negative amount = we owe party more (customer credit / supplier debit increase)
+    Sign convention (enforced at write time):
+      - Invoice: negative (we owe supplier)
+      - Payment/Return/Credit note: positive (reduces what we owe)
 
-    For customers:
-      - Invoice created: amount = +total (customer owes us)
-      - Payment received: amount = -payment (reduces what they owe)
-
-    For suppliers:
-      - Invoice created: amount = -total (we owe supplier)
-      - Payment made: amount = +payment (reduces what we owe)
+    Args:
+        amount: Numeric amount (float or Decimal). Positive = reduce what we owe for suppliers.
+        document_type: Optional document type for sign validation.
     """
+    amt = Decimal(str(amount or 0))
+    if document_type:
+        normalized_type = str(document_type).strip()
+        if normalized_type in _POSITIVE_BALANCE_DOCUMENTS and amt < 0:
+            raise ValueError(f"{normalized_type} must increase supplier balance")
+        if normalized_type in _NEGATIVE_BALANCE_DOCUMENTS and amt > 0:
+            raise ValueError(f"{normalized_type} must decrease supplier balance")
+
     # Find the default site for this party with matching currency
     site = db.execute(text("""
         SELECT id FROM party_sites 
@@ -61,7 +81,7 @@ def update_party_site_balance(db, party_id: int, branch_id: int, currency: str, 
         VALUES (:bid, :sid, :at, :cur, :amt, NOW(), NOW())
         ON CONFLICT (company_branch_id, party_site_id, account_type, currency)
         DO UPDATE SET balance = party_site_balances.balance + :amt, updated_at = NOW()
-    """), {"bid": branch_id, "sid": site_id, "at": account_type, "cur": currency, "amt": amount})
+    """), {"bid": branch_id, "sid": site_id, "at": account_type, "cur": currency, "amt": amt})
 
 
 def get_party_balance(db, party_id: int, branch_id: int = None, currency: str = None) -> list:

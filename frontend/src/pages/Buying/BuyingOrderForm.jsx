@@ -21,6 +21,7 @@ function BuyingOrderForm() {
     const [supplierGroups, setSupplierGroups] = useState([])
     const [products, setProducts] = useState([])
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     const [formData, setFormData] = useState({
@@ -48,9 +49,14 @@ function BuyingOrderForm() {
                 setProducts(prodRes.data)
             } catch (err) {
                 showToast(t('common.error'), 'error')
+            } finally {
+                setInitialLoad(false)
             }
         }
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [])
 
     const handleAddItem = () => {
@@ -213,15 +219,17 @@ function BuyingOrderForm() {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             previewDebounced({
                 lines: items.map(i => ({
+                    product_id: i.product_id ? Number(i.product_id) : null,
                     quantity: Number(i.quantity) || 0,
                     unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
                     discount: Number(i.discount) || 0,
                 })),
+                branch_id: currentBranch?.id || null,
+                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
                 currency,
             })
         }
-    }, [items])
+    }, [items, formData.supplier_id, currentBranch])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -285,6 +293,7 @@ function BuyingOrderForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{t('buying.orders.form.title_new')}</h1>

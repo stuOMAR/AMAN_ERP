@@ -24,6 +24,7 @@ export default function ProductTaxSelector({ branchId, value, onChange }) {
     const [availableGroups, setAvailableGroups] = useState([])
     const [availableClassifications, setAvailableClassifications] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     // Fetch branch tax, available taxes, tax groups, and classifications
@@ -47,10 +48,14 @@ export default function ProductTaxSelector({ branchId, value, onChange }) {
                 setError(t('taxes.load_error', 'تعذر تحميل الضريبة — سيتم استخدام ضريبة الفرع'))
             } finally {
                 setLoading(false)
+                setInitialLoad(false)
             }
         }
-        fetchData()
-    }, [branchId, t])
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [branchId])
 
     const handleModeChange = (mode) => {
         const base = { tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: false }
@@ -115,7 +120,7 @@ export default function ProductTaxSelector({ branchId, value, onChange }) {
         }
     }
 
-    if (loading) {
+    if (initialLoad && !branchTax) {
         return (
             <div style={styles.container}>
                 <div style={styles.loading}>
@@ -127,6 +132,7 @@ export default function ProductTaxSelector({ branchId, value, onChange }) {
 
     return (
         <div style={styles.container}>
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {error && <div style={styles.error}>{error}</div>}
 
             {/* Option 1: Inherit from Branch */}

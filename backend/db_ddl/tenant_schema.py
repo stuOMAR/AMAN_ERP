@@ -686,6 +686,27 @@ def get_additional_base_tables_sql() -> str:
         updated_by INTEGER REFERENCES company_users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS rfq_response_lines (
+        id SERIAL PRIMARY KEY,
+        response_id INTEGER NOT NULL REFERENCES rfq_responses(id) ON DELETE CASCADE,
+        rfq_line_id INTEGER NOT NULL REFERENCES rfq_lines(id) ON DELETE CASCADE,
+        unit_price NUMERIC(15, 4) NOT NULL DEFAULT 0,
+        total_price NUMERIC(15, 4) NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(response_id, rfq_line_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS rfq_suppliers (
+        id SERIAL PRIMARY KEY,
+        rfq_id INTEGER NOT NULL REFERENCES request_for_quotations(id) ON DELETE CASCADE,
+        party_id INTEGER NOT NULL REFERENCES parties(id),
+        status VARCHAR(20) DEFAULT 'invited',
+        invited_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        responded_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- ===== SUPPLIER RATINGS =====
     CREATE TABLE IF NOT EXISTS supplier_ratings (
         id SERIAL PRIMARY KEY,
@@ -954,6 +975,7 @@ def get_core_dependent_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
         product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        po_line_id INTEGER REFERENCES purchase_order_lines(id) ON DELETE SET NULL,
         description VARCHAR(500),
         quantity DECIMAL(18, 4) DEFAULT 1,
         unit_price DECIMAL(18, 4) DEFAULT 0,
@@ -968,6 +990,7 @@ def get_core_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_invoice_lines_po_line_id ON invoice_lines(po_line_id);
     CREATE INDEX IF NOT EXISTS idx_invoice_lines_tax_rate ON invoice_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS supplier_transactions (
@@ -1044,12 +1067,36 @@ def get_additional_dependent_tables_sql() -> str:
         discount DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) DEFAULT 0,
         received_quantity DECIMAL(18, 4) DEFAULT 0,
+        invoiced_quantity DECIMAL(18, 4) DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         created_by INTEGER REFERENCES company_users(id),
         updated_by INTEGER REFERENCES company_users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_order_lines_tax_rate ON purchase_order_lines(tax_rate_id);
+
+    CREATE TABLE IF NOT EXISTS po_receipts (
+        id SERIAL PRIMARY KEY,
+        po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+        receipt_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        created_by INTEGER REFERENCES company_users(id),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS po_receipt_lines (
+        id SERIAL PRIMARY KEY,
+        receipt_id INTEGER NOT NULL REFERENCES po_receipts(id) ON DELETE CASCADE,
+        po_line_id INTEGER NOT NULL REFERENCES purchase_order_lines(id) ON DELETE RESTRICT,
+        product_id INTEGER REFERENCES products(id),
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+        quantity DECIMAL(18, 4) NOT NULL,
+        unit_cost DECIMAL(18, 4) NOT NULL DEFAULT 0,
+        total_cost DECIMAL(18, 4) NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_po_line_id ON po_receipt_lines(po_line_id);
+    CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_receipt_id ON po_receipt_lines(receipt_id);
 
     CREATE TABLE IF NOT EXISTS sales_quotations (
         id SERIAL PRIMARY KEY,
@@ -2214,24 +2261,47 @@ def get_financial_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'draft',
         branch_id INTEGER REFERENCES branches(id),
         jurisdiction_code VARCHAR(2),
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        display_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
+        idempotency_key VARCHAR(120),
+        journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_returns_idempotency
+        ON tax_returns (idempotency_key) WHERE idempotency_key IS NOT NULL;
     
     CREATE TABLE IF NOT EXISTS tax_payments (
         id SERIAL PRIMARY KEY,
         payment_number VARCHAR(50) UNIQUE,
         tax_return_id INTEGER REFERENCES tax_returns(id),
+        branch_id INTEGER REFERENCES branches(id),
+        treasury_account_id INTEGER REFERENCES treasury_accounts(id),
         payment_date DATE NOT NULL,
         amount DECIMAL(18, 4) NOT NULL,
         payment_method VARCHAR(50),
         reference VARCHAR(100),
         status VARCHAR(20) DEFAULT 'pending',
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
+        journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        idempotency_key VARCHAR(120),
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_tax_payments_idempotency
+        ON tax_payments (idempotency_key) WHERE idempotency_key IS NOT NULL;
     
     -- ===== TAX COMPLIANCE TABLES (3) =====
     CREATE TABLE IF NOT EXISTS tax_regimes (
@@ -3872,23 +3942,24 @@ def get_security_tables_sql() -> str:
         name VARCHAR(100) NOT NULL,
         name_ar VARCHAR(100),
         rate DECIMAL(5,2) NOT NULL,
+        country_code VARCHAR(5),
         category VARCHAR(50) DEFAULT 'general',
         description TEXT,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
 
-    INSERT INTO wht_rates (name, name_ar, rate, category) 
+    INSERT INTO wht_rates (name, name_ar, rate, country_code, category)
     SELECT * FROM (VALUES
-        ('Services - Resident', 'خدمات - مقيم', 5.00, 'services'),
-        ('Services - Non-Resident', 'خدمات - غير مقيم', 15.00, 'services'),
-        ('Rent', 'إيجار', 5.00, 'rent'),
-        ('Consulting', 'استشارات', 5.00, 'consulting'),
-        ('Royalties', 'حقوق الملكية', 15.00, 'royalties'),
-        ('Insurance', 'تأمين', 5.00, 'insurance'),
-        ('International Transport', 'نقل دولي', 5.00, 'transport'),
-        ('Dividend', 'أرباح الأسهم', 5.00, 'dividend')
-    ) AS v(name, name_ar, rate, category)
+        ('Services - Resident', 'خدمات - مقيم', 5.00, 'SA', 'services'),
+        ('Services - Non-Resident', 'خدمات - غير مقيم', 15.00, 'SA', 'services'),
+        ('Rent', 'إيجار', 5.00, 'SA', 'rent'),
+        ('Consulting', 'استشارات', 5.00, 'SA', 'consulting'),
+        ('Royalties', 'حقوق الملكية', 15.00, 'SA', 'royalties'),
+        ('Insurance', 'تأمين', 5.00, 'SA', 'insurance'),
+        ('International Transport', 'نقل دولي', 5.00, 'SA', 'transport'),
+        ('Dividend', 'أرباح الأسهم', 5.00, 'SA', 'dividend')
+    ) AS v(name, name_ar, rate, country_code, category)
     WHERE NOT EXISTS (SELECT 1 FROM wht_rates LIMIT 1);
 
     CREATE TABLE IF NOT EXISTS wht_transactions (
@@ -3896,18 +3967,28 @@ def get_security_tables_sql() -> str:
         invoice_id INT,
         payment_id INT,
         supplier_id INT,
+        branch_id INTEGER REFERENCES branches(id),
         wht_rate_id INT REFERENCES wht_rates(id),
         gross_amount DECIMAL(18,2) NOT NULL,
         wht_rate DECIMAL(5,2) NOT NULL,
         wht_amount DECIMAL(18,2) NOT NULL,
         net_amount DECIMAL(18,2) NOT NULL,
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         certificate_number VARCHAR(50),
         status VARCHAR(20) DEFAULT 'pending',
         journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        idempotency_key VARCHAR(120),
+        calculation_version VARCHAR(40),
+        calculation_details JSONB DEFAULT '{}',
         period_date DATE,
         created_by INT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_wht_transactions_idempotency
+        ON wht_transactions (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS sales_opportunities (
         id SERIAL PRIMARY KEY,
@@ -3982,16 +4063,20 @@ def get_security_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         title VARCHAR(200) NOT NULL,
         tax_type VARCHAR(50),
+        branch_id INTEGER REFERENCES branches(id),
         due_date DATE NOT NULL,
         reminder_days JSONB DEFAULT '[7, 3, 1]',
         is_recurring BOOLEAN DEFAULT FALSE,
         recurrence_months INT DEFAULT 3,
         is_completed BOOLEAN DEFAULT FALSE,
+        is_active BOOLEAN DEFAULT TRUE,
+        completed_at TIMESTAMPTZ,
         notes TEXT,
         recurrence_pattern VARCHAR(20),
         status VARCHAR(20) DEFAULT 'pending',
         created_by INT,
-        created_at TIMESTAMPTZ DEFAULT NOW()
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
     );
 
     -- ========== CRM Advanced: Customer Segmentation (moved before marketing_campaigns) ==========
@@ -4518,6 +4603,7 @@ def get_system_completion_tables_sql() -> str:
         allocation_method VARCHAR(30) DEFAULT 'by_value',
         status VARCHAR(20) DEFAULT 'draft',
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         notes TEXT,
         branch_id INTEGER REFERENCES branches(id),
         created_by INTEGER REFERENCES company_users(id),
@@ -4556,6 +4642,51 @@ def get_system_completion_tables_sql() -> str:
         created_by INTEGER REFERENCES company_users(id),
         updated_by INTEGER REFERENCES company_users(id)
     );
+
+    CREATE OR REPLACE VIEW supplier_subledger AS
+    SELECT i.party_id, i.branch_id, i.currency,
+           'purchase_invoice' AS document_type, i.id AS document_id,
+           i.invoice_number AS document_number, i.invoice_date AS document_date,
+           0::numeric AS debit, i.total AS credit,
+           0::numeric AS base_debit, (i.total * COALESCE(i.exchange_rate, 1)) AS base_credit,
+           COALESCE(i.exchange_rate, 1) AS exchange_rate
+    FROM invoices i
+    WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT i.party_id, i.branch_id, i.currency,
+           'purchase_return' AS document_type, i.id, i.invoice_number, i.invoice_date,
+           i.total, 0::numeric, (i.total * COALESCE(i.exchange_rate, 1)), 0::numeric,
+           COALESCE(i.exchange_rate, 1)
+    FROM invoices i
+    WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT pv.party_id, pv.branch_id, pv.currency,
+           pv.voucher_type AS document_type, pv.id, pv.voucher_number, pv.voucher_date,
+           CASE WHEN pv.voucher_type = 'payment' THEN pv.amount ELSE 0 END AS debit,
+           CASE WHEN pv.voucher_type = 'refund' THEN pv.amount ELSE 0 END AS credit,
+           CASE WHEN pv.voucher_type = 'payment' THEN (pv.amount * COALESCE(pv.exchange_rate, 1)) ELSE 0 END AS base_debit,
+           CASE WHEN pv.voucher_type = 'refund' THEN (pv.amount * COALESCE(pv.exchange_rate, 1)) ELSE 0 END AS base_credit,
+           COALESCE(pv.exchange_rate, 1)
+    FROM payment_vouchers pv
+    WHERE pv.voucher_type IN ('payment', 'refund') AND pv.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT i.party_id, i.branch_id, i.currency,
+           i.invoice_type AS document_type, i.id, i.invoice_number, i.invoice_date,
+           CASE WHEN i.invoice_type = 'purchase_credit_note' THEN i.total ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_debit_note' THEN i.total ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_credit_note' THEN (i.total * COALESCE(i.exchange_rate, 1)) ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_debit_note' THEN (i.total * COALESCE(i.exchange_rate, 1)) ELSE 0 END,
+           COALESCE(i.exchange_rate, 1)
+    FROM invoices i
+    WHERE i.invoice_type IN ('purchase_credit_note', 'purchase_debit_note') AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT lci.vendor_id, lc.branch_id, COALESCE(lc.currency, 'SAR'),
+           'landed_cost', lc.id, lc.lc_number, lc.lc_date,
+           0::numeric, lci.amount, 0::numeric, (lci.amount * COALESCE(lc.exchange_rate, 1)),
+           COALESCE(lc.exchange_rate, 1)
+    FROM landed_cost_items lci
+    JOIN landed_costs lc ON lc.id = lci.landed_cost_id
+    WHERE lci.vendor_id IS NOT NULL AND lc.status = 'posted';
 
     -- ===== PRINT TEMPLATES =====
     CREATE TABLE IF NOT EXISTS print_templates (
@@ -4610,18 +4741,31 @@ def get_system_completion_tables_sql() -> str:
     -- ===== ZAKAT CALCULATIONS =====
     CREATE TABLE IF NOT EXISTS zakat_calculations (
         id SERIAL PRIMARY KEY,
-        fiscal_year INTEGER NOT NULL UNIQUE,
+        fiscal_year INTEGER NOT NULL,
+        branch_id INTEGER REFERENCES branches(id),
+        branch_scope_key VARCHAR(160) NOT NULL DEFAULT 'all:company',
+        branch_ids JSONB,
         method VARCHAR(30) DEFAULT 'net_assets',
         zakat_base NUMERIC(15,4) DEFAULT 0,
-        zakat_rate NUMERIC(8,4) DEFAULT 2.5,
+        zakat_rate NUMERIC(8,4) DEFAULT 0,
         zakat_amount NUMERIC(15,4) DEFAULT 0,
         details JSONB DEFAULT '{}',
+        calculation_details JSONB DEFAULT '{}',
+        calculation_version VARCHAR(40),
+        currency VARCHAR(3),
+        base_currency VARCHAR(3),
+        idempotency_key VARCHAR(120),
         status VARCHAR(20) DEFAULT 'calculated',
         journal_entry_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
         notes TEXT,
         calculated_by INTEGER REFERENCES company_users(id),
-        calculated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        calculated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_zakat_calculations_year_scope
+        ON zakat_calculations (fiscal_year, branch_scope_key);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_zakat_calculations_idempotency
+        ON zakat_calculations (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     -- ===== FISCAL PERIOD LOCKS =====
     CREATE TABLE IF NOT EXISTS fiscal_period_locks (
@@ -6002,7 +6146,7 @@ def get_performance_indexes_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_warehouse_id ON inventory_transactions(warehouse_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_id ON inventory_transactions(product_id);
-    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date ON inventory_transactions(product_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date ON inventory_transactions(product_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_reference_id ON inventory_transactions(reference_id);
 
     -- T10.1 P1 #110d \u2014 hot path on the shop floor: filter open production
@@ -6918,6 +7062,10 @@ def get_audit_security_finance_tables_sql() -> str:
         ('expenses.cost_center_policy', 'warn'),
         ('recurring.review_threshold_default', '0')
     ON CONFLICT (setting_key) DO NOTHING;
+
+    INSERT INTO company_settings (setting_key, setting_value)
+    VALUES ('tax.zakat.gregorian_rate', '2.57764')
+    ON CONFLICT (setting_key) DO NOTHING;
     """
 
 
@@ -7278,10 +7426,10 @@ def get_feature023_tables_sql() -> str:
         LIKE inventory_transactions INCLUDING DEFAULTS INCLUDING CONSTRAINTS
     );
 
-    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_item_wh
-        ON inventory_transactions_archive (tenant_id, item_id, warehouse_id, occurred_at);
-    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_tenant_date
-        ON inventory_transactions_archive (tenant_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_product_wh_created
+        ON inventory_transactions_archive (product_id, warehouse_id, created_at);
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_created
+        ON inventory_transactions_archive (created_at);
 
     -- ═══════════════════════════════════════════════════════════════════
     -- Feature 023: Settings keys

@@ -14,6 +14,7 @@ const LeaveCarryover = () => {
     const [balances, setBalances] = useState([]);
     const [employees, setEmployees] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [employeeId, setEmployeeId] = useState('');
     const [showCarryover, setShowCarryover] = useState(false);
     const [carryoverLoading, setCarryoverLoading] = useState(false);
@@ -21,7 +22,10 @@ const LeaveCarryover = () => {
     const [selectedEmployee, setSelectedEmployee] = useState(null);
 
     useEffect(() => {
-        fetchEmployees();
+        const timer = setTimeout(() => {
+            fetchEmployees();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchEmployees = async () => {
@@ -30,7 +34,7 @@ const LeaveCarryover = () => {
             if (currentBranch?.id) params.branch_id = currentBranch.id;
             const res = await hrAPI.listEmployees(params);
             setEmployees(res.data?.items || res.data || []);
-        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); }
+        } catch (err) { toastEmitter.emit(t('common.error'), 'error'); } finally { setInitialLoad(false); }
     };
 
     const fetchBalance = async (empId) => {
@@ -193,12 +197,14 @@ const LeaveCarryover = () => {
                 <div className="card section-card text-center p-6 text-muted">{t('hr.no_leave_balances')}</div>
             )}
 
-            {loading && (
+            {initialLoad && !employees.length && (
                 <div className="card section-card" style={{ textAlign: 'center', padding: 40, color: 'var(--text-muted)' }}>
                     <PageLoading />
                     {t('common.loading')}
                 </div>
             )}
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
             {/* Carryover Modal */}
             {showCarryover && (

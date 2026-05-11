@@ -247,7 +247,7 @@ def get_company_settings(
     """
     company_id = current_user.company_id
     if not company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
         
     db = get_db_connection(company_id)
     
@@ -319,7 +319,7 @@ def update_settings_bulk(
     """
     company_id = current_user.company_id
     if not company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
         
     # Authorization Check
     is_admin = current_user.role in ["system_admin", "company_admin", "admin", "superuser"]
@@ -360,14 +360,14 @@ def update_settings_bulk(
             
             # Sensitive keys - must be admin (already checked above, so if we are here, fail)
             elif any(key.startswith(p) for p in ["security_", "smtp_", "sms_", "zatca_", "workflow_"]):
-                 raise HTTPException(status_code=403, detail=f"Not authorized to update sensitive setting: {key}")
+                 raise HTTPException(**http_error(403, "not_authorized_setting", request))
             
             # General fallback
             else:
                 # If it's a general setting (logo, company name, etc), we might require settings.manage
                 # But we are in the 'else' block where user DOES NOT have settings.manage.
                 # So they cannot update unclassified/general settings.
-                 raise HTTPException(status_code=403, detail=f"Not authorized to update setting: {key}")
+                 raise HTTPException(**http_error(403, "not_authorized_update_setting", request))
             
             # Check if user has the specific required permission
             has_perm = required_perm in perms
@@ -378,7 +378,7 @@ def update_settings_bulk(
                     has_perm = True
             
             if not has_perm:
-                raise HTTPException(status_code=403, detail=f"Missing permission {required_perm} for setting {key}")
+                raise HTTPException(status_code=403, detail=i18n_message("missing_permission_setting", request))
     
     db = get_db_connection(company_id)
     try:
@@ -420,7 +420,7 @@ def update_settings_bulk(
         except Exception:
             logger.warning("Failed to write settings update audit log")
         
-        return {"success": True, "message": "Settings updated successfully"}
+        return {"success": True, "message": i18n_message("settings_updated_success", request)}
 
     except HTTPException:
         db.rollback()
@@ -448,7 +448,7 @@ def test_email_connection(
     password = settings.get("smtp_pass")
 
     if not host or not user or not password:
-        raise HTTPException(status_code=400, detail="Missing SMTP configuration")
+        raise HTTPException(**http_error(400, ("smtp_config_missing", request)))
         
     try:
         # Real connection attempt (with timeout)
@@ -457,9 +457,9 @@ def test_email_connection(
         server.login(user, password)
         server.quit()
         
-        return {"success": True, "message": "Connection successful"}
+        return {"success": True, "message": i18n_message("smtp_connection_success", request)}
     except Exception:
-        raise HTTPException(status_code=400, detail="فشل الاتصال بالخادم")
+        raise HTTPException(**http_error(400, ("smtp_connection_failed", request)))
 
 @router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_sensitive_permission("settings.manage", critical=True))], response_model=Dict[str, Any])
 def generate_csid(
@@ -474,16 +474,16 @@ def generate_csid(
     common_name = settings.get("zatca_csr_common_name")
     
     if not otp or not common_name:
-         raise HTTPException(status_code=400, detail="Missing OTP or Organization Name")
+         raise HTTPException(**http_error(400, ("otp_missing", request)))
          
     # Simulation Logic
     import random
     if otp == "000000":
-         raise HTTPException(status_code=400, detail="Invalid OTP")
+         raise HTTPException(**http_error(400, ("otp_invalid", request)))
          
     return {
         "success": True, 
-        "message": "CSID generated successfully", 
+        "message": i18n_message("csid_generated", request), 
         "csid": f"CSID-{random.randint(1000,9999)}-{common_name}"
     }
 

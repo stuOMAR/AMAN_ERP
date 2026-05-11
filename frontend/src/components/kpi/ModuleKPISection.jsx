@@ -53,6 +53,7 @@ const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) =>
     const [endDate, setEndDate] = useState('');
     const [data, setData] = useState(null);
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [error, setError] = useState(null);
 
     const label = ROLE_LABELS[roleKey] || { ar: 'مؤشرات الأداء', en: 'KPIs' };
@@ -76,10 +77,17 @@ const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) =>
             setError(err?.response?.data?.detail || t('kpi.error_loading'));
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     }, [roleKey, period, startDate, endDate, currentBranch, open, isRTL]);
 
-    useEffect(() => { if (open) fetchData(); }, [fetchData, open]);
+    useEffect(() => {
+        if (!open) return;
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [fetchData, open, currentBranch]);
 
     const handlePeriodChange = (p, s, e) => {
         setPeriod(p);
@@ -185,7 +193,7 @@ const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) =>
                     )}
 
                     {/* Loading skeleton */}
-                    {loading && !data && (
+                    {initialLoad && !data && (
                         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(200px, 1fr))', gap: '0.8rem', marginBottom: '1rem' }}>
                             {[1, 2, 3, 4].map(i => (
                                 <div key={i} className="card animate-pulse" style={{ height: 100 }}>
@@ -195,6 +203,8 @@ const ModuleKPISection = ({ roleKey, color = '#6366f1', defaultOpen = true }) =>
                             ))}
                         </div>
                     )}
+
+                    {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
                     {/* Alerts */}
                     {alerts.length > 0 && (

@@ -5,7 +5,7 @@ AMAN ERP - Role-Based KPI Dashboards Router
 10 Role Endpoints + 1 Industry Endpoint + 1 Auto-Route Endpoint
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from typing import Dict, Any, Optional
 from datetime import date
 import logging
@@ -14,6 +14,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission, resolve_branch_scope
 from utils.cache import cached
+from utils.i18n import http_error
 from utils.currency_display import convert_dashboard_payload_to_display, resolve_display_currency
 from services.kpi_service import (
     resolve_period, get_executive_kpis, get_financial_kpis,
@@ -32,7 +33,7 @@ def _get_company_id(user):
     if cid is None and isinstance(user, dict):
         cid = user.get("company_id")
     if not cid:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
     return cid
 
 
@@ -135,10 +136,11 @@ def get_executive_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المدير التنفيذي — مؤشرات أداء شاملة للإدارة العليا"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "ceo", "manager", "branch_manager"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "ceo", "manager", "branch_manager"], request)
     return _execute_dashboard(get_executive_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -156,6 +158,7 @@ def get_financial_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المدير المالي — نسب مالية وسيولة وميزانيات"""
@@ -163,7 +166,7 @@ def get_financial_dashboard(
         "admin", "superuser", "system_admin", "ceo", "manager", "finance_manager",
         "chief_accountant", "accountant", "branch_accountant", "treasury_officer",
         "tax_accountant", "cost_accountant", "auditor",
-    ])
+    ], request)
     return _execute_dashboard(get_financial_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -181,10 +184,11 @@ def get_sales_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المبيعات — إيرادات وتحويل ومتأخرات"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "sales", "accounts_receivable"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "sales", "accounts_receivable"], request)
     return _execute_dashboard(get_sales_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -202,10 +206,11 @@ def get_procurement_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المشتريات — أوامر شراء وموردين"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "purchasing", "accounts_payable"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "branch_manager", "purchasing", "accounts_payable"], request)
     return _execute_dashboard(get_procurement_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -223,10 +228,11 @@ def get_warehouse_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المخازن — مخزون ودوران ونفاد"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "inventory"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "inventory"], request)
     return _execute_dashboard(get_warehouse_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -244,10 +250,11 @@ def get_hr_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم الموارد البشرية — سعودة وحضور ورواتب"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "hr_manager"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "hr_manager"], request)
     return _execute_dashboard(get_hr_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -265,10 +272,11 @@ def get_manufacturing_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم التصنيع — OEE وإنتاج وتكلفة"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "manufacturing_user"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "manufacturing_user"], request)
     return _execute_dashboard(get_manufacturing_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -286,10 +294,11 @@ def get_projects_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم المشاريع — EVM ومخاطر وموارد"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "project_manager"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "project_manager"], request)
     return _execute_dashboard(get_projects_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -307,10 +316,11 @@ def get_pos_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم نقاط البيع — مبيعات اليوم وعمليات"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "cashier", "sales"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "cashier", "sales"], request)
     return _execute_dashboard(get_pos_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -328,10 +338,11 @@ def get_crm_dashboard(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """لوحة تحكم إدارة العلاقات — فرص وتذاكر وحملات"""
-    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "sales"])
+    _require_roles(current_user, ["admin", "superuser", "system_admin", "manager", "sales"], request)
     return _execute_dashboard(get_crm_kpis, current_user, period, start_date, end_date, branch_id)
 
 
@@ -365,7 +376,7 @@ def get_industry_dashboard(
         return convert_dashboard_payload_to_display(result, display_meta)
     except Exception as ex:
         logger.error(f"Industry dashboard error: {ex}")
-        raise HTTPException(status_code=500, detail="Error loading industry dashboard")
+        raise HTTPException(**http_error(500, "error_loading_industry_dashboard", request))
     finally:
         db.close()
 
@@ -433,7 +444,7 @@ def get_combined_dashboard(
         }, display_meta)
     except Exception as ex:
         logger.error(f"Combined dashboard error: {ex}")
-        raise HTTPException(status_code=500, detail="Error loading combined dashboard")
+        raise HTTPException(**http_error(500, "error_loading_combined_dashboard", request))
     finally:
         db.close()
 
@@ -513,7 +524,7 @@ def get_available_dashboards(
 # Internal Helpers
 # ═══════════════════════════════════════════════════════════════════════════════
 
-def _require_roles(user, allowed_roles: list):
+def _require_roles(user, allowed_roles: list, request: Request = None):
     """Check if user's role is in the allowed list. Admin/superuser always pass."""
     role = _get_user_role(user)
     permissions = []
@@ -527,10 +538,7 @@ def _require_roles(user, allowed_roles: list):
         return
 
     if role not in allowed_roles:
-        raise HTTPException(
-            status_code=403,
-            detail=f"Access denied. Required roles: {', '.join(allowed_roles)}"
-        )
+        raise HTTPException(**http_error(403, "access_denied_roles", request))
 
 
 def _execute_dashboard(handler, current_user, period: str,
@@ -551,6 +559,6 @@ def _execute_dashboard(handler, current_user, period: str,
         raise
     except Exception as ex:
         logger.error(f"Dashboard error ({handler.__name__}): {ex}")
-        raise HTTPException(status_code=500, detail="Error loading dashboard data")
+        raise HTTPException(**http_error(500, "error_loading_dashboard_data", request))
     finally:
         db.close()

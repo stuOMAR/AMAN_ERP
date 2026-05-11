@@ -106,9 +106,9 @@ def _process_pair(db: Any, *, tenant_id: int, row: Any, run_id: str) -> None:
                 THEN quantity ELSE -quantity END
             ), 0) as on_hand
             FROM inventory_transactions
-            WHERE tenant_id = :tid AND product_id = :item AND warehouse_id = :wid
+            WHERE product_id = :item AND warehouse_id = :wid
         """),
-        {"tid": tenant_id, "item": item_id, "wid": warehouse_id},
+        {"item": item_id, "wid": warehouse_id},
     ).fetchone()
 
     available = Decimal(str(avail_row.on_hand or 0)) if avail_row else Decimal(0)
@@ -121,11 +121,11 @@ def _process_pair(db: Any, *, tenant_id: int, row: Any, run_id: str) -> None:
         text("""
             SELECT COALESCE(ABS(SUM(quantity)), 0) / 30.0 as avg_daily
             FROM inventory_transactions
-            WHERE tenant_id = :tid AND product_id = :item AND warehouse_id = :wid
+            WHERE product_id = :item AND warehouse_id = :wid
               AND transaction_type IN ('sales', 'pos_sale')
-              AND occurred_at >= NOW() - INTERVAL '30 days'
+              AND created_at >= NOW() - INTERVAL '30 days'
         """),
-        {"tid": tenant_id, "item": item_id, "wid": warehouse_id},
+        {"item": item_id, "wid": warehouse_id},
     ).fetchone()
 
     avg_daily = Decimal(str(demand_row.avg_daily or 0)) if demand_row else Decimal(0)

@@ -95,7 +95,7 @@ def get_party_site(
         """), {"sid": site_id}).fetchone()
 
         if not row:
-            raise HTTPException(status_code=404, detail="Party site not found")
+            raise HTTPException(**http_error(404, "party_site_not_found", request))
 
         # Get balances
         balances = db.execute(text("""
@@ -148,7 +148,7 @@ def create_party_site(
         # Verify party exists
         party = db.execute(text("SELECT id FROM parties WHERE id = :pid"), {"pid": data.party_id}).fetchone()
         if not party:
-            raise HTTPException(status_code=404, detail="Party not found")
+            raise HTTPException(**http_error(404, "party_not_found", request))
 
         result = db.execute(text("""
             INSERT INTO party_sites (party_id, site_name, site_name_en, country, country_code, currency,
@@ -170,7 +170,7 @@ def create_party_site(
                       {"sid": site_id, "pid": data.party_id})
 
         db.commit()
-        return {"id": site_id, "message": "تم إنشاء الموقع بنجاح"}
+        return {"id": site_id, "message": i18n_message("site_created", request)}
 
 
 @router.put("/{site_id}", dependencies=[Depends(require_permission(["parties.manage", "buying.edit", "sales.edit"]))])
@@ -197,4 +197,4 @@ def update_party_site(
             "bank": data.bank_account, "terms": data.payment_terms, "def": data.is_default
         })
         db.commit()
-        return {"message": "تم تحديث الموقع بنجاح"}
+        return {"message": i18n_message(("site_updated_success", request))}

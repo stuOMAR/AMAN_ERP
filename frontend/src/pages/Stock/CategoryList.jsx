@@ -14,6 +14,7 @@ function CategoryList() {
     const { showToast } = useToast()
     const [categories, setCategories] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [showModal, setShowModal] = useState(false)
     const [editingItem, setEditingItem] = useState(null)
@@ -29,11 +30,15 @@ function CategoryList() {
             setError(t('stock.categories.validation.error_fetch'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }, [currentBranch, t])
 
     useEffect(() => {
-        fetchCategories()
+        const timer = setTimeout(() => {
+            fetchCategories()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [fetchCategories])
 
     const handleSubmit = async (e) => {
@@ -138,6 +143,7 @@ function CategoryList() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

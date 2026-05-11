@@ -746,6 +746,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ("decimal_places", "2"),
                 ("date_format", "YYYY-MM-DD"),
                 ("timezone", timezone),
+                ("tax.zakat.gregorian_rate", "2.57764"),
             ]
             
             for key, value in settings_data:
@@ -991,4 +992,3 @@ def initialize_company_default_data(company_id: str, admin_username: str,
         return False, str(e)
     finally:
         company_engine.dispose()
-

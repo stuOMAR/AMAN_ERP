@@ -21,6 +21,7 @@ export default function ExpenseForm() {
   const currency = getCurrency() || '';
 
   const [loading, setLoading] = useState(false);
+  const [initialLoad, setInitialLoad] = useState(true);
   const [treasuries, setTreasuries] = useState([]);
   const [accounts, setAccounts] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
@@ -43,10 +44,15 @@ export default function ExpenseForm() {
   });
 
   useEffect(() => {
-    loadOptions();
-    if (isEdit) {
-      loadExpense();
-    }
+    const timer = setTimeout(() => {
+      loadOptions();
+      if (isEdit) {
+        loadExpense();
+      } else {
+        setInitialLoad(false);
+      }
+    }, 300)
+    return () => clearTimeout(timer)
   }, [id, currentBranch?.id]);
 
   const loadOptions = async () => {
@@ -92,6 +98,7 @@ export default function ExpenseForm() {
       navigate('/expenses');
     } finally {
       setLoading(false);
+      setInitialLoad(false);
     }
   };
 
@@ -140,7 +147,7 @@ export default function ExpenseForm() {
     }));
   };
 
-  if (loading && isEdit) {
+  if (initialLoad && loading && isEdit) {
     return (
       <div className="workspace fade-in">
         <PageLoading />
@@ -150,6 +157,7 @@ export default function ExpenseForm() {
 
   return (
     <div className="workspace fade-in">
+      {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
       {/* Header */}
       <div className="workspace-header">
         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

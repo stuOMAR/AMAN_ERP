@@ -120,12 +120,12 @@ def update_promotion(
             sets.append(f"{field} = :{field}")
             params[field] = data[field]
     if not sets:
-        raise HTTPException(status_code=400, detail="No fields to update")
+        raise HTTPException(**http_error(400, ("pos_no_fields", request)))
     sets.append("updated_at = NOW()")
     sql = f"UPDATE pos_promotions SET {', '.join(sets)} WHERE id = :id RETURNING *"
     row = db.execute(text(sql), params).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Promotion not found")
+        raise HTTPException(**http_error(404, ("pos_promotion_not_found", request)))
     db.commit()
 
     log_activity(
@@ -151,7 +151,7 @@ def delete_promotion(promo_id: int, request: Request, current_user: UserResponse
         resource_id=str(promo_id), request=request
     )
 
-    return {"message": "Deleted"}
+    return {"message": i18n_message("record_deleted", request)}
 
 
 @router.post("/promotions/validate", dependencies=[Depends(require_permission("pos.view"))], response_model=Dict[str, Any])
@@ -163,7 +163,7 @@ def validate_coupon(
     """Validate a coupon code and return applicable promotion."""
     code = data.get("coupon_code", "").strip()
     if not code:
-        raise HTTPException(status_code=400, detail="Coupon code required")
+        raise HTTPException(**http_error(400, ("pos_coupon_required", request)))
     promo = db.execute(text("""
         SELECT * FROM pos_promotions
         WHERE coupon_code = :code AND is_active = true
@@ -171,7 +171,7 @@ def validate_coupon(
           AND (end_date IS NULL OR end_date > NOW())
     """), {"code": code}).fetchone()
     if not promo:
-        raise HTTPException(status_code=404, detail="Invalid or expired coupon")
+        raise HTTPException(**http_error(404, ("pos_coupon_invalid", request)))
     return dict(promo._mapping)
 
 

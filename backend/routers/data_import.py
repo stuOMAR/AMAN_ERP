@@ -2,8 +2,8 @@
 Data Import / Export Router - DI-001, DI-002
 استيراد/تصدير البيانات (Excel / CSV)
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -82,10 +82,10 @@ def list_importable_entities(current_user=Depends(get_current_user)):
 
 
 @router.get("/template/{entity_type}", dependencies=[Depends(require_permission("data_import.view"))])
-def download_template(entity_type: str, current_user=Depends(get_current_user)):
+def download_template(entity_type: str, request: Request, current_user=Depends(get_current_user)):
     """تحميل قالب Excel/CSV للاستيراد"""
     if entity_type not in IMPORT_CONFIGS:
-        raise HTTPException(400, f"نوع الكيان غير مدعوم: {entity_type}")
+        raise HTTPException(**http_error(400, "unsupported_entity_type", request, type=entity_type))
 
     config = IMPORT_CONFIGS[entity_type]
     headers = config["required_columns"] + config["optional_columns"]
@@ -111,6 +111,7 @@ def download_template(entity_type: str, current_user=Depends(get_current_user)):
 
 @router.post("/preview", dependencies=[Depends(require_permission(["data_import.create", "data_import.manage"]))])
 async def preview_import(
+    request: Request,
     file: UploadFile = File(...),
     entity_type: str = Query(...),
     current_user=Depends(get_current_user)
@@ -120,7 +121,7 @@ async def preview_import(
     يدعم Excel (.xlsx) و CSV (.csv)
     """
     if entity_type not in IMPORT_CONFIGS:
-        raise HTTPException(400, f"نوع الكيان غير مدعوم: {entity_type}")
+        raise HTTPException(**http_error(400, "unsupported_entity_type", request, type=entity_type))
 
     config = IMPORT_CONFIGS[entity_type]
     content = await file.read()
@@ -144,7 +145,7 @@ async def preview_import(
     headers = list(rows[0].keys()) if rows else []
     missing = [c for c in config["required_columns"] if c not in headers]
     if missing:
-        raise HTTPException(400, f"أعمدة مطلوبة ناقصة: {', '.join(missing)}")
+        raise HTTPException(**http_error(400, "missing_required_columns", request, columns=", ".join(missing)))
 
     # Validate rows
     preview_rows = []
@@ -180,6 +181,7 @@ async def preview_import(
 
 @router.post("/execute", dependencies=[Depends(require_permission(["data_import.create", "data_import.manage"]))])
 async def execute_import(
+    request: Request,
     file: UploadFile = File(...),
     entity_type: str = Query(...),
     skip_errors: bool = Query(True),
@@ -189,7 +191,7 @@ async def execute_import(
     تنفيذ الاستيراد الفعلي
     """
     if entity_type not in IMPORT_CONFIGS:
-        raise HTTPException(400, f"نوع الكيان غير مدعوم: {entity_type}")
+        raise HTTPException(**http_error(400, "unsupported_entity_type", request, type=entity_type))
 
     config = IMPORT_CONFIGS[entity_type]
 
@@ -234,7 +236,7 @@ async def execute_import(
                             errors.append(f"سطر {i + 2}: حقول ناقصة: {', '.join(missing)}")
                             continue
                         else:
-                            raise HTTPException(400, f"سطر {i + 2}: الحقول المطلوبة ناقصة: {', '.join(missing)}")
+                            raise HTTPException(**http_error(400, "missing_required_fields_line", request, line=i + 2, fields=", ".join(missing)))
     
                     # Build columns/values
                     # SEC-FIX-012: Validate column names are safe SQL identifiers
@@ -285,7 +287,7 @@ async def execute_import(
                         logger.warning(f"Import row {i + 2} error", exc_info=True)
                     else:
                         logger.exception(f"Import error at row {i + 2}")
-                        raise HTTPException(400, f"خطأ في السطر {i + 2}")
+                        raise HTTPException(**http_error(400, "import_line_error", request, line=i + 2))
     
     
             try:
@@ -296,7 +298,7 @@ async def execute_import(
                 pass
     
             return {
-                "message": "تم الاستيراد بنجاح",
+                "message": i18n_message("import_successful", request),
                 "inserted": inserted,
                 "updated": updated,
                 "skipped": skipped,
@@ -316,12 +318,13 @@ async def execute_import(
 @router.get("/export/{entity_type}", dependencies=[Depends(require_permission("data_import.view"))])
 def export_data(
     entity_type: str,
+    request: Request,
     format: str = Query("csv", enum=["csv", "json"]),
     current_user=Depends(get_current_user)
 ):
     """تصدير البيانات بتنسيق CSV أو JSON"""
     if entity_type not in IMPORT_CONFIGS:
-        raise HTTPException(400, f"نوع الكيان غير مدعوم: {entity_type}")
+        raise HTTPException(**http_error(400, "unsupported_entity_type", request, type=entity_type))
 
     config = IMPORT_CONFIGS[entity_type]
 
@@ -342,7 +345,7 @@ def export_data(
             col_list_filtered = [c for c in all_columns if c in existing_cols]
             
             if not col_list_filtered:
-                raise HTTPException(500, "لا توجد أعمدة مطابقة في الجدول")
+                raise HTTPException(**http_error(500, "no_matching_columns", request))
             
             col_list = ", ".join(col_list_filtered)
     

@@ -19,11 +19,15 @@ const SalesCommissions = () => {
     const [rules, setRules] = useState([]);
     const [summary, setSummary] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [activeTab, setActiveTab] = useState('commissions');
     const [showRuleModal, setShowRuleModal] = useState(false);
     const [ruleForm, setRuleForm] = useState({ salesperson_id: '', rate: '', min_amount: '' });
 
-    useEffect(() => { fetchAll(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => { fetchAll(); }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
 
     const fetchAll = async () => {
         try {
@@ -36,7 +40,7 @@ const SalesCommissions = () => {
             setCommissions(commRes.data || []);
             setRules(rulesRes.data || []);
             setSummary(summRes.data);
-        } catch (err) { showToast(t('common.error'), 'error'); } finally { setLoading(false); }
+        } catch (err) { showToast(t('common.error'), 'error'); } finally { setLoading(false); setInitialLoad(false); }
     };
 
     const handleCreateRule = async (e) => {
@@ -58,6 +62,7 @@ const SalesCommissions = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>

@@ -73,7 +73,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
         ).fetchone()
         
         if existing:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="البريد مستخدم")
+            raise HTTPException(**http_error(400, "email_already_used", request))
         
         # Generate unique company_id
         company_id = generate_company_id()
@@ -88,7 +88,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
             attempts += 1
         
         if attempts >= max_attempts:
-            raise HTTPException(status_code=500, detail="فشل توليد معرف فريد")
+            raise HTTPException(**http_error(500, "unique_id_generation_failed", request))
         
         logger.info(f"🆔 Generated company_id: {company_id}")
         
@@ -99,7 +99,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
         success, message, db_name, db_user = create_company_database(company_id, request_body.admin_password)
         
         if not success:
-            raise HTTPException(status_code=500, detail="فشل إنشاء قاعدة البيانات")
+            raise HTTPException(**http_error(500, "database_creation_failed", request))
         
         # Validate generated identifiers
         validate_aman_identifier(db_name, "database name")
@@ -111,7 +111,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
             if not success:
                 _cleanup_company_database(db_name, db_user)
                 logger.error("Failed to create company tables: %s", message)
-                raise HTTPException(status_code=500, detail="فشل إنشاء الجداول")
+                raise HTTPException(**http_error(500, "tables_creation_failed", request))
             
             # Initialize default data
             success, message = initialize_company_default_data(
@@ -236,7 +236,7 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
                 _cleanup_company_database(db_name, db_user)
             except Exception as cleanup_err:
                 logger.error(f"Failed to cleanup after company creation failure: {cleanup_err}")
-            raise HTTPException(status_code=500, detail="فشل إنشاء الشركة")
+            raise HTTPException(**http_error(500, "company_creation_failed", request))
 
     
     finally:
@@ -454,7 +454,7 @@ def update_enabled_modules(modules: Any = Body(...), current_user=Depends(get_cu
         logger.warning("Failed to write module update audit log")
     
     return {
-        "message": "تم تحديث الوحدات بنجاح",
+        "message": i18n_message("modules_updated_success", request),
         "modules": new_modules,
         "modules_added": added_modules,
         "modules_removed": removed_modules,
@@ -548,7 +548,7 @@ def update_company(
         # Prepare update query
         update_data = request.dict(exclude_unset=True)
         if not update_data:
-            return {"success": True, "message": "No changes provided"}
+            return {"success": True, "message": i18n_message("no_changes_provided", request)}
 
         validate_update_keys(update_data.keys())  # T2.2 defense-in-depth
         set_clause = ", ".join([f"{k} = :{k}" for k in update_data.keys()])
@@ -576,7 +576,7 @@ def update_company(
         except Exception:
             logger.warning("Failed to write company update audit log")
         
-        return {"success": True, "message": "Company updated successfully"}
+        return {"success": True, "message": i18n_message("company_updated", request)}
     except HTTPException:
         raise
     except Exception:

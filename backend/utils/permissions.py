@@ -7,12 +7,13 @@ PERM-003: Cost-Center-Level Permissions
 PERM-004: Permission Audit Logging
 """
 
-from fastapi import Depends, HTTPException, status
+from fastapi import Depends, HTTPException, Request, status
 from typing import List, Union, Any, Optional, Dict
 import logging
 import json
 
 from routers.auth import get_current_user
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -170,7 +171,7 @@ def require_permission(permission: Union[str, List[str]]):
     Or for multiple permissions (user needs ANY of them):
         @router.post("/...", dependencies=[Depends(require_permission(["sales.create", "admin"]))])
     """
-    async def permission_checker(current_user: Union[dict, Any] = Depends(get_current_user)):
+    async def permission_checker(request: Request, current_user: Union[dict, Any] = Depends(get_current_user)):
         # Get user permissions
         if isinstance(current_user, dict):
             user_perms = current_user.get("permissions", [])
@@ -189,10 +190,7 @@ def require_permission(permission: Union[str, List[str]]):
             logger.warning(f"🚫 Permission denied: User {username} tried to access {permission}")
             # PERM-004: Log denied access
             _log_permission_denied(current_user, permission)
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"ليس لديك صلاحية لتنفيذ هذا الإجراء: {permission}"
-            )
+            raise HTTPException(**http_error(403, "permission_denied", request))
         
         return current_user
     
@@ -215,7 +213,7 @@ SENSITIVE_PERMISSIONS = {
 
 def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
     """Like require_permission but also re-validates against the DB."""
-    async def _checker(current_user: Union[dict, Any] = Depends(get_current_user)):
+    async def _checker(request: Request, current_user: Union[dict, Any] = Depends(get_current_user)):
         # First do the normal check
         if isinstance(current_user, dict):
             user_perms = current_user.get("permissions", [])
@@ -231,7 +229,7 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
         required_perms = [permission] if isinstance(permission, str) else permission
         has_permission = any(check_permission(user_perms, perm) for perm in required_perms)
         if not has_permission:
-            raise HTTPException(status_code=403, detail=f"ليس لديك صلاحية: {permission}")
+            raise HTTPException(**http_error(403, "permission_denied", request))
 
         # Re-validate from DB for sensitive ops
         if company_id and user_id:
@@ -245,7 +243,7 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
                 ).fetchone()
                 if row and not row.is_active:
                     logger.warning(f"🔒 Sensitive op blocked: user {username} is deactivated (DB check)")
-                    raise HTTPException(status_code=403, detail="تم تعطيل حسابك. يرجى التواصل مع المسؤول.")
+                    raise HTTPException(**http_error(403, "account_disabled_contact_admin", request))
             except HTTPException:
                 raise
             except Exception as e:
@@ -274,7 +272,7 @@ def require_module(module_key: str):
     Or per-endpoint:
         @router.get("/...", dependencies=[Depends(require_module("stock"))])
     """
-    async def module_checker(current_user: Union[dict, Any] = Depends(get_current_user)):
+    async def module_checker(request: Request, current_user: Union[dict, Any] = Depends(get_current_user)):
         # System admins bypass module checks
         if isinstance(current_user, dict):
             role = current_user.get("role")
@@ -294,17 +292,14 @@ def require_module(module_key: str):
 
         if module_key not in enabled:
             logger.warning(f"🚫 Module disabled: User {username} tried to access module '{module_key}'")
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail=f"هذه الوحدة ({module_key}) غير مفعّلة لشركتك. يمكنك تفعيلها من إعدادات النشاط."
-            )
+            raise HTTPException(**http_error(403, "feature_not_enabled", request))
 
         return current_user
 
     return module_checker
 
 
-def validate_branch_access(current_user: dict, requested_branch_id: Union[int, None, str] = None) -> Union[int, None]:
+def validate_branch_access(current_user: dict, requested_branch_id: Union[int, None, str] = None, request=None) -> Union[int, None]:
     """
     Enforces branch access scope.
     """
@@ -335,7 +330,7 @@ def validate_branch_access(current_user: dict, requested_branch_id: Union[int, N
         try:
             return int(requested_branch_id)
         except ValueError:
-            raise HTTPException(status_code=400, detail="Invalid branch ID")
+            raise HTTPException(**http_error(400, "invalid_branch_id", request))
 
     normalized_allowed_branches = set()
     for branch_id in allowed_branches or []:
@@ -355,22 +350,16 @@ def validate_branch_access(current_user: dict, requested_branch_id: Union[int, N
         if len(normalized_allowed_branches) == 1:
             return next(iter(normalized_allowed_branches)) # Auto-select the only allowed branch
         else:
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN, 
-                detail="يرجى تحديد الفرع (لديك صلاحية على فروع محددة فقط)"
-            )
+            raise HTTPException(**http_error(403, "branch_required", request))
             
     # Cast to int for comparison
     try:
         rid = int(requested_branch_id)
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid branch ID")
+        raise HTTPException(**http_error(400, "invalid_branch_id", request))
 
     if rid not in normalized_allowed_branches:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN, 
-            detail="ليس لديك صلاحية للوصول إلى بيانات هذا الفرع"
-        )
+        raise HTTPException(**http_error(403, "access_denied", request))
     
     return rid
 
@@ -487,6 +476,7 @@ def validate_treasury_account_access(
     requested_branch_id: Union[int, str, None] = None,
     *,
     allow_inactive: bool = False,
+    request=None,
 ):
     """Ensure a selected treasury account belongs to an accessible branch.
 
@@ -500,7 +490,7 @@ def validate_treasury_account_access(
     try:
         account_id = int(treasury_account_id)
     except (TypeError, ValueError):
-        raise HTTPException(status_code=400, detail="Invalid treasury account ID")
+        raise HTTPException(**http_error(400, "invalid_treasury_account_id", request))
 
     from sqlalchemy import text
 
@@ -512,16 +502,13 @@ def validate_treasury_account_access(
     """), {"id": account_id}).mappings().first()
 
     if not row:
-        raise HTTPException(status_code=404, detail="حساب الخزينة غير موجود أو غير نشط")
+        raise HTTPException(**http_error(404, "treasury_account_not_found_or_inactive", request))
 
     account_branch_id = row.get("branch_id")
     if requested_branch_id not in (None, ""):
         branch_id = validate_branch_access(current_user, requested_branch_id)
         if account_branch_id is None or int(account_branch_id) != int(branch_id):
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="حساب الخزينة المحدد غير مرتبط بهذا الفرع"
-            )
+            raise HTTPException(**http_error(403, "access_denied", request))
         return row
 
     if _is_branch_privileged(current_user):
@@ -534,10 +521,7 @@ def validate_treasury_account_access(
     if allowed_branch_ids and account_branch_id is not None and int(account_branch_id) in allowed_branch_ids:
         return row
 
-    raise HTTPException(
-        status_code=status.HTTP_403_FORBIDDEN,
-        detail="ليس لديك صلاحية لاستخدام حساب خزينة خارج فروعك"
-    )
+    raise HTTPException(**http_error(403, "access_denied", request))
 
 
 # ===================== PERM-001: Field-Level Permissions =====================
@@ -629,7 +613,7 @@ def get_field_restrictions(current_user, company_conn=None) -> Dict[str, List[st
     return DEFAULT_FIELD_RESTRICTIONS.get(role, {})
 
 
-def filter_fields(data: Union[dict, list], resource: str, current_user, company_conn=None):
+def filter_fields(data: Union[dict, list], resource: str, current_user, company_conn=None, request=None):
     """
     PERM-001: Filter out restricted fields from response data.
     Usage in endpoint:
@@ -643,10 +627,7 @@ def filter_fields(data: Union[dict, list], resource: str, current_user, company_
 
     if hidden_fields == ["*"]:
         # Hide entire resource
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"ليس لديك صلاحية لعرض بيانات {resource}"
-        )
+        raise HTTPException(**http_error(403, "permission_denied", request))
 
     if isinstance(data, list):
         return [{k: v for k, v in item.items() if k not in hidden_fields}

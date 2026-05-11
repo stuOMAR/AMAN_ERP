@@ -15,6 +15,7 @@ function IncomeStatement() {
     const [endDate, setEndDate] = useState(new Date())
     const [data, setData] = useState(null)
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [isCompareMode, setIsCompareMode] = useState(false)
     const [compareStartDate, setCompareStartDate] = useState(new Date(new Date().getFullYear() - 1, 0, 1))
@@ -51,11 +52,15 @@ function IncomeStatement() {
             setError(t('accounting.income_statement.error_loading'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, startDate, endDate, isCompareMode, compareStartDate, compareEndDate])
 
     // Helpers
@@ -193,7 +198,8 @@ function IncomeStatement() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad && !data ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

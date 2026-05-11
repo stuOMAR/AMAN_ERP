@@ -15,6 +15,7 @@ const SalesReports = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [summary, setSummary] = useState(null);
     const [trend, setTrend] = useState([]);
     const [topCustomers, setTopCustomers] = useState([]);
@@ -27,7 +28,10 @@ const SalesReports = () => {
     });
 
     useEffect(() => {
-        fetchReports();
+        const timer = setTimeout(() => {
+            fetchReports();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, dates]);
 
     const fetchReports = async () => {
@@ -50,10 +54,11 @@ const SalesReports = () => {
             showToast(t('common.error'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     // ECharts Options
     const trendChartOption = {
@@ -192,6 +197,7 @@ const SalesReports = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div className="header-title">

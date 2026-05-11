@@ -205,7 +205,11 @@
       "stock_available": "مخزون متاح",
       "generate_all_pos": "توليد طلبات الشراء لجميع المواد",
       "no_active_orders": "لا توجد أوامر نشطة",
-      "planning_desc": "تخطيط متطلبات المواد"
+      "planning_desc": "تخطيط متطلبات المواد",
+      "run": "تشغيل MRP",
+      "running": "قيد التنفيذ...",
+      "loading": "جاري التحميل...",
+      "no_recommendations": "لا توجد توصيات"
     },
     "material": "المادة",
     "operation": "العملية",
@@ -375,7 +379,24 @@
     "capacity_utilization": "استغلال الطاقة الإنتاجية",
     "production_order": "أمر إنتاج",
     "material_request": "طلب مواد",
-    "quality_inspection": "فحص جودة"
+    "quality_inspection": "فحص جودة",
+    "partial_completion": {
+      "completed": "مكتمل:",
+      "remaining": "متبقي:",
+      "placeholders": {
+        "item_id": "معرّف الصنف",
+        "qty": "الكمية",
+        "reason": "السبب",
+        "sales_value": "قيمة المبيعات"
+      },
+      "completion_recorded": "تم تسجيل الإتمام",
+      "quantity": "الكمية",
+      "scrap_lines": "بند الهالك",
+      "add": "إضافة",
+      "by_products": "المنتجات الثانوية",
+      "processing": "جاري المعالجة...",
+      "complete_production": "إتمام الإنتاج"
+    }
   },
   "reports": {
     "cash_flow": {
@@ -531,7 +552,8 @@
     "data_source": "مصدر البيانات",
     "errors": {
       "name_required": "اسم التقرير مطلوب",
-      "no_columns": "اختر عموداً واحداً على الأقل"
+      "no_columns": "اختر عموداً واحداً على الأقل",
+      "no_data_to_export": "لا توجد بيانات للتصدير"
     },
     "filters": "المرشحات",
     "no_filters": "لا توجد مرشحات",
@@ -795,7 +817,7 @@
     "view_all": "عرض الكل",
     "edit": "تعديل",
     "delete": "حذف",
-    "search": "بحث...",
+    "search": "بحث",
     "error": "خطأ",
     "saved": "تم الحفظ بنجاح",
     "error_save": "حدث خطأ أثناء الحفظ",
@@ -885,11 +907,7 @@
     "error_loading": "حدث خطأ في تحميل البيانات",
     "error_saving": "خطأ في الحفظ",
     "name_en": "الاسم (إنجليزي)",
-    "status": {
-      "title": "الحالة",
-      "draft": "مسودة",
-      "posted": "مرحّل"
-    },
+    "status": "الحالة",
     "notes": "ملاحظات",
     "no_records_found": "لم يتم العثور على سجلات",
     "info": "معلومات",
@@ -906,7 +924,7 @@
     "reject": "رفض",
     "show_more": "عرض المزيد",
     "show_less": "عرض أقل",
-    "processing": "جاري التنفيذ...",
+    "processing": "قيد المعالجة",
     "all_results": "كل النتائج",
     "start_date": "تاريخ البدء",
     "end_date": "تاريخ الانتهاء",
@@ -1007,7 +1025,7 @@
     "add": "إضافة",
     "confirm": "تأكيد",
     "without_name": "بدون اسم",
-    "id": "المعرف",
+    "id": "المعرّف",
     "due_date": "تاريخ الاستحقاق",
     "account": "الحساب",
     "create": "إنشاء",
@@ -1032,7 +1050,7 @@
     "check": "شيك",
     "posted": "مرحّل",
     "draft": "مسودة",
-    "disabled": "معطلة",
+    "disabled": "معطّل",
     "no_name": "بدون اسم",
     "service": "خدمة",
     "delete_item": "حذف الصنف",
@@ -1152,7 +1170,21 @@
     "zatca_qr_code": "رمز الفاتورة الإلكترونية (ZATCA)",
     "good": "جيد",
     "zatca_generated": "تم التوليد",
-    "zatca_submitted": "تم الإرسال"
+    "zatca_submitted": "تم الإرسال",
+    "enabled": "مفعّل",
+    "archived": "مؤرشف",
+    "completed_status": "مكتمل",
+    "failed": "فشل",
+    "created": "تاريخ الإنشاء",
+    "reason": "السبب",
+    "actions_col": "الإجراءات",
+    "all_my_branches": "جميع فروعي",
+    "no_search_results": "لا توجد نتائج",
+    "none": "لا شيء",
+    "move_up": "تحريك لأعلى",
+    "move_down": "تحريك لأسفل",
+    "select_customer": "اختر العميل",
+    "exportError": "فشل التصدير"
   },
   "status": {
     "active": "نشط",
@@ -1251,7 +1283,10 @@
     "blanket_po": "أوامر شراء شاملة",
     "cpq": "التسعير المتقدم",
     "demand_forecast": "التنبؤ بالطلب",
-    "performance": "تقييم الأداء"
+    "performance": "تقييم الأداء",
+    "ops_scheduler": "المجدول",
+    "health": "صحة النظام",
+    "kpi_admin": "إدارة مؤشرات الأداء"
   },
   "self_service": {
     "dashboard_title": "الخدمة الذاتية للموظف",
@@ -1334,7 +1369,12 @@
     "select_branch": "اختر الفرع",
     "current_branch": "الفرع الحالي",
     "all_branches": "كل الفروع",
-    "all_my_branches": "كل فروعي"
+    "all_my_branches": "جميع فروعي",
+    "no_manage_permission": "ليس لديك صلاحية لإدارة الفروع",
+    "update_success": "تم تحديث الفرع بنجاح",
+    "create_success": "تم إنشاء الفرع بنجاح",
+    "save_error": "فشل حفظ الفرع",
+    "delete_success": "تم حذف الفرع بنجاح"
   },
   "countries": {
     "SA": "المملكة العربية السعودية",
@@ -1827,7 +1867,8 @@
       "manufacturing": "التصنيع",
       "projects": "المشاريع",
       "custom": "التقارير المخصصة",
-      "assets": "الأصول الثابتة"
+      "assets": "الأصول الثابتة",
+      "operations": "العمليات"
     },
     "reports": {
       "sales_analytics": "تحليل المبيعات",
@@ -1873,7 +1914,10 @@
       "scheduled_desc": "جدولة إرسال التقارير تلقائياً عبر البريد الإلكتروني",
       "shared_desc": "التقارير التي شاركها معك الزملاء",
       "commissions_desc": "متابعة عمولات مندوبي المبيعات والمدفوعات",
-      "detailed_pl_desc": "تفاصيل الأرباح والخسائر حسب العميل أو المنتج أو الفئة"
+      "detailed_pl_desc": "تفاصيل الأرباح والخسائر حسب العميل أو المنتج أو الفئة",
+      "profitability": "تقرير الربحية",
+      "profitability_desc": "تحليل الإيرادات والتكلفة والأرباح",
+      "bi_analytics_desc": "الذكاء עסקי وتحليلات"
     },
     "quick_access": {
       "title": "الوصول السريع"
@@ -1963,7 +2007,11 @@
     "transfer_asset_to_branch": "نقل الأصل إلى فرع آخر",
     "target_branch": "الفرع المستهدف",
     "additional_notes_optional": "ملاحظات إضافية (اختياري)",
-    "confirm_transfer": "تأكيد النقل"
+    "confirm_transfer": "تأكيد النقل",
+    "impairment_formulas": {
+      "formula_recoverable": "المبلغ المسترد = الحد الأقصى (القيمة العادلة مصروفاً إلى البيع، القيمة في الاستخدام)",
+      "formula_impairment": "خسارة الإخفاض = المبلغ الدُّراسي − المبلغ المسترد"
+    }
   },
   "sales": {
     "title": "المبيعات (CRM)",
@@ -2018,7 +2066,8 @@
       "receipt_status": {
         "posted": "مرحّل",
         "draft": "مسودة"
-      }
+      },
+      "party_sites": "موقع الجهة"
     },
     "groups": {
       "title": "مجموعات العملاء",
@@ -2318,7 +2367,9 @@
           "create_failed": "فشل في إنشاء عرض السعر",
           "customer_required": "يجب اختيار العميل",
           "fetch_failed": "فشل في تحميل البيانات",
-          "product_required": "يجب اختيار منتج واحد على الأقل"
+          "product_required": "يجب اختيار منتج واحد على الأقل",
+          "quantity_required": "الكمية مطلوبة",
+          "price_required": "السعر مطلوب"
         },
         "saving": "جاري الحفظ..."
       },
@@ -2336,7 +2387,8 @@
         "subtotal": "المجموع الجزئي",
         "discount": "الخصم",
         "tax": "الضريبة",
-        "grand_total": "الإجمالي النهائي"
+        "grand_total": "الإجمالي النهائي",
+        "send_email": "إرسال بريد إلكتروني"
       }
     },
     "returns": {
@@ -3555,7 +3607,17 @@
     "sales_order": "أمر بيع",
     "proforma_invoice": "فاتورة مبدئية",
     "effect_type": "نوع التأثير",
-    "application_scope": "نطاق التطبيق"
+    "application_scope": "نطاق التطبيق",
+    "invoice_print": {
+      "simplified_tax_invoice": "فاتورة ضريبية مبسطة"
+    },
+    "invoice_details": {
+      "zatca_qr_code": "رمز QR زاتكا"
+    },
+    "order_to_invoice": {
+      "invoice_prefix": "الفاتورة رقم",
+      "conversion_failed": "فشل التحويل"
+    }
   },
   "buying": {
     "home": {
@@ -3658,7 +3720,8 @@
           "invoices": "لا توجد فواتير مسجلة",
           "payments": "لا توجد سندات صرف مسجلة",
           "receipts": "لا توجد سندات قبض مسجلة"
-        }
+        },
+        "party_sites": "موقع الجهة"
       },
       "search_placeholder": "ابحث في الموردين...",
       "name_placeholder": "مثال: تجارة النور"
@@ -3728,7 +3791,8 @@
         "error_warehouse": "يجب اختيار المستودع",
         "error_saving": "فشل إنشاء الفاتورة",
         "error_supplier_required": "يجب اختيار المورد",
-        "error_product_required": "المنتج مطلوب"
+        "error_product_required": "المنتج مطلوب",
+        "error_qty_exceeds_remaining": "الكمية تتجاوز المتبقي"
       },
       "details": {
         "subtitle": "فاتورة مشتريات من",
@@ -3805,7 +3869,8 @@
         "financial_status": "الحالة المالية",
         "accrued": "تم إثبات الاستحقاق",
         "unit_price": "سعر الوحدة",
-        "total": "الإجمالي"
+        "total": "الإجمالي",
+        "qty_to_invoice": "الكمية للفوترة"
       },
       "form": {
         "title_new": "أمر شراء جديد",
@@ -4334,7 +4399,8 @@
       "search_supplier": "بحث عن مورد...",
       "select_supplier_required": "اختر مورداً واحداً على الأقل",
       "supplier_selected": "مورد محدد",
-      "suppliers": "الموردون"
+      "suppliers": "الموردون",
+      "line_required": "مطلوب عنصر واحد على الأقل"
     },
     "purchases_aging": "تقادم المشتريات",
     "matching_quality": "المطابقة والجودة",
@@ -4371,7 +4437,8 @@
         "batches": "تتبع الدفعات",
         "serials": "الأرقام التسلسلية",
         "quality": "مراقبة الجودة",
-        "cycle_counts": "الجرد الدوري"
+        "cycle_counts": "الجرد الدوري",
+        "profitability_report": "تقرير الربحية"
       }
     },
     "products": {
@@ -4464,7 +4531,9 @@
       "cost_by_warehouse": "تفاصيل التكلفة حسب المستودع",
       "delete_confirm_message": "هل أنت متأكد من حذف المنتج {{name}}؟",
       "unit_piece": "قطعة",
-      "search_placeholder": "ابحث في المنتجات..."
+      "search_placeholder": "ابحث في المنتجات...",
+      "branch_cost": "تكلفة الفرع",
+      "branch_price": "سعر الفرع"
     },
     "batches": {
       "title": "تتبع الدفعات",
@@ -4621,7 +4690,8 @@
       "status": {
         "pending": "⏳ في الانتظار",
         "received": "✅ تم الاستلام",
-        "cancelled": "❌ ملغية"
+        "cancelled": "❌ ملغية",
+        "dispatched": "تم الإرسال"
       },
       "empty": "لا توجد شحنات",
       "view": "عرض",
@@ -4687,7 +4757,13 @@
       "search_placeholder": "ابحث في الشحنات...",
       "validation": {
         "error_load": "فشل تحميل الشحنات",
-        "error_load_details": "فشل تحميل تفاصيل الشحنة"
+        "error_load_details": "فشل تحميل تفاصيل الشحنة",
+        "error_dispatch": "لا يمكن إرسال الشحنة"
+      },
+      "details": {
+        "dispatch_confirm": "هل أنت متأكد من إرسال هذا الشحن؟",
+        "dispatch_success": "تم إرسال الشحنة بنجاح",
+        "dispatch": "إرسال"
       }
     },
     "details": {
@@ -4730,7 +4806,8 @@
         "currency": "العملة",
         "status": "الحالة",
         "notes": "ملاحظات",
-        "actions": "الإجراءات"
+        "actions": "الإجراءات",
+        "branch": "الفرع"
       },
       "status": {
         "active": "نشط",
@@ -4745,7 +4822,8 @@
         "is_active": "نشط",
         "is_default": "ضبط كافتراضي",
         "save": "حفظ",
-        "cancel": "إلغاء"
+        "cancel": "إلغاء",
+        "please_select_branch": "يرجى اختيار الفرع"
       },
       "edit_prices": {
         "title": "💲 تعديل الأسعار",
@@ -4989,6 +5067,25 @@
       "warehouse_label": "المستودع",
       "create_n": "إنشاء أرقام تسلسلية",
       "will_create": "سيتم إنشاء"
+    },
+    "profitability": {
+      "title": "تقرير الربحية",
+      "subtitle": "تحليل الإيرادات والتكلفة والأرباح حسب المنتج",
+      "total_revenue": "إجمالي الإيرادات",
+      "total_cogs": "إجمالي تكلفة البضاعة المباعة",
+      "gross_profit": "إجمالي الربح",
+      "margin": "هامش الربح %",
+      "invoice_count": "الفواتير",
+      "table": {
+        "product": "المنتج",
+        "sku": "رمز الصنف",
+        "qty": "الكمية",
+        "revenue": "الإيراد",
+        "cogs": "التكلفة",
+        "profit": "الربح",
+        "margin": "الهامش %"
+      },
+      "no_data": "لا توجد بيانات ربحية"
     }
   },
   "accounting": {
@@ -5074,7 +5171,13 @@
       "posted": "مرحّل",
       "void_this_entry_a_reversal_entry_will_be_created": "هل تريد إلغاء هذا القيد؟ سيتم إنشاء قيد عكسي.",
       "voided": "ملغى",
-      "search_placeholder": "ابحث في القيود المحاسبية..."
+      "search_placeholder": "ابحث في القيود المحاسبية...",
+      "reverse_entry": "عكس القيد",
+      "reverse_confirm_msg": "هل أنت متأكد من عكس هذا القيد اليومي؟",
+      "reverse_original_kept": "سيُحفظ القيد الأصلي لأغراض المراجعة",
+      "reversal_date": "تاريخ العكس",
+      "reverse_reason_placeholder": "أدخل سبب العكس",
+      "confirm_reverse": "تأكيد العكس"
     },
     "coa": {
       "account": "الحساب",
@@ -5109,7 +5212,9 @@
       "delete": "حذف",
       "save_failed": "فشل في الحفظ",
       "delete_failed": "فشل في الحذف",
-      "add_main_account": "إضافة حساب رئيسي"
+      "add_main_account": "إضافة حساب رئيسي",
+      "original_currency_balance": "رصيد العملة الأصلية",
+      "account_code_optional": "رمز الحساب (اختياري)"
     },
     "trial_balance": {
       "title": "ميزان المراجعة",
@@ -5226,7 +5331,8 @@
         "total_planned": "إجمالي المخطط",
         "total_actual": "إجمالي الفعلي",
         "overruns": "تجاوزات"
-      }
+      },
+      "all_cost_centers": "جميع مراكز التكلفة"
     },
     "currencies": {
       "title": "إدارة العملات",
@@ -5343,7 +5449,21 @@
     "ic_service": "خدمات بين الشركات",
     "ic_transactions": "المعاملات بين الشركات",
     "ic_transfer": "تحويل بين الشركات",
-    "intercompany": "بين الشركات",
+    "intercompany": {
+      "table": {
+        "reference": "المرجع",
+        "entities": "الكيانات",
+        "type": "النوع",
+        "source_amount": "مبلغ المصدر",
+        "target_amount": "مبلغ الهدف",
+        "status": "الحالة",
+        "date": "التاريخ",
+        "actions": "الإجراءات"
+      },
+      "title": "المعاملات بين الكيانات",
+      "source_entity": "الكيان المصدر",
+      "target_entity": "الكيان الهدف"
+    },
     "intercompany_desc": "المعاملات بين الشركات",
     "invoice_id": "رقم الفاتورة",
     "method": "الطريقة",
@@ -5461,7 +5581,8 @@
     "vat_return": "الإقرار الضريبي للقيمة المضافة",
     "zakat_base": "وعاء الزكاة",
     "retained_earnings": "الأرباح المبقاة",
-    "general_journal": "دفتر اليومية العامة"
+    "general_journal": "دفتر اليومية العامة",
+    "cost_center": "مركز التكلفة"
   },
   "treasury": {
     "title": "إدارة الخزينة والمصروفات",
@@ -5660,7 +5781,14 @@
     "deposit": "إيداع",
     "same_account_error": "لا يمكن أن يكون حساب المصدر والوجهة متماثلين",
     "checks_for_collection": "شيكات تحت التحصيل",
-    "checks_for_payment": "شيكات تحت الدفع"
+    "checks_for_payment": "شيكات تحت الدفع",
+    "account_list": {
+      "iban_label": "الايبان"
+    },
+    "account_name_required": "اسم الحساب مطلوب",
+    "account_currency_required": "عملة الحساب مطلوبة",
+    "error_loading_accounts": "فشل تحميل الحسابات",
+    "primary_branch": "الفرع الرئيسي"
   },
   "hr": {
     "attendance": {
@@ -6234,26 +6362,36 @@
       "course catalog": "دليل الدورات التدريبية"
     },
     "violations": {
-      "action": "الإجراء",
-      "action_taken": "الإجراء المتخذ",
-      "actions": "إجراءات",
-      "cancel": "إلغاء",
-      "date": "التاريخ",
-      "deduction": "مبلغ الخصم",
-      "deduction_amount": "مبلغ الخصم",
-      "description": "الوصف",
-      "edit_violation": "تعديل مخالفة",
-      "employee": "الموظف",
-      "en": "ar",
-      "loading": "جاري التحميل...",
+      "types": {
+        "absence": "غياب بدون إذن",
+        "tardiness": "تأخير",
+        "misconduct": "سوء سلوك"
+      },
+      "actions": {
+        "warning": "إنذار",
+        "deduction": "خصم",
+        "suspension": "إيقاف",
+        "termination": "فصل"
+      },
+      "violations_penalties": "المخالفات والجزاءات",
       "manage_employee_violations_and_penalties": "إدارة مخالفات وجزاءات الموظفين",
       "new_violation": "مخالفة جديدة",
-      "no_violations": "لا توجد مخالفات",
-      "save": "حفظ",
-      "select": "-- اختر --",
-      "type": "نوع المخالفة",
+      "employee": "الموظف",
+      "type": "النوع",
+      "date": "التاريخ",
+      "description": "الوصف",
+      "action": "الإجراء",
+      "deduction": "الخصم",
+      "loading": "جاري التحميل...",
+      "no_violations": "لا توجد مخالفات مسجلة",
+      "en": "إجراء",
+      "edit_violation": "تعديل المخالفة",
+      "select": "اختر",
       "violation_type": "نوع المخالفة",
-      "violations_penalties": "المخالفات والجزاءات"
+      "action_taken": "الإجراء المتخذ",
+      "deduction_amount": "مبلغ الخصم",
+      "cancel": "إلغاء",
+      "save": "حفظ"
     },
     "eos": {
       "select_employee": "اختر الموظف",
@@ -6269,16 +6407,55 @@
     "gosi_file_exported_successfully": "تم تصدير ملف التأمينات بنجاح",
     "export_failed": "فشل التصدير",
     "advanced_payroll": "الرواتب المتقدمة",
-    "overtime_requests": "العمل الإضافي",
+    "overtime_requests": {
+      "statuses": {
+        "pending": "معلق",
+        "approved": "موافق",
+        "rejected": "مرفوض"
+      }
+    },
     "gosi_social_insurance": "التأمينات الاجتماعية",
     "end_of_service_calculator": "حاسبة مكافأة نهاية الخدمة",
     "export_gosi_file": "تصدير ملف التأمينات (GOSI)",
     "hr_management": "إدارة الموارد البشرية",
-    "employee_documents": "مستندات الموظفين",
-    "performance_reviews": "تقييم الأداء",
-    "training_programs": "برامج التدريب",
+    "employee_documents": {
+      "types": {
+        "passport": "جواز سفر",
+        "residence": "إقامة",
+        "driving_license": "رخصة قيادة",
+        "national_id": "هوية وطنية",
+        "certificate": "شهادة",
+        "contract": "عقد",
+        "other": "أخرى"
+      }
+    },
+    "performance_reviews": {
+      "frequencies": {
+        "quarterly": "ربع سنوي",
+        "semi_annual": "نصف سنوي",
+        "annual": "سنوي"
+      }
+    },
+    "training_programs": {
+      "statuses": {
+        "planned": "مخطط",
+        "in_progress": "جاري",
+        "completed": "مكتمل",
+        "cancelled": "ملغي"
+      }
+    },
     "violations_penalties": "المخالفات والجزاءات",
-    "custody_management": "إدارة العهد",
+    "custody_management": {
+      "item_types": {
+        "laptop": "لابتوب",
+        "phone": "جوال",
+        "car": "سيارة",
+        "key": "مفتاح",
+        "card": "بطاقة",
+        "tool": "أداة",
+        "other": "أخرى"
+      }
+    },
     "payslips": "كشوف الرواتب",
     "leave_carryover": "ترحيل الإجازات",
     "recruitment": {
@@ -6318,7 +6495,13 @@
     "emergency_contact": "جهة اتصال للطوارئ",
     "returning_item": "إرجاع: {{name}}",
     "days_count": "{{count}} يوم",
-    "participants_title": "المشاركون - {{name}}"
+    "participants_title": "المشاركون - {{name}}",
+    "wps_export": {
+      "formats": {
+        "sif": "SIF — بنكي (SAMA عرض ثابت)",
+        "csv": "CSV — جدول بيانات (قراءة)"
+      }
+    }
   },
   "cost_centers": {
     "title": "مراكز التكلفة",
@@ -6349,7 +6532,9 @@
       "webhooks": "إدارة نقاط الربط الخارجية",
       "branches": "إدارة فروع الشركة والمواقع",
       "data_import": "استيراد العملاء والمنتجات والحسابات من Excel",
-      "modules": "تفعيل وتعطيل الوحدات حسب نوع النشاط"
+      "modules": "تفعيل وتعطيل الوحدات حسب نوع النشاط",
+      "audit_logs": "مراجعة وتتبع جميع عمليات النظام",
+      "roles": "إدارة الأدوار والصلاحيات"
     },
     "company": {
       "title": "إعدادات الشركة",
@@ -6427,7 +6612,8 @@
       "upload_btn": "اختيار صورة",
       "theme_title": "هوية النظام (الألوان)",
       "primary_color": "اللون الأساسي",
-      "theme_hint": "* سيتم تطبيق هذه الألوان تدريجياً على كافة واجهات النظام والتقارير."
+      "theme_hint": "* سيتم تطبيق هذه الألوان تدريجياً على كافة واجهات النظام والتقارير.",
+      "logo_preview": "معاينة الشعار"
     },
     "invoicing": {
       "sequence_title": "ترقيم المستندات",
@@ -6623,7 +6809,13 @@
       "tax_number": "الرقم الضريبي",
       "commercial_reg": "رقم السجل التجاري",
       "enable_vat": "تفعيل ضريبة القيمة المضافة",
-      "tax_rate": "نسبة الضريبة (%)"
+      "tax_rate": "نسبة الضريبة (%)",
+      "quarters": {
+        "jan": "يناير (01)",
+        "apr": "أبريل (04)",
+        "jul": "يوليو (07)",
+        "oct": "أكتوبر (10)"
+      }
     },
     "projects": {
       "main_title": "إعدادات إدارة المشاريع",
@@ -6977,6 +7169,265 @@
       "title": "Webhooks",
       "url": "الرابط",
       "url_label": "رابط الـ Webhook"
+    },
+    "integration_dlq": {
+      "title": "قوائم انتظار التكاملات و DLQ",
+      "subtitle": "مراجعة وإدارة المحاولات الفاشلة",
+      "refresh": "تحديث",
+      "dlq_title": "DLQ (الفشل النهائي)",
+      "payment_queue": "قائمة المدفوعات",
+      "message_queue": "قائمة الرسائل",
+      "dlq_items": "عناصر DLQ",
+      "show_archived": "عرض المؤرشفة",
+      "payment_attempts": "محاولات المدفوعات",
+      "message_attempts": "محاولات الرسائل",
+      "filters": {
+        "all_states": "جميع الحالات",
+        "pending": "قيد الانتظار",
+        "processing": "قيد المعالجة",
+        "successful": "ناجحة",
+        "permanent_failure": "فشل نهائي"
+      },
+      "table": {
+        "type": "النوع",
+        "provider": "المزوّد",
+        "reason": "السبب",
+        "failure_date": "تاريخ الفشل",
+        "status": "الحالة",
+        "actions": "إجراءات",
+        "amount": "المبلغ",
+        "currency": "العملة",
+        "recipient": "المستلم",
+        "attempts": "المحاولات",
+        "next_attempt": "المحاولة التالية",
+        "last_error": "آخر خطأ"
+      },
+      "badges": {
+        "archived": "مؤرشف",
+        "active": "نشط"
+      },
+      "buttons": {
+        "details": "تفاصيل",
+        "resend": "إعادة إرسال",
+        "archive": "أرشفة"
+      },
+      "modal": {
+        "title": "تفاصيل DLQ #",
+        "type": "النوع",
+        "provider": "المزوّد",
+        "original_item_id": "معرّف العنصر الأصلي",
+        "reason": "السبب",
+        "failure_date": "تاريخ الفشل",
+        "payload": "البيانات (Payload)",
+        "gateway_response": "رد البوّابة (Gateway Response)",
+        "close": "إغلاق",
+        "archive": "أرشفة",
+        "resend": "إعادة إرسال"
+      },
+      "loading": "جاري التحميل…",
+      "no_items": "لا توجد عناصر",
+      "confirm_resend": "إعادة إرسال هذا العنصر إلى قائمة الانتظار؟",
+      "confirm_archive": "أرشفة هذا العنصر بدون إعادة إرسال؟",
+      "toast": {
+        "load_failed": "فشل تحميل البيانات",
+        "details_failed": "فشل جلب التفاصيل",
+        "resent_success": "تم إعادة الإرسال",
+        "resend_failed": "فشل إعادة الإرسال",
+        "archived_success": "تم الأرشفة",
+        "archive_failed": "فشل الأرشفة"
+      }
+    },
+    "email_templates": {
+      "title": "قوالب البريد الإلكتروني",
+      "subtitle": "إدارة قوالب الرسائل المرسلة من النظام",
+      "new_template": "قالب جديد",
+      "loading": "جاري التحميل…",
+      "no_templates": "لا توجد قوالب بعد",
+      "table": {
+        "name": "الاسم",
+        "subject": "الموضوع",
+        "status": "الحالة",
+        "actions": "إجراءات"
+      },
+      "status": {
+        "enabled": "مفعّل",
+        "disabled": "معطّل"
+      },
+      "modal": {
+        "new_template": "قالب جديد",
+        "edit_prefix": "تعديل: ",
+        "name_label": "اسم القالب (مفتاح فريد) *",
+        "name_placeholder": "invoice_due, password_reset, ...",
+        "subject_label": "الموضوع *",
+        "subject_placeholder": "مرحبا {{name}}، فاتورتك رقم {{invoice_number}}",
+        "body_html_label": "المحتوى (HTML) *",
+        "body_html_placeholder": "<p>عزيزي {{name}}،</p><p>...</p>",
+        "body_html_help": "استخدم متغيرات مثل {{name}}، {{invoice_number}}، إلخ",
+        "variables_label": "المتغيرات المتاحة (JSON)",
+        "enabled_label": "مفعّل",
+        "cancel": "إلغاء",
+        "create": "إنشاء",
+        "save": "حفظ"
+      },
+      "buttons": {
+        "delete": "حذف"
+      },
+      "toast": {
+        "load_failed": "فشل تحميل القوالب",
+        "load_single_failed": "فشل تحميل القالب",
+        "fields_required": "الاسم والموضوع والمحتوى مطلوبة",
+        "created_success": "تم إنشاء القالب",
+        "updated_success": "تم تحديث القالب",
+        "operation_failed": "فشلت العملية",
+        "confirm_disable": "تعطيل القالب",
+        "disabled_success": "تم تعطيل القالب",
+        "disable_failed": "فشل التعطيل"
+      }
+    },
+    "smart_alerts": {
+      "title": "التنبيهات الذكية",
+      "alert_rules": "قواعد التنبيهات",
+      "fired_alerts": "التنبيهات المُطلقة",
+      "alert_types": {
+        "low_stock": "مخزون منخفض",
+        "overdue_invoice": "فاتورة متأخرة",
+        "low_cash": "رصيد نقدي منخفض",
+        "budget_exceeded": "تجاوز الميزانية",
+        "max_expense": "حد أقصى للمصروف",
+        "revenue_drop": "انخفاض الإيرادات"
+      },
+      "statuses": {
+        "fired": "مُطلق",
+        "resolved": "محلول",
+        "suppressed": "مكبوت"
+      },
+      "table": {
+        "name": "الاسم",
+        "type": "النوع",
+        "threshold": "العتبة",
+        "status": "الحالة",
+        "actions": "إجراءات",
+        "rule": "القاعدة",
+        "fired_at": "وقت التنبيه"
+      },
+      "buttons": {
+        "edit": "تعديل",
+        "delete": "حذف",
+        "add_rule": "إضافة قاعدة",
+        "disable": "تعطيل",
+        "enable": "تفعيل",
+        "resolve": "حل",
+        "update": "تحديث",
+        "create": "إنشاء"
+      },
+      "modal": {
+        "name_label": "اسم القاعدة *",
+        "type_label": "نوع القاعدة *",
+        "threshold_label": "العتبة (Threshold)",
+        "extra_conditions": "شروط إضافية (JSON اختياري)",
+        "create": "إنشاء قاعدة",
+        "update": "تحديث القاعدة",
+        "edit_rule": "تعديل القاعدة",
+        "add_rule": "إضافة قاعدة",
+        "threshold_help": "القيمة التي تُطلق التنبيه عند تجاوزها",
+        "enable_rule": "تفعيل القاعدة"
+      },
+      "confirm_delete": "حذف القاعدة \"{{name}}\"؟",
+      "toast": {
+        "load_rules_failed": "فشل تحميل قواعد التنبيهات",
+        "load_alerts_failed": "فشل تحميل التنبيهات",
+        "name_required": "اسم القاعدة مطلوب",
+        "updated": "تم تحديث القاعدة",
+        "created": "تم إنشاء القاعدة",
+        "operation_failed": "فشلت العملية",
+        "toggle_failed": "فشل التبديل",
+        "deleted": "تم الحذف",
+        "delete_failed": "فشل الحذف",
+        "resolved": "تم حل التنبيه",
+        "resolve_failed": "فشل حل التنبيه"
+      },
+      "subtitle": "إدارة قواعد التنبيهات التلقائية",
+      "empty_rules": "لا توجد قواعد بعد",
+      "empty_alerts": "لا توجد تنبيهات",
+      "badges": {
+        "enabled": "مفعّلة",
+        "disabled": "معطّلة"
+      }
+    },
+    "integration_keys_vault": {
+      "title": "مخزن مفاتيح التكاملات",
+      "show_revoked": "عرض الملغية",
+      "new_key": "مفتاح جديد / تدوير",
+      "add_rotate": "إضافة / تدوير مفتاح",
+      "integration_type": "نوع التكامل",
+      "provider": "المزود (Provider)",
+      "key_name": "اسم المفتاح",
+      "value": "القيمة (ستُشفَّر)",
+      "valid_until": "صالح حتى (اختياري)",
+      "activate_immediately": "تفعيل فوري",
+      "cancel": "إلغاء",
+      "save_encrypt": "حفظ وتشفير",
+      "loading": "جاري التحميل…",
+      "no_keys": "لا توجد مفاتيح",
+      "table": {
+        "type": "النوع",
+        "provider": "المزود",
+        "key": "المفتاح",
+        "status": "الحالة",
+        "valid_from": "صالح من",
+        "valid_until": "صالح حتى",
+        "action": "إجراء",
+        "revoke": "إلغاء"
+      },
+      "circuit_breaker": {
+        "title": "القاطع الكهربائي",
+        "integration": "التكامل",
+        "error_count": "عدد الأخطاء",
+        "open_until": "مفتوح حتى",
+        "last_error": "آخر خطأ",
+        "reset": "إعادة ضبط",
+        "provider": "المزود"
+      },
+      "status_badges": {
+        "open": "🔴 مفتوح",
+        "half_open": "🟡 نصف مفتوح",
+        "closed": "🟢 مغلق"
+      },
+      "modal_title": "تفاصيل DLQ #",
+      "confirm_revoke": "هل تريد إلغاء المفتاح \"{{name}}\"؟",
+      "confirm_reset": "إعادة ضبط القاطع \"{{label}}\"؟",
+      "toast": {
+        "saved": "تم حفظ المفتاح",
+        "save_failed": "فشل الحفظ",
+        "revoked": "تم إلغاء المفتاح",
+        "revoke_failed": "فشل الإلغاء",
+        "reset_success": "تم إعادة ضبط القاطع",
+        "reset_failed": "فشل الإعادة"
+      }
+    },
+    "company_profile": {
+      "logo_alt": "الشعار"
+    },
+    "print_templates_settings": {
+      "letter_option": "خطاب"
+    },
+    "integration": {
+      "providers": {
+        "twilio": "Twilio",
+        "unifonic": "Unifonic",
+        "yamamah": "Yamamah"
+      }
+    },
+    "company_settings_fallbacks": {
+      "advanced_tools": "أدوات متقدمة",
+      "unit_customization": "تخصيص الوحدات",
+      "branches": "الفروع",
+      "cost_policy": "سياسة التكلفة",
+      "data_import": "استيراد البيانات",
+      "audit_logs": "سجلات المراقبة",
+      "role_management": "إدارة الأدوار",
+      "api_keys": "مفاتيح API",
+      "webhooks": "الويب هوك"
     }
   },
   "pos": {
@@ -7219,18 +7670,37 @@
       "drawer_cmd": "تم إرسال أمر فتح الدرج"
     },
     "customer_display": {
-      "title": "شاشة العميل ودرج النقود",
-      "subtitle": "إعدادات العرض للعميل والتحكم بدرج النقود",
-      "open": "فتح شاشة العميل",
+      "welcome": "مرحباً بكم في أمان",
+      "thank_you": "شكراً لتعاملكم معنا",
+      "idle_message": "أجود المنتجات بأفضل الأسعار",
+      "items": "عناصر",
+      "html_title": "شاشة العميل",
+      "manual_open": "فتح يدوي",
+      "user": "المستخدم",
+      "preview_labels": {
+        "welcome": "ترحيب",
+        "clear": "مسح",
+        "total": "إجمالي",
+        "thank_you": "شكراً"
+      },
+      "drawer_log": {
+        "sale": "بيع",
+        "open_drawer": "فتح الصندوق",
+        "ahmed": "أحمد",
+        "mohammed": "محمد"
+      },
+      "title": "شاشة العميل",
+      "subtitle": "شاشة مخصصة للعميل",
+      "live": "مباشر",
+      "open": "فتح",
       "display_settings": "إعدادات العرض",
-      "theme": "السمة",
-      "dark": "داكنة",
-      "light": "فاتحة",
+      "theme": "المظهر",
+      "dark": "داكن",
+      "light": "فاتح",
       "welcome_msg": "رسالة الترحيب",
       "thank_msg": "رسالة الشكر",
-      "idle_msg": "رسالة الانتظار",
-      "preview": "معاينة حالة العرض",
-      "live": "بث مباشر",
+      "idle_msg": "رسالة الخمول",
+      "preview": "معاينة",
       "no_items": "لا توجد عناصر"
     },
     "cash_drawer": {
@@ -7269,16 +7739,23 @@
     "online": "متصل",
     "online_restored": "تم استعادة الاتصال",
     "order_saved_offline": "تم حفظ الطلب محلياً (بدون اتصال)",
-    "receipt": {
-      "total": "الإجمالي",
-      "subtotal": "المجموع الفرعي",
-      "tax": "الضريبة",
-      "paid": "المدفوع",
-      "amount_due": "المبلغ المستحق",
-      "balance_due": "المتبقي"
-    },
+    "receipt": "الفاتورة",
     "items_added": "العناصر المضافة",
-    "shift": "الوردية"
+    "shift": "الوردية",
+    "thermal_print": {
+      "test_receipt": "فاتورة تجريبية",
+      "tax_number": "الرقم الضريبي: ",
+      "receipt_title": "فاتورة POS-2026-001",
+      "thank_you": "شكراً لتعاملكم معنا",
+      "sample_data": {
+        "general_customer": "عميل عام",
+        "arabic_coffee": "قهوة عربية",
+        "chocolate_cake": "كعكة شوكولاتة",
+        "orange_juice": "عصير برتقال",
+        "cash": "نقدي"
+      }
+    },
+    "enter_customer_name": "اسم العميل (اختياري)"
   },
   "errors": {
     "fetch_failed": "فشل في تحميل البيانات",
@@ -7431,7 +7908,9 @@
       "approvalNotes": "ملاحظات الاعتماد",
       "createdBy": "تم الإنشاء بواسطة",
       "createdAt": "تاريخ الإنشاء",
-      "journalEntry": "القيد المحاسبي"
+      "journalEntry": "القيد المحاسبي",
+      "reversalDate": "تاريخ العكس",
+      "reversalReason": "سبب العكس"
     },
     "types": {
       "materials": "مواد",
@@ -7477,14 +7956,18 @@
     "actions": {
       "label": "الإجراءات",
       "approve": "موافقة",
-      "reject": "رفض"
+      "reject": "رفض",
+      "reverseTooltip": "عكس هذا المصروف",
+      "reverse": "عكس",
+      "confirmReverse": "تأكيد العكس"
     },
     "messages": {
       "created": "تم إنشاء المصروف بنجاح",
       "updated": "تم تحديث المصروف بنجاح",
       "deleted": "تم حذف المصروف بنجاح",
       "approved": "تم اعتماد المصروف بنجاح",
-      "rejected": "تم رفض المصروف"
+      "rejected": "تم رفض المصروف",
+      "reversed": "تم عكس المصروف بنجاح"
     },
     "errors": {
       "loadFailed": "فشل تحميل المصروفات",
@@ -7493,13 +7976,16 @@
       "saveFailed": "فشل حفظ المصروف",
       "deleteFailed": "فشل حذف المصروف",
       "approvalFailed": "فشل الاعتماد",
-      "invalidAmount": "المبلغ غير صحيح"
+      "invalidAmount": "المبلغ غير صحيح",
+      "reverseReasonRequired": "سبب العكس مطلوب",
+      "reverseFailed": "فشل عكس المصروف"
     },
     "placeholders": {
       "description": "أدخل وصف المصروف...",
       "vendor": "أدخل اسم المورد (اختياري)",
       "receipt": "رقم الإيصال (اختياري)",
-      "notes": "ملاحظات (اختياري)"
+      "notes": "ملاحظات (اختياري)",
+      "reversalReason": "أدخل سبب العكس"
     },
     "help": {
       "autoAccount": "سيتم اختيار الحساب تلقائياً بناءً على النوع"
@@ -7508,7 +7994,9 @@
       "approveTitle": "اعتماد المصروف",
       "rejectTitle": "رفض المصروف",
       "approveMessage": "هل أنت متأكد من اعتماد هذا المصروف؟ سيتم إنشاء قيد محاسبي.",
-      "rejectMessage": "هل أنت متأكد من رفض هذا المصروف؟"
+      "rejectMessage": "هل أنت متأكد من رفض هذا المصروف؟",
+      "reverseTitle": "عكس المصروف",
+      "reverseMessage": "هل أنت متأكد من عكس هذا المصروف؟"
     },
     "quick_actions": "إجراءات سريعة",
     "status_summary": "ملخص الحالة",
@@ -7737,43 +8225,17 @@
     "beneficiaryName": "اسم المستفيد"
   },
   "reconciliation": {
-    "title": "تسوية البنك",
-    "importStatement": "استيراد كشف حساب",
-    "importFromFile": "استيراد من ملف",
-    "selectFile": "اختر ملف CSV أو Excel",
-    "uploadFile": "رفع الملف",
-    "preview": "معاينة",
-    "confirm": "تأكيد الاستيراد",
-    "autoMatch": "مطابقة تلقائية",
-    "autoMatchDesc": "مطابقة المعاملات البنكية مع القيود المحاسبية تلقائياً",
-    "matchByAmount": "مطابقة بالمبلغ",
-    "matchByDate": "مطابقة بالتاريخ",
-    "matchResult": "نتيجة المطابقة",
-    "matched": "مطابق",
-    "unmatched": "غير مطابق",
-    "totalMatched": "إجمالي المطابق",
-    "totalUnmatched": "إجمالي غير المطابق",
-    "statementDate": "تاريخ الكشف",
-    "transactionDate": "تاريخ المعاملة",
-    "description": "الوصف",
-    "debit": "مدين",
-    "credit": "دائن",
-    "balance": "الرصيد",
-    "bankBalance": "رصيد البنك",
-    "bookBalance": "رصيد الدفاتر",
+    "drift_title": "تم اكتشاف انحراف في التسوية",
+    "gl_total": "إجمالي دفتر الأستاذ",
+    "bank_total": "إجمالي البنك",
     "difference": "الفرق",
-    "reconciled": "تم التسوية",
-    "notReconciled": "لم يتم التسوية",
-    "adjustments": "التسويات",
-    "outstandingChecks": "شيكات صادرة لم تقدم",
-    "depositsInTransit": "إيداعات في الطريق",
-    "importSuccess": "تم استيراد الكشف بنجاح",
-    "matchSuccess": "تم المطابقة بنجاح",
-    "noData": "لا توجد بيانات",
-    "fileFormat": "صيغة الملف",
-    "supportedFormats": "الصيغ المدعومة: CSV, XLSX",
-    "rows": "صف",
-    "columns": "عمود"
+    "tolerance": "التسامح",
+    "unmatched_lines": "أسطر غير مطابقة",
+    "line_id": "رقم السطر",
+    "description": "الوصف",
+    "amount": "المبلغ",
+    "force_finalize": "إجبار الاعتماد",
+    "close": "إغلاق"
   },
   "dueAlerts": {
     "title": "إشعارات الاستحقاق",
@@ -7802,7 +8264,8 @@
       "financials": "المالية"
     },
     "gantt": {
-      "no_tasks": "لا توجد مهام بجدول زمني محدد لعرضها"
+      "no_tasks": "لا توجد مهام بجدول زمني محدد لعرضها",
+      "title": "مخطط جانت"
     },
     "no_tasks_timesheet": "يرجى إضافة مهام للمشروع أولاً لتسجيل الوقت.",
     "task": "المهمة",
@@ -8004,7 +8467,9 @@
     "management": "الإدارة",
     "overview": "نظرة عامة",
     "gantt_chart": "مخطط جانت",
-    "risks": "المخاطر"
+    "risks": "المخاطر",
+    "load_moderate": "جاري التحميل...",
+    "timesheets": "سجلات الوقت"
   },
   "approvals": {
     "title": "سلاسل الاعتماد",
@@ -8125,7 +8590,8 @@
       "employees": "الموظفين"
     },
     "wizard": "معالج استيراد البيانات",
-    "chart_of_accounts": "دليل الحسابات"
+    "chart_of_accounts": "دليل الحسابات",
+    "clear": "مسح"
   },
   "security_page": {
     "title": "الأمان والحماية",
@@ -8693,7 +9159,53 @@
     "tax_calendar": "التقويم الضريبي",
     "wht_name_placeholder": "مثال: ضريبة استقطاع الخدمات",
     "tax_name_placeholder": "مثال: ضريبة القيمة المضافة",
-    "add_first_appointment": "+ إضافة أول موعد"
+    "add_first_appointment": "+ إضافة أول موعد",
+    "calendar_custom": {
+      "titles": {
+        "complete": "إكمال",
+        "edit": "تعديل",
+        "delete": "حذف"
+      },
+      "placeholder": "تقديم إقرار ضريبة القيمة المضافة"
+    },
+    "load_error": "فشل تحميل بيانات الضرائب",
+    "loading": "جاري التحميل...",
+    "inherit_branch": "وراثة من الفرع",
+    "no_branch_tax": "لم يتم تكوين ضريبة الفرع",
+    "tax_classification": "تصنيف ضريبي",
+    "tax_classification_desc": "تعيين تصنيف ضريبي لهذا المنتج",
+    "selected": "محدد",
+    "resolved_per_country": "يُحسب حسب الدولة",
+    "tax_group": "مجموعة ضريبية",
+    "tax_group_desc": "تجميع المنتجات للتقارير الضريبية",
+    "custom_tax": "معدل ضريبة مخصص",
+    "exempt": "معفى",
+    "exempt_desc": "هذا المنتج معفى من الضريبة",
+    "fill_required": "يرجى ملء جميع الحقول المطلوبة",
+    "confirm_delete_classification": "هل أنت متأكد من حذف هذا التصنيف؟",
+    "enter_country_code": "أدخل رمز الدولة",
+    "code": "الرمز",
+    "name_ar": "الاسم (عربي)",
+    "name_en": "الاسم (إنجليزي)",
+    "tax_rate_for": "معدل الضريبة لـ",
+    "no_rate_for_country": "لم يتم تكوين معدل لهذه الدولة",
+    "country": "الدولة",
+    "rate": "المعدل",
+    "tax_classifications": "التصنيفات الضريبية",
+    "classifications_subtitle": "إدارة تصنيفات ضريبة المنتجات والمعدلات حسب الدولة",
+    "add_classification": "إضافة تصنيف",
+    "all_branches": "جميع الفروع",
+    "show_inactive": "عرض المعطلة",
+    "no_classifications": "لا توجد تصنيفات بعد",
+    "edit_classification": "تعديل التصنيف",
+    "code_hint": "مثال: TOBACCO",
+    "description_hint": "مثال: منتجات التبغ",
+    "classification_rates": "معدلات التصنيف",
+    "classification_rates_desc": "تحديد معدلات الضريبة لكل دولة لهذا التصنيف",
+    "tax_rate": "معدل الضريبة",
+    "select_rate": "اختر المعدل",
+    "optional": "اختياري",
+    "currency_mode": "وضع العملة"
   },
   "months": {
     "jan": "يناير",
@@ -9136,7 +9648,8 @@
     "churn_rate": "معدل الإلغاء",
     "customer_lifetime_value": "القيمة الدائمة للعميل",
     "support_ticket": "تذكرة دعم فني",
-    "resolution_time": "وقت الحل"
+    "resolution_time": "وقت الحل",
+    "select_opportunity": "اختر الفرصة"
   },
   "wht": {
     "title": "ضريبة الاستقطاع",
@@ -9191,7 +9704,8 @@
     "error_calc": "حدث خطأ أثناء الحساب",
     "error_calculating": "خطأ في حساب ضريبة الاستقطاع",
     "error_loading_rates": "فشل تحميل معدلات الضريبة المستقطعة",
-    "error_loading_transactions": "فشل تحميل معاملات الضريبة المستقطعة"
+    "error_loading_transactions": "فشل تحميل معاملات الضريبة المستقطعة",
+    "select_branch_first": "اختر الفرع أولاً"
   },
   "services": {
     "home_title": "الخدمات والصيانة",
@@ -9340,7 +9854,9 @@
     "equal": "بالتساوي",
     "allocate": "توزيع التكاليف",
     "allocated": "تم التوزيع",
-    "posted": "تم الترحيل"
+    "posted": "تم الترحيل",
+    "vendor_optional": "المورد (اختياري)",
+    "invoice_ref": "مرجع الفاتورة"
   },
   "wps": {
     "title": "نظام حماية الأجور WPS",
@@ -9357,7 +9873,8 @@
     "allowances": "البدلات",
     "deductions": "الخصومات",
     "net": "صافي الراتب",
-    "missing_iban": "آيبان مفقود!"
+    "missing_iban": "آيبان مفقود!",
+    "format": "صيغة التصدير"
   },
   "saudization": {
     "title": "لوحة السعودة",
@@ -9398,7 +9915,15 @@
     "vacation_balance": "رصيد الإجازات",
     "pending_salary": "رواتب معلقة",
     "total_settlement": "إجمالي التسوية",
-    "settled_success": "تمت التسوية بنجاح"
+    "settled_success": "تمت التسوية بنجاح",
+    "join_date": "تاريخ الالتحاق",
+    "termination_date": "تاريخ إنهاء الخدمة",
+    "base_salary": "الراتب الأساسي",
+    "total_salary_used": "إجمالي الراتب المستخدم",
+    "full_gratuity": "المكافأة الكاملة",
+    "unpaid_leave_deduction": "خصم إجازة غير مدفوعة",
+    "days": "يوم",
+    "final_gratuity": "المكافأة النهائية"
   },
   "bank_import": {
     "title": "استيراد كشف بنكي",
@@ -9544,7 +10069,17 @@
     "mapping_created": "تم إنشاء الربط بنجاح",
     "load_error": "فشل في تحميل البيانات",
     "create_error": "فشل في إنشاء السجل",
-    "company_id_placeholder": "مثال: fcfa5fae"
+    "company_id_placeholder": "مثال: fcfa5fae",
+    "entity_required": "الكيان المصدر مطلوب",
+    "invalid_amount_or_rate": "مبلغ أو سعر صرف غير صالح",
+    "transaction_currency": "عملة المعاملة",
+    "transaction_amount": "مبلغ المعاملة",
+    "source_rate": "سعر المصدر",
+    "source_func_amount": "المبلغ الوظيفي للمصدر",
+    "target_rate": "سعر الهدف",
+    "target_func_amount": "المبلغ الوظيفي للهدف",
+    "entity_updated": "تم تحديث الكيان بنجاح",
+    "update_error": "فشل تحديث الكيان"
   },
   "backup": {
     "title": "النسخ الاحتياطي",
@@ -10218,7 +10753,11 @@
     "change_error": "فشل في تغيير طريقة التكلفة",
     "change_result": "نتيجة التغيير",
     "old_method": "الطريقة القديمة",
-    "layers_created": "الطبقات المنشأة"
+    "layers_created": "الطبقات المنشأة",
+    "method_form": {
+      "fifo": "FIFO",
+      "lifo": "LIFO"
+    }
   },
   "subscription": {
     "title": "الاشتراكات",
@@ -10819,7 +11358,8 @@
     "message": "حدث خطأ غير متوقع. يرجى المحاولة مرة أخرى.",
     "reload": "إعادة تحميل الصفحة",
     "title": "حدث خطأ",
-    "try_again": "حاول مرة أخرى"
+    "try_again": "حاول مرة أخرى",
+    "go_home": "الذهاب للرئيسية"
   },
   "notification_center": {
     "empty": "لا توجد إشعارات",
@@ -11215,17 +11755,313 @@
     "recurring_review_threshold": "حد مراجعة القوالب المتكررة",
     "save_success": "تم حفظ الإعدادات بنجاح"
   },
-  "reconciliation": {
-    "drift_title": "تم اكتشاف انحراف في التسوية",
-    "gl_total": "إجمالي دفتر الأستاذ",
-    "bank_total": "إجمالي البنك",
-    "difference": "الفرق",
-    "tolerance": "التسامح",
-    "unmatched_lines": "أسطر غير مطابقة",
-    "line_id": "رقم السطر",
-    "description": "الوصف",
-    "amount": "المبلغ",
-    "force_finalize": "إجبار الاعتماد",
-    "close": "إغلاق"
+  "ops": {
+    "scheduler": {
+      "title": "مهام المجدول",
+      "loading": "جاري تحميل مهام المجدول...",
+      "error_prefix": "خطأ: ",
+      "refresh": "تحديث",
+      "table": {
+        "job_id": "معرّف المهمة",
+        "name": "الاسم",
+        "status": "الحالة",
+        "next_run": "التشغيل التالي",
+        "trigger": "المُشغّل",
+        "actions": "الإجراءات"
+      },
+      "buttons": {
+        "running": "قيد التنفيذ...",
+        "run_now": "تشغيل الآن"
+      }
+    }
+  },
+  "fsm": {
+    "service_pricelists": {
+      "title": "قوائم أسعار الخدمات",
+      "filters": {
+        "all_scopes": "جميع النطاقات",
+        "global": "عام",
+        "customer_group": "مجموعة العملاء",
+        "customer": "عميل"
+      },
+      "buttons": {
+        "cancel": "إلغاء",
+        "add_entry": "إضافة عنصر",
+        "save": "حفظ",
+        "saving": "جاري الحفظ..."
+      },
+      "form": {
+        "scope": "النطاق",
+        "scope_ref_id": "معرّف مرجع النطاق",
+        "item_id": "معرّف الصنف",
+        "currency": "العملة",
+        "price": "السعر",
+        "valid_from": "صالح من",
+        "valid_to": "صالح حتى"
+      },
+      "table": {
+        "scope": "النطاق",
+        "ref_id": "معرّف المرجع",
+        "item_id": "معرّف الصنف",
+        "currency": "العملة",
+        "price": "السعر",
+        "valid_from": "صالح من",
+        "valid_to": "صالح حتى"
+      },
+      "loading": "جاري التحميل...",
+      "no_entries": "لا توجد عناصر في قائمة الأسعار"
+    },
+    "technician_profiles": {
+      "title": "ملفات الفنيين",
+      "buttons": {
+        "cancel": "إلغاء",
+        "add_technician": "إضافة فني",
+        "save": "حفظ",
+        "saving": "جاري الحفظ...",
+        "find_match": "بحث عن تطابق",
+        "matching": "جاري المطابقة..."
+      },
+      "form": {
+        "employee_id": "معرّف الموظف",
+        "skills": "المهارات (مفصولة بفواصل)",
+        "zones": "المناطق",
+        "certifications": "الشهادات"
+      },
+      "match_section": {
+        "title": "مطابقة الفنيين",
+        "required_skills": "المهارات المطلوبة (مفصولة بفواصل)"
+      },
+      "match_table": {
+        "technician": "الفني",
+        "score": "الدرجة",
+        "matched": "مطابق",
+        "missing": "مفقود"
+      },
+      "no_matches": "لا توجد نتائج",
+      "all_technicians": "جميع الفنيين",
+      "loading": "جاري التحميل...",
+      "table": {
+        "id": "المعرّف",
+        "employee": "الموظف",
+        "skills": "المهارات",
+        "zones": "المناطق"
+      }
+    }
+  },
+  "payroll": {
+    "bulk_salary_increment": {
+      "title": "زيادة الرواتب بالجملة",
+      "csv_label": "ملف CSV (employee_id, new_salary)",
+      "effective_date": "تاريخ النفاذ",
+      "reason": "السبب",
+      "reason_placeholder": "زيادة سنوية، ترقية، إلخ",
+      "preview_title": "معاينة ({{count}} موظف)",
+      "table": {
+        "employee_id": "معرّف الموظف",
+        "new_salary": "الراتب الجديد",
+        "old_salary": "الراتب القديم",
+        "increment": "الزيادة",
+        "status": "الحالة",
+        "error": "خطأ"
+      },
+      "buttons": {
+        "dry_run": "معاينة تجريبية",
+        "previewing": "جاري المعاينة...",
+        "apply": "تطبيق الزيادات",
+        "applying": "جاري التطبيق..."
+      },
+      "results": {
+        "title": "النتائج",
+        "dry_run_suffix": "(تجريبي)",
+        "success": "ناجح: ",
+        "errors": "أخطاء: ",
+        "total_increment": "إجمالي الزيادة: "
+      }
+    },
+    "payroll_reversal": {
+      "reverse_period": "عكس الفترة",
+      "modal_title": "عكس فترة الرواتب",
+      "confirm_text": "هل أنت متأكد من عكس فترة الرواتب هذه؟",
+      "reason_label": "سبب العكس *",
+      "reason_placeholder": "أدخل سبب عكس فترة الرواتب هذه...",
+      "success_message": "تم عكس الفترة بنجاح.",
+      "reversed_je": "القيد المعكوس: #",
+      "run_id": "معرّف التشغيل: ",
+      "buttons": {
+        "cancel": "إلغاء",
+        "confirm": "تأكيد العكس",
+        "reversing": "جاري العكس..."
+      }
+    }
+  },
+  "notifications": {
+    "queue_monitor": {
+      "title": "قائمة الإشعارات",
+      "filters": {
+        "all_states": "جميع الحالات",
+        "pending": "قيد الانتظار",
+        "sending": "قيد الإرسال",
+        "sent": "مرسل",
+        "failed": "فشل",
+        "all_channels": "جميع القنوات",
+        "email": "بريد إلكتروني",
+        "sms": "رسالة نصية",
+        "push": "إشعار فوري",
+        "in_app": "داخل التطبيق",
+        "webhook": "ويب هوك"
+      },
+      "loading": "جاري التحميل...",
+      "table": {
+        "id": "المعرّف",
+        "event": "الحدث",
+        "channel": "القناة",
+        "recipient": "المستلم",
+        "state": "الحالة",
+        "attempts": "المحاولات",
+        "created": "تاريخ الإنشاء",
+        "actions": "الإجراءات"
+      },
+      "buttons": {
+        "retry": "إعادة المحاولة"
+      },
+      "no_entries": "لا توجد سجلات"
+    },
+    "email_template_editor": {
+      "title": "قوالب البريد الإلكتروني",
+      "buttons": {
+        "cancel": "إلغاء",
+        "new_template": "قالب جديد",
+        "save": "حفظ القالب",
+        "saving": "جاري الحفظ...",
+        "delete": "حذف"
+      },
+      "form": {
+        "code": "الرمز",
+        "locale": "اللغة",
+        "locale_en": "الإنجليزية",
+        "locale_ar": "العربية",
+        "subject": "الموضوع",
+        "body_html": "المحتوى HTML (Jinja2)",
+        "body_text": "المحتوى النصي (Jinja2)"
+      },
+      "table": {
+        "code": "الرمز",
+        "locale": "اللغة",
+        "subject": "الموضوع",
+        "version": "الإصدار",
+        "actions": "الإجراءات"
+      },
+      "loading": "جاري التحميل...",
+      "no_templates": "لا توجد قوالب"
+    }
+  },
+  "dms": {
+    "quota_meter": {
+      "loading": "جاري تحميل الحصة...",
+      "title": "حصة التخزين",
+      "mb_used": "ميجابايت مستخدمة",
+      "mb_remaining": "ميجابايت متبقية من {{total}} ميجابايت",
+      "documents": "مستندات"
+    },
+    "quarantine": {
+      "loading": "جاري التحميل...",
+      "title": "المستندات المعزولة",
+      "no_documents": "لا توجد مستندات معزولة",
+      "table": {
+        "id": "المعرّف",
+        "filename": "اسم الملف",
+        "size": "الحجم",
+        "scanned": "تم الفحص",
+        "engine": "المحرك"
+      }
+    }
+  },
+  "einvoicing": {
+    "zatca_outbox": {
+      "filters": {
+        "pending": "قيد الانتظار",
+        "processing": "قيد المعالجة",
+        "failed": "فشل",
+        "dead_letter": "رسالة ميتة",
+        "submitted": "مُقدّم",
+        "cleared": "مُسوّى"
+      },
+      "table": {
+        "id": "المعرّف",
+        "invoice": "الفاتورة",
+        "state": "الحالة",
+        "attempts": "المحاولات",
+        "last_error": "آخر خطأ",
+        "created": "تاريخ الإنشاء",
+        "actions": "الإجراءات"
+      },
+      "buttons": {
+        "reprocess": "إعادة المعالجة"
+      },
+      "title": "صندوق الوارد ZATCA",
+      "loading": "جاري التحميل...",
+      "no_entries": "لا توجد سجلات"
+    }
+  },
+  "kpi_admin": {
+    "title": "إدارة مؤشرات الأداء",
+    "subtitle": "إنشاء ومراقبة مؤشرات الأداء الرئيسية",
+    "metrics": {
+      "total": "إجمالي المؤشرات",
+      "active": "النشطة",
+      "inactive": "المعطلة"
+    },
+    "quick_actions": "إجراءات سريعة",
+    "add_kpi": "إضافة مؤشر",
+    "new_kpi": "مؤشر جديد",
+    "form": {
+      "code": "رمز المؤشر",
+      "source": "مصدر القياس",
+      "report_key": "مفتاح التقرير",
+      "classifier": "فئة التصنيف",
+      "reference": "المرجع",
+      "threshold": "الحد",
+      "operator": "المعامل",
+      "interval": "فورة التقييم (دقائق)",
+      "channels": "قنوات الإشعار",
+      "submit": "إنشاء المؤشر"
+    },
+    "list": {
+      "title": "مؤشرات الأداء"
+    },
+    "empty": "لا توجد مؤشرات بعد",
+    "add_first": "أضف أول مؤشر",
+    "minutes": "دقيقة",
+    "channels": {
+      "email": "بريد إلكتروني",
+      "sms": "رسالة نصية",
+      "push": "إشعار فوري",
+      "in_app": "داخل التطبيق",
+      "webhook": "ويب هوك"
+    }
+  },
+  "health": {
+    "title": "صحة النظام",
+    "subtitle": "مراقبة حالة المحاصلات ومقاييس النظام",
+    "metrics": {
+      "overall": "العام",
+      "adapters": "المحاصلات",
+      "healthy": "سليمة",
+      "issues": "مشاكل"
+    },
+    "adapter": {
+      "status": "الحالة",
+      "latency": "الزمن",
+      "last_success": "آخر نجاح",
+      "last_error": "آخر خطأ",
+      "none": "لا توجد محاصلات مكونة"
+    }
+  },
+  "scheduler": {
+    "title": "المجدول",
+    "subtitle": "إدارة المهام المجدولة"
+  },
+  "a11y": {
+    "primary_nav": "التنقل الرئيسي"
   }
 }

@@ -2,8 +2,8 @@
 Approval Workflows Router - WF-001, WF-002, WF-003
 سلسلة اعتمادات متعددة المستويات
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -77,13 +77,13 @@ def list_workflows(
 
 
 @router.get("/workflows/{workflow_id}", dependencies=[Depends(require_permission("settings.view"))], response_model=Dict[str, Any])
-def get_workflow(workflow_id: int, current_user=Depends(get_current_user)):
+def get_workflow(workflow_id: int, request: Request, current_user=Depends(get_current_user)):
     """تفاصيل سلسلة اعتماد"""
     with transactional(current_user.company_id) as db:
         try:
             row = db.execute(text("SELECT * FROM approval_workflows WHERE id = :id"), {"id": workflow_id}).fetchone()
             if not row:
-                raise HTTPException(404, "سلسلة الاعتماد غير موجودة")
+                raise HTTPException(**http_error(404, "approval_chain_not_found", request))
             return dict(row._mapping)
         except HTTPException:
             raise
@@ -93,12 +93,12 @@ def get_workflow(workflow_id: int, current_user=Depends(get_current_user)):
 
 
 @router.post("/workflows", dependencies=[Depends(require_permission(["settings.create", "approvals.manage"]))], response_model=Dict[str, Any])
-def create_workflow(data: WorkflowCreateSchema, current_user=Depends(get_current_user)):
+def create_workflow(data: WorkflowCreateSchema, request: Request, current_user=Depends(get_current_user)):
     """إنشاء سلسلة اعتماد جديدة"""
     with transactional(current_user.company_id) as db:
         try:
             if not data.steps:
-                raise HTTPException(400, "يجب إضافة خطوة واحدة على الأقل")
+                raise HTTPException(**http_error(400, "approval_chain_min_one_step", request))
     
             import json
             conditions = {}
@@ -128,7 +128,7 @@ def create_workflow(data: WorkflowCreateSchema, current_user=Depends(get_current
                 action="create", resource_type="approval_workflows",
                 resource_id=str(result.id), details={"name": data.name}
             )
-            return {"id": result.id, "message": "تم إنشاء سلسلة الاعتماد بنجاح"}
+            return {"id": result.id, "message": i18n_message("approval_chain_created", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -138,13 +138,13 @@ def create_workflow(data: WorkflowCreateSchema, current_user=Depends(get_current
 
 
 @router.put("/workflows/{workflow_id}", dependencies=[Depends(require_permission(["settings.edit", "approvals.manage"]))], response_model=Dict[str, Any])
-def update_workflow(workflow_id: int, data: WorkflowCreateSchema, current_user=Depends(get_current_user)):
+def update_workflow(workflow_id: int, data: WorkflowCreateSchema, request: Request, current_user=Depends(get_current_user)):
     """تحديث سلسلة اعتماد"""
     with transactional(current_user.company_id) as db:
         try:
             existing = db.execute(text("SELECT id FROM approval_workflows WHERE id = :id"), {"id": workflow_id}).fetchone()
             if not existing:
-                raise HTTPException(404, "سلسلة الاعتماد غير موجودة")
+                raise HTTPException(**http_error(404, "approval_chain_not_found", request))
     
             import json
             conditions = {}
@@ -171,7 +171,7 @@ def update_workflow(workflow_id: int, data: WorkflowCreateSchema, current_user=D
                 "active": data.is_active
             })
     
-            return {"message": "تم تحديث سلسلة الاعتماد بنجاح"}
+            return {"message": i18n_message(("approval_chain_updated", request))}
         except HTTPException:
             raise
         except Exception as e:
@@ -181,7 +181,7 @@ def update_workflow(workflow_id: int, data: WorkflowCreateSchema, current_user=D
 
 
 @router.delete("/workflows/{workflow_id}", dependencies=[Depends(require_permission(["settings.delete", "approvals.manage"]))], response_model=Dict[str, Any])
-def delete_workflow(workflow_id: int, current_user=Depends(get_current_user)):
+def delete_workflow(workflow_id: int, request: Request, current_user=Depends(get_current_user)):
     """حذف سلسلة اعتماد"""
     with transactional(current_user.company_id) as db:
         try:
@@ -190,12 +190,12 @@ def delete_workflow(workflow_id: int, current_user=Depends(get_current_user)):
                 SELECT COUNT(*) FROM approval_requests WHERE workflow_id = :id AND status = 'pending'
             """), {"id": workflow_id}).scalar()
             if pending and pending > 0:
-                raise HTTPException(400, f"لا يمكن الحذف، يوجد {pending} طلب معلق مرتبط بهذه السلسلة")
+                raise HTTPException(**http_error(400, "approval_chain_has_pending_requests", request, pending=pending))
     
             db.execute(text("DELETE FROM approval_actions WHERE request_id IN (SELECT id FROM approval_requests WHERE workflow_id = :id)"), {"id": workflow_id})
             db.execute(text("DELETE FROM approval_requests WHERE workflow_id = :id"), {"id": workflow_id})
             db.execute(text("DELETE FROM approval_workflows WHERE id = :id"), {"id": workflow_id})
-            return {"message": "تم حذف سلسلة الاعتماد"}
+            return {"message": i18n_message(("approval_chain_deleted", request))}
         except HTTPException:
             raise
         except Exception as e:
@@ -237,7 +237,7 @@ def _create_notification(db, user_id: int, title: str, message: str, link: str =
 
 
 @router.post("/requests", dependencies=[Depends(require_permission("approvals.create"))], response_model=Dict[str, Any])
-def create_approval_request(data: ApprovalRequestCreate, current_user=Depends(get_current_user)):
+def create_approval_request(data: ApprovalRequestCreate, request: Request, current_user=Depends(get_current_user)):
     """
     إنشاء طلب اعتماد جديد.
     يُستدعى عند إنشاء أمر شراء أو مصروف أو طلب إجازة.
@@ -252,13 +252,13 @@ def create_approval_request(data: ApprovalRequestCreate, current_user=Depends(ge
             # Find matching workflow
             workflow = _find_matching_workflow(db, document_type, amount)
             if not workflow:
-                raise HTTPException(404, f"لا توجد سلسلة اعتماد مفعّلة لنوع المستند '{document_type}' بالمبلغ {amount}")
+                raise HTTPException(**http_error(404, "approval_chain_not_found_for_document", request, document_type=document_type, amount=amount))
     
             # T017: Validate workflow has steps
             import json as _json
             _steps = workflow.steps if isinstance(workflow.steps, list) else _json.loads(workflow.steps or "[]")
             if not _steps:
-                raise HTTPException(status_code=400, detail="workflow_misconfigured_no_steps")
+                raise HTTPException(**http_error(400, "workflow_misconfigured_no_steps", request))
     
             result = db.execute(text("""
                 INSERT INTO approval_requests (workflow_id, document_type, document_id, amount, description,
@@ -297,7 +297,7 @@ def create_approval_request(data: ApprovalRequestCreate, current_user=Depends(ge
                                         f"{description or document_type} بمبلغ {amount}",
                                         f"/approvals/{result.id}")
     
-            return {"id": result.id, "message": "تم إنشاء طلب الاعتماد بنجاح"}
+            return {"id": result.id, "message": i18n_message("approval_request_created", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -456,7 +456,7 @@ def get_approval_request(request_id: int, current_user=Depends(get_current_user)
 
 
 @router.post("/requests/{request_id}/action", dependencies=[Depends(require_permission("approvals.approve"))], response_model=Dict[str, Any])
-def take_approval_action(request_id: int, data: ApprovalActionSchema, current_user=Depends(get_current_user)):
+def take_approval_action(request_id: int, data: ApprovalActionSchema, request: Request, current_user=Depends(get_current_user)):
     """
     اتخاذ إجراء على طلب اعتماد (اعتماد / رفض / إرجاع)
     """
@@ -468,10 +468,10 @@ def take_approval_action(request_id: int, data: ApprovalActionSchema, current_us
             if not request:
                 raise HTTPException(**http_error(404, "approval_request_not_found"))
             if request.status != 'pending':
-                raise HTTPException(400, f"لا يمكن اتخاذ إجراء، الحالة الحالية: {request.status}")
-    
+                raise HTTPException(**http_error(400, "approval_action_invalid_status", request, status=request.status))
+
             if data.action not in ('approve', 'reject', 'return'):
-                raise HTTPException(400, "الإجراء غير صالح. يجب أن يكون: approve, reject, return")
+                raise HTTPException(**http_error(400, "approval_action_invalid", request))
     
             # Quorum-aware duplicate guard: block the same user from acting twice
             # on the same step, but allow multiple distinct approvers when
@@ -481,7 +481,7 @@ def take_approval_action(request_id: int, data: ApprovalActionSchema, current_us
                 "WHERE request_id = :rid AND step = :step AND actioned_by = :uid"
             ), {"rid": request_id, "step": request.current_step, "uid": current_user.id}).scalar()
             if already_by_user:
-                raise HTTPException(409, "already_actioned")
+                raise HTTPException(**http_error(409, "approval_already_actioned", request))
     
             # Record the action
             db.execute(text("""
@@ -636,7 +636,7 @@ def take_approval_action(request_id: int, data: ApprovalActionSchema, current_us
             )
     
             action_label = {"approve": "اعتماد", "reject": "رفض", "return": "إرجاع"}.get(data.action, data.action)
-            return {"message": f"تم {action_label} الطلب بنجاح"}
+            return {"message": i18n_message("approval_action_success", request)}
         except HTTPException:
             raise
         except Exception as e:

@@ -68,7 +68,7 @@ def get_price_list(
         """), {"id": list_id}).fetchone()
         
         if not pl:
-            raise HTTPException(status_code=404, detail="قائمة الأسعار غير موجودة")
+            raise HTTPException(**http_error(404, "price_list_not_found", request))
         
         # Get items
         items = db.execute(text("""
@@ -110,7 +110,7 @@ def update_price_list_item(
         price = data.get("price")
         
         if not product_id or price is None:
-            raise HTTPException(status_code=400, detail="product_id و price مطلوبان")
+            raise HTTPException(**http_error(400, "product_id_و_price_مطلوبان", request))
         
         db.execute(text("""
             INSERT INTO customer_price_list_items (price_list_id, product_id, price)
@@ -119,7 +119,7 @@ def update_price_list_item(
         """), {"lid": list_id, "pid": product_id, "price": price})
         
         db.commit()
-        return {"message": "تم تحديث السعر بنجاح"}
+        return {"message": i18n_message(("price_updated_success", request))}
     finally:
         db.close()
 
@@ -137,7 +137,7 @@ async def import_prices_from_excel(
         # Verify price list exists
         pl = db.execute(text("SELECT id, currency FROM customer_price_lists WHERE id = :id"), {"id": list_id}).fetchone()
         if not pl:
-            raise HTTPException(status_code=404, detail="قائمة الأسعار غير موجودة")
+            raise HTTPException(**http_error(404, "price_list_not_found", request))
         
         # Read Excel file
         content = await file.read()
@@ -146,7 +146,7 @@ async def import_prices_from_excel(
         # Expected columns: product_code, price
         required_cols = ['product_code', 'price']
         if not all(col in df.columns for col in required_cols):
-            raise HTTPException(status_code=400, detail=f"الملف يجب أن يحتوي على الأعمدة: {', '.join(required_cols)}")
+            raise HTTPException(status_code=400, detail=i18n_message("file_must_contain_columns", request))
         
         updated = 0
         errors = []
@@ -170,6 +170,6 @@ async def import_prices_from_excel(
             updated += 1
         
         db.commit()
-        return {"message": f"تم تحديث {updated} سعر", "errors": errors}
+        return {"message": i18n_message("prices_bulk_updated", request), "errors": errors}
     finally:
         db.close()

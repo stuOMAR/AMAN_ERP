@@ -212,7 +212,7 @@ const DataImportPage = () => {
                                         className="btn btn-ghost"
                                         onClick={() => setPreviewData(null)}
                                     >
-                                        Clear
+                                        {t('data_import.clear', 'Clear')}
                                     </button>
                                     <button
                                         className="btn btn-success gap-2"

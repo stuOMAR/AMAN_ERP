@@ -15,6 +15,7 @@ function BatchList() {
     const { currentBranch } = useBranch()
     const [batches, setBatches] = useState([])
     const [loading, setLoading] = useState(true)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState('')
     const [products, setProducts] = useState([])
@@ -38,9 +39,12 @@ function BatchList() {
     const [error, setError] = useState(null)
 
     useEffect(() => {
-        fetchBatches()
-        fetchProducts()
-        fetchWarehouses()
+        const timer = setTimeout(() => {
+            fetchBatches()
+            fetchProducts()
+            fetchWarehouses()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, search, statusFilter, productFilter, warehouseFilter])
 
     const fetchBatches = async () => {
@@ -58,6 +62,7 @@ function BatchList() {
             console.error(err)
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
@@ -174,6 +179,7 @@ function BatchList() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

@@ -120,7 +120,7 @@ async def create_and_send_notification(
     """
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "لا يمكن إرسال إشعارات بدون شركة")
+        raise HTTPException(**http_error(400, "notifications_no_company", request))
 
     db = get_db_connection(company_id)
     try:
@@ -182,7 +182,7 @@ async def create_and_send_notification(
                 results["sms"] = False
 
         db.commit()
-        return {"message": "تم إرسال الإشعار", "results": results}
+        return {"message": i18n_message("notification_sent", request), "results": results}
     except HTTPException:
         raise
     except Exception as e:
@@ -231,7 +231,7 @@ async def update_notification_settings(
     """تحديث إعدادات البريد الإلكتروني و SMS"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "لا يمكن تعديل الإعدادات بدون شركة")
+        raise HTTPException(**http_error(400, "settings_no_company", request))
 
     db = get_db_connection(company_id)
     try:
@@ -247,12 +247,12 @@ async def update_notification_settings(
             try:
                 port_val = int(data["smtp_port"])
                 if port_val < 1 or port_val > 65535:
-                    raise HTTPException(400, "smtp_port must be between 1 and 65535")
+                    raise HTTPException(**http_error(400, "smtp_port_range", request))
             except (ValueError, TypeError):
-                raise HTTPException(400, "smtp_port must be a valid integer")
+                raise HTTPException(**http_error(400, "smtp_port_invalid", request))
         if "smtp_host" in data and data["smtp_host"] != "********":
             if not isinstance(data["smtp_host"], str) or not data["smtp_host"].strip():
-                raise HTTPException(400, "smtp_host must be a non-empty string")
+                raise HTTPException(**http_error(400, "smtp_host_empty", request))
 
         for key, value in data.items():
             if key not in allowed_keys:
@@ -279,7 +279,7 @@ async def update_notification_settings(
             details={"updated_keys": [k for k in data if k in allowed_keys and data[k] != "********"]},
             request=request,
         )
-        return {"message": "تم تحديث إعدادات الإشعارات بنجاح"}
+        return {"message": i18n_message(("notification_settings_updated", request))}
     except Exception as e:
         db.rollback()
         logger.error(f"Error updating notification settings: {e}")
@@ -325,7 +325,7 @@ async def update_preference(body: PreferenceUpdate, request: Request, current_us
     """تحديث تفضيل إشعار واحد (upsert)"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "company_id required")
+        raise HTTPException(**http_error(400, "company_id_required", request))
     user_id = getattr(current_user, "id", None) or getattr(current_user, "user_id", None)
     db = get_db_connection(company_id)
     try:
@@ -368,11 +368,11 @@ async def update_preference(body: PreferenceUpdate, request: Request, current_us
 
 
 @router.post("/test-email", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
-async def test_email_connection(current_user: dict = Depends(get_current_user)):
+async def test_email_connection(request: Request, current_user: dict = Depends(get_current_user)):
     """اختبار اتصال SMTP"""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "لا يمكن الاختبار بدون شركة")
+        raise HTTPException(**http_error(400, "test_no_company", request))
 
     db = get_db_connection(company_id)
     try:
@@ -380,11 +380,11 @@ async def test_email_connection(current_user: dict = Depends(get_current_user)):
 
         service = get_email_service_from_settings(db, tenant_id=company_id)
         if not service:
-            raise HTTPException(400, "إعدادات SMTP غير مكتملة")
+            raise HTTPException(**http_error(400, "smtp_settings_incomplete", request))
 
         user = db.execute(text("SELECT email FROM company_users WHERE id = :id"), {"id": current_user.id}).fetchone()
         if not user or not user.email:
-            raise HTTPException(400, "لا يوجد بريد إلكتروني مسجّل لحسابك")
+            raise HTTPException(**http_error(400, "no_email_for_account", request))
 
         html = get_base_template("""
             <h2>✅ اختبار ناجح!</h2>
@@ -393,9 +393,9 @@ async def test_email_connection(current_user: dict = Depends(get_current_user)):
         success = service.send(user.email, "اختبار اتصال AMAN ERP", html)
 
         if success:
-            return {"message": "تم إرسال رسالة الاختبار بنجاح", "sent_to": user.email}
+            return {"message": i18n_message("test_message_sent", request), "sent_to": user.email}
         else:
-            raise HTTPException(500, "فشل في إرسال رسالة الاختبار")
+            raise HTTPException(**http_error(500, "test_email_send_failed", request))
     except HTTPException:
         raise
     except Exception as e:

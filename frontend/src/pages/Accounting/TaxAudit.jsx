@@ -13,11 +13,12 @@ import { PageLoading } from '../../components/common/LoadingStates'
 function TaxAudit() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
+    const [currency, setCurrency] = useState(getCurrency())
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), new Date().getMonth(), 1))
     const [endDate, setEndDate] = useState(new Date())
     const [data, setData] = useState([])
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
 
     const fetchData = async () => {
@@ -29,17 +30,28 @@ function TaxAudit() {
                 end_date: endDate.toISOString().split('T')[0],
                 branch_id: currentBranch?.id
             })
-            setData(response.data)
+            const payload = response.data
+            if (Array.isArray(payload)) {
+                setData(payload)
+                setCurrency(getCurrency())
+            } else {
+                setData(payload.items || [])
+                setCurrency(payload.display_currency || payload.currency || getCurrency())
+            }
         } catch (err) {
             console.error("Failed to fetch tax audit", err)
             setError(t('errors.fetch_failed'))
         } finally {
             setLoading(false)
+            setInitialLoad(false)
         }
     }
 
     useEffect(() => {
-        fetchData()
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch, startDate, endDate])
 
     return (
@@ -83,7 +95,8 @@ function TaxAudit() {
                 </div>
             </div>
 
-            {loading ? (
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+            {initialLoad && data.length === 0 ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>

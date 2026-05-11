@@ -376,7 +376,7 @@ def create_expense_policy(policy: ExpensePolicyCreate, current_user=Depends(get_
                 "aab": policy.auto_approve_below, "ia": policy.is_active
             })
             pid = result.fetchone()[0]
-            return {"id": pid, "message": "تم إنشاء سياسة المصروفات بنجاح"}
+            return {"id": pid, "message": i18n_message("expense_policy_created", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -403,7 +403,7 @@ def update_expense_policy(policy_id: int, policy: ExpensePolicyUpdate, current_u
             fields.append("updated_by = :uid")
             params["uid"] = current_user.id
             db.execute(text(f"UPDATE expense_policies SET {', '.join(fields)} WHERE id = :id AND is_deleted = false"), params)
-            return {"message": "تم تحديث السياسة بنجاح"}
+            return {"message": i18n_message(("expense_policy_updated", request))}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -418,7 +418,7 @@ def delete_expense_policy(policy_id: int, current_user=Depends(get_current_user)
             db.execute(text(
                 "UPDATE expense_policies SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
             ), {"id": policy_id, "uid": current_user.id})
-            return {"message": "تم حذف السياسة"}
+            return {"message": i18n_message(("expense_policy_deleted", request))}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -499,7 +499,7 @@ async def create_expense(
             
             # Validate expense type
             if expense.expense_type and expense.expense_type not in EXPENSE_TYPES:
-                raise HTTPException(status_code=400, detail=f"Invalid expense type. Must be one of: {', '.join(EXPENSE_TYPES)}")
+                raise HTTPException(status_code=400, detail=i18n_message("invalid_expense_type", request))
 
             require_cost_center = db.execute(text("""
                 SELECT LOWER(setting_value) IN ('1', 'true', 'yes', 'on')
@@ -507,7 +507,7 @@ async def create_expense(
                 WHERE setting_key = 'expenses_require_cost_center'
             """)).scalar() or False
             if require_cost_center and not expense.cost_center_id:
-                raise HTTPException(status_code=400, detail="cost_center_required")
+                raise HTTPException(**http_error(400, "cost_center_required", request))
             
             policy_result = _evaluate_expense_policy(
                 db,
@@ -532,7 +532,7 @@ async def create_expense(
                 expense_account_id = get_expense_account_by_type(db, expense.expense_type)
             
             if not expense_account_id:
-                raise HTTPException(status_code=400, detail="يجب تحديد حساب المصروف")
+                raise HTTPException(**http_error(400, "expense_account_required", request))
             
             # Determine cash/bank account
             cash_account_id = None
@@ -546,7 +546,7 @@ async def create_expense(
                 cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
             
             if not cash_account_id:
-                raise HTTPException(status_code=400, detail="يجب تحديد حساب النقدية")
+                raise HTTPException(**http_error(400, "cash_account_required", request))
             
             # Generate expense number
             expense_number = generate_sequential_number(db, "EXP", "expenses", "expense_number")
@@ -615,7 +615,7 @@ async def create_expense(
                         "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
                     ), {"id": expense.treasury_id}).scalar() or 0
                     if Decimal(str(treasury_balance)) < Decimal(str(expense.amount)):
-                        raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense.amount)):.2f}")
+                        raise HTTPException(status_code=400, detail=i18n_message("insufficient_treasury_balance", request))
                     db.execute(text("""
                         UPDATE treasury_accounts 
                         SET current_balance = current_balance - :amt 
@@ -663,7 +663,7 @@ async def create_expense(
                 "id": expense_id,
                 "expense_number": expense_number,
                 "approval_status": approval_status,
-                "message": "تم إنشاء المصروف بنجاح" if approval_status == "approved" else "تم إنشاء المصروف - في انتظار الاعتماد",
+                "message": i18n_message("expense_created_success", request) if approval_status == "approved" else "تم إنشاء المصروف - في انتظار الاعتماد",
                 "policy": policy_result,
             }
     
@@ -677,8 +677,8 @@ async def create_expense(
                         WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                         AND u.id != :current_uid
                     """), {
-                        "title": "🧳 طلب مصروف جديد",
-                        "message": f"مصروف {expense_number} — {Decimal(str(expense.amount)):,.2f} — {expense.description or expense.expense_type}",
+                        "title": i18n_message("notif_new_expense", request),
+                        "message": i18n_message("expense_notification_details", request),
                         "link": f"/expenses/{expense_id}",
                         "current_uid": current_user.id
                     })
@@ -717,7 +717,7 @@ async def update_expense(
                 raise HTTPException(**http_error(404, "expense_not_found"))
             
             if existing.approval_status != "pending":
-                raise HTTPException(status_code=400, detail="لا يمكن تعديل مصروف معتمد أو مرفوض")
+                raise HTTPException(**http_error(400, "expense_cannot_edit_approved_or_rejected", request))
             
             # Build update fields
             update_fields = []
@@ -748,7 +748,7 @@ async def update_expense(
                 details={"updates": update_fields}, request=request
             )
             
-            return {"success": True, "message": "تم تحديث المصروف بنجاح"}
+            return {"success": True, "message": i18n_message("expense_updated", request)}
         except HTTPException:
             raise
         except Exception:
@@ -791,14 +791,11 @@ async def approve_expense(
             expense = dict(expense_row._mapping)
             
             if expense["approval_status"] != "pending":
-                raise HTTPException(status_code=400, detail="المصروف تم اعتماده أو رفضه مسبقاً")
+                raise HTTPException(**http_error(400, "expense_already_approved_or_rejected", request))
             
             # Validate approval_status value
             if approval.approval_status not in VALID_APPROVAL_STATUSES:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"Invalid approval status. Must be one of: {', '.join(VALID_APPROVAL_STATUSES)}"
-                )
+                raise HTTPException(**http_error(400, "invalid_approval_status", request, statuses=', '.join(VALID_APPROVAL_STATUSES)))
             
             # Update approval status
             db.execute(text("""
@@ -834,7 +831,7 @@ async def approve_expense(
                     cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
     
                 if not cash_account_id:
-                    raise HTTPException(status_code=400, detail="حساب النقدية غير محدد")
+                    raise HTTPException(**http_error(400, "cash_account_not_set", request))
     
                 existing_je_id = expense.get("journal_entry_id")
                 if existing_je_id:
@@ -869,7 +866,7 @@ async def approve_expense(
                         "SELECT current_balance FROM treasury_accounts WHERE id = :id FOR UPDATE"
                     ), {"id": expense["treasury_id"]}).scalar() or 0
                     if Decimal(str(treasury_balance)) < Decimal(str(expense["amount"])):
-                        raise HTTPException(status_code=400, detail=f"رصيد الخزينة غير كافٍ. المتوفر: {Decimal(str(treasury_balance)):.2f}, المطلوب: {Decimal(str(expense['amount'])):.2f}")
+                        raise HTTPException(status_code=400, detail=i18n_message("insufficient_treasury_balance", request))
                     db.execute(text("""
                         UPDATE treasury_accounts 
                         SET current_balance = current_balance - :amt 
@@ -908,7 +905,7 @@ async def approve_expense(
                     """), {
                         "uid": submitted_by,
                         "title": f"{icon} مصروفك {status_ar}",
-                        "message": f"تم {status_ar} المصروف {exp_num} بمبلغ {Decimal(str(expense.get('amount', 0))):,.2f}" if isinstance(expense, dict) else f"تم {status_ar} طلب المصروف",
+                        "message": i18n_message("expense_status_update_details", request) if isinstance(expense, dict) else f"تم {status_ar} طلب المصروف",
                         "link": f"/expenses/{expense_id}"
                     })
                     db.commit()
@@ -964,15 +961,9 @@ async def reverse_expense(
 
         expense = dict(row._mapping)
         if expense["approval_status"] != "approved":
-            raise HTTPException(
-                status_code=400,
-                detail="لا يمكن عكس مصروف غير معتمد",
-            )
+            raise HTTPException(**http_error(400, "expense_cannot_reverse_non_approved", request))
         if not expense["journal_entry_id"]:
-            raise HTTPException(
-                status_code=400,
-                detail="القيد الأصلي للمصروف غير موجود — لا يمكن العكس",
-            )
+            raise HTTPException(**http_error(400, "expense_original_je_not_found", request))
 
         # Fiscal lock check on the reversal date (defaults to today).
         from datetime import date as _date
@@ -1041,7 +1032,7 @@ async def reverse_expense(
 
         return {
             "success": True,
-            "message": "تم عكس المصروف بنجاح",
+            "message": i18n_message("expense_reversed_success", request),
             "expense_id": expense_id,
             "reversal_journal_entry_id": rev_id,
             "reversal_journal_entry_number": rev_num,
@@ -1074,7 +1065,7 @@ async def delete_expense(
                 raise HTTPException(**http_error(404, "expense_not_found"))
             
             if expense.approval_status != "pending":
-                raise HTTPException(status_code=400, detail="لا يمكن حذف مصروف معتمد - يجب إنشاء قيد عكسي")
+                raise HTTPException(**http_error(400, "expense_approved_cannot_delete", request))
             
             db.execute(text(
                 "UPDATE expenses SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
@@ -1086,7 +1077,7 @@ async def delete_expense(
                 request=request
             )
             
-            return {"success": True, "message": "تم حذف المصروف بنجاح"}
+            return {"success": True, "message": i18n_message("expense_deleted", request)}
         except HTTPException:
             raise
         except Exception:

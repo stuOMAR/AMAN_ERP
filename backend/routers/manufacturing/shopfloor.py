@@ -26,6 +26,7 @@ from schemas.shopfloor import (
     StartOperationRequest,
 )
 from utils.audit import log_activity
+from utils.i18n import http_error
 from utils.permissions import require_permission
 
 shopfloor_router = APIRouter(prefix="/manufacturing/shopfloor", tags=["Shop Floor"])
@@ -166,7 +167,7 @@ async def start_operation(
             {"wid": body.work_order_id},
         ).fetchone()
         if not wo:
-            raise HTTPException(status_code=404, detail="Work order not found")
+            raise HTTPException(**http_error(404, ("work_order_not_found", request)))
 
         # Branch validation
         from utils.permissions import validate_branch_access
@@ -179,10 +180,10 @@ async def start_operation(
             {"oid": body.routing_operation_id},
         ).fetchone()
         if not op:
-            raise HTTPException(status_code=404, detail="Operation not found")
+            raise HTTPException(**http_error(404, ("operation_not_found", request)))
 
         if wo.route_id != op.route_id:
-            raise HTTPException(status_code=400, detail="Operation does not belong to this work order route")
+            raise HTTPException(**http_error(400, ("operation_not_in_route", request)))
 
         # 3) Sequence enforcement
         if op.sequence > 1 and not body.supervisor_override:
@@ -212,10 +213,7 @@ async def start_operation(
                 ).fetchone()
                 if not prev_complete:
                     logger.warning(f"Operation sequence {op.sequence} started before previous completed for work order {body.work_order_id}")
-                    raise HTTPException(
-                        status_code=400,
-                        detail="يجب إكمال العملية السابقة أولاً",
-                    )
+                    raise HTTPException(**http_error(400, "previous_operation_must_complete", request))
 
         # 4) Check no duplicate in-progress log
         existing = db.execute(
@@ -228,7 +226,7 @@ async def start_operation(
             {"wid": body.work_order_id, "oid": body.routing_operation_id},
         ).fetchone()
         if existing:
-            raise HTTPException(status_code=400, detail="Operation already in progress")
+            raise HTTPException(**http_error(400, ("operation_already_in_progress", request)))
 
         # 5) Insert log
         now = datetime.now(timezone.utc)
@@ -288,10 +286,10 @@ async def complete_operation(
             {"lid": body.log_id},
         ).fetchone()
         if not log:
-            raise HTTPException(status_code=404, detail="Log entry not found")
+            raise HTTPException(**http_error(404, "log_entry_not_found", request))
         if log.status != "in_progress":
             logger.warning(f"Cannot complete log {body.log_id} with status {log.status}")
-            raise HTTPException(status_code=400, detail="لا يمكن إكمال العملية في حالتها الحالية")
+            raise HTTPException(**http_error(400, "cannot_complete_operation", request))
 
         # Branch validation via work order
         from utils.permissions import validate_branch_access
@@ -385,10 +383,10 @@ async def pause_operation(
             {"lid": body.log_id},
         ).fetchone()
         if not log:
-            raise HTTPException(status_code=404, detail="Log entry not found")
+            raise HTTPException(**http_error(404, "log_entry_not_found", request))
         if log.status != "in_progress":
             logger.warning(f"Cannot pause log {body.log_id} with status {log.status}")
-            raise HTTPException(status_code=400, detail="لا يمكن إيقاف العملية في حالتها الحالية")
+            raise HTTPException(**http_error(400, "cannot_pause_operation", request))
 
         # Branch validation via work order
         from utils.permissions import validate_branch_access
@@ -446,7 +444,7 @@ def get_work_order_progress(
             {"wid": work_order_id},
         ).fetchone()
         if not wo:
-            raise HTTPException(status_code=404, detail="Work order not found")
+            raise HTTPException(**http_error(404, ("work_order_not_found", request)))
 
         # Branch validation
         from utils.permissions import validate_branch_access

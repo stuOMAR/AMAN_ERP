@@ -28,12 +28,12 @@ def create_return(
 ) -> dict:
     """Create a draft return."""
     if source not in ("sales", "pos"):
-        raise HTTPException(status_code=422, detail="source must be 'sales' or 'pos'")
+        raise HTTPException(**http_error(422, "source_must_be_sales_or_pos", request))
 
     if source == "sales" and not original_invoice_id:
-        raise HTTPException(status_code=422, detail="original_invoice_id required for sales returns")
+        raise HTTPException(**http_error(422, "original_invoice_id_required", request))
     if source == "pos" and not original_pos_sale_id:
-        raise HTTPException(status_code=422, detail="original_pos_sale_id required for POS returns")
+        raise HTTPException(**http_error(422, "original_pos_sale_id_required", request))
 
     # Calculate total
     total = sum(Decimal(str(l.get("qty", 0))) * Decimal(str(l.get("unit_price", 0))) for l in lines)
@@ -99,13 +99,13 @@ def post_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None =
     ).fetchone()
 
     if not ret:
-        raise HTTPException(status_code=404, detail="Return not found")
+        raise HTTPException(**http_error(404, ("return_not_found_service", request)))
     ret = dict(ret._mapping)
 
     if ret["state"] != "draft":
         raise HTTPException(status_code=409, detail={
             "code": "returns.already_posted",
-            "message": "Return is not in draft state",
+            "message": i18n_message("return_not_draft", request),
         })
 
     # Get lines
@@ -175,11 +175,11 @@ def cancel_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None
     ).fetchone()
 
     if not ret:
-        raise HTTPException(status_code=404, detail="Return not found")
+        raise HTTPException(**http_error(404, ("return_not_found_service", request)))
     ret = dict(ret._mapping)
 
     if ret["state"] != "posted":
-        raise HTTPException(status_code=409, detail="Only posted returns can be cancelled")
+        raise HTTPException(**http_error(409, ("only_posted_returns_cancellable", request)))
 
     db.execute(
         text("UPDATE returns_unified SET state = 'cancelled', updated_at = clock_timestamp() WHERE id = :rid"),

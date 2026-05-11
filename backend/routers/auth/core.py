@@ -3,7 +3,7 @@
 Mounted under the parent router via auth/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Body
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
 from sqlalchemy import text, create_engine
 from sqlalchemy.exc import OperationalError, ProgrammingError
@@ -140,7 +140,7 @@ def check_rate_limit(request: Request, username: str = None):
             if ip_count and int(ip_count) >= MAX_LOGIN_ATTEMPTS:
                 ttl = r.ttl(ip_key)
                 minutes = max(int(ttl / 60) + 1, 1) if ttl and ttl > 0 else 1
-                raise HTTPException(429, f"تم تجاوز عدد المحاولات المسموح. يرجى الانتظار {minutes} دقيقة")
+                raise HTTPException(**http_error(429, "rate_limit_exceeded", request, minutes=minutes))
 
             if username:
                 user_key = f"rl:user:{username}"
@@ -149,7 +149,7 @@ def check_rate_limit(request: Request, username: str = None):
                     ttl = r.ttl(user_key)
                     minutes = max(int(ttl / 60) + 1, 1) if ttl and ttl > 0 else 1
                     logger.warning(f"🔒 Username '{username}' locked out - too many attempts")
-                    raise HTTPException(429, f"تم تجاوز عدد المحاولات لهذا المستخدم. يرجى الانتظار {minutes} دقيقة")
+                    raise HTTPException(**http_error(429, "rate_limit_exceeded_user", request, minutes=minutes))
             return
         except HTTPException:
             raise
@@ -166,7 +166,7 @@ def check_rate_limit(request: Request, username: str = None):
         elif info["count"] >= MAX_LOGIN_ATTEMPTS:
             remaining = LOCKOUT_SECONDS - (now - info["last_attempt"]).total_seconds()
             minutes = max(int(remaining / 60) + 1, 1)
-            raise HTTPException(429, f"تم تجاوز عدد المحاولات المسموح. يرجى الانتظار {minutes} دقيقة")
+            raise HTTPException(**http_error(429, "rate_limit_exceeded", request, minutes=minutes))
 
     if username and username in _username_attempts:
         info = _username_attempts[username]
@@ -176,7 +176,7 @@ def check_rate_limit(request: Request, username: str = None):
             remaining = LOCKOUT_SECONDS - (now - info["last_attempt"]).total_seconds()
             minutes = max(int(remaining / 60) + 1, 1)
             logger.warning(f"🔒 Username '{username}' locked out - too many attempts")
-            raise HTTPException(429, f"تم تجاوز عدد المحاولات لهذا المستخدم. يرجى الانتظار {minutes} دقيقة")
+            raise HTTPException(**http_error(429, "rate_limit_exceeded_user", request, minutes=minutes))
 
 
 def record_failed_attempt(request: Request, username: str = None):
@@ -459,11 +459,11 @@ def decode_token(token: str) -> dict:
 
 
 @router.get("/me", response_model=UserResponse)
-async def get_current_user(token: str = Depends(oauth2_scheme)):
+async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)):
     """الحصول على معلومات المستخدم الحالي"""
     credentials_exception = HTTPException(
         status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="Could not validate credentials",
+        detail=i18n_message("could_not_validate_credentials", request),
         headers={"WWW-Authenticate": "Bearer"},
     )
     
@@ -514,7 +514,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     user_id = payload.get("user_id")
     
     if not company_id or not user_id:
-        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="بيانات غير كاملة")
+        raise HTTPException(**http_error(401, "incomplete_credentials", request))
     
     db = get_system_db()
     try:
@@ -524,7 +524,7 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
         ).fetchone()
         
         if not company:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="الشركة غير موجودة")
+            raise HTTPException(**http_error(404, "company_not_found", request))
         
         currency = company[1]
         
@@ -637,15 +637,12 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
                     )
         except (OperationalError, ProgrammingError):
             logger.exception("Current user lookup failed due to tenant DB/schema issue for company %s", company_id)
-            raise HTTPException(
-                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                detail="بيانات الشركة غير جاهزة حالياً. يرجى إعادة تسجيل الدخول أو التواصل مع الدعم.",
-            )
+            raise HTTPException(**http_error(500, "company_data_not_ready_login", request))
 
     finally:
         db.close()
     
-    raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="المستخدم غير موجود")
+    raise HTTPException(**http_error(404, "user_not_found", request))
 
 
 class SelfProfileUpdateRequest(BaseModel):
@@ -671,14 +668,14 @@ async def update_current_user_profile(
     company_id = getattr(current_user, "company_id", None)
 
     if not company_id:
-        raise HTTPException(status_code=400, detail="غير متاح لمسؤولي النظام")
+        raise HTTPException(**http_error(400, "not_available_for_system_admins", request))
 
     updates = {}
 
     if data.full_name is not None:
         full_name = data.full_name.strip()
         if not full_name:
-            raise HTTPException(status_code=400, detail="الاسم الكامل لا يمكن أن يكون فارغا")
+            raise HTTPException(**http_error(400, "full_name_cannot_be_empty", request))
         updates["full_name"] = full_name
 
     if data.email is not None:
@@ -699,7 +696,7 @@ async def update_current_user_profile(
                 {"email": updates["email"], "uid": current_user.id}
             ).fetchone()
             if existing_email:
-                raise HTTPException(status_code=400, detail="البريد الإلكتروني مستخدم من قبل مستخدم آخر")
+                raise HTTPException(**http_error(400, "email_already_used_by_another_user", request))
 
         set_parts = []
         params = {"uid": current_user.id}
@@ -738,7 +735,7 @@ async def update_current_user_profile(
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to update self profile: {e}")
-        raise HTTPException(status_code=500, detail="فشل تحديث بيانات الحساب")
+        raise HTTPException(**http_error(500, "account_data_update_failed", request))
     finally:
         db.close()
 
@@ -788,13 +785,10 @@ class TwoFALoginRequest(BaseModel):
     code: str
 
 
-def get_current_user_company(current_user: UserResponse = Depends(get_current_user)):
+def get_current_user_company(request: Request, current_user: UserResponse = Depends(get_current_user)):
     """Dependency that ensures a user is linked to a company and returns that company_id"""
     if not current_user.company_id:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED, 
-            detail="Unauthorized - User not linked to a company"
-        )
+        raise HTTPException(**http_error(401, "unauthorized_no_company", request))
     return current_user.company_id
 
 
@@ -811,13 +805,10 @@ class AdminTwoFAVerify(BaseModel):
     code: str
 
 
-def _require_system_admin(current_user):
+def _require_system_admin(current_user, request: Request = None):
     """Raise 403 unless the caller is a system administrator."""
     role = getattr(current_user, "role", None) or getattr(current_user, "type", None)
     if role != "system_admin":
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="يتطلب هذا الإجراء صلاحيات مسؤول النظام",
-        )
+        raise HTTPException(**http_error(403, "system_admin_required", request))
 
 

@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * PayrollReversal — confirm-and-reason modal for reversing a locked payroll period.
@@ -10,6 +11,7 @@ import { useMutation, useQueryClient } from '@tanstack/react-query';
  *   onSuccess  — callback after successful reversal
  */
 export default function PayrollReversal({ periodId, periodName, onSuccess }) {
+  const { t } = useTranslation();
   const [reason, setReason] = useState('');
   const [showModal, setShowModal] = useState(false);
   const [result, setResult] = useState(null);
@@ -41,7 +43,7 @@ export default function PayrollReversal({ periodId, periodName, onSuccess }) {
         className="btn btn-danger btn-sm"
         onClick={() => setShowModal(true)}
       >
-        Reverse Period
+        {t('payroll.payroll_reversal.reverse_period')}
       </button>
     );
   }
@@ -49,21 +51,21 @@ export default function PayrollReversal({ periodId, periodName, onSuccess }) {
   return (
     <div className="modal-overlay">
       <div className="modal-content" style={{ maxWidth: 500 }}>
-        <h3>Reverse Payroll Period</h3>
+        <h3>{t('payroll.payroll_reversal.modal_title')}</h3>
         <p>
-          Are you sure you want to reverse <strong>{periodName}</strong>?
+          {t('payroll.payroll_reversal.confirm_text')} <strong>{periodName}</strong>?
           This will reverse the GL journal entries and create compensating bank movements.
         </p>
 
         <div className="form-group">
-          <label htmlFor="reversal-reason">Reason for reversal *</label>
+          <label htmlFor="reversal-reason">{t('payroll.payroll_reversal.reason_label')}</label>
           <textarea
             id="reversal-reason"
             className="form-control"
             rows={3}
             value={reason}
             onChange={(e) => setReason(e.target.value)}
-            placeholder="Enter the reason for reversing this payroll period..."
+            placeholder={t('payroll.payroll_reversal.reason_placeholder')}
             required
           />
         </div>
@@ -76,9 +78,9 @@ export default function PayrollReversal({ periodId, periodName, onSuccess }) {
 
         {result && (
           <div className="alert alert-success">
-            <p>Period reversed successfully.</p>
-            {result.je_id && <p>Reversed JE: #{result.je_id}</p>}
-            {result.run_id && <p>Run ID: {result.run_id}</p>}
+            <p>{t('payroll.payroll_reversal.success_message')}</p>
+            {result.je_id && <p>{t('payroll.payroll_reversal.reversed_je')}{result.je_id}</p>}
+            {result.run_id && <p>{t('payroll.payroll_reversal.run_id')}{result.run_id}</p>}
           </div>
         )}
 
@@ -91,14 +93,14 @@ export default function PayrollReversal({ periodId, periodName, onSuccess }) {
               setReason('');
             }}
           >
-            Cancel
+            {t('payroll.payroll_reversal.buttons.cancel')}
           </button>
           <button
             className="btn btn-danger"
             onClick={() => mutation.mutate()}
             disabled={!reason.trim() || mutation.isLoading || result}
           >
-            {mutation.isLoading ? 'Reversing...' : 'Confirm Reversal'}
+            {mutation.isLoading ? t('payroll.payroll_reversal.buttons.reversing') : t('payroll.payroll_reversal.buttons.confirm')}
           </button>
         </div>
       </div>

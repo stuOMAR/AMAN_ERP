@@ -97,10 +97,10 @@ def update_table(table_id: int, data: dict, current_user: UserResponse = Depends
             sets.append(f"{f} = :{f}")
             params[f] = data[f]
     if not sets:
-        raise HTTPException(status_code=400, detail="No fields")
+        raise HTTPException(**http_error(400, ("pos_no_fields", request)))
     row = db.execute(text(f"UPDATE pos_tables SET {', '.join(sets)} WHERE id = :id RETURNING *"), params).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="Table not found")
+        raise HTTPException(**http_error(404, ("pos_table_not_found", request)))
     db.commit()
     return dict(row._mapping)
 
@@ -110,7 +110,7 @@ def delete_table(table_id: int, current_user: UserResponse = Depends(get_current
     """Delete Table."""
     db.execute(text("UPDATE pos_tables SET is_active = false WHERE id = :id"), {"id": table_id})
     db.commit()
-    return {"message": "Table deactivated"}
+    return {"message": i18n_message("pos_table_deactivated", request)}
 
 
 @router.post("/tables/{table_id}/seat", dependencies=[Depends(require_permission("pos.create"))], response_model=Dict[str, Any])
@@ -135,7 +135,7 @@ def clear_table(table_id: int, current_user: UserResponse = Depends(get_current_
         WHERE table_id = :tid AND status = 'seated'
     """), {"tid": table_id})
     db.commit()
-    return {"message": "Table cleared"}
+    return {"message": i18n_message("pos_table_cleared", request)}
 
 
 # ---------- POS-008: Kitchen Display System ----------

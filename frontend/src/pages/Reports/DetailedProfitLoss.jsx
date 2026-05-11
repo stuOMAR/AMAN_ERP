@@ -28,6 +28,7 @@ const DetailedProfitLoss = () => {
     const [groupBy, setGroupBy] = useState('customer');
     const [data, setData] = useState([]);
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
 
     const fetchData = useCallback(async () => {
         try {
@@ -45,6 +46,7 @@ const DetailedProfitLoss = () => {
             showToast(t('common.error_loading'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     }, [startDate, endDate, groupBy, currentBranch?.id]);
 
@@ -94,6 +96,7 @@ const DetailedProfitLoss = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             {/* Header */}
             <div className="workspace-header">
                 <BackButton />

@@ -92,7 +92,7 @@ def enroll_customer(data: dict, request: Request, current_user: UserResponse = D
         "SELECT id FROM pos_loyalty_points WHERE party_id = :pid AND program_id = :prog"
     ), {"pid": data["party_id"], "prog": data["program_id"]}).fetchone()
     if existing:
-        raise HTTPException(status_code=400, detail="Customer already enrolled")
+        raise HTTPException(**http_error(400, "customer_already_enrolled", request))
     result = db.execute(text("""
         INSERT INTO pos_loyalty_points (program_id, party_id, points_earned, points_redeemed, balance, tier)
         VALUES (:prog, :pid, 0, 0, 0, 'standard')
@@ -117,7 +117,7 @@ def earn_points(data: dict, request: Request, current_user: UserResponse = Depen
     """Award loyalty points after a sale."""
     loyalty = db.execute(text("SELECT * FROM pos_loyalty_points WHERE party_id = :pid"), {"pid": data["party_id"]}).fetchone()
     if not loyalty:
-        raise HTTPException(status_code=404, detail="Customer not enrolled in loyalty")
+        raise HTTPException(**http_error(404, "customer_not_enrolled_in_loyalty", request))
     program = db.execute(text("SELECT * FROM pos_loyalty_programs WHERE id = :id"), {"id": loyalty.program_id}).fetchone()
     points = (_dec(data.get("amount", 0)) * _dec(program.points_per_unit)).quantize(_D2, ROUND_HALF_UP)
     db.execute(text("""
@@ -146,13 +146,13 @@ def redeem_points(data: dict, request: Request, current_user: UserResponse = Dep
     """Redeem loyalty points as discount."""
     loyalty = db.execute(text("SELECT * FROM pos_loyalty_points WHERE party_id = :pid"), {"pid": data["party_id"]}).fetchone()
     if not loyalty:
-        raise HTTPException(status_code=404, detail="Customer not enrolled")
+        raise HTTPException(**http_error(404, "customer_not_enrolled", request))
     points = _dec(data.get("points", 0))
     if points > _dec(loyalty.balance):
-        raise HTTPException(status_code=400, detail="Insufficient points")
+        raise HTTPException(**http_error(400, "insufficient_points", request))
     program = db.execute(text("SELECT * FROM pos_loyalty_programs WHERE id = :id"), {"id": loyalty.program_id}).fetchone()
     if points < _dec(program.min_points_redeem):
-        raise HTTPException(status_code=400, detail=f"Minimum {program.min_points_redeem} points to redeem")
+        raise HTTPException(status_code=400, detail=i18n_message("min_points_to_redeem", request))
     discount_value = (points * _dec(program.currency_per_point)).quantize(_D2, ROUND_HALF_UP)
     db.execute(text("""
         UPDATE pos_loyalty_points SET points_redeemed = points_redeemed + :pts, balance = balance - :pts,

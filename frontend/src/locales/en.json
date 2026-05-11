@@ -153,7 +153,8 @@
     "data_source": "Data Source",
     "errors": {
       "name_required": "Report name is required",
-      "no_columns": "Select at least one column"
+      "no_columns": "Select at least one column",
+      "no_data_to_export": "No data to export"
     },
     "filters": "Filters",
     "no_filters": "No filters",
@@ -417,7 +418,7 @@
     "refresh": "Refresh",
     "edit": "Edit",
     "delete": "Delete",
-    "search": "Search...",
+    "search": "Search",
     "loading": "Loading...",
     "actions": "Actions",
     "add_new": "Add New",
@@ -447,7 +448,7 @@
     "retry": "Retry",
     "created_by": "Created By",
     "submit": "Submit",
-    "no_data": "No data available",
+    "no_data": "No data",
     "back_to_list": "Back to List",
     "unnamed": "Unnamed",
     "admin": "Admin",
@@ -483,14 +484,10 @@
     "primary_branch": "Primary Branch",
     "department": "Department",
     "position": "Position",
-    "status": {
-      "title": "Status",
-      "draft": "Draft",
-      "posted": "Posted"
-    },
+    "status": "Status",
     "notes": "Notes",
     "no_records_found": "No records found",
-    "processing": "Processing...",
+    "processing": "Processing",
     "details": "Details",
     "month": "Month",
     "period": "Period",
@@ -772,7 +769,20 @@
     "zatca_qr_code": "Electronic Invoice QR Code (ZATCA)",
     "good": "Good",
     "zatca_generated": "Generated",
-    "zatca_submitted": "Submitted"
+    "zatca_submitted": "Submitted",
+    "enabled": "Enabled",
+    "archived": "Archived",
+    "completed_status": "Completed",
+    "failed": "Failed",
+    "created": "Created",
+    "reason": "Reason",
+    "actions_col": "Actions",
+    "no_search_results": "No results found",
+    "none": "None",
+    "move_up": "Move Up",
+    "move_down": "Move Down",
+    "select_customer": "Select Customer",
+    "exportError": "Export failed"
   },
   "nav": {
     "dashboard": "Workspace",
@@ -844,7 +854,10 @@
     "blanket_po": "Blanket POs",
     "cpq": "Configure-Price-Quote",
     "demand_forecast": "Demand Forecast",
-    "performance": "Performance Reviews"
+    "performance": "Performance Reviews",
+    "ops_scheduler": "Scheduler",
+    "health": "System Health",
+    "kpi_admin": "KPI Admin"
   },
   "self_service": {
     "dashboard_title": "Employee Self-Service",
@@ -1477,26 +1490,36 @@
       "course catalog": "Course Catalog"
     },
     "violations": {
-      "action": "Action",
-      "action_taken": "Action Taken",
-      "actions": "Actions",
-      "cancel": "Cancel",
-      "date": "Date",
-      "deduction": "Deduction",
-      "deduction_amount": "Deduction Amount",
-      "description": "Description",
-      "edit_violation": "Edit Violation",
-      "employee": "Employee",
-      "en": "en",
-      "loading": "Loading...",
+      "types": {
+        "absence": "Absence without permission",
+        "tardiness": "Tardiness",
+        "misconduct": "Misconduct"
+      },
+      "actions": {
+        "warning": "Warning",
+        "deduction": "Deduction",
+        "suspension": "Suspension",
+        "termination": "Termination"
+      },
+      "violations_penalties": "Violations & Penalties",
       "manage_employee_violations_and_penalties": "Manage employee violations and penalties",
       "new_violation": "New Violation",
-      "no_violations": "No violations",
-      "save": "Save",
-      "select": "-- Select --",
+      "employee": "Employee",
       "type": "Type",
+      "date": "Date",
+      "description": "Description",
+      "action": "Action",
+      "deduction": "Deduction",
+      "loading": "Loading...",
+      "no_violations": "No violations recorded",
+      "en": "Action",
+      "edit_violation": "Edit Violation",
+      "select": "Select",
       "violation_type": "Violation Type",
-      "violations_penalties": "Violations & Penalties"
+      "action_taken": "Action Taken",
+      "deduction_amount": "Deduction Amount",
+      "cancel": "Cancel",
+      "save": "Save"
     },
     "eos": {
       "select_employee": "Select employee",
@@ -1512,16 +1535,55 @@
     "gosi_file_exported_successfully": "GOSI file exported successfully",
     "export_failed": "Export failed",
     "advanced_payroll": "Advanced Payroll",
-    "overtime_requests": "Overtime Requests",
+    "overtime_requests": {
+      "statuses": {
+        "pending": "Pending",
+        "approved": "Approved",
+        "rejected": "Rejected"
+      }
+    },
     "gosi_social_insurance": "GOSI / Social Insurance",
     "end_of_service_calculator": "End of Service Calculator",
     "export_gosi_file": "Export GOSI File",
     "hr_management": "HR Management",
-    "employee_documents": "Employee Documents",
-    "performance_reviews": "Performance Reviews",
-    "training_programs": "Training Programs",
+    "employee_documents": {
+      "types": {
+        "passport": "Passport",
+        "residence": "Residence Permit",
+        "driving_license": "Driving License",
+        "national_id": "National ID",
+        "certificate": "Certificate",
+        "contract": "Contract",
+        "other": "Other"
+      }
+    },
+    "performance_reviews": {
+      "frequencies": {
+        "quarterly": "Quarterly",
+        "semi_annual": "Semi-Annual",
+        "annual": "Annual"
+      }
+    },
+    "training_programs": {
+      "statuses": {
+        "planned": "Planned",
+        "in_progress": "In Progress",
+        "completed": "Completed",
+        "cancelled": "Cancelled"
+      }
+    },
     "violations_penalties": "Violations & Penalties",
-    "custody_management": "Custody Management",
+    "custody_management": {
+      "item_types": {
+        "laptop": "Laptop",
+        "phone": "Phone",
+        "car": "Car",
+        "key": "Key",
+        "card": "Card",
+        "tool": "Tool",
+        "other": "Other"
+      }
+    },
     "payslips": "Payslips",
     "leave_carryover": "Leave Carryover",
     "recruitment": {
@@ -1561,7 +1623,13 @@
     "emergency_contact": "Emergency Contact",
     "returning_item": "Returning: {{name}}",
     "days_count": "{{count}} day",
-    "participants_title": "Participants - {{name}}"
+    "participants_title": "Participants - {{name}}",
+    "wps_export": {
+      "formats": {
+        "sif": "SIF — SAMA Fixed-Width (Banking)",
+        "csv": "CSV — Spreadsheet (Readable)"
+      }
+    }
   },
   "status": {
     "active": "Active",
@@ -2045,7 +2113,8 @@
       "manufacturing": "Manufacturing",
       "projects": "Projects",
       "assets": "Fixed Assets",
-      "custom": "Custom Reports"
+      "custom": "Custom Reports",
+      "operations": "Operations"
     },
     "reports": {
       "sales_analytics": "Sales Analytics",
@@ -2091,7 +2160,10 @@
       "scheduled_desc": "Automate report delivery via email",
       "shared_desc": "Reports that colleagues have shared with you",
       "commissions_desc": "Track salesperson commissions and payouts",
-      "detailed_pl_desc": "Profit & loss breakdown by customer, product, or category"
+      "detailed_pl_desc": "Profit & loss breakdown by customer, product, or category",
+      "profitability": "Profitability Report",
+      "profitability_desc": "Revenue, cost, and profit analysis",
+      "bi_analytics_desc": "Business intelligence and analytics"
     },
     "quick_access": {
       "title": "Quick Access"
@@ -2181,7 +2253,11 @@
     "transfer_asset_to_branch": "Transfer Asset to Branch",
     "target_branch": "Target Branch",
     "additional_notes_optional": "Additional notes (optional)",
-    "confirm_transfer": "Confirm Transfer"
+    "confirm_transfer": "Confirm Transfer",
+    "impairment_formulas": {
+      "formula_recoverable": "Recoverable Amount = MAX(Fair Value Less Costs to Sell, Value in Use)",
+      "formula_impairment": "Impairment Loss = Carrying Amount − Recoverable Amount"
+    }
   },
   "sales": {
     "title": "Sales (CRM)",
@@ -2236,7 +2312,8 @@
       "receipt_status": {
         "posted": "Posted",
         "draft": "Draft"
-      }
+      },
+      "party_sites": "Party Sites"
     },
     "groups": {
       "title": "Customer Groups",
@@ -2536,7 +2613,9 @@
           "create_failed": "Failed to create quotation",
           "customer_required": "Customer is required",
           "fetch_failed": "Failed to fetch data",
-          "product_required": "At least one product is required"
+          "product_required": "At least one product is required",
+          "quantity_required": "Quantity is required",
+          "price_required": "Price is required"
         },
         "saving": "Saving..."
       },
@@ -2554,7 +2633,8 @@
         "subtotal": "Subtotal",
         "discount": "Discount",
         "tax": "Tax",
-        "grand_total": "Grand Total"
+        "grand_total": "Grand Total",
+        "send_email": "Send Email"
       }
     },
     "returns": {
@@ -3773,7 +3853,17 @@
     "sales_order": "Sales Order",
     "proforma_invoice": "Proforma Invoice",
     "effect_type": "Effect Type",
-    "application_scope": "Application Scope"
+    "application_scope": "Application Scope",
+    "invoice_print": {
+      "simplified_tax_invoice": "Simplified Tax Invoice"
+    },
+    "invoice_details": {
+      "zatca_qr_code": "ZATCA QR Code"
+    },
+    "order_to_invoice": {
+      "invoice_prefix": "Invoice #",
+      "conversion_failed": "Conversion failed"
+    }
   },
   "buying": {
     "home": {
@@ -3875,7 +3965,8 @@
           "invoices": "No invoices recorded",
           "payments": "No payment vouchers recorded",
           "receipts": "No receipt vouchers recorded"
-        }
+        },
+        "party_sites": "Party Sites"
       },
       "delete_confirm": "Are you sure you want to delete this supplier?",
       "search_placeholder": "Search suppliers...",
@@ -3946,7 +4037,8 @@
         "error_saving": "Failed to create invoice",
         "error_warehouse": "Warehouse is required",
         "error_supplier_required": "Supplier is required",
-        "error_product_required": "Product is required"
+        "error_product_required": "Product is required",
+        "error_qty_exceeds_remaining": "Quantity exceeds remaining"
       },
       "details": {
         "subtitle": "Purchase invoice from",
@@ -4080,7 +4172,8 @@
         "qty_remaining": "Qty Remaining",
         "received_value": "Received Value (Unbilled)",
         "total": "Total",
-        "unit_price": "Unit Price"
+        "unit_price": "Unit Price",
+        "qty_to_invoice": "Qty to Invoice"
       },
       "items": "Items",
       "not_found": "Purchase order not found",
@@ -4552,7 +4645,8 @@
       "search_supplier": "Search supplier...",
       "select_supplier_required": "Select at least one supplier",
       "supplier_selected": "Supplier selected",
-      "suppliers": "Suppliers"
+      "suppliers": "Suppliers",
+      "line_required": "At least one line item is required"
     },
     "purchases_aging": "Purchases Aging",
     "matching_quality": "Matching & Quality",
@@ -4589,7 +4683,8 @@
         "batches": "Batch Tracking",
         "cycle_counts": "Cycle Counts",
         "quality": "Quality Control",
-        "serials": "Serial Numbers"
+        "serials": "Serial Numbers",
+        "profitability_report": "Profitability Report"
       }
     },
     "products": {
@@ -4682,7 +4777,9 @@
       "delete_confirm_message": "Are you sure you want to delete the product {{name}}?",
       "cost_by_warehouse": "Cost Details by Warehouse",
       "unit_piece": "Piece",
-      "search_placeholder": "Search products..."
+      "search_placeholder": "Search products...",
+      "branch_cost": "Branch Cost",
+      "branch_price": "Branch Price"
     },
     "categories": {
       "title": "Product Categories",
@@ -4784,7 +4881,8 @@
       "status": {
         "pending": "⏳ Pending",
         "received": "✅ Received",
-        "cancelled": "❌ Cancelled"
+        "cancelled": "❌ Cancelled",
+        "dispatched": "Dispatched"
       },
       "empty": "No shipments found",
       "view": "View",
@@ -4850,7 +4948,13 @@
       "search_placeholder": "Search shipments...",
       "validation": {
         "error_load": "Failed to load shipments",
-        "error_load_details": "Failed to load shipment details"
+        "error_load_details": "Failed to load shipment details",
+        "error_dispatch": "Cannot dispatch shipment"
+      },
+      "details": {
+        "dispatch_confirm": "Are you sure you want to dispatch this shipment?",
+        "dispatch_success": "Shipment dispatched successfully",
+        "dispatch": "Dispatch"
       }
     },
     "details": {
@@ -4893,7 +4997,8 @@
         "currency": "Currency",
         "status": "Status",
         "notes": "Notes",
-        "actions": "Actions"
+        "actions": "Actions",
+        "branch": "Branch"
       },
       "status": {
         "active": "Active",
@@ -4908,7 +5013,8 @@
         "is_active": "Active",
         "is_default": "Set as Default",
         "save": "Save",
-        "cancel": "Cancel"
+        "cancel": "Cancel",
+        "please_select_branch": "Please select a branch"
       },
       "edit_prices": {
         "title": "Edit Prices",
@@ -5207,6 +5313,25 @@
     "serials": {
       "subtitle": "Manage product serial numbers",
       "title": "Serial Numbers"
+    },
+    "profitability": {
+      "title": "Profitability Report",
+      "subtitle": "Revenue, cost, and profit analysis by product",
+      "total_revenue": "Total Revenue",
+      "total_cogs": "Total COGS",
+      "gross_profit": "Gross Profit",
+      "margin": "Margin %",
+      "invoice_count": "Invoices",
+      "table": {
+        "product": "Product",
+        "sku": "SKU",
+        "qty": "Qty",
+        "revenue": "Revenue",
+        "cogs": "COGS",
+        "profit": "Profit",
+        "margin": "Margin %"
+      },
+      "no_data": "No profitability data"
     }
   },
   "accounting": {
@@ -5276,7 +5401,9 @@
       "delete": "Delete",
       "save_failed": "Failed to save",
       "delete_failed": "Failed to delete",
-      "add_main_account": "Add Main Account"
+      "add_main_account": "Add Main Account",
+      "original_currency_balance": "Original Currency Balance",
+      "account_code_optional": "Account Code (Optional)"
     },
     "table": {
       "debit": "Debit",
@@ -5324,7 +5451,13 @@
       "posted": "Posted",
       "void_this_entry_a_reversal_entry_will_be_created": "Void this entry? A reversal entry will be created.",
       "voided": "Voided",
-      "search_placeholder": "Search journal entries..."
+      "search_placeholder": "Search journal entries...",
+      "reverse_entry": "Reverse Entry",
+      "reverse_confirm_msg": "Are you sure you want to reverse this journal entry?",
+      "reverse_original_kept": "The original entry will be kept for audit purposes",
+      "reversal_date": "Reversal Date",
+      "reverse_reason_placeholder": "Enter reason for reversal",
+      "confirm_reverse": "Confirm Reverse"
     },
     "trial_balance": {
       "title": "Trial Balance",
@@ -5444,7 +5577,8 @@
         "total_planned": "Total Planned",
         "total_actual": "Total Actual",
         "overruns": "Overruns"
-      }
+      },
+      "all_cost_centers": "All Cost Centers"
     },
     "currencies": {
       "title": "Currency Management",
@@ -5561,7 +5695,21 @@
     "ic_service": "IC Service",
     "ic_transactions": "IC Transactions",
     "ic_transfer": "IC Transfer",
-    "intercompany": "Intercompany",
+    "intercompany": {
+      "table": {
+        "reference": "Reference",
+        "entities": "Entities",
+        "type": "Type",
+        "source_amount": "Source Amount",
+        "target_amount": "Target Amount",
+        "status": "Status",
+        "date": "Date",
+        "actions": "Actions"
+      },
+      "title": "Intercompany Transactions",
+      "source_entity": "Source Entity",
+      "target_entity": "Target Entity"
+    },
     "intercompany_desc": "Intercompany Transactions",
     "invoice_id": "Invoice ID",
     "method": "Method",
@@ -5679,7 +5827,8 @@
     "vat_return": "VAT Return",
     "zakat_base": "Zakat Base",
     "retained_earnings": "Retained Earnings",
-    "general_journal": "General Journal"
+    "general_journal": "General Journal",
+    "cost_center": "Cost Center"
   },
   "treasury": {
     "title": "Treasury Management",
@@ -5878,7 +6027,14 @@
     "deposit": "Deposit",
     "same_account_error": "Source and destination accounts cannot be the same",
     "checks_for_collection": "Checks Under Collection",
-    "checks_for_payment": "Checks Under Payment"
+    "checks_for_payment": "Checks Under Payment",
+    "account_list": {
+      "iban_label": "IBAN"
+    },
+    "account_name_required": "Account name is required",
+    "account_currency_required": "Account currency is required",
+    "error_loading_accounts": "Failed to load accounts",
+    "primary_branch": "Primary Branch"
   },
   "employee": {
     "first_name": "First Name",
@@ -5894,7 +6050,9 @@
       "webhooks": "Manage external webhook endpoints",
       "branches": "Manage company branches and locations",
       "data_import": "Import customers, products, and accounts from Excel",
-      "modules": "Enable or disable modules based on business type"
+      "modules": "Enable or disable modules based on business type",
+      "audit_logs": "Review and track all system operations",
+      "roles": "Manage roles and permissions"
     },
     "company": {
       "title": "Company Settings",
@@ -5971,7 +6129,13 @@
       "tax_number": "Tax Number",
       "commercial_reg": "Commercial Registration",
       "enable_vat": "Enable VAT",
-      "tax_rate": "Tax Rate (%)"
+      "tax_rate": "Tax Rate (%)",
+      "quarters": {
+        "jan": "January (01)",
+        "apr": "April (04)",
+        "jul": "July (07)",
+        "oct": "October (10)"
+      }
     },
     "branding": {
       "logo_title": "Company Logo",
@@ -5982,7 +6146,8 @@
       "upload_btn": "Choose Image",
       "theme_title": "System Theme (Colors)",
       "primary_color": "Primary Color",
-      "theme_hint": "* These colors will valid gradually across system interfaces and reports."
+      "theme_hint": "* These colors will valid gradually across system interfaces and reports.",
+      "logo_preview": "Logo Preview"
     },
     "invoicing": {
       "sequence_title": "Document Sequencing",
@@ -6522,6 +6687,265 @@
       "title": "Webhooks",
       "url": "URL",
       "url_label": "Webhook URL"
+    },
+    "integration_dlq": {
+      "title": "Integration Queues & DLQ",
+      "subtitle": "Review and manage failed integration attempts",
+      "refresh": "Refresh",
+      "dlq_title": "DLQ (Permanent Failure)",
+      "payment_queue": "Payment Queue",
+      "message_queue": "Message Queue",
+      "dlq_items": "DLQ Items",
+      "show_archived": "Show archived",
+      "payment_attempts": "Payment attempts",
+      "message_attempts": "Message attempts",
+      "filters": {
+        "all_states": "All States",
+        "pending": "Pending",
+        "processing": "Processing",
+        "successful": "Successful",
+        "permanent_failure": "Permanent Failure"
+      },
+      "table": {
+        "type": "Type",
+        "provider": "Provider",
+        "reason": "Reason",
+        "failure_date": "Failure Date",
+        "status": "Status",
+        "actions": "Actions",
+        "amount": "Amount",
+        "currency": "Currency",
+        "recipient": "Recipient",
+        "attempts": "Attempts",
+        "next_attempt": "Next Attempt",
+        "last_error": "Last Error"
+      },
+      "badges": {
+        "archived": "Archived",
+        "active": "Active"
+      },
+      "buttons": {
+        "details": "Details",
+        "resend": "Resend",
+        "archive": "Archive"
+      },
+      "modal": {
+        "title": "DLQ Details #",
+        "type": "Type",
+        "provider": "Provider",
+        "original_item_id": "Original Item ID",
+        "reason": "Reason",
+        "failure_date": "Failure Date",
+        "payload": "Payload",
+        "gateway_response": "Gateway Response",
+        "close": "Close",
+        "archive": "Archive",
+        "resend": "Resend"
+      },
+      "loading": "Loading...",
+      "no_items": "No items",
+      "confirm_resend": "Resend this item to the queue?",
+      "confirm_archive": "Archive this item without resend?",
+      "toast": {
+        "load_failed": "Failed to load data",
+        "details_failed": "Failed to fetch details",
+        "resent_success": "Resent successfully",
+        "resend_failed": "Resend failed",
+        "archived_success": "Archived",
+        "archive_failed": "Archive failed"
+      }
+    },
+    "email_templates": {
+      "title": "Email Templates",
+      "subtitle": "Manage system email templates",
+      "new_template": "New Template",
+      "loading": "Loading...",
+      "no_templates": "No templates yet",
+      "table": {
+        "name": "Name",
+        "subject": "Subject",
+        "status": "Status",
+        "actions": "Actions"
+      },
+      "status": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      },
+      "modal": {
+        "new_template": "New Template",
+        "edit_prefix": "Edit: ",
+        "name_label": "Template Name (unique key) *",
+        "name_placeholder": "invoice_due, password_reset, ...",
+        "subject_label": "Subject *",
+        "subject_placeholder": "Hello {{name}}, your invoice #{{invoice_number}}",
+        "body_html_label": "Body (HTML) *",
+        "body_html_placeholder": "<p>Dear {{name}},</p><p>...</p>",
+        "body_html_help": "Use variables like {{name}}, {{invoice_number}}, etc.",
+        "variables_label": "Available Variables (JSON)",
+        "enabled_label": "Enabled",
+        "cancel": "Cancel",
+        "create": "Create",
+        "save": "Save"
+      },
+      "buttons": {
+        "delete": "Delete"
+      },
+      "toast": {
+        "load_failed": "Failed to load templates",
+        "load_single_failed": "Failed to load template",
+        "fields_required": "Name, subject, and content are required",
+        "created_success": "Template created",
+        "updated_success": "Template updated",
+        "operation_failed": "Operation failed",
+        "confirm_disable": "Disable template",
+        "disabled_success": "Template disabled",
+        "disable_failed": "Disable failed"
+      }
+    },
+    "smart_alerts": {
+      "title": "Smart Alerts",
+      "alert_rules": "Alert Rules",
+      "fired_alerts": "Fired Alerts",
+      "alert_types": {
+        "low_stock": "Low Stock",
+        "overdue_invoice": "Overdue Invoice",
+        "low_cash": "Low Cash Balance",
+        "budget_exceeded": "Budget Exceeded",
+        "max_expense": "Max Expense",
+        "revenue_drop": "Revenue Drop"
+      },
+      "statuses": {
+        "fired": "Fired",
+        "resolved": "Resolved",
+        "suppressed": "Suppressed"
+      },
+      "table": {
+        "name": "Name",
+        "type": "Type",
+        "threshold": "Threshold",
+        "status": "Status",
+        "actions": "Actions",
+        "rule": "Rule",
+        "fired_at": "Fired At"
+      },
+      "buttons": {
+        "edit": "Edit",
+        "delete": "Delete",
+        "add_rule": "Add Rule",
+        "disable": "Disable",
+        "enable": "Enable",
+        "resolve": "Resolve",
+        "update": "Update",
+        "create": "Create"
+      },
+      "modal": {
+        "name_label": "Rule Name *",
+        "type_label": "Rule Type *",
+        "threshold_label": "Threshold",
+        "extra_conditions": "Additional Conditions (JSON optional)",
+        "create": "Create Rule",
+        "update": "Update Rule",
+        "edit_rule": "Edit Rule",
+        "add_rule": "Add Rule",
+        "threshold_help": "The value that triggers the alert when exceeded",
+        "enable_rule": "Enable Rule"
+      },
+      "confirm_delete": "Delete rule \"{{name}}\"?",
+      "toast": {
+        "load_rules_failed": "Failed to load alert rules",
+        "load_alerts_failed": "Failed to load alerts",
+        "name_required": "Rule name is required",
+        "updated": "Rule updated",
+        "created": "Rule created",
+        "operation_failed": "Operation failed",
+        "toggle_failed": "Toggle failed",
+        "deleted": "Deleted",
+        "delete_failed": "Delete failed",
+        "resolved": "Alert resolved",
+        "resolve_failed": "Resolve failed"
+      },
+      "subtitle": "Manage automated alert rules",
+      "empty_rules": "No rules yet",
+      "empty_alerts": "No alerts",
+      "badges": {
+        "enabled": "Enabled",
+        "disabled": "Disabled"
+      }
+    },
+    "integration_keys_vault": {
+      "title": "Integration Keys Vault",
+      "show_revoked": "Show Revoked",
+      "new_key": "New Key / Rotate",
+      "add_rotate": "Add / Rotate Key",
+      "integration_type": "Integration Type",
+      "provider": "Provider",
+      "key_name": "Key Name",
+      "value": "Value (will be encrypted)",
+      "valid_until": "Valid Until (optional)",
+      "activate_immediately": "Activate Immediately",
+      "cancel": "Cancel",
+      "save_encrypt": "Save & Encrypt",
+      "loading": "Loading...",
+      "no_keys": "No keys",
+      "table": {
+        "type": "Type",
+        "provider": "Provider",
+        "key": "Key",
+        "status": "Status",
+        "valid_from": "Valid From",
+        "valid_until": "Valid Until",
+        "action": "Action",
+        "revoke": "Revoke"
+      },
+      "circuit_breaker": {
+        "title": "Circuit Breaker",
+        "integration": "Integration",
+        "error_count": "Error Count",
+        "open_until": "Open Until",
+        "last_error": "Last Error",
+        "reset": "Reset",
+        "provider": "Provider"
+      },
+      "status_badges": {
+        "open": "Open",
+        "half_open": "Half Open",
+        "closed": "Closed"
+      },
+      "modal_title": "DLQ Details #",
+      "confirm_revoke": "Revoke key \"{{name}}\"?",
+      "confirm_reset": "Reset circuit breaker \"{{label}}\"?",
+      "toast": {
+        "saved": "Key saved",
+        "save_failed": "Save failed",
+        "revoked": "Key revoked",
+        "revoke_failed": "Revoke failed",
+        "reset_success": "Circuit breaker reset",
+        "reset_failed": "Reset failed"
+      }
+    },
+    "company_profile": {
+      "logo_alt": "Logo"
+    },
+    "print_templates_settings": {
+      "letter_option": "Letter"
+    },
+    "integration": {
+      "providers": {
+        "twilio": "Twilio",
+        "unifonic": "Unifonic",
+        "yamamah": "Yamamah"
+      }
+    },
+    "company_settings_fallbacks": {
+      "advanced_tools": "Advanced Tools",
+      "unit_customization": "Unit Customization",
+      "branches": "Branches",
+      "cost_policy": "Cost Policy",
+      "data_import": "Data Import",
+      "audit_logs": "Audit Logs",
+      "role_management": "Role Management",
+      "api_keys": "API Keys",
+      "webhooks": "Webhooks"
     }
   },
   "pos": {
@@ -6764,9 +7188,29 @@
       "drawer_cmd": "Drawer open command sent"
     },
     "customer_display": {
-      "title": "Customer Display & Cash Drawer",
-      "subtitle": "Display settings for customer and cash drawer control",
-      "open": "Open Customer Display",
+      "welcome": "Welcome to Aman",
+      "thank_you": "Thank you for your purchase",
+      "idle_message": "Best products at the best prices",
+      "items": "items",
+      "html_title": "Customer Display",
+      "manual_open": "Manual Open",
+      "user": "User",
+      "preview_labels": {
+        "welcome": "Welcome",
+        "clear": "Clear",
+        "total": "Total",
+        "thank_you": "Thank You"
+      },
+      "drawer_log": {
+        "sale": "Sale",
+        "open_drawer": "Open Drawer",
+        "ahmed": "Ahmed",
+        "mohammed": "Mohammed"
+      },
+      "title": "Customer Display",
+      "subtitle": "Customer-facing screen",
+      "live": "Live",
+      "open": "Open",
       "display_settings": "Display Settings",
       "theme": "Theme",
       "dark": "Dark",
@@ -6774,8 +7218,7 @@
       "welcome_msg": "Welcome Message",
       "thank_msg": "Thank You Message",
       "idle_msg": "Idle Message",
-      "preview": "Display State Preview",
-      "live": "Live",
+      "preview": "Preview",
       "no_items": "No items"
     },
     "cash_drawer": {
@@ -6814,16 +7257,23 @@
     "online": "Online",
     "online_restored": "Connection restored",
     "order_saved_offline": "Order saved offline",
-    "receipt": {
-      "total": "Total",
-      "subtotal": "Subtotal",
-      "tax": "Tax",
-      "paid": "Paid",
-      "amount_due": "Amount Due",
-      "balance_due": "Balance Due"
-    },
+    "receipt": "Receipt",
     "items_added": "Items Added",
-    "shift": "Shift"
+    "shift": "Shift",
+    "thermal_print": {
+      "test_receipt": "Test Receipt",
+      "tax_number": "Tax Number: ",
+      "receipt_title": "POS Receipt #2026-001",
+      "thank_you": "Thank you for your purchase",
+      "sample_data": {
+        "general_customer": "General Customer",
+        "arabic_coffee": "Arabic Coffee",
+        "chocolate_cake": "Chocolate Cake",
+        "orange_juice": "Orange Juice",
+        "cash": "Cash"
+      }
+    },
+    "enter_customer_name": "Customer name (optional)"
   },
   "branches": {
     "title": "Branch Management",
@@ -6846,7 +7296,13 @@
     "new_branch": "New Branch",
     "all_branches": "All Branches",
     "current_branch": "Current Branch",
-    "select_branch": "Select Branch"
+    "select_branch": "Select Branch",
+    "all_my_branches": "All My Branches",
+    "no_manage_permission": "You do not have permission to manage branches",
+    "update_success": "Branch updated successfully",
+    "create_success": "Branch created successfully",
+    "save_error": "Failed to save branch",
+    "delete_success": "Branch deleted successfully"
   },
   "countries": {
     "SA": "Saudi Arabia",
@@ -7064,7 +7520,11 @@
       "stock_available": "Stock Available",
       "generate_all_pos": "Generate all POs",
       "no_active_orders": "No active orders",
-      "planning_desc": "Material Requirements Planning"
+      "planning_desc": "Material Requirements Planning",
+      "run": "Run MRP",
+      "running": "Running...",
+      "loading": "Loading...",
+      "no_recommendations": "No recommendations"
     },
     "no_operations": "No operations defined for this order",
     "edit_routing": "Edit Routing",
@@ -7251,7 +7711,24 @@
     "capacity_utilization": "Capacity Utilization",
     "production_order": "Production Order",
     "material_request": "Material Request",
-    "quality_inspection": "Quality Inspection"
+    "quality_inspection": "Quality Inspection",
+    "partial_completion": {
+      "completed": "Completed:",
+      "remaining": "Remaining:",
+      "placeholders": {
+        "item_id": "Item ID",
+        "qty": "Qty",
+        "reason": "Reason",
+        "sales_value": "Sales Value"
+      },
+      "completion_recorded": "Completion recorded",
+      "quantity": "Quantity",
+      "scrap_lines": "Scrap Lines",
+      "add": "Add",
+      "by_products": "By-products",
+      "processing": "Processing...",
+      "complete_production": "Complete Production"
+    }
   },
   "roles": {
     "addRole": "Add New Role",
@@ -7430,7 +7907,9 @@
       "approvalNotes": "Approval Notes",
       "createdBy": "Created By",
       "createdAt": "Created At",
-      "journalEntry": "Journal Entry"
+      "journalEntry": "Journal Entry",
+      "reversalDate": "Reversal Date",
+      "reversalReason": "Reversal Reason"
     },
     "types": {
       "materials": "Materials",
@@ -7476,14 +7955,18 @@
     "actions": {
       "label": "Actions",
       "approve": "Approve",
-      "reject": "Reject"
+      "reject": "Reject",
+      "reverseTooltip": "Reverse this expense",
+      "reverse": "Reverse",
+      "confirmReverse": "Confirm Reverse"
     },
     "messages": {
       "created": "Expense created successfully",
       "updated": "Expense updated successfully",
       "deleted": "Expense deleted successfully",
       "approved": "Expense approved successfully",
-      "rejected": "Expense rejected"
+      "rejected": "Expense rejected",
+      "reversed": "Expense reversed successfully"
     },
     "errors": {
       "loadFailed": "Failed to load expenses",
@@ -7492,13 +7975,16 @@
       "saveFailed": "Failed to save expense",
       "deleteFailed": "Failed to delete expense",
       "approvalFailed": "Approval failed",
-      "invalidAmount": "Invalid amount"
+      "invalidAmount": "Invalid amount",
+      "reverseReasonRequired": "Reversal reason is required",
+      "reverseFailed": "Failed to reverse expense"
     },
     "placeholders": {
       "description": "Enter expense description...",
       "vendor": "Enter vendor name (optional)",
       "receipt": "Receipt number (optional)",
-      "notes": "Notes (optional)"
+      "notes": "Notes (optional)",
+      "reversalReason": "Enter reason for reversal"
     },
     "help": {
       "autoAccount": "Account will be selected automatically based on the type"
@@ -7507,7 +7993,9 @@
       "approveTitle": "Approve Expense",
       "rejectTitle": "Reject Expense",
       "approveMessage": "Are you sure you want to approve this expense? A journal entry will be created.",
-      "rejectMessage": "Are you sure you want to reject this expense?"
+      "rejectMessage": "Are you sure you want to reject this expense?",
+      "reverseTitle": "Reverse Expense",
+      "reverseMessage": "Are you sure you want to reverse this expense?"
     },
     "quick_actions": "Quick Actions",
     "status_summary": "Status Summary",
@@ -7736,43 +8224,17 @@
     "beneficiaryName": "Beneficiary Name"
   },
   "reconciliation": {
-    "title": "Bank Reconciliation",
-    "importStatement": "Import Statement",
-    "importFromFile": "Import from File",
-    "selectFile": "Select CSV or Excel file",
-    "uploadFile": "Upload File",
-    "preview": "Preview",
-    "confirm": "Confirm Import",
-    "autoMatch": "Auto Match",
-    "autoMatchDesc": "Automatically match bank transactions with journal entries",
-    "matchByAmount": "Match by Amount",
-    "matchByDate": "Match by Date",
-    "matchResult": "Match Result",
-    "matched": "Matched",
-    "unmatched": "Unmatched",
-    "totalMatched": "Total Matched",
-    "totalUnmatched": "Total Unmatched",
-    "statementDate": "Statement Date",
-    "transactionDate": "Transaction Date",
-    "description": "Description",
-    "debit": "Debit",
-    "credit": "Credit",
-    "balance": "Balance",
-    "bankBalance": "Bank Balance",
-    "bookBalance": "Book Balance",
+    "drift_title": "Reconciliation Drift Detected",
+    "gl_total": "GL Total",
+    "bank_total": "Bank Total",
     "difference": "Difference",
-    "reconciled": "Reconciled",
-    "notReconciled": "Not Reconciled",
-    "adjustments": "Adjustments",
-    "outstandingChecks": "Outstanding Checks",
-    "depositsInTransit": "Deposits in Transit",
-    "importSuccess": "Statement imported successfully",
-    "matchSuccess": "Matching completed successfully",
-    "noData": "No data available",
-    "fileFormat": "File Format",
-    "supportedFormats": "Supported formats: CSV, XLSX",
-    "rows": "rows",
-    "columns": "columns"
+    "tolerance": "Tolerance",
+    "unmatched_lines": "Unmatched Lines",
+    "line_id": "Line ID",
+    "description": "Description",
+    "amount": "Amount",
+    "force_finalize": "Force Finalize",
+    "close": "Close"
   },
   "dueAlerts": {
     "title": "Due Alerts",
@@ -7797,7 +8259,8 @@
       "financials": "Financials"
     },
     "gantt": {
-      "no_tasks": "No scheduled tasks to display"
+      "no_tasks": "No scheduled tasks to display",
+      "title": "Gantt Chart"
     },
     "no_tasks_timesheet": "Please add tasks to the project first to log time.",
     "task": "Task",
@@ -7999,7 +8462,9 @@
     "management": "Management",
     "overview": "Overview",
     "gantt_chart": "Gantt Chart",
-    "risks": "Risks"
+    "risks": "Risks",
+    "load_moderate": "Loading...",
+    "timesheets": "Timesheets"
   },
   "approvals": {
     "title": "Approval Workflows",
@@ -8120,7 +8585,8 @@
       "employees": "Employees"
     },
     "wizard": "Data Import Wizard",
-    "chart_of_accounts": "Chart of Accounts"
+    "chart_of_accounts": "Chart of Accounts",
+    "clear": "Clear"
   },
   "security_page": {
     "title": "Security & Protection",
@@ -8692,7 +9158,53 @@
     "tax_calendar": "Tax Calendar",
     "wht_name_placeholder": "e.g. Services WHT",
     "tax_name_placeholder": "e.g. VAT",
-    "add_first_appointment": "+ Add First Appointment"
+    "add_first_appointment": "+ Add First Appointment",
+    "calendar_custom": {
+      "titles": {
+        "complete": "Complete",
+        "edit": "Edit",
+        "delete": "Delete"
+      },
+      "placeholder": "Submit VAT return"
+    },
+    "load_error": "Failed to load tax data",
+    "loading": "Loading...",
+    "inherit_branch": "Inherit from branch",
+    "no_branch_tax": "No branch tax configured",
+    "tax_classification": "Tax Classification",
+    "tax_classification_desc": "Assign a tax classification to this product",
+    "selected": "Selected",
+    "resolved_per_country": "Resolved per country",
+    "tax_group": "Tax Group",
+    "tax_group_desc": "Group products for batch tax reporting",
+    "custom_tax": "Custom Tax Rate",
+    "exempt": "Exempt",
+    "exempt_desc": "This product is exempt from tax",
+    "fill_required": "Please fill all required fields",
+    "confirm_delete_classification": "Are you sure you want to delete this classification?",
+    "enter_country_code": "Enter country code",
+    "code": "Code",
+    "name_ar": "Name (Arabic)",
+    "name_en": "Name (English)",
+    "tax_rate_for": "Tax Rate for",
+    "no_rate_for_country": "No rate configured for this country",
+    "country": "Country",
+    "rate": "Rate",
+    "tax_classifications": "Tax Classifications",
+    "classifications_subtitle": "Manage product tax classifications and country-specific rates",
+    "add_classification": "Add Classification",
+    "all_branches": "All Branches",
+    "show_inactive": "Show Inactive",
+    "no_classifications": "No classifications yet",
+    "edit_classification": "Edit Classification",
+    "code_hint": "e.g. TOBACCO",
+    "description_hint": "e.g. Tobacco Products",
+    "classification_rates": "Classification Rates",
+    "classification_rates_desc": "Set tax rates per country for this classification",
+    "tax_rate": "Tax Rate",
+    "select_rate": "Select rate",
+    "optional": "Optional",
+    "currency_mode": "Currency Mode"
   },
   "months": {
     "jan": "January",
@@ -9135,7 +9647,8 @@
     "churn_rate": "Churn Rate",
     "customer_lifetime_value": "Customer Lifetime Value (CLV)",
     "support_ticket": "Support Ticket",
-    "resolution_time": "Resolution Time"
+    "resolution_time": "Resolution Time",
+    "select_opportunity": "Select Opportunity"
   },
   "wht": {
     "title": "Withholding Tax",
@@ -9190,7 +9703,8 @@
     "error_calc": "Error calculating",
     "error_calculating": "Error calculating WHT",
     "error_loading_rates": "Failed to load WHT rates",
-    "error_loading_transactions": "Failed to load WHT transactions"
+    "error_loading_transactions": "Failed to load WHT transactions",
+    "select_branch_first": "Select a branch first"
   },
   "services": {
     "home_title": "Services & Maintenance",
@@ -9339,7 +9853,9 @@
     "equal": "Equal",
     "allocate": "Allocate Costs",
     "allocated": "Costs allocated",
-    "posted": "Posted"
+    "posted": "Posted",
+    "vendor_optional": "Vendor (optional)",
+    "invoice_ref": "Invoice Reference"
   },
   "wps": {
     "title": "Wage Protection System (WPS)",
@@ -9356,7 +9872,8 @@
     "allowances": "Allowances",
     "deductions": "Deductions",
     "net": "Net Salary",
-    "missing_iban": "Missing IBAN!"
+    "missing_iban": "Missing IBAN!",
+    "format": "Export Format"
   },
   "saudization": {
     "title": "Saudization Dashboard",
@@ -9397,7 +9914,15 @@
     "vacation_balance": "Vacation Balance",
     "pending_salary": "Pending Salary",
     "total_settlement": "Total Settlement",
-    "settled_success": "Settlement completed successfully"
+    "settled_success": "Settlement completed successfully",
+    "join_date": "Join Date",
+    "termination_date": "Termination Date",
+    "base_salary": "Base Salary",
+    "total_salary_used": "Total Salary Used",
+    "full_gratuity": "Full Gratuity",
+    "unpaid_leave_deduction": "Unpaid Leave Deduction",
+    "days": "days",
+    "final_gratuity": "Final Gratuity"
   },
   "bank_import": {
     "title": "Bank Statement Import",
@@ -9543,7 +10068,17 @@
     "mapping_created": "Mapping created successfully",
     "load_error": "Failed to load data",
     "create_error": "Failed to create record",
-    "company_id_placeholder": "e.g. fcfa5fae"
+    "company_id_placeholder": "e.g. fcfa5fae",
+    "entity_required": "Source entity is required",
+    "invalid_amount_or_rate": "Invalid amount or exchange rate",
+    "transaction_currency": "Transaction Currency",
+    "transaction_amount": "Transaction Amount",
+    "source_rate": "Source Rate",
+    "source_func_amount": "Source Functional Amount",
+    "target_rate": "Target Rate",
+    "target_func_amount": "Target Functional Amount",
+    "entity_updated": "Entity updated successfully",
+    "update_error": "Failed to update entity"
   },
   "backup": {
     "title": "Backup Management",
@@ -10217,7 +10752,11 @@
     "change_error": "Failed to change costing method",
     "change_result": "Change Result",
     "old_method": "Old Method",
-    "layers_created": "Layers Created"
+    "layers_created": "Layers Created",
+    "method_form": {
+      "fifo": "FIFO",
+      "lifo": "LIFO"
+    }
   },
   "subscription": {
     "title": "Subscriptions",
@@ -10818,7 +11357,8 @@
     "message": "An unexpected error occurred. Please try again.",
     "reload": "Reload Page",
     "title": "Something went wrong",
-    "try_again": "Try Again"
+    "try_again": "Try Again",
+    "go_home": "Go to Home"
   },
   "notification_center": {
     "empty": "No notifications",
@@ -11214,17 +11754,313 @@
     "recurring_review_threshold": "Recurring Review Threshold",
     "save_success": "Settings saved successfully"
   },
-  "reconciliation": {
-    "drift_title": "Reconciliation Drift Detected",
-    "gl_total": "GL Total",
-    "bank_total": "Bank Total",
-    "difference": "Difference",
-    "tolerance": "Tolerance",
-    "unmatched_lines": "Unmatched Lines",
-    "line_id": "Line ID",
-    "description": "Description",
-    "amount": "Amount",
-    "force_finalize": "Force Finalize",
-    "close": "Close"
+  "ops": {
+    "scheduler": {
+      "title": "Scheduler Jobs",
+      "loading": "Loading scheduler jobs...",
+      "error_prefix": "Error: ",
+      "refresh": "Refresh",
+      "table": {
+        "job_id": "Job ID",
+        "name": "Name",
+        "status": "Status",
+        "next_run": "Next Run",
+        "trigger": "Trigger",
+        "actions": "Actions"
+      },
+      "buttons": {
+        "running": "Running...",
+        "run_now": "Run now"
+      }
+    }
+  },
+  "fsm": {
+    "service_pricelists": {
+      "title": "Service Pricelists",
+      "filters": {
+        "all_scopes": "All Scopes",
+        "global": "Global",
+        "customer_group": "Customer Group",
+        "customer": "Customer"
+      },
+      "buttons": {
+        "cancel": "Cancel",
+        "add_entry": "Add Entry",
+        "save": "Save",
+        "saving": "Saving..."
+      },
+      "form": {
+        "scope": "Scope",
+        "scope_ref_id": "Scope Reference ID",
+        "item_id": "Item ID",
+        "currency": "Currency",
+        "price": "Price",
+        "valid_from": "Valid From",
+        "valid_to": "Valid To"
+      },
+      "table": {
+        "scope": "Scope",
+        "ref_id": "Ref ID",
+        "item_id": "Item ID",
+        "currency": "Currency",
+        "price": "Price",
+        "valid_from": "Valid From",
+        "valid_to": "Valid To"
+      },
+      "loading": "Loading...",
+      "no_entries": "No pricelist entries found"
+    },
+    "technician_profiles": {
+      "title": "Technician Profiles",
+      "buttons": {
+        "cancel": "Cancel",
+        "add_technician": "Add Technician",
+        "save": "Save",
+        "saving": "Saving...",
+        "find_match": "Find Match",
+        "matching": "Matching..."
+      },
+      "form": {
+        "employee_id": "Employee ID",
+        "skills": "Skills (comma-separated)",
+        "zones": "Zones",
+        "certifications": "Certifications"
+      },
+      "match_section": {
+        "title": "Match Technicians",
+        "required_skills": "Required skills (comma-separated)"
+      },
+      "match_table": {
+        "technician": "Technician",
+        "score": "Score",
+        "matched": "Matched",
+        "missing": "Missing"
+      },
+      "no_matches": "No matches",
+      "all_technicians": "All Technicians",
+      "loading": "Loading...",
+      "table": {
+        "id": "ID",
+        "employee": "Employee",
+        "skills": "Skills",
+        "zones": "Zones"
+      }
+    }
+  },
+  "payroll": {
+    "bulk_salary_increment": {
+      "title": "Bulk Salary Increment",
+      "csv_label": "CSV File (employee_id, new_salary)",
+      "effective_date": "Effective Date",
+      "reason": "Reason",
+      "reason_placeholder": "Annual increment, promotion, etc.",
+      "preview_title": "Preview ({{count}} employees)",
+      "table": {
+        "employee_id": "Employee ID",
+        "new_salary": "New Salary",
+        "old_salary": "Old Salary",
+        "increment": "Increment",
+        "status": "Status",
+        "error": "Error"
+      },
+      "buttons": {
+        "dry_run": "Dry Run Preview",
+        "previewing": "Previewing...",
+        "apply": "Apply Increments",
+        "applying": "Applying..."
+      },
+      "results": {
+        "title": "Results",
+        "dry_run_suffix": "(Dry Run)",
+        "success": "Success: ",
+        "errors": "Errors: ",
+        "total_increment": "Total Increment: "
+      }
+    },
+    "payroll_reversal": {
+      "reverse_period": "Reverse Period",
+      "modal_title": "Reverse Payroll Period",
+      "confirm_text": "Are you sure you want to reverse this payroll period?",
+      "reason_label": "Reason for reversal *",
+      "reason_placeholder": "Enter the reason for reversing this payroll period...",
+      "success_message": "Period reversed successfully.",
+      "reversed_je": "Reversed JE: #",
+      "run_id": "Run ID: ",
+      "buttons": {
+        "cancel": "Cancel",
+        "confirm": "Confirm Reversal",
+        "reversing": "Reversing..."
+      }
+    }
+  },
+  "notifications": {
+    "queue_monitor": {
+      "title": "Notification Queue",
+      "filters": {
+        "all_states": "All States",
+        "pending": "Pending",
+        "sending": "Sending",
+        "sent": "Sent",
+        "failed": "Failed",
+        "all_channels": "All Channels",
+        "email": "Email",
+        "sms": "SMS",
+        "push": "Push",
+        "in_app": "In-App",
+        "webhook": "Webhook"
+      },
+      "loading": "Loading...",
+      "table": {
+        "id": "ID",
+        "event": "Event",
+        "channel": "Channel",
+        "recipient": "Recipient",
+        "state": "State",
+        "attempts": "Attempts",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "buttons": {
+        "retry": "Retry"
+      },
+      "no_entries": "No entries"
+    },
+    "email_template_editor": {
+      "title": "Email Templates",
+      "buttons": {
+        "cancel": "Cancel",
+        "new_template": "New Template",
+        "save": "Save Template",
+        "saving": "Saving...",
+        "delete": "Delete"
+      },
+      "form": {
+        "code": "Code",
+        "locale": "Locale",
+        "locale_en": "English",
+        "locale_ar": "Arabic",
+        "subject": "Subject",
+        "body_html": "Body HTML (Jinja2)",
+        "body_text": "Body Text (Jinja2)"
+      },
+      "table": {
+        "code": "Code",
+        "locale": "Locale",
+        "subject": "Subject",
+        "version": "Version",
+        "actions": "Actions"
+      },
+      "loading": "Loading...",
+      "no_templates": "No templates"
+    }
+  },
+  "dms": {
+    "quota_meter": {
+      "loading": "Loading quota...",
+      "title": "Storage Quota",
+      "mb_used": "MB used",
+      "mb_remaining": "MB remaining of {{total}} MB",
+      "documents": "documents"
+    },
+    "quarantine": {
+      "loading": "Loading...",
+      "title": "Quarantined Documents",
+      "no_documents": "No quarantined documents",
+      "table": {
+        "id": "ID",
+        "filename": "Filename",
+        "size": "Size",
+        "scanned": "Scanned",
+        "engine": "Engine"
+      }
+    }
+  },
+  "einvoicing": {
+    "zatca_outbox": {
+      "filters": {
+        "pending": "Pending",
+        "processing": "Processing",
+        "failed": "Failed",
+        "dead_letter": "Dead Letter",
+        "submitted": "Submitted",
+        "cleared": "Cleared"
+      },
+      "table": {
+        "id": "ID",
+        "invoice": "Invoice",
+        "state": "State",
+        "attempts": "Attempts",
+        "last_error": "Last Error",
+        "created": "Created",
+        "actions": "Actions"
+      },
+      "buttons": {
+        "reprocess": "Reprocess"
+      },
+      "title": "ZATCA Outbox",
+      "loading": "Loading...",
+      "no_entries": "No outbox rows"
+    }
+  },
+  "kpi_admin": {
+    "title": "KPI Admin",
+    "subtitle": "Create and monitor key performance indicators",
+    "metrics": {
+      "total": "Total KPIs",
+      "active": "Active",
+      "inactive": "Inactive"
+    },
+    "quick_actions": "Quick Actions",
+    "add_kpi": "Add KPI",
+    "new_kpi": "New KPI",
+    "form": {
+      "code": "KPI Code",
+      "source": "Measurement Source",
+      "report_key": "Report Key",
+      "classifier": "Classifier Category",
+      "reference": "Reference",
+      "threshold": "Threshold",
+      "operator": "Operator",
+      "interval": "Evaluation Interval (minutes)",
+      "channels": "Notification Channels",
+      "submit": "Create KPI"
+    },
+    "list": {
+      "title": "KPIs"
+    },
+    "empty": "No KPIs yet",
+    "add_first": "Add your first KPI",
+    "minutes": "minutes",
+    "channels": {
+      "email": "Email",
+      "sms": "SMS",
+      "push": "Push",
+      "in_app": "In-App",
+      "webhook": "Webhook"
+    }
+  },
+  "health": {
+    "title": "System Health",
+    "subtitle": "Monitor adapter status and system metrics",
+    "metrics": {
+      "overall": "Overall",
+      "adapters": "Adapters",
+      "healthy": "Healthy",
+      "issues": "Issues"
+    },
+    "adapter": {
+      "status": "Status",
+      "latency": "Latency",
+      "last_success": "Last Success",
+      "last_error": "Last Error",
+      "none": "No adapters configured"
+    }
+  },
+  "scheduler": {
+    "title": "Scheduler",
+    "subtitle": "Manage scheduled tasks"
+  },
+  "a11y": {
+    "primary_nav": "Primary navigation"
   }
 }

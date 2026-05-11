@@ -89,7 +89,7 @@ def create_print_template(body: PrintTemplateCreate, current_user: dict = Depend
             })
             tmpl_id = result.fetchone()[0]
     
-            return {"id": tmpl_id, "message": "تم إنشاء قالب الطباعة"}
+            return {"id": tmpl_id, "message": i18n_message("print_template_created", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -136,4 +136,4 @@ def update_print_template(template_id: int, body: PrintTemplateCreate,
             "id": template_id
         })
 
-        return {"message": "تم تحديث القالب"}
+        return {"message": i18n_message("template_updated_msg", request)}

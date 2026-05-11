@@ -569,7 +569,7 @@ def horizontal_analysis(
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
-            raise HTTPException(status_code=400, detail="يجب فترتين على الأقل")
+            raise HTTPException(**http_error(400, ("must_be_two_lines", request)))
 
         all_accounts = db.execute(text("SELECT id, account_number, name, name_en, account_type FROM accounts ORDER BY account_number")).fetchall()
 
@@ -963,7 +963,7 @@ def detailed_profit_loss(
 
         return result
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
     finally:
         db.close()
 

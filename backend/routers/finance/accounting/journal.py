@@ -68,14 +68,14 @@ async def create_journal_entry(
                     LIMIT 1
                 """), {"key": idempotency_key}).fetchone()
                 if existing:
-                    return {"success": True, "message": "قيد موجود مسبقاً (مفتاح تكرار)", "entry_number": existing.entry_number, "entry_id": existing.id, "status": existing.status, "idempotent": True}
+                    return {"success": True, "message": i18n_message("journal_entry_already_exists", request), "entry_number": existing.entry_number, "entry_id": existing.id, "status": existing.status, "idempotent": True}
     
             entry_status = entry_data.get("status", "posted")
     
             # Fiscal-period lock: block posting into a closed period.
             entry_date = entry_data.get("date")
             if not entry_date:
-                raise HTTPException(status_code=400, detail="تاريخ القيد مطلوب")
+                raise HTTPException(**http_error(400, ("journal_date_required", request)))
             check_fiscal_period_open(db, entry_date)
     
             journal_id, entry_number = gl_create_journal_entry(
@@ -128,8 +128,8 @@ async def create_journal_entry(
                         WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                         AND u.id != :current_uid
                     """), {
-                        "title": "📝 تم ترحيل قيد يومية",
-                        "message": f"تم ترحيل القيد {entry_number} — {entry_data.get('description', '')[:80]}",
+                        "title": i18n_message("notif_journal_posted", request),
+                        "message": i18n_message("journal_entry_posted_details", request),
                         "link": f"/accounting/journal/{journal_id}",
                         "current_uid": current_user.id
                     })
@@ -261,7 +261,7 @@ def get_journal_entry(
             WHERE je.id = :id
         """), {"id": entry_id}).fetchone()
         if not entry:
-            raise HTTPException(status_code=404, detail="القيد غير موجود")
+            raise HTTPException(**http_error(404, ("journal_entry_not_found", request)))
 
         # Branch access check
         if entry.branch_id:
@@ -317,9 +317,9 @@ async def post_journal_entry(
         try:
             entry = db.execute(text("SELECT * FROM journal_entries WHERE id = :id"), {"id": entry_id}).fetchone()
             if not entry:
-                raise HTTPException(status_code=404, detail="القيد غير موجود")
+                raise HTTPException(**http_error(404, ("journal_entry_not_found", request)))
             if entry.status != 'draft':
-                raise HTTPException(status_code=400, detail=f"القيد بحالة '{entry.status}' ولا يمكن ترحيله")
+                raise HTTPException(status_code=400, detail=i18n_message("journal_entry_status_invalid", request))
     
             # Closed period check
             if entry.entry_date:
@@ -329,7 +329,7 @@ async def post_journal_entry(
                     AND is_closed = TRUE LIMIT 1
                 """), {"entry_date": entry.entry_date}).fetchone()
                 if closed_period:
-                    raise HTTPException(status_code=400, detail="لا يمكن ترحيل قيود في فترة محاسبية مغلقة")
+                    raise HTTPException(**http_error(400, ("cannot_post_closed_period", request)))
     
             # Get lines and update account balances
             lines = db.execute(text("""
@@ -394,15 +394,15 @@ async def post_journal_entry(
                     WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                     AND u.id != :current_uid
                 """), {
-                    "title": "📝 تم ترحيل قيد يومية",
-                    "message": f"تم ترحيل القيد {entry.entry_number} — {entry.description[:80] if entry.description else ''}",
+                    "title": i18n_message("notif_journal_posted", request),
+                    "message": i18n_message("journal_entry_posted_details", request),
                     "link": f"/accounting/journal/{entry_id}",
                     "current_uid": current_user.id
                 })
             except Exception:
                 pass
     
-            return {"success": True, "message": "تم ترحيل القيد بنجاح", "entry_number": entry.entry_number}
+            return {"success": True, "message": i18n_message("journal_entry_posted", request), "entry_number": entry.entry_number}
         except HTTPException:
             raise
         except Exception as e:
@@ -428,17 +428,17 @@ async def void_journal_entry(
             """), {"id": entry_id}).fetchone()
             
             if not original:
-                raise HTTPException(status_code=404, detail="القيد غير موجود")
+                raise HTTPException(**http_error(404, ("journal_entry_not_found", request)))
             
             if original.status in ('void', 'voided'):
-                raise HTTPException(status_code=400, detail="القيد ملغى بالفعل")
+                raise HTTPException(**http_error(400, ("journal_already_cancelled", request)))
 
             if original.status == 'reversed':
-                raise HTTPException(status_code=400, detail="تم عكس هذا القيد مسبقاً ولا يمكن إلغاؤه")
+                raise HTTPException(**http_error(400, ("journal_entry_already_reversed", request)))
 
             # Block voiding a reversal entry (to prevent infinite reversal chains)
             if (original.source or '').strip().lower() in ('reversal',):
-                raise HTTPException(status_code=400, detail="لا يمكن إلغاء قيد عكسي")
+                raise HTTPException(**http_error(400, ("cannot_cancel_reversal", request)))
     
             # ACC-F4: source-doc-aware authorization.
             # A JE that was auto-generated by another module should only be
@@ -492,7 +492,7 @@ async def void_journal_entry(
             """), {"id": entry_id}).fetchall()
             
             if not lines:
-                raise HTTPException(status_code=400, detail="القيد لا يحتوي على أسطر")
+                raise HTTPException(**http_error(400, ("journal_entry_no_lines", request)))
             
             # 3. Create reversal entry via centralized GL service
             # Fiscal-period lock: the reversal posts at today, so the current
@@ -545,7 +545,7 @@ async def void_journal_entry(
             
             return {
                 "success": True, 
-                "message": "تم إلغاء القيد بنجاح وإنشاء قيد عكسي",
+                "message": i18n_message("journal_entry_cancelled_success", request),
                 "reversal_entry_id": rev_id,
                 "reversal_entry_number": rev_entry_number
             }
@@ -601,7 +601,7 @@ def reverse_journal_entry_endpoint(
 
             return {
                 "success": True,
-                "message": f"تم إنشاء القيد العكسي {rev_num} بنجاح",
+                "message": i18n_message("reversal_entry_created", request),
                 "reversal_entry_id": rev_id,
                 "reversal_entry_number": rev_num,
             }

@@ -45,7 +45,7 @@ def create_order(
     # Get base currency
     from utils.accounting import get_base_currency
     base_currency = get_base_currency(db)
-    
+
     # UOM Validation: Discrete units must have integer quantities
     from utils.quantity_validation import validate_quantity_for_product
     for item in order_in.items:
@@ -65,11 +65,11 @@ def create_order(
             max_price = _dec(product_price.max_price).quantize(_D4, ROUND_HALF_UP)
             if requested_price != selling_price:
                 if not can_override_price:
-                    raise HTTPException(status_code=403, detail="pos_price_override_permission_required")
+                    raise HTTPException(**http_error(403, "pos_price_override_permission_required", request))
                 if min_price > 0 and requested_price < min_price:
-                    raise HTTPException(status_code=400, detail="price_below_minimum")
+                    raise HTTPException(**http_error(400, "price_below_minimum", request))
                 if max_price > 0 and requested_price > max_price:
-                    raise HTTPException(status_code=400, detail="price_above_maximum")
+                    raise HTTPException(**http_error(400, "price_above_maximum", request))
 
     # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
     # produces the same numbers as routers/sales/invoices for the same
@@ -127,7 +127,7 @@ def create_order(
               AND (end_date   IS NULL OR end_date   >  NOW())
         """), {"id": order_in.promotion_id}).fetchone()
         if promotion_row is None:
-            raise HTTPException(status_code=400, detail="العرض الترويجي غير صالح أو منتهي الصلاحية")
+            raise HTTPException(**http_error(400, "pos_promotion_not_found", request))
     elif order_in.coupon_code:
         promotion_row = db.execute(text("""
             SELECT id, promotion_type, value, coupon_code, min_order_amount
@@ -137,7 +137,7 @@ def create_order(
               AND (end_date   IS NULL OR end_date   >  NOW())
         """), {"code": order_in.coupon_code.strip()}).fetchone()
         if promotion_row is None:
-            raise HTTPException(status_code=400, detail="كود الكوبون غير صالح أو منتهي الصلاحية")
+            raise HTTPException(**http_error(400, "pos_coupon_invalid", request))
 
     # Pre-compute the gross subtotal (qty*price summed) to translate any
     # absolute header discount into a percentage and to enforce
@@ -184,16 +184,16 @@ def create_order(
 
     # FISCAL-LOCK: Reject if accounting period is closed
     check_fiscal_period_open(db, datetime.now().date())
-    
+
     # T3.10: total already includes the header discount via
     # compute_invoice_totals(header_discount_pct=...) — do NOT subtract
     # order_in.discount_amount again here, that would double-count it
     # and break the POS == sales-invoice equivalence.
-    
+
     # Validate branch and warehouse access
     if order_in.branch_id:
         validate_branch_access(current_user, order_in.branch_id)
-    
+
     if order_in.warehouse_id:
         wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": order_in.warehouse_id}).scalar()
         if wh_branch:
@@ -223,7 +223,7 @@ def create_order(
                 # Auto-adjust only for rounding differences
                 order_in.payments[0].amount = total
             elif total_payments < total:
-                raise HTTPException(status_code=400, detail=f"المبلغ المدفوع ({total_payments:.2f}) أقل من إجمالي الطلب ({total:.2f})")
+                raise HTTPException(status_code=400, detail=i18n_message("payment_amount_less_than_total", request))
 
     # Treasury validation (branch_id already resolved above)
     selected_treasury = None
@@ -232,13 +232,13 @@ def create_order(
 
     import uuid
     order_number = f"POS-{uuid.uuid4().hex[:8].upper()}"
-    
+
     # 1. Create Order
     total_cogs = Decimal('0')
     result = db.execute(text("""
         INSERT INTO pos_orders (
-            order_number, session_id, customer_id, walk_in_customer_name, 
-            warehouse_id, branch_id, status, subtotal, tax_amount, 
+            order_number, session_id, customer_id, walk_in_customer_name,
+            warehouse_id, branch_id, status, subtotal, tax_amount,
             discount_amount, total_amount, paid_amount, note, client_order_id, created_by, party_site_id
         ) VALUES (
             :num, :sess, :cust, :walkin, :wh, :branch, :status, :subtotal, :tax,
@@ -262,17 +262,17 @@ def create_order(
         "uid": current_user.id,
         "party_site_id": order_in.party_site_id,
     }).fetchone()
-    
+
     order_id = result.id
-    
+
     # 2. Create Items
     for item in order_in.items:
         # Fetch product details for the record
         prod_info = db.execute(text("SELECT product_name, product_code, barcode FROM products WHERE id = :id"), {"id": item.product_id}).fetchone()
-        
+
         # Use pre-resolved tax info
         tax_info = _resolved_taxes[item.product_id]
-        
+
         item_subtotal = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
         _line_disc_pct = _line_discount_pct(item.quantity, item.unit_price, item.discount_amount)
         _la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], _line_disc_pct)
@@ -305,24 +305,14 @@ def create_order(
             "tot": item_total,
             "wh": warehouse_id
         })
-        
+
         # 3. Update Inventory if Paid
         if order_in.status == 'paid':
-            # CONC-FIX: Lock inventory row to prevent overselling under concurrent POS load
-            current_stock = db.execute(text("""
-                SELECT COALESCE(quantity, 0) as qty FROM inventory
-                WHERE product_id = :pid AND warehouse_id = :wh
-                FOR UPDATE
-            """), {"pid": item.product_id, "wh": warehouse_id}).fetchone()
-            avail_qty = _dec(current_stock.qty) if current_stock else Decimal('0')
-            if avail_qty < _dec(item.quantity):
-                prod_name = prod_info[0] if prod_info else str(item.product_id)
-                raise HTTPException(status_code=400, detail=f"المخزون غير كافٍ للمنتج {prod_name}. المتوفر: {avail_qty:.0f}, المطلوب: {item.quantity}")
-
-            # Fetch cost price for COGS (FIFO/LIFO or WAC)
+            # Calculate COGS before deducting stock so FIFO/LIFO checks the
+            # pre-sale available balance while holding the inventory row lock.
+            from services.costing_service import CostingService
+            method = CostingService._get_product_costing_method(db, item.product_id, warehouse_id)
             try:
-                from services.costing_service import CostingService
-                method = CostingService._get_product_costing_method(db, item.product_id, warehouse_id)
                 if method in ("fifo", "lifo"):
                     item_cogs = CostingService.consume_layers(
                         db,
@@ -338,24 +328,34 @@ def create_order(
                 else:
                     cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": item.product_id}).scalar() or 0)
                     total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
-            except Exception:
-                cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": item.product_id}).scalar() or 0)
-                total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
+            except ValueError as e:
+                # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
+                raise HTTPException(status_code=400, detail=str(e))
 
-            db.execute(text("""
-                UPDATE inventory 
-                SET quantity = quantity - :qty 
+            # T030: Atomic deduction with authoritative available formula
+            inv_update = db.execute(text("""
+                UPDATE inventory
+                SET quantity = quantity - :qty,
+                    last_movement_date = NOW(),
+                    updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
-            """), {
-                "qty": item.quantity,
-                "pid": item.product_id,
-                "wh": warehouse_id
-            })
+                  AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                RETURNING id, quantity
+            """), {"qty": item.quantity, "pid": item.product_id, "wh": warehouse_id}).fetchone()
+
+            if not inv_update:
+                exists = db.execute(text(
+                    "SELECT 1 FROM inventory WHERE product_id = :pid AND warehouse_id = :wh"
+                ), {"pid": item.product_id, "wh": warehouse_id}).scalar()
+                if not exists:
+                    raise HTTPException(status_code=400, detail=i18n_message("no_inventory_record_product", request))
+                else:
+                    raise HTTPException(status_code=400, detail=i18n_message("insufficient_stock_product", request))
 
             # Log Inventory Transaction
             db.execute(text("""
                 INSERT INTO inventory_transactions (
-                    product_id, warehouse_id, transaction_type, 
+                    product_id, warehouse_id, transaction_type,
                     reference_type, reference_id, reference_document,
                     quantity, unit_cost, total_cost, created_by
                 ) VALUES (
@@ -372,7 +372,7 @@ def create_order(
                 "total_cost": (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP),
                 "user": current_user.id
             })
-            
+
     # 4. Create Payments
     for payment in order_in.payments:
         db.execute(text("""
@@ -385,7 +385,7 @@ def create_order(
             "amt": payment.amount,
             "ref": payment.reference
         })
-        
+
     # 5. Update Session Totals & Accounting
     if order_in.status == 'paid':
         # Update gross sales
@@ -515,11 +515,11 @@ def create_order(
                 source="POS-Order",
                 source_id=order_id
             )
-        
+
         # Update individual payment method totals if you have columns for them
-        # For now, we assume total_sales covers it all, but you might want 
+        # For now, we assume total_sales covers it all, but you might want
         # specifically to log cash_sales and bank_sales for reconciliation.
-        
+
         # 6. Update Treasury Balance — T1.3a idempotent recompute
         if treasury_id:
             from utils.treasury_balance import recalc_treasury_from_gl
@@ -542,10 +542,7 @@ def create_order(
                 # and let the outer transaction roll back instead of swallowing.
                 logger.exception("POS: failed to update party balance for credit sale")
                 db.rollback()
-                raise HTTPException(
-                    status_code=500,
-                    detail="تعذّر تحديث رصيد العميل لطلب البيع الآجل",
-                )
+                raise HTTPException(**http_error(500, "customer_balance_update_failed", request))
 
     db.commit()
 
@@ -589,7 +586,7 @@ def get_held_orders(
             {branch_filter}
             ORDER BY po.created_at DESC
         """), params).fetchall()
-        
+
         return [dict(r._mapping) for r in result]
     except Exception as e:
         logger.error(f"Error fetching held orders: {str(e)}")
@@ -604,15 +601,15 @@ def resume_held_order(
 ):
     """Resume a held order - returns full order details"""
     order = db.execute(text("""
-        SELECT po.*, 
+        SELECT po.*,
                COALESCE(c.name, po.walk_in_customer_name) as customer_name
         FROM pos_orders po
         LEFT JOIN parties c ON po.customer_id = c.id
         WHERE po.id = :id AND po.status = 'hold'
     """), {"id": order_id}).fetchone()
-    
+
     if not order:
-        raise HTTPException(status_code=404, detail="Held order not found")
+        raise HTTPException(**http_error(404, "held_order_not_found", request))
 
     if order.branch_id:
         validate_branch_access(current_user, order.branch_id)
@@ -624,7 +621,7 @@ def resume_held_order(
         JOIN products p ON poi.product_id = p.id
         WHERE poi.order_id = :id
     """), {"id": order_id}).fetchall()
-    
+
     return {
         "order": dict(order._mapping),
         "items": [dict(i._mapping) for i in items]
@@ -640,12 +637,12 @@ def cancel_held_order(
 ):
     """Cancel a held order"""
     order = db.execute(text("""
-        SELECT id, branch_id, order_number FROM pos_orders 
+        SELECT id, branch_id, order_number FROM pos_orders
         WHERE id = :id AND status = 'hold'
     """), {"id": order_id}).fetchone()
-    
+
     if not order:
-        raise HTTPException(status_code=404, detail="Held order not found")
+        raise HTTPException(**http_error(404, "held_order_not_found", request))
 
     if order.branch_id:
         validate_branch_access(current_user, order.branch_id)
@@ -664,7 +661,7 @@ def cancel_held_order(
         request=request, branch_id=getattr(order, "branch_id", None)
     )
 
-    return {"message": "Order cancelled successfully"}
+    return {"message": i18n_message("order_cancelled_success", request)}
 
 
 # --- Returns ---
@@ -688,12 +685,12 @@ def create_return(
         JOIN pos_sessions s ON o.session_id = s.id
         WHERE o.id = :id AND o.status = 'paid'
     """), {"id": order_id}).fetchone()
-    
+
     if not order:
-        raise HTTPException(status_code=404, detail="Original order not found or not paid")
-        
+        raise HTTPException(**http_error(404, "original_order_not_found_or_not_paid", request))
+
     branch_id = validate_branch_access(current_user, order.branch_id)
-    
+
     total_refund = Decimal('0')
 
     # Pre-calculate total refund to check cash sufficiency
@@ -703,7 +700,10 @@ def create_return(
             FROM pos_order_lines WHERE id = :id AND order_id = :order_id
         """), {"id": item.item_id, "order_id": order_id}).fetchone()
         if orig_item_pre:
-            total_refund += (_dec(item.quantity) * _dec(orig_item_pre.unit_price)).quantize(_D2, ROUND_HALF_UP)
+            refund_amount = (_dec(item.quantity) * _dec(orig_item_pre.unit_price)).quantize(_D2, ROUND_HALF_UP)
+            tax_info = resolve_line_tax(branch_id, orig_item_pre.product_id, db)
+            refund_tax = (refund_amount * (_dec(tax_info["tax_rate"]) / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
+            total_refund += refund_amount + refund_tax
 
     # Check cash sufficiency for cash refunds
     if return_in.refund_method == 'cash' and total_refund > 0:
@@ -716,24 +716,33 @@ def create_return(
         if session_info and session_info.treasury_account_id:
             validate_treasury_account_access(db, current_user, session_info.treasury_account_id, branch_id)
         if session_info and _dec(session_info.cash_balance) < total_refund:
-            raise HTTPException(status_code=400, detail=f"رصيد الصندوق غير كافٍ للمرتجع. الرصيد الحالي: {_dec(session_info.cash_balance):.2f}, المطلوب: {total_refund:.2f}")
+            raise HTTPException(status_code=400, detail=i18n_message("insufficient_cash_for_return", request))
 
     total_refund = Decimal('0')  # Reset for actual calculation
     total_refund_tax = Decimal('0')  # Track VAT on returns
-    
+    return_lines = []
+
     for item in return_in.items:
         # Get original item details
         orig_item = db.execute(text("""
-            SELECT product_id, unit_price, quantity, tax_rate 
+            SELECT product_id, unit_price, quantity, tax_rate
             FROM pos_order_lines WHERE id = :id AND order_id = :order_id
         """), {"id": item.item_id, "order_id": order_id}).fetchone()
-        
+
         if not orig_item:
-            raise HTTPException(status_code=404, detail=f"Item {item.item_id} not found in order")
-        
-        if item.quantity > orig_item.quantity:
-            raise HTTPException(status_code=400, detail="Return quantity exceeds original quantity")
-        
+            raise HTTPException(status_code=404, detail=i18n_message("item_not_found_in_order", request))
+
+        already_returned = db.execute(text("""
+            SELECT COALESCE(SUM(ri.quantity), 0)
+            FROM pos_return_items ri
+            JOIN pos_returns r ON r.id = ri.return_id
+            WHERE ri.original_item_id = :item_id
+              AND r.original_order_id = :order_id
+        """), {"item_id": item.item_id, "order_id": order_id}).scalar() or 0
+
+        if _dec(item.quantity) + _dec(already_returned) > _dec(orig_item.quantity):
+            raise HTTPException(**http_error(400, ("return_qty_exceeds_original", request)))
+
         refund_amount = (_dec(item.quantity) * _dec(orig_item.unit_price)).quantize(_D2, ROUND_HALF_UP)
         # Re-resolve tax via engine (handles exemptions, rate changes since order)
         tax_info = resolve_line_tax(branch_id, orig_item.product_id, db)
@@ -741,21 +750,110 @@ def create_return(
         refund_tax = (refund_amount * (effective_tax_rate / Decimal('100'))).quantize(_D2, ROUND_HALF_UP)
         total_refund += refund_amount
         total_refund_tax += refund_tax
-        
+        return_lines.append({"item": item, "orig_item": orig_item})
+
+    # Find active session to link this return to current cash count
+    active_session = db.execute(text("SELECT id FROM pos_sessions WHERE user_id = :uid AND status = 'opened'"), {"uid": current_user.id}).fetchone()
+    curr_session_id = active_session.id if active_session else None
+
+    # Create return record before inventory reversal so cost layers and stock tx
+    # point at the real POS return document.
+    return_id = db.execute(text("""
+        INSERT INTO pos_returns (
+            original_order_id, user_id, session_id, refund_amount, refund_method, notes, created_at
+        ) VALUES (:order_id, :user_id, :sess_id, :amount, :method, :notes, CURRENT_TIMESTAMP)
+        RETURNING id
+    """), {
+        "order_id": order_id,
+        "user_id": current_user.id,
+        "sess_id": curr_session_id,
+        "amount": total_refund,
+        "method": return_in.refund_method,
+        "notes": return_in.notes
+    }).scalar()
+
+    # Insert return items
+    for line in return_lines:
+        item = line["item"]
+        db.execute(text("""
+            INSERT INTO pos_return_items (return_id, original_item_id, quantity, reason)
+            VALUES (:rid, :iid, :qty, :reason)
+        """), {
+            "rid": return_id,
+            "iid": item.item_id,
+            "qty": item.quantity,
+            "reason": item.reason
+        })
+
+    total_cogs_return = Decimal('0')
+
+    for line in return_lines:
+        item = line["item"]
+        orig_item = line["orig_item"]
+
         # Update stock (add back) - use 'inventory' table (not warehouse_stock)
         if order.warehouse_id:
+            # T035-T037: Use handle_return for FIFO/LIFO cost layer reversal
+            from services.costing_service import CostingService
+            costing_method = CostingService._get_product_costing_method(db, orig_item.product_id, order.warehouse_id)
+            orig_cost_row = db.execute(text("""
+                SELECT unit_cost
+                FROM inventory_transactions
+                WHERE reference_type = 'pos_order'
+                  AND reference_id = :order_id
+                  AND product_id = :pid
+                ORDER BY id DESC
+                LIMIT 1
+            """), {"order_id": order_id, "pid": orig_item.product_id}).fetchone()
+            orig_cost = _dec(orig_cost_row.unit_cost) if orig_cost_row and orig_cost_row.unit_cost is not None else _dec(db.execute(text(
+                "SELECT cost_price FROM products WHERE id = :id"
+            ), {"id": orig_item.product_id}).scalar() or 0)
+
+            if costing_method in ("fifo", "lifo"):
+                try:
+                    return_result = CostingService.handle_return(
+                        db,
+                        product_id=orig_item.product_id,
+                        warehouse_id=order.warehouse_id,
+                        quantity=item.quantity,
+                        unit_cost=float(orig_cost),
+                        source_document_type="pos_return",
+                        source_document_id=return_id,
+                        costing_method=costing_method,
+                        original_source_document_type="pos_order",
+                        original_source_document_id=order_id,
+                    )
+                    restored_cost = _dec(return_result.get("restored_unit_cost", orig_cost))
+                    restored_total = _dec(return_result.get("restored_total_cost", orig_cost * _dec(item.quantity)))
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+            else:
+                restored_cost = orig_cost
+                restored_total = (orig_cost * _dec(item.quantity)).quantize(_D4, ROUND_HALF_UP)
+                CostingService.update_cost(
+                    db,
+                    product_id=orig_item.product_id,
+                    warehouse_id=order.warehouse_id,
+                    new_qty=float(item.quantity),
+                    new_price=float(orig_cost),
+                )
+
             db.execute(text("""
-                UPDATE inventory 
-                SET quantity = quantity + :qty 
-                WHERE product_id = :pid AND warehouse_id = :wid
+                INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                VALUES (:pid, :wid, :qty, :cost, NOW())
+                ON CONFLICT (product_id, warehouse_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                              updated_at = NOW()
             """), {
                 "qty": item.quantity,
                 "pid": orig_item.product_id,
-                "wid": order.warehouse_id
+                "wid": order.warehouse_id,
+                "cost": float(restored_cost),
             })
-            
-            # Log inventory transaction for return
-            cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": orig_item.product_id}).scalar() or 0)
+
+            total_cogs_return += _dec(restored_total)
+
+            # T037: Log inventory transaction with restored cost
             db.execute(text("""
                 INSERT INTO inventory_transactions (
                     product_id, warehouse_id, transaction_type,
@@ -770,50 +868,19 @@ def create_return(
                 "pid": orig_item.product_id,
                 "wid": order.warehouse_id,
                 "qty": item.quantity,
-                "order_id": order_id,
-                "cost": cost_price,
-                "total_cost": (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP),
+                "order_id": return_id,
+                "cost": float(restored_cost),
+                "total_cost": float(restored_total),
                 "uid": current_user.id
             })
-    
-    # Find active session to link this return to current cash count
-    active_session = db.execute(text("SELECT id FROM pos_sessions WHERE user_id = :uid AND status = 'opened'"), {"uid": current_user.id}).fetchone()
-    curr_session_id = active_session.id if active_session else None
 
-    # Create return record
-    return_id = db.execute(text("""
-        INSERT INTO pos_returns (
-            original_order_id, user_id, session_id, refund_amount, refund_method, notes, created_at
-        ) VALUES (:order_id, :user_id, :sess_id, :amount, :method, :notes, CURRENT_TIMESTAMP)
-        RETURNING id
-    """), {
-        "order_id": order_id,
-        "user_id": current_user.id,
-        "sess_id": curr_session_id,
-        "amount": total_refund,
-        "method": return_in.refund_method,
-        "notes": return_in.notes
-    }).scalar()
-    
-    # Insert return items
-    for item in return_in.items:
-        db.execute(text("""
-            INSERT INTO pos_return_items (return_id, original_item_id, quantity, reason)
-            VALUES (:rid, :iid, :qty, :reason)
-        """), {
-            "rid": return_id,
-            "iid": item.item_id,
-            "qty": item.quantity,
-            "reason": item.reason
-        })
-    
     # Update session totals (subtract refund)
     db.execute(text("""
-        UPDATE pos_sessions 
-        SET total_returns = COALESCE(total_returns, 0) + :amount 
+        UPDATE pos_sessions
+        SET total_returns = COALESCE(total_returns, 0) + :amount
         WHERE id = :id
     """), {"amount": total_refund, "id": order.session_id})
-    
+
     # FISCAL-LOCK: Reject if accounting period is closed
     check_fiscal_period_open(db, datetime.now().date())
 
@@ -829,7 +896,7 @@ def create_return(
     acc_cogs = get_mapped_account_id(db, "acc_map_cogs") or get_acc_id("CGS")
     acc_inventory = get_mapped_account_id(db, "acc_map_inventory") or get_acc_id("INV")
     acc_vat_out = get_mapped_account_id(db, "acc_map_vat_output") or get_acc_id("VAT-OUT")
-    
+
     # Get treasury for session
     session_treasury = db.execute(text("SELECT treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order.session_id}).fetchone()
     if session_treasury and session_treasury.treasury_account_id:
@@ -837,7 +904,7 @@ def create_return(
             db, current_user, session_treasury.treasury_account_id, branch_id
         )
         acc_cash = selected_treasury.get("gl_account_id") or acc_cash
-    
+
     total_refund_with_tax = (total_refund + total_refund_tax).quantize(_D2, ROUND_HALF_UP)
 
     if acc_sales and acc_cash:
@@ -856,14 +923,7 @@ def create_return(
             "account_id": acc_cash, "debit": 0, "credit": total_refund_with_tax, "description": "POS Return Cash Refund"
         })
 
-        # Reverse COGS if applicable
-        total_cogs_return = Decimal('0')
-        for item in return_in.items:
-            orig_item = db.execute(text("SELECT product_id FROM pos_order_lines WHERE id = :id"), {"id": item.item_id}).fetchone()
-            if orig_item:
-                cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": orig_item.product_id}).scalar() or 0)
-                total_cogs_return += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
-
+        # Reverse COGS using the restored cost from the original POS movement.
         if total_cogs_return > 0 and acc_cogs and acc_inventory:
             total_cogs_ret_q = total_cogs_return.quantize(_D2, ROUND_HALF_UP)
             je_lines.append({
@@ -891,7 +951,7 @@ def create_return(
         if return_in.refund_method == 'cash' and session_treasury and session_treasury.treasury_account_id:
             from utils.treasury_balance import recalc_treasury_from_gl
             recalc_treasury_from_gl(db, session_treasury.treasury_account_id)
-    
+
     db.commit()
 
     log_activity(
@@ -905,7 +965,7 @@ def create_return(
     return {
         "return_id": return_id,
         "refund_amount": str(total_refund),
-        "message": "Return processed successfully"
+        "message": i18n_message("return_processed_success", request)
     }
 
 
@@ -917,15 +977,15 @@ def get_order_details(
 ):
     """Get full order details for returns"""
     order = db.execute(text("""
-        SELECT po.*, 
+        SELECT po.*,
                COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name
         FROM pos_orders po
         LEFT JOIN parties c ON po.customer_id = c.id
         WHERE po.id = :id
     """), {"id": order_id}).fetchone()
-    
+
     if not order:
-        raise HTTPException(status_code=404, detail="Order not found")
+        raise HTTPException(**http_error(404, ("order_not_found", request)))
 
     if hasattr(order, 'branch_id') and order.branch_id:
         validate_branch_access(current_user, order.branch_id)
@@ -936,7 +996,7 @@ def get_order_details(
         JOIN products p ON poi.product_id = p.id
         WHERE poi.order_id = :id
     """), {"id": order_id}).fetchall()
-    
+
     return {
         "order": dict(order._mapping),
         "items": [dict(i._mapping) for i in items]
@@ -948,4 +1008,3 @@ def get_order_details(
 # =====================================================
 
 # ---------- POS-003: Promotions & Discounts ----------
-

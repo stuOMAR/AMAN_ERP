@@ -78,19 +78,20 @@ def perform_match(db, invoice_id: int, po_id: int, supplier_id: int | None = Non
         logger.warning("No PO lines found for PO %s — skipping match", po_id)
         return {"match_id": None, "match_status": "skipped"}
 
-    # 2. Fetch invoice lines
+    # 2. Fetch invoice lines (with po_line_id for line-level matching)
     inv_lines = db.execute(text("""
-        SELECT id, product_id, quantity, unit_price
+        SELECT id, product_id, po_line_id, quantity, unit_price
         FROM invoice_lines
         WHERE invoice_id = :inv_id
         FOR UPDATE
     """), {"inv_id": invoice_id}).fetchall()
 
-    # Build invoice lines map by product_id for matching
+    # Build invoice lines map by po_line_id. PO-linked invoices must not fall
+    # back to product_id because duplicate products on a PO are common.
     inv_map: dict[int | None, list] = {}
     for il in inv_lines:
-        pid = il.product_id
-        inv_map.setdefault(pid, []).append(il)
+        if il.po_line_id:
+            inv_map.setdefault(il.po_line_id, []).append(il)
 
     # 3. Find applicable tolerance
     tol = _find_tolerance(db, supplier_id)
@@ -122,19 +123,19 @@ def perform_match(db, invoice_id: int, po_id: int, supplier_id: int | None = Non
         po_price = _dec(pol.unit_price)
         recv_qty = _dec(pol.received_quantity)
 
-        # Find matching invoice line by product_id
-        inv_line = None
-        candidates = inv_map.get(pol.product_id, [])
-        if candidates:
-            inv_line = candidates.pop(0)  # consume first match
+        # Find matching invoice line by po_line_id only.
+        candidates = inv_map.get(pol.id, [])
+        if not candidates:
+            continue
+        inv_line = candidates.pop(0)  # consume first match
 
         inv_qty = _dec(inv_line.quantity) if inv_line else _ZERO
         inv_price = _dec(inv_line.unit_price) if inv_line else _ZERO
         inv_line_id = inv_line.id if inv_line else None
 
         # Compute variances
-        qty_var_abs = abs(inv_qty - recv_qty).quantize(_D4, ROUND_HALF_UP)
-        qty_var_pct = _pct(inv_qty, recv_qty)
+        qty_var_abs = max(_ZERO, inv_qty - recv_qty).quantize(_D4, ROUND_HALF_UP)
+        qty_var_pct = _pct(qty_var_abs, recv_qty)
         price_var_abs = abs(inv_price - po_price).quantize(_D4, ROUND_HALF_UP)
         price_var_pct = _pct(inv_price, po_price)
 

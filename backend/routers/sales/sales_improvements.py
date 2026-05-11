@@ -36,22 +36,22 @@ def convert_quotation_to_order(sq_id: int, request: Request, current_user=Depend
     try:
         sq = db.execute(text("SELECT * FROM sales_quotations WHERE id = :id"), {"id": sq_id}).fetchone()
         if not sq:
-            raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
+            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
         if sq.status in ('converted', 'cancelled', 'expired'):
             existing = db.execute(text("""
                 SELECT id, so_number FROM sales_orders WHERE quotation_id = :id LIMIT 1
             """), {"id": sq_id}).fetchone()
             if existing:
-                return {"message": "عرض السعر محول مسبقاً", "order_id": existing.id, "so_number": existing.so_number}
-            raise HTTPException(status_code=400, detail=f"لا يمكن تحويل عرض السعر بالحالة الحالية: {sq.status}")
+                return {"message": i18n_message("quotation_already_converted", request), "order_id": existing.id, "so_number": existing.so_number}
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_convert_quotation_status", request))
 
         lines = db.execute(text("""
             SELECT * FROM sales_quotation_lines WHERE sq_id = :id ORDER BY id
         """), {"id": sq_id}).fetchall()
         if not lines:
-            raise HTTPException(status_code=400, detail="لا يمكن تحويل عرض سعر بدون أصناف")
+            raise HTTPException(**http_error(400, "cannot_convert_quotation_no_lines", request))
         if any(line.product_id is None for line in lines):
-            raise HTTPException(status_code=400, detail="لا يمكن تحويل عرض السعر: يوجد سطر بدون صنف مرتبط")
+            raise HTTPException(**http_error(400, "conversion_line_no_product", request))
 
         # T10.2 #153 — enforce customer credit limit BEFORE creating the
         # order. Without this, an over-limit customer's quotation flows
@@ -137,7 +137,7 @@ def convert_quotation_to_order(sq_id: int, request: Request, current_user=Depend
         )
 
         db.commit()
-        return {"success": True, "message": "تم تحويل عرض السعر إلى أمر بيع بنجاح", "order_id": so.id, "so_number": so_num}
+        return {"success": True, "message": i18n_message("quotation_converted_to_order_success", request), "order_id": so.id, "so_number": so_num}
     except HTTPException:
         raise
     except Exception as e:
@@ -283,16 +283,16 @@ def calculate_commission(data: dict, current_user=Depends(get_current_user)):
                 })
                 count += 1
             db.commit()
-            return {"count": count, "message": f"Calculated {count} commission entries"}
+            return {"count": count, "message": i18n_message("commissions_calculated_count", request)}
 
         # Single invoice mode
         inv = db.execute(text("SELECT * FROM invoices WHERE id = :id"), {"id": invoice_id}).fetchone()
         if not inv:
-            raise HTTPException(status_code=404, detail="Invoice not found")
+            raise HTTPException(**http_error(404, ("invoice_not_found", request)))
 
         salesperson_id = data.get("salesperson_id") or getattr(inv, "salesperson_id", None)
         if not salesperson_id:
-            raise HTTPException(status_code=400, detail="No salesperson assigned")
+            raise HTTPException(**http_error(400, "no_salesperson_assigned", request))
 
         # Find applicable rule
         rule = db.execute(text("""
@@ -368,7 +368,7 @@ def pay_commission(data: dict, current_user=Depends(get_current_user)):
         payment_date = data.get("payment_date", str(date.today()))
         
         if not commission_ids:
-            raise HTTPException(status_code=400, detail="لم يتم تحديد عمولات للصرف")
+            raise HTTPException(**http_error(400, "no_commissions_to_pay", request))
         
         # Fetch pending commissions
         normalized_ids = [int(cid) for cid in commission_ids]
@@ -378,7 +378,7 @@ def pay_commission(data: dict, current_user=Depends(get_current_user)):
         """), {"commission_ids": normalized_ids}).fetchall()
         
         if not commissions:
-            raise HTTPException(status_code=400, detail="لا توجد عمولات معلقة بالأرقام المحددة")
+            raise HTTPException(**http_error(400, "no_pending_commissions", request))
         
         total_amount = sum(Decimal(str(c.commission_amount)) for c in commissions)
         
@@ -429,7 +429,7 @@ def pay_commission(data: dict, current_user=Depends(get_current_user)):
             "paid_count": len(commissions),
             "total_amount": round(total_amount, 2),
             "journal_entry_id": je_id,
-            "message": f"تم صرف {len(commissions)} عمولة بمبلغ {total_amount:.2f} وإنشاء القيد المحاسبي"
+            "message": i18n_message("commissions_paid_details", request)
         }
     except HTTPException:
         raise
@@ -452,11 +452,11 @@ def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_c
     try:
         order = db.execute(text("SELECT * FROM sales_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
 
         lines = data.get("lines", [])  # [{order_line_id, quantity}]
         if not lines:
-            raise HTTPException(status_code=400, detail="No lines specified")
+            raise HTTPException(**http_error(400, "no_lines_specified", request))
 
         import uuid
         inv_num = f"INV-{uuid.uuid4().hex[:8].upper()}"
@@ -473,7 +473,7 @@ def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_c
                     else datetime.fromisoformat(str(raw_invoice_date)).date()
                 )
             except (TypeError, ValueError):
-                raise HTTPException(status_code=400, detail="invalid invoice_date format (expected ISO 8601)")
+                raise HTTPException(**http_error(400, "invalid_invoice_date_format_expected_iso_8601", request))
 
         inv = db.execute(text("""
             INSERT INTO invoices (invoice_number, party_id, branch_id, invoice_date, type,
@@ -528,7 +528,7 @@ def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
         party = db.execute(text("SELECT id, name, credit_limit, credit_used FROM parties WHERE id = :id"),
                            {"id": party_id}).fetchone()
         if not party:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(**http_error(404, ("customer_not_found", request)))
         limit_ = Decimal(str(party.credit_limit or 0))
         used = Decimal(str(party.credit_used or 0))
         return {
@@ -562,7 +562,7 @@ def update_credit_limit(party_id: int, data: dict, request: Request, current_use
             details={"old_limit": str(old_limit or 0), "new_limit": data["credit_limit"]},
             request=request
         )
-        return {"message": "Credit limit updated", "credit_limit": data["credit_limit"]}
+        return {"message": i18n_message("credit_limit_updated", request), "credit_limit": data["credit_limit"]}
     finally:
         db.close()
 
@@ -577,7 +577,7 @@ def check_credit(data: dict, current_user=Depends(get_current_user)):
         party = db.execute(text("SELECT credit_limit, credit_used FROM parties WHERE id = :id"),
                            {"id": party_id}).fetchone()
         if not party:
-            raise HTTPException(status_code=404, detail="Customer not found")
+            raise HTTPException(**http_error(404, ("customer_not_found", request)))
         limit_ = Decimal(str(party.credit_limit or 0))
         used = Decimal(str(party.credit_used or 0))
         available = limit_ - used
@@ -588,7 +588,7 @@ def check_credit(data: dict, current_user=Depends(get_current_user)):
             "credit_used": str(used),
             "available": str(available),
             "requested": str(amount),
-            "message": "Approved" if approved else f"Credit limit exceeded by {amount - available:.2f}"
+            "message": i18n_message("change_order_cannot_edit_after_approval", request) if approved else f"Credit limit exceeded by {amount - available:.2f}"
         }
     finally:
         db.close()

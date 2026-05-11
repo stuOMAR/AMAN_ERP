@@ -69,7 +69,7 @@ def get_article(article_id: int, current_user=Depends(get_current_user)):
             WHERE kb.id = :id
         """), {"id": article_id}).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="المقالة غير موجودة")
+            raise HTTPException(**http_error(404, "kb_article_not_found", request))
         return dict(row._mapping)
     finally:
         db.close()
@@ -89,7 +89,7 @@ def create_article(data: ArticleCreate, request: Request, current_user=Depends(g
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_article", resource_type="knowledge_article", resource_id=str(aid), details={"title": data.title, "category": data.category}, request=request)
-        return {"id": aid, "message": "تم إنشاء المقالة"}
+        return {"id": aid, "message": i18n_message("article_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating article: {e}")
@@ -112,7 +112,7 @@ def update_article(article_id: int, data: ArticleUpdate, request: Request, curre
         db.execute(text(f"UPDATE crm_knowledge_base SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_article", resource_type="knowledge_article", resource_id=str(article_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": "تم تحديث المقالة"}
+        return {"message": i18n_message(("article_updated", request))}
     finally:
         db.close()
 
@@ -125,7 +125,7 @@ def delete_article(article_id: int, request: Request, current_user=Depends(get_c
         db.execute(text("DELETE FROM crm_knowledge_base WHERE id = :id"), {"id": article_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_article", resource_type="knowledge_article", resource_id=str(article_id), details={}, request=request)
-        return {"message": "تم حذف المقالة"}
+        return {"message": i18n_message(("article_deleted", request))}
     finally:
         db.close()
 

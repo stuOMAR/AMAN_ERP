@@ -20,7 +20,7 @@ from datetime import date
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -28,6 +28,7 @@ from database import get_db_connection
 from integrations.einvoicing import get_adapter
 from routers.auth import get_current_user
 from services import ecl_service, ifrs15_revenue_service, impairment_service, nrv_service
+from utils.i18n import http_error
 from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
@@ -56,7 +57,7 @@ class ECLComputeRequest(BaseModel):
     "/ecl/compute",
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
-def ecl_compute(body: ECLComputeRequest, current_user=Depends(get_current_user)):
+def ecl_compute(body: ECLComputeRequest, request: Request, current_user=Depends(get_current_user)):
     """Ecl Compute."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -79,7 +80,7 @@ def ecl_compute(body: ECLComputeRequest, current_user=Depends(get_current_user))
     except Exception:
         db.rollback()
         logger.exception("ECL compute failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -118,7 +119,7 @@ class NRVRunRequest(BaseModel):
     "/nrv/run",
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
-def nrv_run(body: NRVRunRequest, current_user=Depends(get_current_user)):
+def nrv_run(body: NRVRunRequest, request: Request, current_user=Depends(get_current_user)):
     """Nrv Run."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -139,7 +140,7 @@ def nrv_run(body: NRVRunRequest, current_user=Depends(get_current_user)):
     except Exception:
         db.rollback()
         logger.exception("NRV run failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -225,6 +226,7 @@ def cgu_list(current_user=Depends(get_current_user)):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def impairment_test(body: ImpairmentTestRequest,
+                    request: Request,
                     current_user=Depends(get_current_user)):
     """Impairment Test."""
     db = get_db_connection(current_user.company_id)
@@ -250,7 +252,7 @@ def impairment_test(body: ImpairmentTestRequest,
     except Exception:
         db.rollback()
         logger.exception("Impairment test failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -290,6 +292,7 @@ class RevenueRecogniseRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def ifrs15_create_contract(body: ContractCreateRequest,
+                           request: Request,
                            current_user=Depends(get_current_user)):
     """Ifrs15 Create Contract."""
     db = get_db_connection(current_user.company_id)
@@ -311,7 +314,7 @@ def ifrs15_create_contract(body: ContractCreateRequest,
     except Exception:
         db.rollback()
         logger.exception("IFRS15 contract create failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -320,7 +323,7 @@ def ifrs15_create_contract(body: ContractCreateRequest,
     "/ifrs15/contracts/{contract_id}",
     dependencies=[Depends(require_permission("finance.accounting_view"))],
 )
-def ifrs15_get_contract(contract_id: int, current_user=Depends(get_current_user)):
+def ifrs15_get_contract(contract_id: int, request: Request, current_user=Depends(get_current_user)):
     """Ifrs15 Get Contract."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -328,7 +331,7 @@ def ifrs15_get_contract(contract_id: int, current_user=Depends(get_current_user)
             "SELECT * FROM revenue_contracts WHERE id = :id"
         ), {"id": contract_id}).fetchone()
         if not c:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "contract not found")
+            raise HTTPException(**http_error(404, "contract_not_found", request))
         pos = db.execute(text("""
             SELECT * FROM performance_obligations WHERE contract_id = :id ORDER BY id
         """), {"id": contract_id}).fetchall()
@@ -345,6 +348,7 @@ def ifrs15_get_contract(contract_id: int, current_user=Depends(get_current_user)
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def ifrs15_recognise(body: RevenueRecogniseRequest,
+                     request: Request,
                      current_user=Depends(get_current_user)):
     """Ifrs15 Recognise."""
     db = get_db_connection(current_user.company_id)
@@ -367,7 +371,7 @@ def ifrs15_recognise(body: RevenueRecogniseRequest,
     except Exception:
         db.rollback()
         logger.exception("IFRS15 recognise failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -388,6 +392,7 @@ class EInvoiceSubmitRequest(BaseModel):
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
 def einvoice_submit(body: EInvoiceSubmitRequest,
+                    request: Request,
                     current_user=Depends(get_current_user)):
     """Einvoice Submit."""
     try:
@@ -454,7 +459,7 @@ def einvoice_submit(body: EInvoiceSubmitRequest,
     except Exception:
         db.rollback()
         logger.exception("einvoice submit failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -492,7 +497,7 @@ def einvoice_list(current_user=Depends(get_current_user), limit: int = 50,
     "/einvoice/{submission_id}/refresh",
     dependencies=[Depends(require_permission("finance.accounting_post"))],
 )
-def einvoice_refresh(submission_id: int, current_user=Depends(get_current_user)):
+def einvoice_refresh(submission_id: int, request: Request, current_user=Depends(get_current_user)):
     """Einvoice Refresh."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -501,9 +506,9 @@ def einvoice_refresh(submission_id: int, current_user=Depends(get_current_user))
             FROM e_invoice_submissions WHERE id = :id
         """), {"id": submission_id}).fetchone()
         if not sub:
-            raise HTTPException(status.HTTP_404_NOT_FOUND, "submission not found")
+            raise HTTPException(**http_error(404, "einvoice_submission_not_found", request))
         if not sub.document_uuid:
-            raise HTTPException(status.HTTP_400_BAD_REQUEST, "submission has no document_uuid")
+            raise HTTPException(**http_error(400, "einvoice_no_document_uuid", request))
         adapter = get_adapter(sub.jurisdiction)
         result = adapter.fetch_status(sub.document_uuid)
         db.execute(text("""
@@ -526,7 +531,7 @@ def einvoice_refresh(submission_id: int, current_user=Depends(get_current_user))
     except Exception:
         db.rollback()
         logger.exception("einvoice refresh failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 
@@ -544,6 +549,7 @@ MAX_OUTBOX_ATTEMPTS = 6  # exponential back-off caps out at ~5.3 hours
 )
 def einvoice_outbox_relay(
     limit: int = 20,
+    request: Request = None,
     current_user=Depends(get_current_user),
 ):
     """Retry pending e-invoice submissions from the outbox.
@@ -635,7 +641,7 @@ def einvoice_outbox_relay(
     except Exception:
         db.rollback()
         logger.exception("einvoice outbox relay failed")
-        raise HTTPException(status.HTTP_500_INTERNAL_SERVER_ERROR, "internal_error")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         _close(db)
 

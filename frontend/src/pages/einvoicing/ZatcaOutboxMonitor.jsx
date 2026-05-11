@@ -47,20 +47,20 @@ const ZatcaOutboxMonitor = () => {
     return (
         <div className="space-y-4">
             <div className="flex items-center justify-between">
-                <h2 className="text-lg font-semibold">{t('ZATCA Outbox')}</h2>
+                <h2 className="text-lg font-semibold">{t('einvoicing.zatca_outbox.title')}</h2>
                 <div className="flex items-center gap-2">
                     <select
                         value={filter}
                         onChange={e => setFilter(e.target.value)}
                         className="text-sm border rounded px-2 py-1"
                     >
-                        <option value="">{t('All States')}</option>
-                        <option value="pending">Pending</option>
-                        <option value="processing">Processing</option>
-                        <option value="failed">Failed</option>
-                        <option value="dead_letter">Dead Letter</option>
-                        <option value="submitted">Submitted</option>
-                        <option value="cleared">Cleared</option>
+                        <option value="">{t('einvoicing.zatca_outbox.filters.all_states')}</option>
+                        <option value="pending">{t('einvoicing.zatca_outbox.filters.pending')}</option>
+                        <option value="processing">{t('einvoicing.zatca_outbox.filters.processing')}</option>
+                        <option value="failed">{t('einvoicing.zatca_outbox.filters.failed')}</option>
+                        <option value="dead_letter">{t('einvoicing.zatca_outbox.filters.dead_letter')}</option>
+                        <option value="submitted">{t('einvoicing.zatca_outbox.filters.submitted')}</option>
+                        <option value="cleared">{t('einvoicing.zatca_outbox.filters.cleared')}</option>
                     </select>
                     <button onClick={fetchRows} className="p-1 hover:bg-gray-100 rounded">
                         <RefreshCw size={16} />
@@ -70,20 +70,20 @@ const ZatcaOutboxMonitor = () => {
 
             {loading ? (
                 <div className="flex items-center gap-2 text-gray-500">
-                    <Loader2 size={16} className="animate-spin" /> {t('Loading...')}
+                    <Loader2 size={16} className="animate-spin" /> {t('common.loading')}
                 </div>
             ) : (
                 <div className="overflow-x-auto">
                     <table className="w-full text-sm">
                         <thead>
                             <tr className="border-b text-left text-gray-500">
-                                <th className="py-2 px-3">ID</th>
-                                <th className="py-2 px-3">Invoice</th>
-                                <th className="py-2 px-3">State</th>
-                                <th className="py-2 px-3">Attempts</th>
-                                <th className="py-2 px-3">Last Error</th>
-                                <th className="py-2 px-3">Created</th>
-                                <th className="py-2 px-3">Actions</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.id')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.invoice')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.state')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.attempts')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.last_error')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.created')}</th>
+                                <th className="py-2 px-3">{t('einvoicing.zatca_outbox.table.actions')}</th>
                             </tr>
                         </thead>
                         <tbody>
@@ -105,7 +105,7 @@ const ZatcaOutboxMonitor = () => {
                                                 onClick={() => handleReprocess(row.id)}
                                                 className="text-blue-600 hover:underline text-xs"
                                             >
-                                                Reprocess
+                                                {t('einvoicing.zatca_outbox.buttons.reprocess')}
                                             </button>
                                         )}
                                     </td>
@@ -114,7 +114,7 @@ const ZatcaOutboxMonitor = () => {
                         </tbody>
                     </table>
                     {rows.length === 0 && (
-                        <p className="text-center text-gray-400 py-8">{t('No outbox rows')}</p>
+                        <p className="text-center text-gray-400 py-8">{t('einvoicing.zatca_outbox.no_entries')}</p>
                     )}
                 </div>
             )}

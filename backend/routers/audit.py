@@ -104,7 +104,7 @@ def list_audit_logs(
             db.close()
 
     if not target_company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing and not a system view")
+        raise HTTPException(**http_error(400, "company_id_missing_and_not_a_system_view", request))
 
     with transactional(target_company_id) as db:
         query = """

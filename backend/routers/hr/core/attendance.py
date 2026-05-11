@@ -46,7 +46,7 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         ).fetchone()
         
         if not emp_res:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise HTTPException(**http_error(404, ("employee_not_found", request)))
         
         employee_id = emp_res[0]
         today = date.today()
@@ -67,7 +67,7 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         ).fetchone()
         
         if existing and existing[1] and not existing[2]:
-            raise HTTPException(status_code=400, detail="You are already checked in")
+            raise HTTPException(**http_error(400, "you_are_already_checked_in", request))
         
         # Prevent excessive check-ins on same day (max 3 sessions)
         day_count = conn.execute(
@@ -76,7 +76,7 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         ).scalar() or 0
         
         if day_count >= 3:
-            raise HTTPException(status_code=400, detail="تم تجاوز الحد الأقصى لتسجيلات الحضور لهذا اليوم (3 مرات)")
+            raise HTTPException(**http_error(400, "daily_attendance_limit_exceeded", request))
             
         # Create new check-in
         new_record = conn.execute(
@@ -125,7 +125,7 @@ def check_out(
         ).fetchone()
         
         if not emp_res:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise HTTPException(**http_error(404, ("employee_not_found", request)))
         
         employee_id = emp_res[0]
         today = date.today()
@@ -137,7 +137,7 @@ def check_out(
         ).fetchone()
         
         if not existing:
-            raise HTTPException(status_code=400, detail="No active check-in found for today")
+            raise HTTPException(**http_error(400, "no_active_check_in_found_for_today", request))
             
         # Update check-out
         updated_record = conn.execute(
@@ -184,7 +184,7 @@ def get_attendance_status(
         ).fetchone()
         
         if not emp_res:
-            return {"status": "not_linked", "message": "User not linked to employee"}
+            return {"status": "not_linked", "message": i18n_message("user_not_linked_to_employee", request)}
             
         employee_id = emp_res[0]
         today = date.today()

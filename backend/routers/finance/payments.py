@@ -30,6 +30,7 @@ from database import get_db_connection
 from integrations.payments import get_gateway
 from routers.auth import get_current_user
 from utils.permissions import require_permission
+from utils.i18n import http_error
 
 try:  # event bus is optional in some deployments
     from utils.event_bus import publish as _bus_publish
@@ -82,14 +83,11 @@ def _load_gateway_config(db, provider: str, *, tenant_id: Optional[str] = None) 
         {"k": f"payment_gateways.{provider.lower()}"},
     ).fetchone()
     if not row or not row[0]:
-        raise HTTPException(
-            status.HTTP_412_PRECONDITION_FAILED,
-            f"payment gateway '{provider}' is not configured for this tenant",
-        )
+        raise HTTPException(**http_error(status.HTTP_412_PRECONDITION_FAILED, "payment_gateway_not_configured"))
     try:
         cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
     except Exception as e:
-        raise HTTPException(500, f"gateway config is not valid JSON: {e}")
+        raise HTTPException(**http_error(500, "payment_config_invalid_json"))
     if tenant_id:
         try:
             from services.integration_keys_service import get_active_key
@@ -208,7 +206,7 @@ def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
     except Exception as e:
         db.rollback()
         logger.exception("payment charge failed")
-        raise HTTPException(500, f"payment charge failed: {e}")
+        raise HTTPException(**http_error(500, "payment_charge_failed"))
     finally:
         _close(db)
 
@@ -281,7 +279,7 @@ async def webhook(provider: str, company_id: str, request: Request):
             tenant_db.rollback()
         finally:
             _close(tenant_db)
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, "webhook signature invalid")
+        raise HTTPException(**http_error(status.HTTP_400_BAD_REQUEST, "webhook_signature_invalid", request))
 
     # Persist + update charge status in matched tenant
     try:
@@ -345,7 +343,7 @@ def fetch_charge(provider: str, charge_id: str, current_user=Depends(get_current
             {"p": provider, "c": charge_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "charge not found")
+            raise HTTPException(**http_error(404, "payment_charge_not_found"))
         return {
             "id": row[0], "provider": row[1], "charge_id": row[2],
             "invoice_id": row[3], "amount": str(row[4]), "currency": row[5],
@@ -389,6 +387,6 @@ def refund_charge(provider: str, charge_id: str, body: RefundRequest,
     except Exception as e:
         db.rollback()
         logger.exception("refund failed")
-        raise HTTPException(500, f"refund failed: {e}")
+        raise HTTPException(**http_error(500, "payment_refund_failed"))
     finally:
         _close(db)

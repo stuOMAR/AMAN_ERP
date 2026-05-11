@@ -130,7 +130,7 @@ def update_template(
             },
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Template not found")
+            raise HTTPException(**http_error(404, "template_not_found", request))
         conn.commit()
         return {"updated": True, "id": template_id}
     finally:
@@ -155,7 +155,7 @@ def delete_template(
             {"tid": template_id, "tnt": int(tenant_id)},
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Template not found")
+            raise HTTPException(**http_error(404, "template_not_found", request))
         conn.commit()
         return {"deleted": True, "id": template_id}
     finally:

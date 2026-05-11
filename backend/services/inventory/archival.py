@@ -50,15 +50,14 @@ def run_archival(db: Any, *, tenant_id: int) -> dict:
                     text("""
                         WITH moved AS (
                             DELETE FROM inventory_transactions
-                            WHERE tenant_id = :tid
-                              AND occurred_at < NOW() - (:days || ' days')::INTERVAL
+                            WHERE created_at < NOW() - (:days || ' days')::INTERVAL
                             LIMIT :batch_size
                             RETURNING *
                         )
                         INSERT INTO inventory_transactions_archive
                         SELECT * FROM moved
                     """),
-                    {"tid": tenant_id, "days": retention_days, "batch_size": batch_size},
+                    {"days": retention_days, "batch_size": batch_size},
                 )
                 moved = result.rowcount
                 db.commit()

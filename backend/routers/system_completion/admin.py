@@ -2,7 +2,7 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -36,7 +36,7 @@ router = APIRouter()
 
 @router.post("/admin/backup", dependencies=[Depends(require_permission("admin"))],
              tags=["Backup"], response_model=Dict[str, Any])
-def create_backup(current_user: dict = Depends(get_current_user)):
+def create_backup(request: Request, current_user: dict = Depends(get_current_user)):
     """إنشاء نسخة احتياطية لقاعدة بيانات الشركة (pg_dump)"""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
@@ -44,7 +44,7 @@ def create_backup(current_user: dict = Depends(get_current_user)):
     # SEC-FIX-021: Validate company_id before using in subprocess
     import re
     if not company_id or not re.match(r'^[a-f0-9]+$', company_id):
-        raise HTTPException(400, "معرف الشركة غير صالح")
+        raise HTTPException(**http_error(400, "invalid_company_id", request))
 
     from config import settings
     db_name = f"aman_{company_id}"
@@ -76,7 +76,7 @@ def create_backup(current_user: dict = Depends(get_current_user)):
             error_msg = result.stderr.decode() if result.stderr else "Unknown error"
             # SEC-FIX-023: Log stderr server-side, don't leak to client
             logger.error(f"pg_dump failed for {db_name}: {error_msg}")
-            raise HTTPException(500, "فشل إنشاء النسخة الاحتياطية")
+            raise HTTPException(**http_error(500, "backup_create_failed", request))
 
         file_size = os.path.getsize(backup_file)
 
@@ -100,7 +100,7 @@ def create_backup(current_user: dict = Depends(get_current_user)):
                          {"file_size_mb": round(file_size / (1024 * 1024), 2)})
 
         return {
-            "message": "تم إنشاء النسخة الاحتياطية بنجاح",
+            "message": i18n_message("backup_created_success", request),
             "file_name": os.path.basename(backup_file),
             "file_size_mb": round(file_size / (1024 * 1024), 2),
             "timestamp": timestamp
@@ -108,12 +108,12 @@ def create_backup(current_user: dict = Depends(get_current_user)):
     except HTTPException:
         raise
     except subprocess.TimeoutExpired:
-        raise HTTPException(500, "تجاوز الوقت المسموح للنسخ الاحتياطي")
+        raise HTTPException(**http_error(500, "backup_timeout", request))
     except FileNotFoundError:
-        raise HTTPException(500, "pg_dump غير متوفر على النظام. يرجى تثبيت postgresql-client")
+        raise HTTPException(**http_error(500, "pg_dump_not_available", request))
     except Exception as e:
         logger.error(f"Backup creation failed: {e}")
-        raise HTTPException(500, "حدث خطأ أثناء إنشاء النسخة الاحتياطية")
+        raise HTTPException(**http_error(500, "backup_error", request))
 
 
 @router.get("/admin/backups", dependencies=[Depends(require_permission("admin"))],
@@ -137,7 +137,7 @@ def list_backups(current_user: dict = Depends(get_current_user)):
 
 @router.get("/admin/backup/{backup_id}/download",
             dependencies=[Depends(require_permission("admin"))], tags=["Backup"])
-def download_backup(backup_id: int, current_user: dict = Depends(get_current_user)):
+def download_backup(backup_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """تحميل نسخة احتياطية"""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
@@ -146,10 +146,10 @@ def download_backup(backup_id: int, current_user: dict = Depends(get_current_use
         ), {"id": backup_id}).fetchone()
 
         if not backup:
-            raise HTTPException(404, "النسخة غير موجودة")
+            raise HTTPException(**http_error(404, "backup_not_found", request))
 
         if not os.path.exists(backup.file_path):
-            raise HTTPException(404, "ملف النسخة الاحتياطية غير موجود على القرص")
+            raise HTTPException(**http_error(404, "backup_file_not_found", request))
 
         with open(backup.file_path, 'rb') as f:
             content = f.read()

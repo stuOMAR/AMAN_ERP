@@ -17,6 +17,7 @@ from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -97,7 +98,7 @@ class DashboardResponse(BaseModel):
 def _get_company_id(current_user) -> str:
     cid = getattr(current_user, "company_id", None)
     if not cid:
-        raise HTTPException(status_code=400, detail="company_id not available")
+        raise HTTPException(**http_error(400, ("company_id_not_available", request)))
     return cid
 
 
@@ -257,9 +258,9 @@ async def resolve_conflict(
             """), {"sid": body.sync_queue_id, "uid": current_user.id}).mappings().first()
 
             if not row:
-                raise HTTPException(404, "Sync queue item not found")
+                raise HTTPException(**http_error(404, "sync_item_not_found", request))
             if row["sync_status"] != "conflict":
-                raise HTTPException(400, "Item is not in conflict status")
+                raise HTTPException(**http_error(400, "item_not_in_conflict", request))
 
             if body.resolution == "keep_server":
                 # Just mark as resolved — server version already in DB
@@ -271,7 +272,7 @@ async def resolve_conflict(
                 _apply_sync_item_raw(conn, row["entity_type"], row["entity_id"], payload, current_user.id)
             elif body.resolution == "merge":
                 if not body.merged_payload:
-                    raise HTTPException(400, "merged_payload required for merge resolution")
+                    raise HTTPException(**http_error(400, "merged_payload_required", request))
                 _apply_sync_item_raw(conn, row["entity_type"], row["entity_id"], body.merged_payload, current_user.id)
 
             conn.execute(text("""

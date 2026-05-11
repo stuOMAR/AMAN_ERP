@@ -63,7 +63,7 @@ def run_depreciation(
         dep_exp_acc = s.get('acc_map_depr_exp')
         acc_dep_acc = s.get('acc_map_acc_depr')
         if not dep_exp_acc or not acc_dep_acc:
-            raise HTTPException(status_code=400, detail="لم يتم ربط حسابات الإهلاك (acc_map_depr_exp / acc_map_acc_depr)")
+            raise HTTPException(**http_error(400, "depreciation_accounts_mapped_roles_acc_map_depr_ex", request))
 
         params: Dict[str, Any] = {"cutoff": cutoff.isoformat()}
         asset_filter = ""
@@ -84,7 +84,7 @@ def run_depreciation(
         """), params).fetchall()
 
         if not rows:
-            return {"posted_count": 0, "total_amount": 0.0, "message": "لا توجد سطور إهلاك بحاجة للترحيل"}
+            return {"posted_count": 0, "total_amount": 0.0, "message": i18n_message("no_depreciation_to_post", request)}
 
         base_currency = get_base_currency(conn)
         posted_count = 0
@@ -132,7 +132,7 @@ def run_depreciation(
             "total_amount": float(total_amount.quantize(_D2, ROUND_HALF_UP)),
             "schedule_ids": posted_ids,
             "through_date": cutoff.isoformat(),
-            "message": f"تم ترحيل {posted_count} سطر إهلاك بإجمالي {total_amount}",
+            "message": i18n_message("depreciation_posted_count", request),
         }
     except HTTPException:
         conn.rollback()
@@ -141,7 +141,7 @@ def run_depreciation(
         conn.rollback()
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Depreciation run failed")
-        raise HTTPException(status_code=500, detail="تعذّر ترحيل الإهلاك")
+        raise HTTPException(**http_error(500, "depreciation_posting_failed", request))
     finally:
         conn.close()
 
@@ -161,7 +161,7 @@ def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depe
         """), {"sid": schedule_id, "aid": asset_id}).fetchone()
         
         if not item:
-            raise HTTPException(status_code=400, detail="Schedule item not found or already posted")
+            raise HTTPException(**http_error(400, "schedule_item_not_found_or_already_posted", request))
             
         # Get Asset info for name/code
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
@@ -178,7 +178,7 @@ def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depe
         acc_depr_id = get_mapped_account_id(conn, "acc_map_acc_depr")
         
         if not exp_acc_id or not acc_depr_id:
-             raise HTTPException(status_code=400, detail="Depreciation accounts (mapped roles: acc_map_depr_exp, acc_map_acc_depr) not found.")
+             raise HTTPException(**http_error(400, "depreciation_accounts_mapped_roles_acc_map_depr_ex", request))
 
         # Create Header
         je_lines = [
@@ -215,7 +215,7 @@ def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depe
                      {"jid": je_id, "sid": schedule_id})
                      
         trans.commit()
-        return {"message": "Depreciation posted successfully", "journal_entry_id": je_id}
+        return {"message": i18n_message("depreciation_posted", request), "journal_entry_id": je_id}
         
     except HTTPException:
         trans.rollback()
@@ -232,7 +232,7 @@ def calc_declining_balance(asset_id: int, data: DecliningBalanceInput = Declinin
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
+            raise HTTPException(**http_error(404, "asset_not_found", request))
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         life = int(asset.life_years or 5)
@@ -256,7 +256,7 @@ def calc_units_of_production(asset_id: int, data: UnitsOfProductionInput, curren
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
+            raise HTTPException(**http_error(404, "asset_not_found", request))
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         total_units = _dec(data.total_units if data.total_units is not None else (asset.total_units or 1))
@@ -279,7 +279,7 @@ def calc_sum_of_years_digits(asset_id: int, current_user: dict = Depends(get_cur
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
+            raise HTTPException(**http_error(404, "asset_not_found", request))
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         life = int(asset.life_years or 5)

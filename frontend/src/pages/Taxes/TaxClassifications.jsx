@@ -7,6 +7,7 @@ import { useBranch } from '../../context/BranchContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import SimpleModal from '../../components/common/SimpleModal'
 import { ChevronLeft, Plus, Edit2, Trash2, Globe, Search, X, Tag } from 'lucide-react'
+import DataTable from '../../components/common/DataTable'
 
 export default function TaxClassifications() {
     const { t } = useTranslation()
@@ -187,6 +188,76 @@ export default function TaxClassifications() {
         return true
     })
 
+    const classificationColumns = [
+        {
+            key: 'code',
+            label: t('taxes.code', 'الرمز'),
+            width: '120px',
+            render: (value) => (
+                <span style={{ fontFamily: 'monospace', fontWeight: 600, color: 'var(--primary)', background: 'var(--primary-light)', padding: '2px 8px', borderRadius: 4, fontSize: 12 }}>
+                    {value}
+                </span>
+            ),
+        },
+        { key: 'name_ar', label: t('taxes.name_ar', 'الاسم بالعربي'), render: (v) => <span style={{ fontWeight: 600 }}>{v}</span> },
+        { key: 'name_en', label: t('taxes.name_en', 'الاسم بالإنجليزي'), render: (v) => <span style={{ color: 'var(--text-secondary)' }}>{v || '—'}</span> },
+        {
+            key: 'country_tax_rate',
+            label: `${t('taxes.tax_rate_for', 'المعدل')} (${currentCountry})`,
+            render: (v, item) => item.has_country_rate ? (
+                <span style={{ fontWeight: 700, color: 'var(--success, #16a34a)' }}>
+                    {v}% {item.country_tax_name || ''}
+                </span>
+            ) : (
+                <span style={{ color: 'var(--text-secondary)', fontSize: 12 }}>
+                    {t('taxes.no_rate_for_country', 'لا يوجد معدل')}
+                </span>
+            ),
+        },
+        {
+            key: 'is_active',
+            label: t('common.status_title', 'الحالة'),
+            width: '90px',
+            render: (v) => <span className={`badge ${v ? 'badge-success' : 'badge-danger'}`}>{v ? t('common.active', 'نشط') : t('common.inactive', 'غير نشط')}</span>,
+        },
+        {
+            key: 'actions',
+            label: t('common.actions', 'الإجراءات'),
+            width: '170px',
+            sortable: false,
+            searchable: false,
+            exportable: false,
+            render: (_, item) => (
+                <div style={{ display: 'flex', gap: 6 }}>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openRatesModal(item)} title={t('taxes.manage_rates', 'المعدلات')}>
+                        <Globe size={14} />
+                    </button>
+                    <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(item)} title={t('common.edit', 'تعديل')}>
+                        <Edit2 size={14} />
+                    </button>
+                    {item.is_active && (
+                        <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(item)} title={t('common.delete', 'حذف')} style={{ color: 'var(--danger)' }}>
+                            <Trash2 size={14} />
+                        </button>
+                    )}
+                </div>
+            ),
+        },
+    ]
+
+    const classificationRateColumns = [
+        { key: 'country_code', label: t('taxes.country', 'الدولة'), render: (v) => <span style={{ display: 'inline-flex', alignItems: 'center', gap: 6 }}><Globe size={14} style={{ color: 'var(--primary)' }} /><strong>{v}</strong></span> },
+        { key: 'tax_name', label: t('taxes.tax_name', 'اسم الضريبة'), render: (v) => v || t('taxes.exempt', 'معفى') },
+        { key: 'tax_code', label: t('taxes.tax_code', 'رمز الضريبة'), render: (v) => <span style={{ fontFamily: 'monospace', fontSize: 12 }}>{v || '—'}</span> },
+        { key: 'tax_rate', label: t('taxes.rate', 'المعدل'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', fontWeight: 700 }, render: (v) => v != null ? `${v}%` : t('taxes.exempt', 'معفى') },
+        { key: 'effective_from', label: t('taxes.effective_from', 'تاريخ البداية'), render: (v) => v || '—' },
+        { key: 'actions', label: '', sortable: false, searchable: false, exportable: false, render: (_, r) => (
+            <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteRate(r.rate_link_id)} style={{ color: 'var(--danger)' }}>
+                <Trash2 size={14} />
+            </button>
+        ) },
+    ]
+
     if (loading) return <PageLoading />
 
     return (
@@ -253,70 +324,15 @@ export default function TaxClassifications() {
 
             {/* Table */}
             <div className="card" style={{ marginTop: '12px', padding: 0, overflow: 'hidden' }}>
-                <div className="data-table-container">
-                    <table className="data-table">
-                        <thead>
-                            <tr>
-                                <th style={{ width: '120px' }}>{t('taxes.code', 'الرمز')}</th>
-                                <th>{t('taxes.name_ar', 'الاسم بالعربي')}</th>
-                                <th>{t('taxes.name_en', 'الاسم بالإنجليزي')}</th>
-                                <th style={{ width: '140px' }}>{t('taxes.tax_rate_for', 'المعدل')} ({currentCountry})</th>
-                                <th style={{ width: '80px' }}>{t('common.status_title', 'الحالة')}</th>
-                                <th style={{ width: '160px' }}>{t('common.actions', 'الإجراءات')}</th>
-                            </tr>
-                        </thead>
-                        <tbody>
-                            {filtered.length === 0 ? (
-                                <tr>
-                                    <td colSpan={6} style={{ textAlign: 'center', padding: '40px', color: 'var(--text-secondary)' }}>
-                                        {t('taxes.no_classifications', 'لا توجد تصنيفات ضريبية')}
-                                    </td>
-                                </tr>
-                            ) : filtered.map(item => (
-                                <tr key={item.id} style={{ opacity: item.is_active ? 1 : 0.5 }}>
-                                    <td>
-                                        <span style={{ fontFamily: 'monospace', fontWeight: '600', color: 'var(--primary)', background: 'var(--primary-light)', padding: '2px 8px', borderRadius: '4px', fontSize: '12px' }}>
-                                            {item.code}
-                                        </span>
-                                    </td>
-                                    <td style={{ fontWeight: '600' }}>{item.name_ar}</td>
-                                    <td style={{ color: 'var(--text-secondary)' }}>{item.name_en || '—'}</td>
-                                    <td>
-                                        {item.has_country_rate ? (
-                                            <span style={{ fontWeight: '700', color: 'var(--success, #16a34a)' }}>
-                                                {item.country_tax_rate}% {item.country_tax_name || ''}
-                                            </span>
-                                        ) : (
-                                            <span style={{ color: 'var(--text-secondary)', fontSize: '12px' }}>
-                                                {t('taxes.no_rate_for_country', 'لا يوجد معدل')}
-                                            </span>
-                                        )}
-                                    </td>
-                                    <td>
-                                        <span className={`badge ${item.is_active ? 'badge-success' : 'badge-danger'}`}>
-                                            {item.is_active ? t('common.active', 'نشط') : t('common.inactive', 'غير نشط')}
-                                        </span>
-                                    </td>
-                                    <td>
-                                        <div style={{ display: 'flex', gap: '6px' }}>
-                                            <button className="btn btn-ghost btn-sm" onClick={() => openRatesModal(item)} title={t('taxes.manage_rates', 'المعدلات')}>
-                                                <Globe size={14} />
-                                            </button>
-                                            <button className="btn btn-ghost btn-sm" onClick={() => openEditModal(item)} title={t('common.edit', 'تعديل')}>
-                                                <Edit2 size={14} />
-                                            </button>
-                                            {item.is_active && (
-                                                <button className="btn btn-ghost btn-sm" onClick={() => handleDelete(item)} title={t('common.delete', 'حذف')} style={{ color: 'var(--danger)' }}>
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            )}
-                                        </div>
-                                    </td>
-                                </tr>
-                            ))}
-                        </tbody>
-                    </table>
-                </div>
+                <DataTable
+                    columns={classificationColumns}
+                    data={filtered}
+                    rowKey="id"
+                    searchable
+                    exportable
+                    exportName="tax-classifications"
+                    emptyTitle={t('taxes.no_classifications', 'لا توجد تصنيفات ضريبية')}
+                />
             </div>
 
             {/* Create/Edit Modal */}
@@ -448,50 +464,15 @@ export default function TaxClassifications() {
                             </div>
                         )}
 
-                        {/* Rates Table */}
-                        <div className="data-table-container">
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>{t('taxes.country', 'الدولة')}</th>
-                                        <th>{t('taxes.tax_name', 'اسم الضريبة')}</th>
-                                        <th>{t('taxes.tax_code', 'رمز الضريبة')}</th>
-                                        <th style={{ textAlign: 'left' }}>{t('taxes.rate', 'المعدل')}</th>
-                                        <th>{t('taxes.effective_from', 'تاريخ البداية')}</th>
-                                        <th style={{ width: '60px' }}></th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {classificationRates.length === 0 ? (
-                                        <tr>
-                                            <td colSpan={6} style={{ textAlign: 'center', padding: '24px', color: 'var(--text-secondary)' }}>
-                                                {t('taxes.no_rates', 'لا توجد معدلات مرتبطة')}
-                                            </td>
-                                        </tr>
-                                    ) : classificationRates.map(r => (
-                                        <tr key={r.rate_link_id}>
-                                            <td>
-                                                <span style={{ display: 'inline-flex', alignItems: 'center', gap: '6px' }}>
-                                                    <Globe size={14} style={{ color: 'var(--primary)' }} />
-                                                    <strong>{r.country_code}</strong>
-                                                </span>
-                                            </td>
-                                            <td>{r.tax_name || t('taxes.exempt', 'معفى')}</td>
-                                            <td style={{ fontFamily: 'monospace', fontSize: '12px' }}>{r.tax_code || '—'}</td>
-                                            <td style={{ textAlign: 'left', fontWeight: '700' }}>
-                                                {r.tax_rate != null ? `${r.tax_rate}%` : t('taxes.exempt', 'معفى')}
-                                            </td>
-                                            <td style={{ fontSize: '13px' }}>{r.effective_from || '—'}</td>
-                                            <td>
-                                                <button className="btn btn-ghost btn-sm" onClick={() => handleDeleteRate(r.rate_link_id)} style={{ color: 'var(--danger)' }}>
-                                                    <Trash2 size={14} />
-                                                </button>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
+                        <DataTable
+                            columns={classificationRateColumns}
+                            data={classificationRates}
+                            rowKey="rate_link_id"
+                            searchable
+                            exportable
+                            exportName={`tax-classification-${selectedClassification?.code || 'rates'}`}
+                            emptyTitle={t('taxes.no_rates', 'لا توجد معدلات مرتبطة')}
+                        />
                     </div>
                 )}
             </SimpleModal>

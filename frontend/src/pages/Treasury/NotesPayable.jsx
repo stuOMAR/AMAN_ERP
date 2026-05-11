@@ -17,6 +17,7 @@ const NotesPayable = () => {
     const currency = getCurrency() || '';
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [statusFilter, setStatusFilter] = useState('');
     const [showCreate, setShowCreate] = useState(false);
     const [showDetail, setShowDetail] = useState(null);
@@ -32,7 +33,12 @@ const NotesPayable = () => {
     const [payForm, setPayForm] = useState({ payment_date: new Date().toISOString().split('T')[0], treasury_account_id: '' });
     const [protestForm, setProtestForm] = useState({ protest_date: new Date().toISOString().split('T')[0], reason: '' });
 
-    useEffect(() => { loadData(); }, [currentBranch, statusFilter]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            loadData();
+        }, 300)
+        return () => clearTimeout(timer);
+    }, [currentBranch, statusFilter]);
 
     const loadData = async () => {
         try {
@@ -46,7 +52,7 @@ const NotesPayable = () => {
             setNotes(notesRes.data);
             setStats(statsRes.data);
         } catch (e) { console.error(e); }
-        finally { setLoading(false); }
+        finally { setLoading(false); setInitialLoad(false); }
     };
 
     const loadCreateData = async () => {
@@ -101,10 +107,11 @@ const NotesPayable = () => {
         return <span className={`badge ${map[s] || 'badge-secondary'}`}>{labels[s] || s}</span>;
     };
 
-    if (loading) return <PageLoading />;
+    if (initialLoad) return <PageLoading />;
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <div>

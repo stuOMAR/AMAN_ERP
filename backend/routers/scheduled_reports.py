@@ -103,9 +103,9 @@ def create_scheduled_report(
 ):
     """Create a new scheduled report."""
     if data.report_type not in REPORT_TYPES:
-        raise HTTPException(status_code=400, detail=f"Invalid report type. Valid: {list(REPORT_TYPES.keys())}")
+        raise HTTPException(status_code=400, detail=i18n_message("invalid_report_type", request))
     if data.frequency not in ("daily", "weekly", "monthly"):
-        raise HTTPException(status_code=400, detail="Frequency must be daily, weekly, or monthly")
+        raise HTTPException(**http_error(400, "frequency_must_be", request))
 
     with transactional(current_user.company_id) as db:
         try:
@@ -179,7 +179,7 @@ def update_scheduled_report(
             "uid": current_user.id,
         })
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Report not found or unauthorized")
+            raise HTTPException(**http_error(404, "report_not_found_unauthorized", request))
         log_activity(
             db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="reports.scheduled.update", resource_type="scheduled_report",
@@ -187,7 +187,7 @@ def update_scheduled_report(
             details={"report_type": data.report_type, "frequency": data.frequency},
             request=request
         )
-        return {"message": "Scheduled report updated"}
+        return {"message": i18n_message("scheduled_report_updated", request)}
 
 
 @router.delete("/scheduled/{report_id}", dependencies=[Depends(require_permission(["reports.delete"]))], response_model=Dict[str, Any])
@@ -202,14 +202,14 @@ def delete_scheduled_report(
         result = db.execute(text("DELETE FROM scheduled_reports WHERE id = :id AND created_by = :uid"),
                             {"id": report_id, "uid": current_user.id})
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Report not found or unauthorized")
+            raise HTTPException(**http_error(404, "report_not_found_unauthorized", request))
         log_activity(
             db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="reports.scheduled.delete", resource_type="scheduled_report",
             resource_id=str(report_id), details={},
             request=request
         )
-        return {"message": "Scheduled report deleted"}
+        return {"message": i18n_message("scheduled_report_deleted", request)}
 
 
 @router.put("/scheduled/{report_id}/toggle", dependencies=[Depends(require_permission(["reports.edit"]))], response_model=Dict[str, Any])
@@ -226,14 +226,14 @@ def toggle_scheduled_report(
             {"active": active, "id": report_id}
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Report not found")
+            raise HTTPException(**http_error(404, "report_not_found", request))
         log_activity(
             db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="reports.scheduled.toggle", resource_type="scheduled_report",
             resource_id=str(report_id), details={"is_active": active},
             request=request
         )
-        return {"message": f"Report {'activated' if active else 'deactivated'}"}
+        return {"message": i18n_message("report_activated_status", request)}
 
 
 @router.post("/scheduled/{report_id}/run", dependencies=[Depends(require_permission(["reports.create"]))], response_model=Dict[str, Any])
@@ -247,7 +247,7 @@ def run_scheduled_report_now(
     with transactional(current_user.company_id) as db:
         report = db.execute(text("SELECT * FROM scheduled_reports WHERE id=:id"), {"id": report_id}).fetchone()
         if not report:
-            raise HTTPException(status_code=404, detail="Report not found")
+            raise HTTPException(**http_error(404, "report_not_found", request))
 
         background_tasks.add_task(_execute_scheduled_report, current_user.company_id, dict(report._mapping))
         log_activity(
@@ -256,7 +256,7 @@ def run_scheduled_report_now(
             resource_id=str(report_id), details={},
             request=request
         )
-        return {"message": "Report execution started in background"}
+        return {"message": i18n_message("report_execution_started", request)}
 
 
 # ═══════════════════════════════════════════════════════════
@@ -271,14 +271,14 @@ def share_report(
 ):
     """Share a report with another user."""
     if data.report_type not in ("custom", "scheduled"):
-        raise HTTPException(status_code=400, detail="report_type must be 'custom' or 'scheduled'")
+        raise HTTPException(**http_error(400, "report_type_must_be", request))
 
     with transactional(current_user.company_id) as db:
         try:
             # Verify user exists
             user = db.execute(text("SELECT id, full_name FROM company_users WHERE id=:id"), {"id": data.shared_with}).fetchone()
             if not user:
-                raise HTTPException(status_code=404, detail="User not found")
+                raise HTTPException(**http_error(404, "user_not_found", request))
     
             # Verify report exists — SEC-003: table is from controlled whitelist, not user input
             _ALLOWED_TABLES = {"custom_reports", "scheduled_reports"}
@@ -286,7 +286,7 @@ def share_report(
             assert table in _ALLOWED_TABLES
             report = db.execute(text(f"SELECT id FROM {table} WHERE id=:id"), {"id": data.report_id}).fetchone()
             if not report:
-                raise HTTPException(status_code=404, detail="Report not found")
+                raise HTTPException(**http_error(404, "report_not_found", request))
     
             db.execute(text("""
                 INSERT INTO shared_reports (report_type, report_id, shared_by, shared_with, permission, message)
@@ -305,7 +305,7 @@ def share_report(
                 details={"report_type": data.report_type, "shared_with": data.shared_with},
                 request=request
             )
-            return {"message": f"Report shared with {user.full_name}"}
+            return {"message": i18n_message("report_shared_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -321,14 +321,14 @@ def unshare_report(share_id: int, request: Request, current_user: dict = Depends
         result = db.execute(text("DELETE FROM shared_reports WHERE id=:id AND shared_by=:uid"),
                             {"id": share_id, "uid": current_user.id})
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Share not found or unauthorized")
+            raise HTTPException(**http_error(404, "share_not_found_unauthorized", request))
         log_activity(
             db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="reports.share.delete", resource_type="shared_report",
             resource_id=str(share_id), details={},
             request=request
         )
-        return {"message": "Share removed"}
+        return {"message": i18n_message("share_removed", request)}
 
 
 @router.get("/shared/", dependencies=[Depends(require_permission(["reports.view"]))], response_model=List[Dict[str, Any]])

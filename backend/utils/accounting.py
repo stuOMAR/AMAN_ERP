@@ -4,6 +4,8 @@ from fastapi import HTTPException
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
+from utils.i18n import http_error
+
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
@@ -23,7 +25,7 @@ def _to_decimal(v) -> Decimal:
     return Decimal(str(v))
 
 
-def prepare_je_lines(je_lines: List[Dict], source: str = "auto") -> List[Dict]:
+def prepare_je_lines(je_lines: List[Dict], source: str = "auto", request=None) -> List[Dict]:
     """
     Routing-layer JE preparation + validation.
 
@@ -48,17 +50,14 @@ def prepare_je_lines(je_lines: List[Dict], source: str = "auto") -> List[Dict]:
     missing = [l.get("description", "unknown") for l in je_lines if l.get("account_id") is None]
     if missing:
         logger.error(f"JE validation ({source}): Missing account mappings for: {missing}")
-        raise HTTPException(
-            400,
-            f"لا يمكن ترحيل القيد - حسابات غير معرفة: {', '.join(missing)}"
-        )
+        raise HTTPException(**http_error(400, "account_mapping.missing", request))
 
     # 2. Filter zero lines
     valid = [l for l in je_lines if l.get("debit", 0) > 0 or l.get("credit", 0) > 0]
 
     # 3. At least 2 non-zero lines
     if len(valid) < 2:
-        raise HTTPException(400, "القيد المحاسبي يحتاج سطرين على الأقل")
+        raise HTTPException(**http_error(400, "journal_entry_minimum_two_lines", request))
 
     # 4. Delegate balance / sign / non-negative checks
     from services.gl_service import validate_je_lines as _validate

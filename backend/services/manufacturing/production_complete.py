@@ -45,14 +45,14 @@ def complete_production(
     ).fetchone()
 
     if not mo:
-        raise HTTPException(status_code=404, detail="Manufacturing order not found")
+        raise HTTPException(**http_error(404, ("manufacturing_order_not_found", request)))
     mo = dict(mo._mapping)
 
     remaining = Decimal(str(mo.get("remaining_qty", mo.get("original_qty", 0))))
     if qty > remaining:
         raise HTTPException(status_code=409, detail={
             "code": "mfg.completion.qty_exceeds_remaining",
-            "message": f"Qty {qty} exceeds remaining {remaining}",
+            "message": i18n_message("qty_exceeds_remaining_detail", request, qty=qty, remaining=remaining),
         })
 
     # Yield tolerance check

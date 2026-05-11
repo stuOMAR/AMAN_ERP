@@ -36,6 +36,7 @@ const Employees = () => {
     const isAdmin = user?.role === 'admin' || user?.role === 'system_admin' || user?.role === 'superuser' || user?.role === 'gm' || user?.role === 'manager';
     const [employees, setEmployees] = useState([]);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showModal, setShowModal] = useState(false);
     const [branches, setBranches] = useState([]);
     const [isEditMode, setIsEditMode] = useState(false);
@@ -84,10 +85,13 @@ const Employees = () => {
     });
 
     useEffect(() => {
-        fetchEmployees();
-        fetchBranches();
-        fetchCommonData();
-        fetchCurrencies();
+        const timer = setTimeout(() => {
+            fetchEmployees();
+            fetchBranches();
+            fetchCommonData();
+            fetchCurrencies();
+        }, 300)
+        return () => clearTimeout(timer)
     }, [currentBranch]);
 
     const fetchCurrencies = async () => {
@@ -146,6 +150,7 @@ const Employees = () => {
             toastEmitter.emit(t('common.error'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -256,7 +261,7 @@ const Employees = () => {
                         </tr>
                     </thead>
                     <tbody>
-                        {loading ? (
+                        {initialLoad && !employees.length ? (
                             <tr><td colSpan="7" className="text-center p-4">{t("common.loading")}</td></tr>
                         ) : employees.length === 0 ? (
                             <tr>
@@ -377,6 +382,8 @@ const Employees = () => {
                 </table>
                 <Pagination currentPage={currentPage} totalItems={totalItems} pageSize={pageSize} onPageChange={onPageChange} onPageSizeChange={onPageSizeChange} />
             </div>
+
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
 
             {/* Modal */}
             {showModal && (

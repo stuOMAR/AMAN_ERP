@@ -59,7 +59,7 @@ def create_asset_transfer(data: AssetTransferCreate, current_user: dict = Depend
         try:
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
             if not asset:
-                raise HTTPException(status_code=404, detail="Asset not found")
+                raise HTTPException(**http_error(404, "asset_not_found", request))
             dep_sum = conn.execute(text(
                 "SELECT COALESCE(SUM(amount),0) FROM asset_depreciation_schedule WHERE asset_id = :id AND posted = true"
             ), {"id": data.asset_id}).scalar()
@@ -91,12 +91,12 @@ def approve_transfer(transfer_id: int, current_user: dict = Depends(get_current_
         try:
             t = conn.execute(text("SELECT * FROM asset_transfers WHERE id = :id"), {"id": transfer_id}).fetchone()
             if not t or t.status != 'pending':
-                raise HTTPException(status_code=404, detail="Pending transfer not found")
+                raise HTTPException(**http_error(404, "pending_transfer_not_found", request))
             conn.execute(text("UPDATE asset_transfers SET status = 'approved', approved_by = :uid WHERE id = :id"),
                          {"uid": current_user.id, "id": transfer_id})
             conn.execute(text("UPDATE assets SET branch_id = :bid WHERE id = :aid"),
                          {"bid": t.to_branch_id, "aid": t.asset_id})
-            return {"message": "Transfer approved, asset moved to new branch"}
+            return {"message": i18n_message(("asset_transfer_approved", request))}
         except HTTPException:
             raise
         except Exception:
@@ -119,17 +119,17 @@ def transfer_asset(asset_id: int, transfer: AssetTransfer, current_user: dict = 
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found"))
         if asset.status == 'disposed':
-            raise HTTPException(status_code=400, detail="لا يمكن نقل أصل مستبعد")
+            raise HTTPException(**http_error(400, "asset_cannot_transfer_disposed", request))
 
         from_branch_id = asset.branch_id
         if from_branch_id == transfer.to_branch_id:
-            raise HTTPException(status_code=400, detail="الفرع المصدر والوجهة متطابقان")
+            raise HTTPException(**http_error(400, "asset_source_dest_branch_same", request))
 
         base_currency = get_base_currency(conn)
         acc_fixed = get_mapped_account_id(conn, "acc_map_fixed_assets")
         acc_inter = get_mapped_account_id(conn, "acc_map_intercompany")
         if not acc_inter:
-            raise HTTPException(status_code=400, detail="لم يتم تعيين حساب بين الفروع (acc_map_intercompany)")
+            raise HTTPException(**http_error(400, "intercompany_account_not_configured", request))
 
         cost = _dec(asset.cost).quantize(_D2, ROUND_HALF_UP)
 

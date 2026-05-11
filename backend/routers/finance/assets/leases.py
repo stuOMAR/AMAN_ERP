@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -168,7 +168,7 @@ def create_lease_contract(lease: LeaseContractCreate, current_user: dict = Depen
             return {
                 "id": lid, "right_of_use_value": float(rou_value),
                 "journal_entry_id": journal_entry_id,
-                "message": "تم إنشاء عقد الإيجار بنجاح" + (" مع قيد محاسبي" if journal_entry_id else "")
+                "message": i18n_message("asset_lease_created_success", request) + (" مع قيد محاسبي" if journal_entry_id else "")
             }
         except Exception:
             pass
@@ -177,13 +177,13 @@ def create_lease_contract(lease: LeaseContractCreate, current_user: dict = Depen
 
 
 @router.get("/leases/{lease_id}/schedule", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
-def get_lease_schedule(lease_id: int, current_user: dict = Depends(get_current_user)):
+def get_lease_schedule(lease_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """جدول استهلاك عقد الإيجار"""
     with transactional(current_user.company_id) as conn:
         row = conn.execute(text("SELECT * FROM lease_contracts WHERE id = :id"),
                            {"id": lease_id}).fetchone()
         if not row:
-            raise HTTPException(404, "Lease not found")
+            raise HTTPException(**http_error(404, "lease_not_found", request))
         lc = dict(row._mapping)
         monthly = _dec(lc.get("monthly_payment", 0)).quantize(_D2, ROUND_HALF_UP)
         total = int(lc.get("total_payments", 0))

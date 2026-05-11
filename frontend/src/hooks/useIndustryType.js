@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
 import { getUser, updateUser } from '../utils/auth'
 import { getEnabledModulesForIndustry, INDUSTRY_TYPES, resolveIndustryKey, resolveIndustryCode, hasIndustryFeature } from '../config/industryModules'
+import api from '../services/apiClient'
 
 const STORAGE_KEY = 'industry_type'
 
@@ -69,7 +70,6 @@ export function useIndustryType() {
     setError(null)
 
     try {
-      const { default: api } = await import('../services/apiClient')
       const modules = getEnabledModulesForIndustry(key)
 
       // حفظ في company_settings — بصيغة code (retail, restaurant, etc.)
@@ -108,7 +108,6 @@ export function useIndustryType() {
    */
   const fetchIndustryType = useCallback(async () => {
     try {
-      const { default: api } = await import('../services/apiClient')
       const res = await api.get('/settings/')
       const serverType = res.data?.industry_type
 

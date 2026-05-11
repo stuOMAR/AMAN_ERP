@@ -18,7 +18,7 @@ def get_reports_indexes_sql() -> str:
         ON journal_lines USING BRIN (posting_date);
 
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_date_brin
-        ON inventory_transactions USING BRIN (transaction_date);
+        ON inventory_transactions USING BRIN (created_at);
 
     -- ═══════════════════════════════════════════════════════════════════
     -- Composite B-tree indexes (join paths)
@@ -29,6 +29,6 @@ def get_reports_indexes_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_journal_entries_tenant_source
         ON journal_entries (tenant_id, source, source_id);
 
-    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_tenant_item_date
-        ON inventory_transactions (tenant_id, item_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date
+        ON inventory_transactions (product_id, created_at);
     """

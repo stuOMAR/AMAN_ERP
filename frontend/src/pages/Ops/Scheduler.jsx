@@ -1,9 +1,11 @@
-"T264: Scheduler monitoring page — auto-refresh + Run now button."
+// T264: Scheduler monitoring page - auto-refresh + Run now button.
 
 import React, { useState, useEffect } from 'react';
+import { useTranslation } from 'react-i18next';
 import useApi from '../../hooks/useApi';
 
 export default function Scheduler() {
+  const { t } = useTranslation();
   const { data, loading, error, refetch } = useApi('/ops/scheduler/jobs');
   const [runningJob, setRunningJob] = useState(null);
 
@@ -29,20 +31,20 @@ export default function Scheduler() {
     }
   };
 
-  if (loading) return <div className="p-4">Loading scheduler jobs...</div>;
-  if (error) return <div className="p-4 text-red-500">Error: {error}</div>;
+  if (loading) return <div className="p-4">{t('ops.scheduler.loading')}</div>;
+  if (error) return <div className="p-4 text-red-500">{t('ops.scheduler.error_prefix')}{error}</div>;
 
   const jobs = data?.jobs || [];
 
   return (
     <div className="p-6">
       <div className="flex justify-between items-center mb-6">
-        <h1 className="text-2xl font-bold">Scheduler Jobs</h1>
+        <h1 className="text-2xl font-bold">{t('ops.scheduler.title')}</h1>
         <button
           onClick={refetch}
           className="bg-gray-500 text-white px-4 py-2 rounded hover:bg-gray-600"
         >
-          Refresh
+          {t('ops.scheduler.refresh')}
         </button>
       </div>
 
@@ -50,12 +52,12 @@ export default function Scheduler() {
         <table className="w-full">
           <thead>
             <tr className="border-b">
-              <th className="text-left p-3">Job ID</th>
-              <th className="text-left p-3">Name</th>
-              <th className="text-left p-3">Status</th>
-              <th className="text-left p-3">Next Run</th>
-              <th className="text-left p-3">Trigger</th>
-              <th className="text-left p-3">Actions</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.job_id')}</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.name')}</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.status')}</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.next_run')}</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.trigger')}</th>
+              <th className="text-left p-3">{t('ops.scheduler.table.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -82,7 +84,7 @@ export default function Scheduler() {
                     disabled={runningJob === job.job_id}
                     className="bg-blue-500 text-white px-3 py-1 rounded text-sm hover:bg-blue-600 disabled:opacity-50"
                   >
-                    {runningJob === job.job_id ? 'Running...' : 'Run now'}
+                    {runningJob === job.job_id ? t('ops.scheduler.buttons.running') : t('ops.scheduler.buttons.run_now')}
                   </button>
                 </td>
               </tr>

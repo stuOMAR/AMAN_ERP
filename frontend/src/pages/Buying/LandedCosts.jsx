@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { landedCostsAPI } from '../../utils/api'
+import { landedCostsAPI, purchasesAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
@@ -14,24 +14,50 @@ function LandedCosts() {
     const { showToast } = useToast()
     const currency = getCurrency()
     const [costs, setCosts] = useState([])
+    const [suppliers, setSuppliers] = useState([])
     const [loading, setLoading] = useState(true)
     const [showForm, setShowForm] = useState(false)
-    const [form, setForm] = useState({ reference_type: 'purchase_order', reference_id: '', description: '', items: [] })
-    const [newItem, setNewItem] = useState({ cost_type: 'freight', description: '', amount: '' })
+    const [form, setForm] = useState({ purchase_order_id: '', reference: '', notes: '', currency: currency || '', exchange_rate: 1, allocation_method: 'by_value', cost_items: [] })
+    const [newItem, setNewItem] = useState({ cost_type: 'freight', description: '', amount: '', vendor_id: '', invoice_ref: '' })
 
     useEffect(() => {
-        landedCostsAPI.list().then(r => setCosts(r.data)).catch(() => showToast(t('common.error'), 'error')).finally(() => setLoading(false))
+        Promise.all([
+            landedCostsAPI.list(),
+            purchasesAPI.listSuppliers({ limit: 1000 }).catch(() => ({ data: [] })),
+        ])
+            .then(([costRes, supplierRes]) => {
+                setCosts(costRes.data)
+                setSuppliers(supplierRes.data || [])
+            })
+            .catch(() => showToast(t('common.error'), 'error'))
+            .finally(() => setLoading(false))
     }, [])
 
     const addItem = () => {
         if (!newItem.amount) return
-        setForm(f => ({ ...f, items: [...f.items, { ...newItem, amount: Number(newItem.amount) }] }))
-        setNewItem({ cost_type: 'freight', description: '', amount: '' })
+        setForm(f => ({
+            ...f,
+            cost_items: [
+                ...f.cost_items,
+                {
+                    ...newItem,
+                    amount: Number(newItem.amount),
+                    vendor_id: newItem.vendor_id ? Number(newItem.vendor_id) : null,
+                    invoice_ref: newItem.invoice_ref || null,
+                },
+            ],
+        }))
+        setNewItem({ cost_type: 'freight', description: '', amount: '', vendor_id: '', invoice_ref: '' })
     }
 
     const handleCreate = async () => {
         try {
-            const res = await landedCostsAPI.create(form)
+            const payload = {
+                ...form,
+                purchase_order_id: form.purchase_order_id ? Number(form.purchase_order_id) : null,
+                exchange_rate: form.exchange_rate != null && form.exchange_rate !== '' ? Number(form.exchange_rate) : 1,
+            }
+            const res = await landedCostsAPI.create(payload)
             showToast(t('landed_costs.created'), 'success')
             navigate(`/buying/landed-costs/${res.data.id}`)
         } catch (err) {
@@ -61,45 +87,59 @@ function LandedCosts() {
                     <h3 className="card-title mb-3">{t('landed_costs.create_new')}</h3>
                     <div className="form-grid-3">
                         <div className="form-group">
-                            <label>{t('landed_costs.reference_type')}</label>
-                            <select className="form-select" value={form.reference_type} onChange={e => setForm(f => ({ ...f, reference_type: e.target.value }))}>
-                                <option value="purchase_order">{t('landed_costs.purchase_order')}</option>
-                                <option value="grn">{t('landed_costs.grn')}</option>
-                            </select>
+                            <label>{t('landed_costs.purchase_order')}</label>
+                            <input type="number" className="form-input" value={form.purchase_order_id} onChange={e => setForm(f => ({ ...f, purchase_order_id: e.target.value }))} />
                         </div>
                         <div className="form-group">
                             <label>{t('landed_costs.reference_id')}</label>
-                            <input type="number" className="form-input" value={form.reference_id} onChange={e => setForm(f => ({ ...f, reference_id: e.target.value }))} />
+                            <input type="text" className="form-input" value={form.reference} onChange={e => setForm(f => ({ ...f, reference: e.target.value }))} />
                         </div>
                         <div className="form-group">
                             <label>{t('common.description')}</label>
-                            <input type="text" className="form-input" value={form.description} onChange={e => setForm(f => ({ ...f, description: e.target.value }))} />
+                            <input type="text" className="form-input" value={form.notes} onChange={e => setForm(f => ({ ...f, notes: e.target.value }))} />
+                        </div>
+                        <div className="form-group">
+                            <label>{t('common.currency')}</label>
+                            <select className="form-select" value={form.currency} onChange={e => setForm(f => ({ ...f, currency: e.target.value }))}>
+                                <option value="">{currency || t('common.base_currency')}</option>
+                            </select>
+                        </div>
+                        <div className="form-group">
+                            <label>{t('common.exchange_rate')}</label>
+                            <input type="number" className="form-input" step="0.000001" min="0.000001" value={form.exchange_rate} onChange={e => setForm(f => ({ ...f, exchange_rate: e.target.value }))} />
                         </div>
                     </div>
 
                     <h4 className="mt-3 mb-2">{t('landed_costs.cost_items')}</h4>
-                    <div className="form-grid-4">
-                        <select className="form-select" value={newItem.cost_type} onChange={e => setNewItem(n => ({ ...n, cost_type: e.target.value }))}>
-                            <option value="freight">{t('landed_costs.freight')}</option>
-                            <option value="customs">{t('landed_costs.customs')}</option>
-                            <option value="insurance">{t('landed_costs.insurance')}</option>
-                            <option value="other">{t('common.other')}</option>
-                        </select>
-                        <input type="text" className="form-input" placeholder={t('common.description')} value={newItem.description} onChange={e => setNewItem(n => ({ ...n, description: e.target.value }))} />
-                        <input type="number" className="form-input" step="0.01" placeholder={t('common.amount')} value={newItem.amount} onChange={e => setNewItem(n => ({ ...n, amount: e.target.value }))} />
-                        <button type="button" className="btn btn-secondary" onClick={addItem}>+</button>
-                    </div>
+	                    <div className="form-grid-4">
+	                        <select className="form-select" value={newItem.cost_type} onChange={e => setNewItem(n => ({ ...n, cost_type: e.target.value }))}>
+	                            <option value="freight">{t('landed_costs.freight')}</option>
+	                            <option value="customs">{t('landed_costs.customs')}</option>
+	                            <option value="insurance">{t('landed_costs.insurance')}</option>
+	                            <option value="other">{t('common.other')}</option>
+	                        </select>
+	                        <input type="text" className="form-input" placeholder={t('common.description')} value={newItem.description} onChange={e => setNewItem(n => ({ ...n, description: e.target.value }))} />
+	                        <input type="number" className="form-input" step="0.01" placeholder={t('common.amount')} value={newItem.amount} onChange={e => setNewItem(n => ({ ...n, amount: e.target.value }))} />
+	                        <button type="button" className="btn btn-secondary" onClick={addItem}>+</button>
+	                    </div>
+	                    <div className="form-grid-2 mt-2">
+	                        <select className="form-select" value={newItem.vendor_id} onChange={e => setNewItem(n => ({ ...n, vendor_id: e.target.value }))}>
+	                            <option value="">{t('landed_costs.vendor_optional', 'Vendor optional')}</option>
+	                            {suppliers.map(s => <option key={s.id} value={s.id}>{s.name || s.supplier_name}</option>)}
+	                        </select>
+	                        <input type="text" className="form-input" placeholder={t('landed_costs.invoice_ref', 'Invoice reference')} value={newItem.invoice_ref} onChange={e => setNewItem(n => ({ ...n, invoice_ref: e.target.value }))} />
+	                    </div>
 
-                    {form.items.length > 0 && (
+                    {form.cost_items.length > 0 && (
                         <table className="data-table mt-2">
                             <thead><tr><th>{t('common.type')}</th><th>{t('common.description')}</th><th>{t('common.amount')}</th><th></th></tr></thead>
                             <tbody>
-                                {form.items.map((item, i) => (
+                                {form.cost_items.map((item, i) => (
                                     <tr key={i}>
                                         <td>{t(`landed_costs.${item.cost_type}`, item.cost_type)}</td>
                                         <td>{item.description}</td>
                                         <td>{Number(item.amount).toLocaleString()} {currency}</td>
-                                        <td><button className="btn-icon text-danger" onClick={() => setForm(f => ({ ...f, items: f.items.filter((_, j) => j !== i) }))}>🗑️</button></td>
+                                        <td><button className="btn-icon text-danger" onClick={() => setForm(f => ({ ...f, cost_items: f.cost_items.filter((_, j) => j !== i) }))}>🗑️</button></td>
                                     </tr>
                                 ))}
                             </tbody>
@@ -107,7 +147,7 @@ function LandedCosts() {
                     )}
 
                     <div className="mt-3 flex gap-2">
-                        <button className="btn btn-primary" onClick={handleCreate} disabled={form.items.length === 0}>
+                        <button className="btn btn-primary" onClick={handleCreate} disabled={form.cost_items.length === 0 || !form.purchase_order_id}>
                             {t('common.save')}
                         </button>
                         <button className="btn btn-secondary" onClick={() => setShowForm(false)}>{t('common.cancel')}</button>
@@ -133,7 +173,7 @@ function LandedCosts() {
                             <tr key={c.id}>
                                 <td className="font-medium text-primary">{c.lc_number}</td>
                                 <td>{formatShortDate(c.created_at)}</td>
-                                <td className="font-bold">{Number(c.total_cost).toLocaleString()} <small>{currency}</small></td>
+                                <td className="font-bold">{Number(c.total_amount || 0).toLocaleString()} <small>{currency}</small></td>
                                 <td><span className={`status-badge ${c.status}`}>{c.status}</span></td>
                                 <td><button onClick={() => navigate(`/buying/landed-costs/${c.id}`)} className="btn-icon">👁️</button></td>
                             </tr>

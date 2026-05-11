@@ -18,7 +18,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -26,6 +26,7 @@ from database import get_db_connection
 from integrations.sms import get_gateway
 from integrations.sms.registry import _REGISTRY as _SMS_REGISTRY
 from routers.auth import get_current_user
+from utils.i18n import http_error
 from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
@@ -39,17 +40,17 @@ def _close(db):
         pass
 
 
-def _load_cfg(db, provider: str) -> Dict[str, Any]:
+def _load_cfg(db, provider: str, request: Request) -> Dict[str, Any]:
     row = db.execute(
         text("SELECT setting_value FROM company_settings WHERE setting_key = :k LIMIT 1"),
         {"k": f"sms_gateways.{provider.lower()}"},
     ).fetchone()
     if not row or not row[0]:
-        raise HTTPException(412, f"SMS gateway '{provider}' is not configured for this tenant")
+        raise HTTPException(**http_error(412, "sms_gateway_not_configured", request, provider=provider))
     try:
         return row[0] if isinstance(row[0], dict) else json.loads(row[0])
     except Exception as e:
-        raise HTTPException(500, f"SMS config is not valid JSON: {e}")
+        raise HTTPException(**http_error(500, "sms_config_invalid_json", request))
 
 
 class SendSMSRequest(BaseModel):
@@ -64,11 +65,11 @@ class SendSMSRequest(BaseModel):
     "/send",
     dependencies=[Depends(require_permission("notifications.send"))],
 )
-def send_sms(body: SendSMSRequest, current_user=Depends(get_current_user)):
+def send_sms(body: SendSMSRequest, request: Request, current_user=Depends(get_current_user)):
     """Send SMS."""
     db = get_db_connection(current_user.company_id)
     try:
-        cfg = _load_cfg(db, body.provider)
+        cfg = _load_cfg(db, body.provider, request)
         gw = get_gateway(body.provider, **cfg)
         result = gw.send(body.to, body.message, sender=body.sender, metadata=body.metadata)
         row = db.execute(
@@ -105,7 +106,7 @@ def send_sms(body: SendSMSRequest, current_user=Depends(get_current_user)):
     except Exception as e:
         db.rollback()
         logger.exception("sms.send failed")
-        raise HTTPException(500, f"SMS send failed: {e}")
+        raise HTTPException(**http_error(500, "sms_send_failed", request, error=str(e)))
     finally:
         _close(db)
 
@@ -143,11 +144,11 @@ def list_providers() -> List[str]:
 
 @router.get("/{provider}/balance",
             dependencies=[Depends(require_permission("notifications.view"))])
-def gateway_balance(provider: str, current_user=Depends(get_current_user)):
+def gateway_balance(provider: str, request: Request, current_user=Depends(get_current_user)):
     """Gateway Balance."""
     db = get_db_connection(current_user.company_id)
     try:
-        cfg = _load_cfg(db, provider)
+        cfg = _load_cfg(db, provider, request)
         gw = get_gateway(provider, **cfg)
         bal = gw.get_balance()
         return {"provider": provider, "balance": str(bal) if bal is not None else None}

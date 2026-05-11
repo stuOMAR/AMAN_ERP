@@ -80,7 +80,7 @@ def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depen
         """), {"tid": data.treasury_account_id}).fetchone()
         
         if existing:
-            raise HTTPException(status_code=400, detail="يوجد بالفعل تسوية مسودة لهذا الحساب. يرجى إكمالها أو حذفها.")
+            raise HTTPException(**http_error(400, ("reconciliation_draft_exists", request)))
 
         tolerance_amount = data.tolerance_amount
         if tolerance_amount is None:
@@ -114,7 +114,7 @@ def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depen
                      action="reconciliation.create",
                      resource_type="bank_reconciliation", resource_id=str(rec_id),
                      details={"treasury_account_id": data.treasury_account_id, "statement_date": str(data.statement_date)})
-        return {"id": rec_id, "message": "تم إنشاء التسوية بنجاح"}
+        return {"id": rec_id, "message": i18n_message("reconciliation_created", request)}
 
 @router.get("/{id}", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=Dict[str, Any])
 def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
@@ -183,7 +183,7 @@ def add_statement_lines(id: int, lines: List[StatementLineCreate], current_user:
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن إضافة أسطر إلى تسوية معتمدة")
+            raise HTTPException(**http_error(400, ("cannot_add_to_approved", request)))
 
         last_balance = db.execute(text("""
             SELECT balance FROM bank_statement_lines 
@@ -209,7 +209,7 @@ def add_statement_lines(id: int, lines: List[StatementLineCreate], current_user:
             })
             added.append(result.scalar())
             
-        return {"message": f"تم إضافة {len(added)} أسطر بنجاح", "line_ids": added}
+        return {"message": i18n_message("reconciliation_lines_added", request), "line_ids": added}
 
 
 # ──────── BANK STATEMENT FILE IMPORT ────────
@@ -303,7 +303,7 @@ async def preview_import(
             if not rec:
                 raise HTTPException(**http_error(404, "reconciliation_not_found"))
             if rec.status != 'draft':
-                raise HTTPException(status_code=400, detail="لا يمكن الاستيراد في تسوية معتمدة")
+                raise HTTPException(**http_error(400, ("cannot_import_to_approved", request)))
     
             content = await file.read()
             filename = file.filename.lower() if file.filename else ""
@@ -318,7 +318,7 @@ async def preview_import(
                 try:
                     import openpyxl
                 except ImportError:
-                    raise HTTPException(status_code=400, detail="يرجى تثبيت مكتبة openpyxl لدعم ملفات Excel")
+                    raise HTTPException(**http_error(400, ("openpyxl_required", request)))
                 wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
                 ws = wb.active
                 all_rows = list(ws.iter_rows(values_only=True))
@@ -428,7 +428,7 @@ async def preview_import(
             raise
         except Exception:
             logger.exception("Error parsing reconciliation file")
-            raise HTTPException(status_code=400, detail="خطأ في تحليل الملف")
+            raise HTTPException(**http_error(400, "reconciliation_parse_error", request))
 
 
 @router.post("/{id}/import-confirm", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
@@ -439,10 +439,10 @@ def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن الاستيراد في تسوية معتمدة")
+            raise HTTPException(**http_error(400, ("cannot_import_to_approved", request)))
 
         if not lines:
-            raise HTTPException(status_code=400, detail="لا توجد أسطر للاستيراد")
+            raise HTTPException(**http_error(400, "reconciliation_no_lines_to_import", request))
 
         last_balance = db.execute(text("""
             SELECT balance FROM bank_statement_lines 
@@ -467,7 +467,7 @@ def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict
             })
             added.append(result.scalar())
 
-        return {"message": f"تم استيراد {len(added)} سطر بنجاح", "line_ids": added, "imported_count": len(added)}
+        return {"message": i18n_message("reconciliation_lines_imported", request), "line_ids": added, "imported_count": len(added)}
 
 
 # ──────── AUTO RECONCILIATION ────────
@@ -487,7 +487,7 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
         if not rec_info:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec_info.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن المطابقة في تسوية معتمدة")
+            raise HTTPException(**http_error(400, "reconciliation_approved_no_match", request))
 
         # TREAS-F4: per-reconciliation absolute tolerance (0 = exact match)
         amt_tol = _dec(rec_info.tolerance_amount)
@@ -610,7 +610,7 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
             "matched_count": len(matches),
             "matches": matches,
             "remaining_unmatched": len(stmt_lines) - len(matches),
-            "message": f"تم مطابقة {len(matches)} حركة تلقائياً"
+            "message": i18n_message("reconciliation_auto_matched", request)
         }
 
 @router.delete("/{id}/lines/{line_id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
@@ -621,7 +621,7 @@ def delete_statement_line(id: int, line_id: int, current_user: dict = Depends(ge
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن حذف أسطر من تسوية معتمدة")
+            raise HTTPException(**http_error(400, "reconciliation_approved_no_delete_lines", request))
 
         line = db.execute(text("""
             SELECT is_reconciled, matched_journal_line_id 
@@ -638,7 +638,7 @@ def delete_statement_line(id: int, line_id: int, current_user: dict = Depends(ge
             """), {"jid": line.matched_journal_line_id})
         
         db.execute(text("DELETE FROM bank_statement_lines WHERE id = :lid"), {"lid": line_id})
-        return {"message": "تم حذف السطر بنجاح"}
+        return {"message": i18n_message("reconciliation_line_deleted", request)}
 
 @router.get("/{id}/ledger", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=List[Dict[str, Any]])
 def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
@@ -680,7 +680,7 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec_status.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن المطابقة في تسوية معتمدة")
+            raise HTTPException(**http_error(400, "reconciliation_approved_no_match", request))
 
         sl = db.execute(text("""
             SELECT debit, credit, is_reconciled 
@@ -693,12 +693,12 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
         """), {"id": match.journal_line_id}).fetchone()
         
         if not sl or not jl:
-             raise HTTPException(status_code=404, detail="الأسطر غير موجودة")
+             raise HTTPException(**http_error(404, "reconciliation_lines_not_found", request))
         
         if sl.is_reconciled:
-            raise HTTPException(status_code=400, detail="سطر الكشف البنكي مطابق بالفعل")
+            raise HTTPException(**http_error(400, "bank_statement_line_already_matched", request))
         if jl.is_reconciled:
-            raise HTTPException(status_code=400, detail="القيد المحاسبي مطابق بالفعل في تسوية أخرى")
+            raise HTTPException(**http_error(400, "journal_entry_matched_in_another_reconciliation", request))
              
         sl_debit = _dec(sl.debit)
         sl_credit = _dec(sl.credit)
@@ -720,7 +720,7 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
                     detail=f"المبالغ غير متطابقة. إيداع بنكي: {float(sl_credit):,.2f} ≠ قيد مدين: {float(jl_debit):,.2f}"
                 )
         else:
-            raise HTTPException(status_code=400, detail="سطر الكشف البنكي لا يحتوي على مبلغ")
+            raise HTTPException(**http_error(400, "bank_statement_line_has_no_amount", request))
 
         db.execute(text("""
             UPDATE bank_statement_lines 
@@ -734,7 +734,7 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
             WHERE id = :jid
         """), {"rid": id, "jid": match.journal_line_id})
         
-        return {"success": True, "message": "تمت المطابقة بنجاح"}
+        return {"success": True, "message": i18n_message("reconciliation_matched", request)}
 
 @router.post("/{id}/unmatch", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depends(get_current_user)):
@@ -744,7 +744,7 @@ def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depe
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec_status.status != 'draft':
-            raise HTTPException(status_code=400, detail="لا يمكن إلغاء المطابقة في تسوية معتمدة")
+            raise HTTPException(**http_error(400, "reconciliation_approved_no_unmatch", request))
 
         sl = db.execute(text("""
             SELECT matched_journal_line_id, is_reconciled 
@@ -754,7 +754,7 @@ def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depe
         if not sl:
             raise HTTPException(**http_error(404, "line_not_found"))
         if not sl.is_reconciled:
-            raise HTTPException(status_code=400, detail="السطر غير مطابق أصلاً")
+            raise HTTPException(**http_error(400, "reconciliation_line_not_matched", request))
 
         if sl.matched_journal_line_id:
             db.execute(text("""
@@ -768,7 +768,7 @@ def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depe
             WHERE id = :sid
         """), {"sid": data.statement_line_id})
         
-        return {"success": True, "message": "تم إلغاء المطابقة بنجاح"}
+        return {"success": True, "message": i18n_message("reconciliation_unmatched", request)}
 
 @router.delete("/{id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
@@ -780,7 +780,7 @@ def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user
                 raise HTTPException(**http_error(404, "reconciliation_not_found"))
             
             if rec.status != 'draft':
-                raise HTTPException(status_code=400, detail="لا يمكن حذف تسوية معتمدة. يمكن حذف التسويات في حالة المسودة فقط")
+                raise HTTPException(**http_error(400, "reconciliation_approved_cannot_delete", request))
             
             # Un-reconcile any matched journal lines first
             db.execute(text("""
@@ -790,12 +790,12 @@ def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user
             
             db.execute(text("DELETE FROM bank_statement_lines WHERE reconciliation_id = :id"), {"id": id})
             db.execute(text("DELETE FROM bank_reconciliations WHERE id = :id"), {"id": id})
-            return {"message": "تم حذف التسوية بنجاح"}
+            return {"message": i18n_message("reconciliation_deleted_success", request)}
         except HTTPException:
             raise
         except Exception:
             pass
-            raise HTTPException(status_code=500, detail="حدث خطأ أثناء حذف التسوية")
+            raise HTTPException(**http_error(500, "reconciliation_delete_error", request))
 
 
 @router.post("/{id}/finalize", dependencies=[Depends(require_sensitive_permission("finance.reconciliation.finalize", critical=True))], response_model=Dict[str, Any])
@@ -815,7 +815,7 @@ def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_us
             validate_branch_access(current_user, rec.branch_id)
         
         if rec.status == 'posted':
-            raise HTTPException(status_code=400, detail="التسوية معتمدة بالفعل")
+            raise HTTPException(**http_error(400, "reconciliation_already_approved", request))
         
         unmatched_count = db.execute(text("""
             SELECT COUNT(*) FROM bank_statement_lines 
@@ -887,4 +887,4 @@ def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_us
                      action="reconciliation.finalize",
                      resource_type="bank_reconciliation", resource_id=str(id),
                      details={"end_balance": float(_dec(rec.end_balance))})
-        return {"success": True, "message": "تم اعتماد التسوية"}
+        return {"success": True, "message": i18n_message("reconciliation_approved", request)}

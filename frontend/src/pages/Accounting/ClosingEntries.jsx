@@ -18,6 +18,7 @@ export default function ClosingEntries() {
     const [startDate, setStartDate] = useState(`${now.getFullYear()}-01-01`)
     const [endDate, setEndDate] = useState(now.toISOString().slice(0, 10))
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [generating, setGenerating] = useState(false)
     const [preview, setPreview] = useState(null)
     const [useIncomeSummary, setUseIncomeSummary] = useState(false)

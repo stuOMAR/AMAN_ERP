@@ -1,10 +1,12 @@
 import React from 'react';
 import { useQuery } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * QuarantineAlerts — lists quarantined documents.
  */
 export default function QuarantineAlerts() {
+  const { t } = useTranslation();
   const { data: items, isLoading } = useQuery({
     queryKey: ['dms-quarantine'],
     queryFn: async () => {
@@ -14,22 +16,22 @@ export default function QuarantineAlerts() {
     },
   });
 
-  if (isLoading) return <div>Loading...</div>;
+  if (isLoading) return <div>{t('dms.quarantine.loading')}</div>;
 
   return (
     <div className="quarantine-alerts">
-      <h3>Quarantined Documents</h3>
+      <h3>{t('dms.quarantine.title')}</h3>
       {items?.length === 0 ? (
-        <p className="text-muted">No quarantined documents</p>
+        <p className="text-muted">{t('dms.quarantine.no_documents')}</p>
       ) : (
         <table className="table table-sm table-danger">
           <thead>
             <tr>
-              <th>ID</th>
-              <th>Filename</th>
-              <th>Size</th>
-              <th>Scanned</th>
-              <th>Engine</th>
+              <th>{t('dms.quarantine.table.id')}</th>
+              <th>{t('dms.quarantine.table.filename')}</th>
+              <th>{t('dms.quarantine.table.size')}</th>
+              <th>{t('dms.quarantine.table.scanned')}</th>
+              <th>{t('dms.quarantine.table.engine')}</th>
             </tr>
           </thead>
           <tbody>

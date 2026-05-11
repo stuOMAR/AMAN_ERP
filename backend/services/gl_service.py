@@ -8,6 +8,7 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from utils.accounting import generate_sequential_number, update_account_balance
 from utils.audit import log_activity
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
@@ -40,7 +41,7 @@ def _dec(v: Any) -> Decimal:
     return Decimal(str(v or 0))
 
 
-def validate_je_lines(lines: List[Dict[str, Any]]) -> tuple[Decimal, Decimal]:
+def validate_je_lines(lines: List[Dict[str, Any]], request=None) -> tuple[Decimal, Decimal]:
     """
     Pure validation helper for journal-entry lines (TASK-032 testable surface).
 
@@ -54,7 +55,7 @@ def validate_je_lines(lines: List[Dict[str, Any]]) -> tuple[Decimal, Decimal]:
     Raises HTTPException(400) on violation. Pure (no I/O).
     """
     if not lines:
-        raise HTTPException(status_code=400, detail="يجب إضافة سطر واحد على الأقل في القيد")
+        raise HTTPException(**http_error(400, "min_one_je_line", request))
 
     total_debit = Decimal("0")
     total_credit = Decimal("0")
@@ -63,17 +64,17 @@ def validate_je_lines(lines: List[Dict[str, Any]]) -> tuple[Decimal, Decimal]:
         d = _dec(line.get("debit", 0)).quantize(_D2, ROUND_HALF_UP)
         c = _dec(line.get("credit", 0)).quantize(_D2, ROUND_HALF_UP)
         if d < 0 or c < 0:
-            raise HTTPException(status_code=400, detail=f"السطر {i+1}: لا يمكن إدخال مبالغ سالبة")
+            raise HTTPException(status_code=400, detail=i18n_message("negative_amounts_not_allowed", request))
         if d > 0 and c > 0:
-            raise HTTPException(status_code=400, detail=f"السطر {i+1}: لا يمكن أن يكون مدين ودائن معاً في نفس السطر")
+            raise HTTPException(status_code=400, detail=i18n_message("line_debit_credit_same", request))
         total_debit += d
         total_credit += c
 
     if total_debit == 0 and total_credit == 0:
-        raise HTTPException(status_code=400, detail="لا يمكن إنشاء قيد بمبالغ صفرية")
+        raise HTTPException(**http_error(400, "zero_amounts_not_allowed", request))
 
     if abs(total_debit - total_credit) >= _D2:
-        raise HTTPException(status_code=400, detail="القيود غير موزونة (المدين لا يساوي الدائن)")
+        raise HTTPException(**http_error(400, "unbalanced_entry", request))
 
     return total_debit, total_credit
 
@@ -124,6 +125,7 @@ def create_journal_entry(
     username: Optional[str] = None,
     idempotency_key: Optional[str] = None,
     ledger_id: Optional[int] = None,
+    request=None,
 ) -> tuple[int, str]:
     """
     Centralized function to create a journal entry, validate it, insert lines, 
@@ -281,7 +283,7 @@ def create_journal_entry(
                 logger.info("Source-duplicate race resolved: %s/%s → JE %s", source, source_id, row[1])
                 return row[0], row[1]
         logger.exception("IntegrityError creating journal entry: %s", e)
-        raise HTTPException(status_code=409, detail="تعذر إنشاء القيد — تعارض في البيانات")
+        raise HTTPException(**http_error(409, "je_creation_conflict", request))
 
     journal_id = res[0]
 
@@ -292,7 +294,7 @@ def create_journal_entry(
         
         line_rate = _dec(line.get("exchange_rate", exchange_rate))
         if line_rate <= 0:
-            raise HTTPException(status_code=400, detail="سعر الصرف يجب أن يكون أكبر من صفر")
+            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
         debit_base = (input_debit * line_rate).quantize(_D2, ROUND_HALF_UP)
         credit_base = (input_credit * line_rate).quantize(_D2, ROUND_HALF_UP)
         
@@ -410,7 +412,7 @@ def create_journal_entry(
 # `draft` so it shows up in GL without affecting balances; on approval
 # we flip it to `posted` and apply the balances exactly once.
 # ────────────────────────────────────────────────────────────────────────
-def post_draft_journal_entry(db, je_id: int, user_id: int) -> bool:
+def post_draft_journal_entry(db, je_id: int, user_id: int, request=None) -> bool:
     """Promote a draft journal entry to posted.
 
     Returns True if a state transition happened, False if the entry
@@ -422,14 +424,11 @@ def post_draft_journal_entry(db, je_id: int, user_id: int) -> bool:
         "WHERE id = :id FOR UPDATE"
     ), {"id": je_id}).fetchone()
     if not row:
-        raise HTTPException(status_code=404, detail="القيد المحاسبي غير موجود")
+        raise HTTPException(**http_error(404, "je_not_found", request))
     if row.status == "posted":
         return False
     if row.status != "draft":
-        raise HTTPException(
-            status_code=400,
-            detail=f"لا يمكن ترحيل قيد بحالة {row.status}",
-        )
+        raise HTTPException(**http_error(400, "journal_entry_status_invalid_post", request, status=row.status))
     # Re-check fiscal lock at posting time — the period might have
     # closed between draft creation and approval.
     if row.entry_date:
@@ -488,6 +487,7 @@ def reverse_journal_entry(
     company_id: str,
     reversal_date: Optional[str] = None,
     reason: Optional[str] = None,
+    request=None,
 ) -> tuple[int, str]:
     """Create a reversing JE for an existing posted JE.
 
@@ -501,23 +501,20 @@ def reverse_journal_entry(
         "FROM journal_entries WHERE id = :id FOR UPDATE"
     ), {"id": je_id}).fetchone()
     if not head:
-        raise HTTPException(status_code=404, detail="القيد الأصلي غير موجود")
+        raise HTTPException(**http_error(404, "original_je_not_found", request))
     if head.status == "reversed":
-        raise HTTPException(status_code=400, detail="تم عكس هذا القيد مسبقاً")
+        raise HTTPException(**http_error(400, "already_reversed", request))
     if head.status != "posted":
-        raise HTTPException(
-            status_code=400,
-            detail="لا يمكن عكس قيد غير مرحَّل",
-        )
+        raise HTTPException(**http_error(400, "je_cannot_reverse_non_posted", request))
     # Block reversing a reversal entry (prevents infinite chains)
     if (head.source or "").strip().lower() in ("reversal",):
-        raise HTTPException(status_code=400, detail="لا يمكن عكس قيد عكسي")
+        raise HTTPException(**http_error(400, "cannot_reverse_reversal", request))
     # Guard: block if a reversal JE already exists for this entry
     already = db.execute(text(
         "SELECT id FROM journal_entries WHERE source = 'reversal' AND source_id = :id LIMIT 1"
     ), {"id": je_id}).fetchone()
     if already:
-        raise HTTPException(status_code=400, detail="يوجد قيد عكسي لهذا القيد مسبقاً")
+        raise HTTPException(**http_error(400, "reversal_already_exists", request))
 
     src_lines = db.execute(text(
         "SELECT account_id, debit, credit, description, cost_center_id, "
@@ -525,7 +522,7 @@ def reverse_journal_entry(
         "FROM journal_lines WHERE journal_entry_id = :id"
     ), {"id": je_id}).fetchall()
     if not src_lines:
-        raise HTTPException(status_code=400, detail="القيد لا يحوي سطوراً")
+        raise HTTPException(**http_error(400, "je_has_no_lines", request))
 
     rev_lines = []
     for ln in src_lines:

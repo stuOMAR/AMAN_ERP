@@ -21,6 +21,7 @@ const LeaseContracts = () => {
     const [assets, setAssets] = useState([]);
     const [schedule, setSchedule] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [showForm, setShowForm] = useState(false);
     const [form, setForm] = useState({
         asset_id: '', description: '', lessor_name: '', lease_type: 'operating',
@@ -28,7 +29,12 @@ const LeaseContracts = () => {
         discount_rate: '5', status: 'active'
     });
 
-    useEffect(() => { fetchData(); }, [currentBranch]);
+    useEffect(() => {
+        const timer = setTimeout(() => {
+            fetchData()
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
 
     const fetchData = async () => {
         try {
@@ -48,6 +54,7 @@ const LeaseContracts = () => {
             showToast(err.response?.data?.detail || t('common.error_occurred', 'حدث خطأ'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -225,7 +232,8 @@ const LeaseContracts = () => {
 
             {/* Content */}
             <div className="section-card">
-                {loading ? (
+                {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
+                {initialLoad && loading ? (
                     <PageLoading />
                 ) : activeTab === 'list' ? (
                     <div className="data-table-container">

@@ -10,11 +10,19 @@ import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
+import { useBranch } from '../../context/BranchContext'
+import DataTable from '../../components/common/DataTable'
+
+function makeIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
+    return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
 
 export default function WithholdingTax() {
     const { t, i18n } = useTranslation()
   const { showToast } = useToast()
     const isRTL = i18n.language === 'ar'
+    const { currentBranch } = useBranch()
     const currency = getCurrency()
     const [activeTab, setActiveTab] = useState('rates')
     const [loading, setLoading] = useState(true)
@@ -32,6 +40,7 @@ export default function WithholdingTax() {
 
     // Calculator state
     const [calcRateId, setCalcRateId] = useState('')
+    const [calcSupplierId, setCalcSupplierId] = useState('')
     const [calcGross, setCalcGross] = useState('')
     const [calcResult, setCalcResult] = useState(null)
     const [calcLoading, setCalcLoading] = useState(false)
@@ -52,7 +61,8 @@ export default function WithholdingTax() {
     const fetchRates = useCallback(async () => {
         try {
             setLoading(true)
-            const res = await externalAPI.listWhtRates()
+            const params = currentBranch?.id ? { branch_id: currentBranch.id } : undefined
+            const res = await externalAPI.listWhtRates(params)
             setRates(res.data ?? res)
         } catch (e) {
             console.error(e)
@@ -60,12 +70,13 @@ export default function WithholdingTax() {
         } finally {
             setLoading(false)
         }
-    }, [showToast, t])
+    }, [currentBranch?.id, showToast, t])
 
     const fetchTransactions = useCallback(async () => {
         try {
             setTxLoading(true)
-            const res = await externalAPI.listWhtTransactions()
+            const params = currentBranch?.id ? { branch_id: currentBranch.id } : undefined
+            const res = await externalAPI.listWhtTransactions(params)
             setTransactions(res.data ?? res)
         } catch (e) {
             console.error(e)
@@ -73,7 +84,7 @@ export default function WithholdingTax() {
         } finally {
             setTxLoading(false)
         }
-    }, [showToast, t])
+    }, [currentBranch?.id, showToast, t])
 
     useEffect(() => {
         fetchRates()
@@ -107,11 +118,16 @@ export default function WithholdingTax() {
 
     const handleCalculate = async () => {
         if (!calcRateId || !calcGross) return
+        if (!currentBranch?.id) {
+            showToast(t('wht.select_branch_first', 'يرجى تحديد الفرع أولاً'), 'error')
+            return
+        }
         try {
             setCalcLoading(true)
             const res = await externalAPI.calculateWht({
                 wht_rate_id: parseInt(calcRateId),
                 gross_amount: String(calcGross),
+                branch_id: currentBranch?.id || null,
             })
             setCalcResult(res.data ?? res)
         } catch (e) {
@@ -123,16 +139,18 @@ export default function WithholdingTax() {
     }
 
     const handleCreateTransaction = async () => {
-        if (!calcResult) return
+        if (!calcResult || !calcSupplierId || txSubmitting) return
         try {
             setTxSubmitting(true)
             await externalAPI.createWhtTransaction({
+                supplier_id: parseInt(calcSupplierId),
                 wht_rate_id: parseInt(calcRateId),
                 gross_amount: String(calcGross),
-                ...calcResult,
-            })
+                branch_id: currentBranch?.id || null,
+            }, makeIdempotencyKey(`wht-tx:${calcSupplierId}`))
             setCalcResult(null)
             setCalcRateId('')
+            setCalcSupplierId('')
             setCalcGross('')
             fetchTransactions()
         } catch (e) {
@@ -202,8 +220,34 @@ export default function WithholdingTax() {
     }
 
     // Summary stats
-    const totalWht = transactions.reduce((s, tx) => s + (tx.wht_amount || 0), 0);
-    const totalGross = transactions.reduce((s, tx) => s + (tx.gross_amount || 0), 0);
+    const totalWht = transactions.reduce((s, tx) => s + Number(tx.wht_amount || 0), 0);
+    const totalGross = transactions.reduce((s, tx) => s + Number(tx.gross_amount || 0), 0);
+    const displayCurrency = transactions[0]?.currency || calcResult?.currency || currency
+
+    const rateColumns = [
+        { key: 'name', label: t('wht.col_name'), render: (v) => <span className="font-medium">{v}</span> },
+        { key: 'name_ar', label: t('wht.col_name_ar'), render: (v) => v || '—' },
+        { key: 'rate', label: t('wht.col_rate'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (v) => `${formatNumber(v, 2)}%` },
+        { key: 'category', label: t('wht.col_category'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (v) => <span className="badge badge-info">{categoryLabels[v] || v}</span> },
+        { key: 'country_code', label: t('taxes.country_code'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (v) => v || '—' },
+        { key: 'is_active', label: t('wht.col_status'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (v) => <span className={`badge ${v ? 'badge-success' : 'badge-secondary'}`}>{v ? t('wht.active') : t('wht.inactive')}</span> },
+    ]
+
+    const transactionColumns = [
+        { key: 'invoice_id', label: t('wht.col_invoice'), render: (v) => v || '—' },
+        { key: 'supplier_name', label: t('wht.col_supplier'), render: (v, tx) => v || tx.supplier_id || '—' },
+        { key: 'gross_amount', label: t('wht.gross_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left' }, render: (v, tx) => <span className="font-mono">{formatNumber(v)} <small>{tx.currency || displayCurrency}</small></span> },
+        { key: 'wht_rate', label: t('wht.col_rate'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (v) => <span className="font-mono">{formatNumber(v, 2)}%</span> },
+        { key: 'wht_amount', label: t('wht.wht_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left' }, render: (v, tx) => <span className="font-mono text-danger">{formatNumber(v)} <small>{tx.currency || displayCurrency}</small></span> },
+        { key: 'net_amount', label: t('wht.net_amount'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left' }, render: (v, tx) => <span className="font-mono text-success">{formatNumber(v)} <small>{tx.currency || displayCurrency}</small></span> },
+        { key: 'certificate_number', label: t('wht.col_certificate'), render: (v) => v || '—' },
+        { key: 'created_at', label: t('wht.col_date'), render: (v, tx) => formatDate(tx.period_date || v) },
+        { key: 'actions', label: t('wht.col_actions'), sortable: false, searchable: false, exportable: false, render: (_, tx) => (
+            <button className="btn btn-sm btn-secondary" onClick={() => openCertificate(tx)} title={t('wht.print_certificate')}>
+                🖨️
+            </button>
+        ) },
+    ]
 
     return (
         <div className="workspace fade-in">
@@ -231,11 +275,11 @@ export default function WithholdingTax() {
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('wht.total_gross')}</div>
-                        <div className="metric-value" style={{ color: '#7c3aed' }}>{formatNumber(totalGross)} <small style={{ fontSize: 12 }}>{currency}</small></div>
+                        <div className="metric-value" style={{ color: '#7c3aed' }}>{formatNumber(totalGross)} <small style={{ fontSize: 12 }}>{displayCurrency}</small></div>
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('wht.total_withheld')}</div>
-                        <div className="metric-value" style={{ color: '#dc2626' }}>{formatNumber(totalWht)} <small style={{ fontSize: 12 }}>{currency}</small></div>
+                        <div className="metric-value" style={{ color: '#dc2626' }}>{formatNumber(totalWht)} <small style={{ fontSize: 12 }}>{displayCurrency}</small></div>
                     </div>
                 </div>
             )}
@@ -259,48 +303,16 @@ export default function WithholdingTax() {
             {/* ===== Rates Tab ===== */}
             {activeTab === 'rates' && (
                 <div className="section-card">
-                    {loading ? (
-                        <PageLoading />
-                    ) : rates.length === 0 ? (
-                        <div className="empty-state">
-                            <p>{t('wht.no_rates')}</p>
-                        </div>
-                    ) : (
-                        <div className="data-table-container">
-                            <table className="data-table">
-                                <thead>
-                                    <tr>
-                                        <th>{t('wht.col_name')}</th>
-                                        <th>{t('wht.col_name_ar')}</th>
-                                        <th style={{ textAlign: 'center' }}>{t('wht.col_rate')}</th>
-                                        <th style={{ textAlign: 'center' }}>{t('wht.col_category')}</th>
-                                        <th style={{ textAlign: 'center' }}>{t('wht.col_status')}</th>
-                                    </tr>
-                                </thead>
-                                <tbody>
-                                    {rates.map((rate) => (
-                                        <tr key={rate.id}>
-                                            <td className="font-medium">{rate.name}</td>
-                                            <td>{rate.name_ar}</td>
-                                            <td style={{ textAlign: 'center' }} className="font-mono">
-                                                {formatNumber(rate.rate, 2)}%
-                                            </td>
-                                            <td style={{ textAlign: 'center' }}>
-                                                <span className="badge badge-info">
-                                                    {categoryLabels[rate.category] || rate.category}
-                                                </span>
-                                            </td>
-                                            <td style={{ textAlign: 'center' }}>
-                                                <span className={`badge ${rate.is_active ? 'badge-success' : 'badge-secondary'}`}>
-                                                    {rate.is_active ? t('wht.active') : t('wht.inactive')}
-                                                </span>
-                                            </td>
-                                        </tr>
-                                    ))}
-                                </tbody>
-                            </table>
-                        </div>
-                    )}
+                    <DataTable
+                        columns={rateColumns}
+                        data={rates}
+                        loading={loading}
+                        rowKey="id"
+                        searchable
+                        exportable
+                        exportName="wht-rates"
+                        emptyTitle={t('wht.no_rates')}
+                    />
                 </div>
             )}
 
@@ -326,6 +338,17 @@ export default function WithholdingTax() {
                                     ))}
                                 </select>
                             </div>
+                            <div className="form-group" style={{ flex: 1, minWidth: '160px', marginBottom: 0 }}>
+                                <label className="form-label">{t('wht.col_supplier')}</label>
+                                <input
+                                    type="number"
+                                    className="form-input"
+                                    placeholder="Supplier ID"
+                                    value={calcSupplierId}
+                                    onChange={(e) => setCalcSupplierId(e.target.value)}
+                                    min="1"
+                                />
+                            </div>
                             <div className="form-group" style={{ flex: 1, minWidth: '200px', marginBottom: 0 }}>
                                 <label className="form-label">{t('wht.gross_amount')}</label>
                                 <input
@@ -341,7 +364,7 @@ export default function WithholdingTax() {
                             <button
                                 className="btn btn-primary"
                                 onClick={handleCalculate}
-                                disabled={calcLoading || !calcRateId || !calcGross}
+                                disabled={calcLoading || !currentBranch?.id || !calcRateId || !calcGross}
                                 style={{ height: '42px' }}
                             >
                                 {calcLoading ? t('wht.calculating') : t('wht.calculate_btn')}
@@ -363,19 +386,19 @@ export default function WithholdingTax() {
                                 <div>
                                     <span className="text-secondary" style={{ fontSize: '13px' }}>{t('wht.wht_amount')}</span>
                                     <div className="font-bold text-danger" style={{ fontSize: '1.25rem' }}>
-                                        {formatNumber(calcResult.wht_amount)} <small>{currency}</small>
+                                        {formatNumber(calcResult.wht_amount)} <small>{displayCurrency}</small>
                                     </div>
                                 </div>
                                 <div>
                                     <span className="text-secondary" style={{ fontSize: '13px' }}>{t('wht.net_amount')}</span>
                                     <div className="font-bold text-success" style={{ fontSize: '1.25rem' }}>
-                                        {formatNumber(calcResult.net_amount)} <small>{currency}</small>
+                                        {formatNumber(calcResult.net_amount)} <small>{displayCurrency}</small>
                                     </div>
                                 </div>
                                 <button
                                     className="btn btn-success"
                                     onClick={handleCreateTransaction}
-                                    disabled={txSubmitting}
+                                    disabled={txSubmitting || !currentBranch?.id || !calcSupplierId}
                                     style={{ marginRight: 'auto' }}
                                 >
                                     {txSubmitting ? t('wht.saving') : t('wht.create_transaction')}
@@ -386,58 +409,16 @@ export default function WithholdingTax() {
 
                     {/* Transactions Table */}
                     <div className="section-card">
-                        {txLoading ? (
-                            <PageLoading />
-                        ) : transactions.length === 0 ? (
-                            <div className="empty-state">
-                                <p>{t('wht.no_transactions')}</p>
-                            </div>
-                        ) : (
-                            <div className="data-table-container">
-                                <table className="data-table">
-                                    <thead>
-                                        <tr>
-                                            <th>{t('wht.col_invoice')}</th>
-                                            <th>{t('wht.col_supplier')}</th>
-                                            <th style={{ textAlign: 'left' }}>{t('wht.gross_amount')}</th>
-                                            <th style={{ textAlign: 'center' }}>{t('wht.col_rate')}</th>
-                                            <th style={{ textAlign: 'left' }}>{t('wht.wht_amount')}</th>
-                                            <th style={{ textAlign: 'left' }}>{t('wht.net_amount')}</th>
-                                            <th>{t('wht.col_certificate')}</th>
-                                            <th>{t('wht.col_date')}</th>
-                                            <th>{t('wht.col_actions')}</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody>
-                                        {transactions.map((tx) => (
-                                            <tr key={tx.id}>
-                                                <td className="font-medium">{tx.invoice_id || '—'}</td>
-                                                <td>{tx.supplier_id || '—'}</td>
-                                                <td style={{ textAlign: 'left' }} className="font-mono">
-                                                    {formatNumber(tx.gross_amount)} <small>{currency}</small>
-                                                </td>
-                                                <td style={{ textAlign: 'center' }} className="font-mono">
-                                                    {formatNumber(tx.wht_rate, 2)}%
-                                                </td>
-                                                <td style={{ textAlign: 'left' }} className="font-mono text-danger">
-                                                    {formatNumber(tx.wht_amount)} <small>{currency}</small>
-                                                </td>
-                                                <td style={{ textAlign: 'left' }} className="font-mono text-success">
-                                                    {formatNumber(tx.net_amount)} <small>{currency}</small>
-                                                </td>
-                                                <td>{tx.certificate_number || '—'}</td>
-                                                <td className="text-muted">{formatDate(tx.created_at)}</td>
-                                                <td>
-                                                    <button className="btn btn-sm btn-secondary" onClick={() => openCertificate(tx)} title={t('wht.print_certificate')}>
-                                                        🖨️
-                                                    </button>
-                                                </td>
-                                            </tr>
-                                        ))}
-                                    </tbody>
-                                </table>
-                            </div>
-                        )}
+                        <DataTable
+                            columns={transactionColumns}
+                            data={transactions}
+                            loading={txLoading}
+                            rowKey="id"
+                            searchable
+                            exportable
+                            exportName="wht-transactions"
+                            emptyTitle={t('wht.no_transactions')}
+                        />
                     </div>
                 </>
             )}

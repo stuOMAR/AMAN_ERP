@@ -13,10 +13,12 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, require_module
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.currency_display import display_currency_fields, resolve_display_currency
+from utils.tax_precision import get_idempotency_key, money_str
 from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
@@ -44,51 +46,42 @@ def create_tax_settlement(
         try:
             start = body.get("period_start")
             end = body.get("period_end")
-            branch_id = validate_branch_access(current_user, body.get("branch_id"))
+            branch_scope = resolve_branch_scope(current_user, body.get("branch_id"))
+            branch_id = branch_scope["branch_id"]
+            idempotency_key = get_idempotency_key(
+                request,
+                fallback=f"tax-settlement:{start}:{end}:branch:{branch_id or 'all'}",
+            )
     
             if not start or not end:
-                raise HTTPException(status_code=400, detail="يجب تحديد فترة التسوية")
+                raise HTTPException(**http_error(400, "settlement_period_required", request))
     
+            display_meta = resolve_display_currency(db, branch_scope)
             params = {"start": start, "end": end}
-            branch_filter = ""
-            if branch_id:
-                branch_filter = "AND i.branch_id = :branch_id"
-                params["branch_id"] = branch_id
-    
-            output = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'sales' AND i.status NOT IN ('draft','cancelled')
-                AND i.invoice_date BETWEEN :start AND :end {branch_filter}
-            """), params).scalar() or 0
+            branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
+
+            def invoice_vat(invoice_type: str) -> Decimal:
+                row_params = {**params, "invoice_type": invoice_type}
+                return _dec(db.execute(text(  # noqa: sql-lint
+                    f"""
+                    SELECT COALESCE(SUM(COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)), 0) as vat
+                    FROM invoices i
+                    WHERE i.invoice_type = :invoice_type
+                      AND i.status NOT IN ('draft','cancelled')
+                      AND i.invoice_date BETWEEN :start AND :end
+                      {branch_filter}
+                """), row_params).scalar() or 0)
+
+            output = invoice_vat("sales")
     
             # T3.6 (audit #18): output VAT must be NET of sales returns; otherwise
             # we settle more than the company actually owes the tax authority.
-            output_returns = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'sales_return' AND i.status NOT IN ('draft','cancelled')
-                AND i.invoice_date BETWEEN :start AND :end {branch_filter}
-            """), params).scalar() or 0
-    
-            input_v = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft','cancelled')
-                AND i.invoice_date BETWEEN :start AND :end {branch_filter}
-            """), params).scalar() or 0
+            output_returns = invoice_vat("sales_return")
+
+            input_v = invoice_vat("purchase")
     
             # T3.6 (audit #18): input VAT must be NET of purchase returns.
-            input_returns = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT COALESCE(SUM((il.quantity * il.unit_price - COALESCE(il.discount, 0)) * i.exchange_rate * (il.tax_rate / 100)), 0) as vat
-                FROM invoice_lines il JOIN invoices i ON il.invoice_id = i.id
-                WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft','cancelled')
-                AND i.invoice_date BETWEEN :start AND :end {branch_filter}
-            """), params).scalar() or 0
+            input_returns = invoice_vat("purchase_return")
     
             output_dec = (_dec(output) - _dec(output_returns)).quantize(_D2, ROUND_HALF_UP)
             input_dec = (_dec(input_v) - _dec(input_returns)).quantize(_D2, ROUND_HALF_UP)
@@ -98,7 +91,7 @@ def create_tax_settlement(
             vat_in_id = get_mapped_account_id(db, "acc_map_vat_in")
     
             if not vat_out_id or not vat_in_id:
-                raise HTTPException(status_code=400, detail="حسابات ضريبة المدخلات/المخرجات غير معينة في الإعدادات")
+                raise HTTPException(**http_error(400, "input_output_tax_accounts_not_configured", request))
     
             base_currency = get_base_currency(db)
             settle_amount = min(output_dec, input_dec)
@@ -110,11 +103,11 @@ def create_tax_settlement(
     
                 je_lines = [
                     {
-                        "account_id": vat_out_id, "debit": float(settle_amount), "credit": 0,
+                        "account_id": vat_out_id, "debit": settle_amount, "credit": Decimal("0"),
                         "description": "تسوية ضريبة المخرجات"
                     },
                     {
-                        "account_id": vat_in_id, "debit": 0, "credit": float(settle_amount),
+                        "account_id": vat_in_id, "debit": Decimal("0"), "credit": settle_amount,
                         "description": "تسوية ضريبة المدخلات مع المخرجات"
                     }
                 ]
@@ -130,22 +123,24 @@ def create_tax_settlement(
                     branch_id=branch_id,
                     reference=f"TAX-SETTLE-{start}-{end}",
                     currency=base_currency,
-                    exchange_rate=1.0,
-                    source="tax_settlement"
+                    exchange_rate=Decimal("1"),
+                    source="tax_settlement",
+                    idempotency_key=f"tax-settlement-je:{idempotency_key}",
                 )
     
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.settlement.create", resource_type="tax_settlement",
                          resource_id=entry_number,
-                         details={"period": f"{start} - {end}", "net": float(net), "je": entry_number},
+                         details={"period": f"{start} - {end}", "net": money_str(net), "je": entry_number},
                          request=request)
     
             return {
-                "success": True, "message": "تم إنشاء التسوية الضريبية بنجاح",
+                **display_currency_fields(display_meta),
+                "success": True, "message": i18n_message("tax_settlement_created_success", request),
                 "journal_entry": entry_number,
-                "output_vat": float(output_dec), "input_vat": float(input_dec),
-                "net_amount": float(net),
+                "output_vat": money_str(output_dec), "input_vat": money_str(input_dec),
+                "net_amount": money_str(net),
                 "settlement_type": "payable" if net >= Decimal("0") else "refundable"
             }
         except HTTPException:
@@ -162,6 +157,7 @@ def create_tax_settlement(
 class TaxCalendarCreate(BaseModel):
     title: str
     tax_type: Optional[str] = None
+    branch_id: Optional[int] = None
     due_date: date
     reminder_days: Optional[list] = [7, 3, 1]
     is_recurring: Optional[bool] = False
@@ -171,11 +167,10 @@ class TaxCalendarCreate(BaseModel):
 class TaxCalendarUpdate(BaseModel):
     title: Optional[str] = None
     tax_type: Optional[str] = None
+    branch_id: Optional[int] = None
     due_date: Optional[date] = None
     reminder_days: Optional[list] = None
     is_recurring: Optional[bool] = None
     recurrence_months: Optional[int] = None
     is_completed: Optional[bool] = None
     notes: Optional[str] = None
-
-

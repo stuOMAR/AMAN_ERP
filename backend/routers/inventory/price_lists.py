@@ -83,7 +83,7 @@ def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_cu
         }).fetchone()
 
         db.commit()
-        return {"id": result[0], "message": "تم إنشاء القائمة بنجاح", "currency": company_currency}
+        return {"id": result[0], "message": i18n_message("price_list_created", request), "currency": company_currency}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -127,7 +127,7 @@ def update_price_list(
         })
 
         db.commit()
-        return {"id": id, "message": "تم تحديث القائمة بنجاح"}
+        return {"id": id, "message": i18n_message("price_list_updated", request)}
     except HTTPException:
         raise
     except Exception:
@@ -154,7 +154,7 @@ def delete_price_list(
         # Check if it's used by any customers
         usage = db.execute(text("SELECT COUNT(*) FROM parties WHERE price_list_id = :id"), {"id": id}).scalar()
         if usage and usage > 0:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف قائمة أسعار مستخدمة من قبل عملاء")
+            raise HTTPException(**http_error(400, ("cannot_delete_price_list_in_use", request)))
 
         # Delete price list items first
         db.execute(text("DELETE FROM customer_price_list_items WHERE price_list_id = :id"), {"id": id})
@@ -176,7 +176,7 @@ def delete_price_list(
             branch_id=None
         )
 
-        return {"message": "تم حذف قائمة الأسعار بنجاح"}
+        return {"message": i18n_message("price_list_deleted_success", request)}
     except HTTPException:
         raise
     except Exception:
@@ -233,7 +233,7 @@ def update_price_list_items(
                 """), {"lid": id, "pid": item.product_id, "price": item.price})
 
         db.commit()
-        return {"message": "تم تحديث الأسعار بنجاح"}
+        return {"message": i18n_message(("prices_updated_success", request))}
     except Exception:
         db.rollback()
         logger.exception("Internal error")

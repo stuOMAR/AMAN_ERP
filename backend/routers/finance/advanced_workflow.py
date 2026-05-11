@@ -45,7 +45,7 @@ def get_advanced_workflow(request: Request, workflow_id: int, current_user=Depen
             WHERE aw.id = :id
         """), {"id": workflow_id}).fetchone()
         if not wf:
-            raise HTTPException(404, "سير العمل غير موجود")
+            raise HTTPException(**http_error(404, "workflow_not_found", request))
 
         result = dict(wf._mapping)
         if isinstance(result.get("conditions"), str):
@@ -71,7 +71,7 @@ def update_workflow_conditions(
             UPDATE approval_workflows SET conditions = :conds WHERE id = :id
         """), {"conds": json.dumps(conditions), "id": workflow_id})
         db.commit()
-        return {"message": "تم تحديث الشروط"}
+        return {"message": i18n_message(("conditions_updated", request))}
     finally:
         db.close()
 
@@ -99,7 +99,7 @@ def update_workflow_sla(
             "id": workflow_id
         })
         db.commit()
-        return {"message": "تم تحديث إعدادات SLA"}
+        return {"message": i18n_message(("sla_settings_updated", request))}
     finally:
         db.close()
 
@@ -143,7 +143,7 @@ def check_sla_escalations(request: Request, current_user=Depends(get_current_use
         return {
             "checked": len(overdue),
             "escalated": escalated,
-            "message": f"تم تصعيد {escalated} طلب"
+            "message": i18n_message("escalated_requests", request)
         }
     except Exception:
         db.rollback()
@@ -180,7 +180,7 @@ def auto_approve_below_threshold(request: Request, current_user=Depends(get_curr
                          request=request)
         return {
             "auto_approved": len(auto_approved),
-            "message": f"تمت الموافقة التلقائية على {len(auto_approved)} طلب"
+            "message": i18n_message("auto_approved_requests", request)
         }
     except Exception:
         db.rollback()

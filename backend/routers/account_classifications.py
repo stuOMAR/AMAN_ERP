@@ -20,6 +20,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from services.permissions.sensitive import require_sensitive_permission
 from utils.audit import log_activity
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -116,27 +117,21 @@ def list_classifications(
 )
 def upsert_classification(
     payload: ClassificationUpsert,
+    request: Request,
     current_user: dict = Depends(get_current_user),
 ):
     """Upsert an account classification."""
     tenant_id = current_user.get("tenant_id") or current_user.get("company_id")
 
     if payload.statement_category not in VALID_CATEGORIES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Invalid statement_category. Must be one of: {sorted(VALID_CATEGORIES)}",
-        )
+        raise HTTPException(**http_error(400, "invalid_statement_category", request))
 
     if payload.sign not in (-1, 1):
-        raise HTTPException(status_code=400, detail="sign must be -1 or 1")
+        raise HTTPException(**http_error(400, "sign_must_be__1_or_1", request))
 
     expected_sign = SIGN_MAP.get(payload.statement_category)
     if expected_sign is not None and payload.sign != expected_sign:
-        raise HTTPException(
-            status_code=400,
-            detail=f"sign={payload.sign} does not match statement_category='{payload.statement_category}' "
-                   f"(expected {expected_sign})",
-        )
+        raise HTTPException(**http_error(400, "classification_sign_mismatch", request))
 
     conn = get_db_connection(current_user["company_id"])
     try:

@@ -82,13 +82,13 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
                          resource_type="blanket_purchase_order", resource_id=str(bpo_id),
                          details={"agreement_number": agr_number, "supplier_id": payload.supplier_id},
                          request=request)
-            return {"id": bpo_id, "agreement_number": agr_number, "message": "Blanket PO created successfully"}
+            return {"id": bpo_id, "agreement_number": agr_number, "message": i18n_message("blanket_po_created_success", request)}
         except HTTPException:
             raise
         except Exception as e:
             pass
             logger.error(f"Failed to create blanket PO: {e}")
-            raise HTTPException(status_code=500, detail="Failed to create blanket PO")
+            raise HTTPException(**http_error(500, "failed_to_create_blanket_po", request))
 @router.get("/blanket", dependencies=[Depends(require_permission("buying.blanket_view"))], response_model=Dict[str, Any])
 def list_blanket_pos(
     status_filter: Optional[str] = None,
@@ -153,7 +153,7 @@ def get_blanket_po(bpo_id: int, current_user: dict = Depends(get_current_user)):
         """), {"id": bpo_id}).fetchone()
 
         if not bpo:
-            raise HTTPException(status_code=404, detail="Blanket PO not found")
+            raise HTTPException(**http_error(404, "blanket_po_not_found", request))
 
         d = dict(bpo._mapping)
         d["remaining_quantity"] = str(_dec(d["total_quantity"]) - _dec(d["released_quantity"]))
@@ -180,9 +180,9 @@ def activate_blanket_po(bpo_id: int, request: Request, current_user: dict = Depe
             ), {"id": bpo_id}).fetchone()
     
             if not bpo:
-                raise HTTPException(status_code=404, detail="Blanket PO not found")
+                raise HTTPException(**http_error(404, "blanket_po_not_found", request))
             if bpo._mapping["status"] != "draft":
-                raise HTTPException(status_code=400, detail="Only draft blanket POs can be activated")
+                raise HTTPException(**http_error(400, "only_draft_blanket_pos_can_be_activated", request))
     
             db.execute(text(
                 "UPDATE blanket_purchase_orders SET status = 'active', updated_at = NOW() WHERE id = :id"
@@ -193,7 +193,7 @@ def activate_blanket_po(bpo_id: int, request: Request, current_user: dict = Depe
             log_activity(db, user_id=user_id, username=username, action="blanket_po_activated",
                          resource_type="blanket_purchase_order", resource_id=str(bpo_id),
                          details={"blanket_po_id": bpo_id}, request=request)
-            return {"message": "Blanket PO activated successfully"}
+            return {"message": i18n_message("blanket_po_activated_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -211,11 +211,11 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
             """), {"id": bpo_id}).fetchone()
     
             if not bpo:
-                raise HTTPException(status_code=404, detail="Blanket PO not found")
+                raise HTTPException(**http_error(404, "blanket_po_not_found", request))
     
             bpo_data = dict(bpo._mapping)
             if bpo_data["status"] != "active":
-                raise HTTPException(status_code=400, detail="Blanket PO must be active to release orders")
+                raise HTTPException(**http_error(400, "blanket_po_must_be_active_to_release_orders", request))
     
             release_qty = _dec(payload.release_quantity)
             released_qty = _dec(bpo_data["released_quantity"])
@@ -277,7 +277,7 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
                 "release_amount": str(release_amount),
                 "remaining_quantity": str(total_qty - new_released_qty),
                 "remaining_amount": str(_dec(bpo_data["total_amount"]) - new_released_amt),
-                "message": "Release order created successfully",
+                "message": i18n_message("release_order_created_success", request),
             }
             return response
         except HTTPException:
@@ -285,7 +285,7 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
         except Exception as e:
             pass
             logger.error(f"Failed to create release order: {e}")
-            raise HTTPException(status_code=500, detail="Failed to create release order")
+            raise HTTPException(**http_error(500, "failed_to_create_release_order", request))
 @router.put("/blanket/{bpo_id}/amend-price", dependencies=[Depends(require_permission("buying.blanket_manage"))], response_model=Dict[str, Any])
 def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Request, current_user: dict = Depends(get_current_user)):
     """Amend the unit price of a blanket PO with effective date tracking."""
@@ -299,11 +299,11 @@ def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Req
             """), {"id": bpo_id}).fetchone()
     
             if not bpo:
-                raise HTTPException(status_code=404, detail="Blanket PO not found")
+                raise HTTPException(**http_error(404, "blanket_po_not_found", request))
     
             bpo_data = dict(bpo._mapping)
             if bpo_data["status"] not in ("draft", "active"):
-                raise HTTPException(status_code=400, detail="Cannot amend price on a completed/cancelled/expired blanket PO")
+                raise HTTPException(**http_error(400, "cannot_amend_price_on_a_completedcancelledexpired_", request))
     
             old_price = _dec(bpo_data["unit_price"])
             new_price = _dec(payload.new_price)
@@ -341,7 +341,7 @@ def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Req
                          request=request)
     
             return {
-                "message": "Price amended successfully",
+                "message": i18n_message("price_amended_success", request),
                 "old_price": str(old_price),
                 "new_price": str(new_price),
                 "new_total_amount": str(new_total_amount),
@@ -352,4 +352,4 @@ def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Req
         except Exception as e:
             pass
             logger.error(f"Failed to amend blanket PO price: {e}")
-            raise HTTPException(status_code=500, detail="Failed to amend price")
+            raise HTTPException(**http_error(500, "failed_to_amend_price", request))

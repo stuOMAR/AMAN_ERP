@@ -98,9 +98,9 @@ def admin_2fa_verify(
             {"u": body.username},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="لم يتم إعداد 2FA لهذا الحساب")
+            raise HTTPException(**http_error(404, "2fa_not_setup", request))
         if not pyotp.TOTP(row.secret_key).verify(body.code, valid_window=1):
-            raise HTTPException(status_code=400, detail="الرمز غير صحيح")
+            raise HTTPException(**http_error(400, "code_incorrect", request))
         db.execute(
             text(
                 "UPDATE system_admin_2fa SET is_enabled = TRUE, "

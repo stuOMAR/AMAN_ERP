@@ -75,7 +75,7 @@ def update_job_opening(opening_id: int, data: JobOpeningUpdate, company_id: str 
                 fields.append(f"{col} = :{f}"); params[f] = v
         if fields:
             conn.execute(text(f"UPDATE job_openings SET {', '.join(fields)} WHERE id = :id"), params)
-        return {"message": "Updated"}
+        return {"message": i18n_message(("updated_success", request))}
 
 
 @router.get("/recruitment/openings/{opening_id}/applications", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
@@ -87,7 +87,7 @@ def list_opening_applications(opening_id: int, current_user: UserResponse = Depe
             opening = conn.execute(text("SELECT branch_id FROM job_openings WHERE id=:id"), {"id": opening_id}).fetchone()
             if opening and opening.branch_id and current_user.allowed_branches:
                 if opening.branch_id not in current_user.allowed_branches:
-                    raise HTTPException(status_code=403, detail="Unauthorized access to this branch")
+                    raise HTTPException(**http_error(403, ("unauthorized_branch_access", request)))
         result = conn.execute(text("""
             SELECT ja.*, jo.title as opening_title
             FROM job_applications ja
@@ -132,7 +132,7 @@ def update_application_stage(app_id: int, data: ApplicationStageUpdate, company_
     with transactional(company_id) as conn:
         conn.execute(text("UPDATE job_applications SET stage=:stage, updated_at=NOW() WHERE id=:id"),
                      {"stage": data.stage, "id": app_id})
-        return {"message": "Stage updated"}
+        return {"message": i18n_message(("recruitment_stage_updated", request))}
 
 
 # --- Leave Balance & Carryover (with branch access) ---

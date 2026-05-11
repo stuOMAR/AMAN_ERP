@@ -15,6 +15,7 @@ const BudgetItems = () => {
     const { id } = useParams();
 
     const [loading, setLoading] = useState(true);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [accounts, setAccounts] = useState([]);
     const [budgetItems, setBudgetItems] = useState({});
     const [budgetMonths, setBudgetMonths] = useState(12);
@@ -41,8 +42,11 @@ const BudgetItems = () => {
     }, [currentBranch, budgetBranchId]);
 
     useEffect(() => {
-        fetchData();
-    }, [id]);
+        const timer = setTimeout(() => {
+            fetchData();
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [id, currentBranch]);
 
     const countMonths = (start, end) => {
         const s = new Date(start);
@@ -91,6 +95,7 @@ const BudgetItems = () => {
             showToast(t('common.error_loading'), 'error');
         } finally {
             setLoading(false);
+            setInitialLoad(false);
         }
     };
 
@@ -158,6 +163,7 @@ const BudgetItems = () => {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header mb-4">
                 <div className="d-flex align-items-center gap-3">
                         <BackButton />

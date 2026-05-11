@@ -49,6 +49,7 @@ function ProductForm() {
     const { showToast } = useToast()
     const currency = getCurrency()
     const [loading, setLoading] = useState(false)
+    const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const [formData, setFormData] = useState({
         item_code: '',
@@ -107,92 +108,98 @@ function ProductForm() {
     }
 
     useEffect(() => {
-        const fetchInitialData = async () => {
-            try {
-                // Fetch Categories
-                const catRes = await inventoryAPI.listCategories({ branch_id: currentBranch?.id })
-                setCategories(catRes.data)
-
-                // If new product, fetch default tax rate from settings
-                if (!id) {
-                    // Default to inherit mode — no need to set anything
-                }
-            } catch (err) {
-                showToast(t('stock.products.validation.error_load_data'), 'error')
-            }
-        }
-        fetchInitialData()
-
-        if (id) {
-            const fetchProduct = async () => {
+        const timer = setTimeout(() => {
+            const fetchInitialData = async () => {
                 try {
-                    setLoading(true)
-                    const res = await inventoryAPI.getProduct(id)
-                    const data = res.data
-                    setFormData({
-                        ...data,
-                        category_id: data.category_id || '',
-                        product_name: data.product_name || '',
-                        product_name_en: data.product_name_en || '',
-                        product_code: data.product_code || '',
-                        description: data.description || '',
-                        barcode: data.barcode || '',
-                        brand: data.brand || '',
-                        manufacturer: data.manufacturer || '',
-                        sku: data.sku || '',
-                        cost_price: data.cost_price ?? 0,
-                        selling_price: data.selling_price ?? 0,
-                        wholesale_price: data.wholesale_price ?? 0,
-                        min_price: data.min_price ?? 0,
-                        max_price: data.max_price ?? 0,
-                        reorder_level: data.reorder_level ?? 0,
-                        reorder_quantity: data.reorder_quantity ?? 0,
-                    })
-                    // Set tax mode based on product data
-                    if (data.is_exempt) {
-                        setTaxMode({ mode: 'exempt', tax_rate_id: null, tax_rate: 0, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: true })
-                    } else if (data.tax_group_id) {
-                        setTaxMode({
-                            mode: 'group',
-                            tax_rate_id: null,
-                            tax_rate: null,
-                            tax_name: data.tax_group_name || null,
-                            tax_group_id: data.tax_group_id,
-                            tax_classification_id: null,
-                            is_exempt: false,
-                        })
-                    } else if (data.tax_classification_id) {
-                        setTaxMode({
-                            mode: 'classification',
-                            tax_rate_id: null,
-                            tax_rate: null,
-                            tax_name: data.tax_classification_name || null,
-                            tax_group_id: null,
-                            tax_classification_id: data.tax_classification_id,
-                            is_exempt: false,
-                        })
-                    } else if (data.tax_rate_id) {
-                        setTaxMode({
-                            mode: 'custom',
-                            tax_rate_id: data.tax_rate_id,
-                            tax_rate: data.tax_rate,
-                            tax_name: data.tax_name || null,
-                            tax_group_id: null,
-                            tax_classification_id: null,
-                            is_exempt: false,
-                        })
-                    } else {
-                        setTaxMode({ mode: 'inherit', tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: false })
+                    // Fetch Categories
+                    const catRes = await inventoryAPI.listCategories({ branch_id: currentBranch?.id })
+                    setCategories(catRes.data)
+
+                    // If new product, fetch default tax rate from settings
+                    if (!id) {
+                        // Default to inherit mode — no need to set anything
                     }
                 } catch (err) {
-                    setError(t('stock.products.validation.error_load_data'))
                     showToast(t('stock.products.validation.error_load_data'), 'error')
-                } finally {
-                    setLoading(false)
                 }
             }
-            fetchProduct()
-        }
+            fetchInitialData()
+
+            if (id) {
+                const fetchProduct = async () => {
+                    try {
+                        setLoading(true)
+                        const res = await inventoryAPI.getProduct(id)
+                        const data = res.data
+                        setFormData({
+                            ...data,
+                            category_id: data.category_id || '',
+                            product_name: data.product_name || '',
+                            product_name_en: data.product_name_en || '',
+                            product_code: data.product_code || '',
+                            description: data.description || '',
+                            barcode: data.barcode || '',
+                            brand: data.brand || '',
+                            manufacturer: data.manufacturer || '',
+                            sku: data.sku || '',
+                            cost_price: data.cost_price ?? 0,
+                            selling_price: data.selling_price ?? 0,
+                            wholesale_price: data.wholesale_price ?? 0,
+                            min_price: data.min_price ?? 0,
+                            max_price: data.max_price ?? 0,
+                            reorder_level: data.reorder_level ?? 0,
+                            reorder_quantity: data.reorder_quantity ?? 0,
+                        })
+                        // Set tax mode based on product data
+                        if (data.is_exempt) {
+                            setTaxMode({ mode: 'exempt', tax_rate_id: null, tax_rate: 0, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: true })
+                        } else if (data.tax_group_id) {
+                            setTaxMode({
+                                mode: 'group',
+                                tax_rate_id: null,
+                                tax_rate: null,
+                                tax_name: data.tax_group_name || null,
+                                tax_group_id: data.tax_group_id,
+                                tax_classification_id: null,
+                                is_exempt: false,
+                            })
+                        } else if (data.tax_classification_id) {
+                            setTaxMode({
+                                mode: 'classification',
+                                tax_rate_id: null,
+                                tax_rate: null,
+                                tax_name: data.tax_classification_name || null,
+                                tax_group_id: null,
+                                tax_classification_id: data.tax_classification_id,
+                                is_exempt: false,
+                            })
+                        } else if (data.tax_rate_id) {
+                            setTaxMode({
+                                mode: 'custom',
+                                tax_rate_id: data.tax_rate_id,
+                                tax_rate: data.tax_rate,
+                                tax_name: data.tax_name || null,
+                                tax_group_id: null,
+                                tax_classification_id: null,
+                                is_exempt: false,
+                            })
+                        } else {
+                            setTaxMode({ mode: 'inherit', tax_rate_id: null, tax_rate: null, tax_name: null, tax_group_id: null, tax_classification_id: null, is_exempt: false })
+                        }
+                    } catch (err) {
+                        setError(t('stock.products.validation.error_load_data'))
+                        showToast(t('stock.products.validation.error_load_data'), 'error')
+                    } finally {
+                        setLoading(false)
+                        setInitialLoad(false)
+                    }
+                }
+                fetchProduct()
+            } else {
+                setInitialLoad(false)
+            }
+        }, 300)
+        return () => clearTimeout(timer)
     }, [id, currentBranch, t])
 
     const handleSubmit = async (e) => {
@@ -230,6 +237,7 @@ function ProductForm() {
 
     return (
         <div className="workspace fade-in">
+            {loading && !initialLoad && <div style={{position:'fixed',top:10,right:10,zIndex:1000,background:'var(--bg-card)',padding:'8px 16px',borderRadius:8,boxShadow:'0 2px 8px rgba(0,0,0,0.15)',fontSize:13}}>جاري التحميل...</div>}
             <div className="workspace-header">
                 <BackButton />
                 <h1 className="workspace-title">{id ? t('stock.products.form.edit_title') : t('stock.products.form.title')}</h1>

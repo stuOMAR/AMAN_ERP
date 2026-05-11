@@ -312,7 +312,7 @@ _POST_DDL_INDEXES: list[str] = [
     "CREATE INDEX IF NOT EXISTS idx_inventory_warehouse ON inventory(warehouse_id)",
     "CREATE INDEX IF NOT EXISTS idx_inventory_product_warehouse ON inventory(product_id, warehouse_id)",
     "CREATE INDEX IF NOT EXISTS idx_inventory_txn_product ON inventory_transactions(product_id)",
-    "CREATE INDEX IF NOT EXISTS idx_inventory_txn_date ON inventory_transactions(transaction_date)",
+    "CREATE INDEX IF NOT EXISTS idx_inventory_txn_date ON inventory_transactions(created_at)",
     "CREATE INDEX IF NOT EXISTS idx_inventory_txn_type ON inventory_transactions(transaction_type)",
     "CREATE INDEX IF NOT EXISTS idx_sales_orders_customer ON sales_orders(customer_id)",
     "CREATE INDEX IF NOT EXISTS idx_sales_orders_status ON sales_orders(status)",

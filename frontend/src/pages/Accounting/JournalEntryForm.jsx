@@ -16,6 +16,7 @@ const JournalEntryForm = () => {
     const { t } = useTranslation();
     const navigate = useNavigate();
     const [loading, setLoading] = useState(false);
+    const [initialLoad, setInitialLoad] = useState(true);
     const [accounts, setAccounts] = useState([]);
     const [costCenters, setCostCenters] = useState([]);
     const { currentBranch } = useBranch();
@@ -35,9 +36,13 @@ const JournalEntryForm = () => {
     const [idempotencyKey, setIdempotencyKey] = useState(crypto.randomUUID());
 
     useEffect(() => {
-        fetchAccounts();
-        fetchCostCenters();
-    }, []);
+        const timer = setTimeout(() => {
+            fetchAccounts();
+            fetchCostCenters();
+            setInitialLoad(false);
+        }, 300)
+        return () => clearTimeout(timer)
+    }, [currentBranch]);
 
     const fetchAccounts = async () => {
         try {
