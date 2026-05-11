@@ -433,7 +433,7 @@ BEGIN
             sr.status                                    AS status,
             sr.notes                                     AS notes,
             sr.created_at                                AS created_at,
-            sr.created_by                                AS created_by
+            sr.created_by::text                          AS created_by
         FROM sales_returns sr
 
         UNION ALL
@@ -452,7 +452,7 @@ BEGIN
             'completed'::text                            AS status,
             pr.notes                                     AS notes,
             pr.created_at                                AS created_at,
-            pr.created_by                                AS created_by
+            pr.created_by::text                          AS created_by
         FROM pos_returns pr;
         $VIEW$;
     END IF;

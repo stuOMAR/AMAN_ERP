@@ -1,6 +1,6 @@
 """028 purchase lifecycle integrity — schema changes
 
-Revision ID: 028a_purchase_lifecycle_integrity
+Revision ID: 028a_purchase_integrity
 Revises: 025l_zakat_branch_scope
 Create Date: 2026-05-10
 """
@@ -8,7 +8,7 @@ from alembic import op
 import sqlalchemy as sa
 
 # revision identifiers
-revision = '028a_purchase_lifecycle_integrity'
+revision = '028a_purchase_integrity'
 down_revision = '025l_zakat_branch_scope'
 branch_labels = None
 depends_on = None

@@ -1,5 +1,5 @@
-from fastapi import APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
@@ -574,19 +574,30 @@ class LayoutUpdate(BaseModel):
 
 # Default widgets for new users
 DEFAULT_WIDGETS = [
-    {"id": "sales_today", "type": "stat", "title": i18n_message("dashboard_sales_today", request), "x": 0, "y": 0, "w": 1, "h": 1, "config": {"period": "today"}},
-    {"id": "sales_month", "type": "stat", "title": i18n_message("dashboard_sales_month", request), "x": 1, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
-    {"id": "expenses_month", "type": "stat", "title": i18n_message("dashboard_expenses_month", request), "x": 2, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
-    {"id": "cash_balance", "type": "stat", "title": i18n_message("dashboard_cash_balance", request), "x": 3, "y": 0, "w": 1, "h": 1, "config": {}},
-    {"id": "financial_chart", "type": "chart", "title": i18n_message("dashboard_financial_chart", request), "x": 0, "y": 1, "w": 2, "h": 2, "config": {"days": 30}},
-    {"id": "top_products", "type": "chart", "title": i18n_message("dashboard_top_products", request), "x": 2, "y": 1, "w": 2, "h": 2, "config": {"limit": 5}},
-    {"id": "low_stock", "type": "list", "title": i18n_message("dashboard_low_stock", request), "x": 0, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
-    {"id": "pending_tasks", "type": "list", "title": i18n_message("dashboard_pending_tasks", request), "x": 2, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
+    {"id": "sales_today", "type": "stat", "title": "dashboard_sales_today", "x": 0, "y": 0, "w": 1, "h": 1, "config": {"period": "today"}},
+    {"id": "sales_month", "type": "stat", "title": "dashboard_sales_month", "x": 1, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
+    {"id": "expenses_month", "type": "stat", "title": "dashboard_expenses_month", "x": 2, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
+    {"id": "cash_balance", "type": "stat", "title": "dashboard_cash_balance", "x": 3, "y": 0, "w": 1, "h": 1, "config": {}},
+    {"id": "financial_chart", "type": "chart", "title": "dashboard_financial_chart", "x": 0, "y": 1, "w": 2, "h": 2, "config": {"days": 30}},
+    {"id": "top_products", "type": "chart", "title": "dashboard_top_products", "x": 2, "y": 1, "w": 2, "h": 2, "config": {"limit": 5}},
+    {"id": "low_stock", "type": "list", "title": "dashboard_low_stock", "x": 0, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
+    {"id": "pending_tasks", "type": "list", "title": "dashboard_pending_tasks", "x": 2, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
 ]
 
 
+def _translate_widgets(widgets: list, request: Request) -> list:
+    """Helper to translate widget titles using the request locale."""
+    translated = []
+    for w in widgets:
+        w_copy = dict(w)
+        if "title" in w_copy:
+            w_copy["title"] = i18n_message(w_copy["title"], request)
+        translated.append(w_copy)
+    return translated
+
+
 @router.get("/layouts", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
-def get_dashboard_layouts(current_user=Depends(get_current_user)):
+def get_dashboard_layouts(request: Request, current_user=Depends(get_current_user)):
     """جلب تخطيطات لوحة التحكم للمستخدم"""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -599,14 +610,14 @@ def get_dashboard_layouts(current_user=Depends(get_current_user)):
         if not rows:
             # Return default layout
             return {"layouts": [{"id": 0, "layout_name": "default", "is_active": True,
-                                 "widgets": DEFAULT_WIDGETS}]}
+                                 "widgets": _translate_widgets(DEFAULT_WIDGETS, request)}]}
 
         return {"layouts": [
             {
                 "id": r.id,
                 "layout_name": r.layout_name,
                 "is_active": r.is_active,
-                "widgets": r.widgets if isinstance(r.widgets, list) else json.loads(r.widgets) if r.widgets else DEFAULT_WIDGETS,
+                "widgets": _translate_widgets(r.widgets if isinstance(r.widgets, list) else json.loads(r.widgets) if r.widgets else DEFAULT_WIDGETS, request),
                 "created_at": str(r.created_at) if r.created_at else None,
                 "updated_at": str(r.updated_at) if r.updated_at else None
             } for r in rows
@@ -614,13 +625,13 @@ def get_dashboard_layouts(current_user=Depends(get_current_user)):
     except Exception as e:
         logger.warning(f"Dashboard layouts fetch: {e}")
         return {"layouts": [{"id": 0, "layout_name": "default", "is_active": True,
-                             "widgets": DEFAULT_WIDGETS}]}
+                             "widgets": _translate_widgets(DEFAULT_WIDGETS, request)}]}
     finally:
         db.close()
 
 
 @router.post("/layouts", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
-def save_dashboard_layout(data: LayoutCreate, current_user=Depends(get_current_user)):
+def save_dashboard_layout(request: Request, data: LayoutCreate, current_user=Depends(get_current_user)):
     """حفظ تخطيط لوحة التحكم"""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -647,7 +658,7 @@ def save_dashboard_layout(data: LayoutCreate, current_user=Depends(get_current_u
 
 
 @router.put("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
-def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Depends(get_current_user)):
+def update_dashboard_layout(layout_id: int, data: LayoutUpdate, request: Request, current_user=Depends(get_current_user)):
     """تحديث تخطيط لوحة التحكم (تغيير ترتيب/حجم الـ widgets)"""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -659,7 +670,7 @@ def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Dep
             WHERE id = :lid AND user_id = :uid
         """), {"lid": layout_id, "uid": current_user.id, "widgets": widgets_json})
         db.commit()
-        return {"message": i18n_message(("dashboard_layout_updated", request))}
+        return {"message": i18n_message("dashboard_layout_updated", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -669,7 +680,7 @@ def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Dep
 
 
 @router.delete("/layouts/{layout_id}", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
-def delete_dashboard_layout(layout_id: int, current_user=Depends(get_current_user)):
+def delete_dashboard_layout(layout_id: int, request: Request, current_user=Depends(get_current_user)):
     """حذف تخطيط لوحة التحكم"""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -678,7 +689,7 @@ def delete_dashboard_layout(layout_id: int, current_user=Depends(get_current_use
             DELETE FROM dashboard_layouts WHERE id = :lid AND user_id = :uid
         """), {"lid": layout_id, "uid": current_user.id})
         db.commit()
-        return {"message": i18n_message(("dashboard_layout_deleted", request))}
+        return {"message": i18n_message("dashboard_layout_deleted", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
