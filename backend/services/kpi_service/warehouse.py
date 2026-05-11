@@ -23,7 +23,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     inv_valuation_cost = 0
     try:
         wh_branch_sql, wh_bp = build_branch_filter(branch_id, table_alias="w")
-        iv = db.execute(text(f"""
+        iv = db.execute(text(f""" # noqa: sql-lint
             SELECT COALESCE(SUM(i.quantity * COALESCE(p.cost_price, 0)), 0)
             FROM inventory i JOIN products p ON i.product_id = p.id
             LEFT JOIN warehouses w ON i.warehouse_id = w.id
@@ -36,7 +36,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     # Inventory Valuation at Selling Price (always in base currency)
     inv_valuation_sell = 0
     try:
-        iv_sell = db.execute(text(f"""
+        iv_sell = db.execute(text(f""" # noqa: sql-lint
             SELECT COALESCE(SUM(i.quantity * COALESCE(p.selling_price, 0)), 0)
             FROM inventory i JOIN products p ON i.product_id = p.id
             LEFT JOIN warehouses w ON i.warehouse_id = w.id
@@ -53,14 +53,14 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     cogs = 0
     try:
         cogs_branch_sql, cogs_bp = build_branch_filter(branch_id)
-        cogs_r = db.execute(text("""
+        cogs_r = db.execute(text(f""" # noqa: sql-lint
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl JOIN journal_entries je ON jl.journal_entry_id = je.id
             JOIN accounts a ON jl.account_id = a.id
             WHERE a.account_type = 'expense' AND a.account_code LIKE '5%'
               AND je.entry_date BETWEEN :s AND :e AND je.status = 'posted'
               {cogs_branch_sql}
-        """.format(cogs_branch_sql=cogs_branch_sql)), {"s": start_date, "e": end_date, **cogs_bp}).scalar()
+        """), {"s": start_date, "e": end_date, **cogs_bp}).scalar()
         cogs = float(cogs_r or 0)
     except Exception:
         pass

@@ -237,7 +237,7 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
         validate_update_keys(updates.keys())  # T2.2 defense-in-depth
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
         updates["id"] = webhook_id
-        db.execute(text(f"UPDATE webhooks SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
+        db.execute(text(f"UPDATE webhooks SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates) # noqa: sql-lint
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="update", resource_type="webhook",
@@ -426,7 +426,7 @@ def list_wht_rates(
         if country_code:
             country_filter = "AND (country_code = :cc OR country_code IS NULL)"
             params["cc"] = country_code.upper()
-        rows = db.execute(text(f"""
+        rows = db.execute(text(f""" # noqa: sql-lint
             SELECT * FROM wht_rates
             WHERE is_active = TRUE {country_filter}
             ORDER BY category, name

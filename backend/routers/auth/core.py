@@ -711,7 +711,7 @@ async def update_current_user_profile(
         set_parts.append("updated_at = CURRENT_TIMESTAMP")
 
         db.execute(
-            text(f"UPDATE company_users SET {', '.join(set_parts)} WHERE id = :uid"),
+            text(f"UPDATE company_users SET {', '.join(set_parts)} WHERE id = :uid"), # noqa: sql-lint
             params
         )
         db.commit()

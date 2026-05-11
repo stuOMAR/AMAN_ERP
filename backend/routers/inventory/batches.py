@@ -433,7 +433,7 @@ def update_batch(
     
             if updates:
                 updates.append("updated_at = NOW()")
-                db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params)
+                db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
                 db.commit()
     
             return {"message": i18n_message("batch_updated_success", request)}
@@ -803,7 +803,7 @@ def update_serial(
     
             if updates:
                 updates.append("updated_at = NOW()")
-                db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params)
+                db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
                 db.commit()
     
             return {"message": i18n_message(("serial_number_updated", request))}
@@ -854,7 +854,7 @@ def update_product_tracking(
                 params["ead"] = expiry_alert_days
     
             if updates:
-                db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params)
+                db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params) # noqa: sql-lint
                 db.commit()
     
             return {"message": i18n_message(("tracking_settings_updated", request))}

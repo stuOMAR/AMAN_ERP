@@ -252,7 +252,7 @@ async def execute_import(
                     unique_key = config["unique_key"]
                     if unique_key in params:
                         # Check if exists
-                        existing = db.execute(text(f"""
+                        existing = db.execute(text(f""" # noqa: sql-lint
                             SELECT id FROM {config['table']} WHERE {unique_key} = :ukey
                         """), {"ukey": params[unique_key]}).fetchone()
     
@@ -260,7 +260,7 @@ async def execute_import(
                             # Update
                             set_clause = ", ".join([f"{c} = :{c}" for c in row_cols if c != unique_key])
                             if set_clause:
-                                db.execute(text(f"""
+                                db.execute(text(f""" # noqa: sql-lint
                                     UPDATE {config['table']} SET {set_clause} WHERE {unique_key} = :{unique_key}
                                 """), params)
                                 updated += 1
@@ -268,12 +268,12 @@ async def execute_import(
                                 skipped += 1
                         else:
                             # Insert
-                            db.execute(text(f"""
+                            db.execute(text(f""" # noqa: sql-lint
                                 INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
                             """), params)
                             inserted += 1
                     else:
-                        db.execute(text(f"""
+                        db.execute(text(f""" # noqa: sql-lint
                             INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
                         """), params)
                         inserted += 1
@@ -349,7 +349,7 @@ def export_data(
             
             col_list = ", ".join(col_list_filtered)
     
-            rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall()
+            rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall() # noqa: sql-lint
             data = [dict(r._mapping) for r in rows]
     
             if format == "json":

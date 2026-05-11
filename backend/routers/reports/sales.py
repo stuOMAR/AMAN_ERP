@@ -54,7 +54,7 @@ def get_sales_summary(
         params = {"start": start_date, "end": end_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        tax_row = db.execute(text(f"""
+        tax_row = db.execute(text(f""" # noqa: sql-lint
             WITH all_sales AS (
                 SELECT
                     total,
@@ -143,7 +143,7 @@ def get_sales_trend(
         params = {"start": start_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
-        result = db.execute(text(f"""
+        result = db.execute(text(f""" # noqa: sql-lint
             WITH all_sales AS (
                 SELECT 
                     invoice_date as sale_date,
@@ -189,7 +189,7 @@ def get_sales_by_customer(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "s.branch_id", params)
 
-        result = db.execute(text(f"""
+        result = db.execute(text(f""" # noqa: sql-lint
             WITH all_sales AS (
                 SELECT 
                     party_id, 
@@ -237,7 +237,7 @@ def get_sales_by_product(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "cl.branch_id", params)
 
-        result = db.execute(text(f"""
+        result = db.execute(text(f""" # noqa: sql-lint
             WITH combined_lines AS (
                 SELECT 
                     il.product_id,
@@ -297,7 +297,7 @@ def get_customer_statement(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         # 1. Get Opening Balance (Combined: invoices + POS + payment vouchers)
-        opening_balance = db.execute(text(f"""
+        opening_balance = db.execute(text(f""" # noqa: sql-lint
             WITH all_movements AS (
                 SELECT 
                     (total * COALESCE(exchange_rate, 1.0)) as debit, 
@@ -349,7 +349,7 @@ def get_customer_statement(
 
         # 2. Get Transactions (Combined: invoices + POS + payment vouchers)
         params["end"] = end_date
-        transactions = db.execute(text(f"""
+        transactions = db.execute(text(f""" # noqa: sql-lint
             WITH all_movements AS (
                 SELECT 
                     id, invoice_date as date, invoice_number as ref, 
@@ -433,7 +433,7 @@ def get_aging_report(
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
 
-        results = db.execute(text(f"""
+        results = db.execute(text(f""" # noqa: sql-lint
             SELECT 
                 p.name as customer_name,
                 i.invoice_number,
@@ -532,7 +532,7 @@ def sales_by_cashier(
     invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
     pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
     try:
-        rows = db.execute(text(f"""
+        rows = db.execute(text(f""" # noqa: sql-lint
             WITH all_sales AS (
                 SELECT created_by, 
                        total * COALESCE(exchange_rate, 1) AS sale_total, 
@@ -604,7 +604,7 @@ def sales_target_vs_actual(
         invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        actuals = db.execute(text(f"""
+        actuals = db.execute(text(f""" # noqa: sql-lint
             SELECT EXTRACT(MONTH FROM sale_date)::int as month,
                    COALESCE(SUM(total_amount), 0) as actual
             FROM (

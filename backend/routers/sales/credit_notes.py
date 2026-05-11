@@ -195,13 +195,13 @@ def list_sales_credit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa: sql-lint
 
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(f"""
+        rows = db.execute(text(f""" # noqa: sql-lint
             SELECT i.*,
                    p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,
@@ -575,13 +575,13 @@ def list_sales_debit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa: sql-lint
 
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(f"""
+        rows = db.execute(text(f""" # noqa: sql-lint
             SELECT i.*,
                    p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,

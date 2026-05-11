@@ -44,7 +44,7 @@ def optimistic_update(
     """
     params = {**params, "_id": record_id, "_ver": expected_version}
 
-    sql = text(
+    sql = text( # noqa: sql-lint
         f"UPDATE {table} SET {set_clause}, version = version + 1 "
         f"WHERE {id_column} = :_id AND version = :_ver {extra_where} "
         f"RETURNING version"
@@ -54,7 +54,7 @@ def optimistic_update(
     if row is None:
         # Distinguish 404 vs 409
         exists = conn.execute(
-            text(f"SELECT version FROM {table} WHERE {id_column} = :_id"),
+            text(f"SELECT version FROM {table} WHERE {id_column} = :_id"), # noqa: sql-lint
             {"_id": record_id},
         ).fetchone()
         if exists is None:

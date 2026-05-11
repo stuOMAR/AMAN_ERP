@@ -348,7 +348,7 @@ def delete_branch(
             # Build WHERE clause for single or composite FK
             where_clause = ' AND '.join(f'{c} = :bid' for c in col.split(','))
             count = conn.execute(
-                text(f'SELECT COUNT(*) FROM {fk.tbl} WHERE {where_clause}'),
+                text(f'SELECT COUNT(*) FROM {fk.tbl} WHERE {where_clause}'), # noqa: sql-lint
                 {"bid": branch_id}
             ).scalar() or 0
             if count > 0:

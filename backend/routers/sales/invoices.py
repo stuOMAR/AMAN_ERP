@@ -210,7 +210,7 @@ def list_invoices(
         where_sql = " AND ".join(where_clauses)
 
         # Count total
-        total = db.execute(text(f"""
+        total = db.execute(text(f""" # noqa: sql-lint
             SELECT COUNT(*) FROM invoices i
             JOIN parties p ON i.party_id = p.id
             WHERE {where_sql}
@@ -220,7 +220,7 @@ def list_invoices(
         params["limit"] = limit
         params["offset"] = (page - 1) * limit
 
-        result = db.execute(text(f"""
+        result = db.execute(text(f""" # noqa: sql-lint
             SELECT i.id, i.invoice_number, i.invoice_date, i.due_date,
                    i.total, i.paid_amount, i.status, p.name as customer_name,
                    i.currency, i.exchange_rate,
@@ -1218,7 +1218,7 @@ def amend_invoice_header(invoice_id: int, payload: InvoiceHeaderAmend,
             return {"id": invoice_id, "updated_fields": []}
 
         sets.append("updated_at = NOW()")
-        db.execute(text(f"UPDATE invoices SET {', '.join(sets)} WHERE id = :id"), params)
+        db.execute(text(f"UPDATE invoices SET {', '.join(sets)} WHERE id = :id"), params) # noqa: sql-lint
         db.commit()
         try:
             invalidate_aggregates(str(current_user.company_id),

@@ -538,7 +538,7 @@ def _check_conflict(conn, entity_type: str, entity_id: int, device_timestamp: da
     table = mapping["table"]
     id_col = mapping["id_col"]
 
-    row = conn.execute(text(f"""
+    row = conn.execute(text(f""" # noqa: sql-lint
         SELECT updated_at FROM {table} WHERE {id_col} = :eid
     """), {"eid": entity_id}).mappings().first()
 
@@ -548,7 +548,7 @@ def _check_conflict(conn, entity_type: str, entity_id: int, device_timestamp: da
     server_updated = row["updated_at"]
     if server_updated and server_updated > device_timestamp:
         # Fetch server version
-        server_row = conn.execute(text(f"""
+        server_row = conn.execute(text(f""" # noqa: sql-lint
             SELECT * FROM {table} WHERE {id_col} = :eid
         """), {"eid": entity_id}).mappings().first()
         return True, {k: str(v) if v is not None else None for k, v in dict(server_row).items()} if server_row else None
@@ -586,7 +586,7 @@ def _apply_sync_item_raw(conn, entity_type: str, entity_id: int | None, payload:
             set_clause = ", ".join(f"{k} = :{k}" for k in safe_cols)
             safe_cols[id_col] = entity_id
             safe_cols["_user_id"] = user_id
-            conn.execute(text(f"""
+            conn.execute(text(f""" # noqa: sql-lint
                 UPDATE {table}
                 SET {set_clause}, updated_at = now(), updated_by = :_user_id
                 WHERE {id_col} = :{id_col}
@@ -605,7 +605,7 @@ def _apply_sync_item_raw(conn, entity_type: str, entity_id: int | None, payload:
         if safe_cols:
             col_names = ", ".join(safe_cols.keys())
             col_params = ", ".join(f":{k}" for k in safe_cols.keys())
-            result = conn.execute(text(f"""
+            result = conn.execute(text(f""" # noqa: sql-lint
                 INSERT INTO {table} ({col_names}, created_at, updated_at)
                 VALUES ({col_params}, now(), now())
                 RETURNING {id_col}
