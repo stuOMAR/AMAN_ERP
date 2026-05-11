@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { accountingAPI } from '../../utils/api'
-import { hasPermission } from '../../utils/auth'
+import { hasPermission, isAuthReady } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
