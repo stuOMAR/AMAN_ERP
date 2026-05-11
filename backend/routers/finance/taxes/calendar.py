@@ -87,7 +87,8 @@ def tax_calendar_summary(
         try:
             params = {}
             branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
-            row = db.execute(text(f""" # noqa: sql-lint
+            row = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT
                     COUNT(*) as total,
                     COUNT(*) FILTER (WHERE is_completed = false AND due_date >= CURRENT_DATE) as pending,

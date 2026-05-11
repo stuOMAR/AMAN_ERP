@@ -105,7 +105,8 @@ def resolve_display_currency(db, branch_scope: Any = None) -> dict[str, Any]:
             else:
                 default_filter = "AND 1=0"
         row = db.execute(
-            text(f""" # noqa: sql-lint
+            text( # noqa: sql-lint
+                        f"""
                 SELECT COALESCE(default_currency, :base) AS currency
                 FROM branches
                 WHERE is_active = TRUE {default_filter}

@@ -576,7 +576,8 @@ def get_held_orders(
         branch_scope = resolve_branch_scope(current_user, branch_id)
         params = {}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
                    COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
                    (SELECT COUNT(*) FROM pos_order_lines WHERE order_id = po.id) as items_count

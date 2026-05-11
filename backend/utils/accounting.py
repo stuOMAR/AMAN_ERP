@@ -103,7 +103,8 @@ def generate_sequential_number(db, prefix: str, table: str, column: str) -> str:
         {"k": lock_key},
     )
 
-    result = db.execute(text(f""" # noqa: sql-lint
+    result = db.execute(text( # noqa: sql-lint
+                f"""
         SELECT MAX(CAST(SUBSTRING({column} FROM '[0-9]+$') AS INTEGER))
         FROM {table} WHERE {column} LIKE :pattern
     """), {"pattern": f"{prefix}-%"}).scalar()

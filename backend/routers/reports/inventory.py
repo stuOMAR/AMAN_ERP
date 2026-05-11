@@ -68,7 +68,8 @@ def inventory_valuation_report(
         if warehouse_id:
             params["wh"] = warehouse_id
 
-        rows = db.execute(text(f""" # noqa: sql-lint
+        rows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT p.id, p.sku, p.product_name, p.selling_price,
                    COALESCE(SUM(i.quantity), 0) as total_qty,
                    w.warehouse_name
@@ -255,7 +256,8 @@ def cogs_report(
             branch_filter = "AND inv.branch_id = :branch_id"
             params["branch_id"] = branch_id
 
-        rows = db.execute(text(f""" # noqa: sql-lint
+        rows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT p.id, p.sku, p.product_name, p.cost_price,
                    SUM(ABS(il.quantity)) as sold_qty,
                    SUM(ABS(il.quantity) * COALESCE(il.unit_cost, p.cost_price, 0)) as cogs_total,
@@ -337,7 +339,8 @@ def product_profitability_report(
                     branch_rate = _dec(rate_val)
 
             params["branch_id"] = branch_id
-            rows = db.execute(text(f""" # noqa: sql-lint
+            rows = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT 
                     p.id as product_id,
                     p.product_name,
@@ -406,7 +409,8 @@ def product_profitability_report(
 
         else:
             # All branches: convert everything to base currency (SAR)
-            rows = db.execute(text(f""" # noqa: sql-lint
+            rows = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT 
                     p.id as product_id,
                     p.product_name,
@@ -502,7 +506,8 @@ def profitability_summary(
             branch_cur = base_cur
             branch_rate = Decimal('1')
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 COUNT(DISTINCT i.id) as invoice_count,
                 SUM(il.quantity) as total_qty,

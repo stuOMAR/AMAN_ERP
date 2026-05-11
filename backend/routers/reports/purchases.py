@@ -44,7 +44,8 @@ def get_purchases_summary(
         
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
-        summary = db.execute(text(f""" # noqa: sql-lint
+        summary = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 COUNT(*) as count,
                 COALESCE(SUM(total * COALESCE(exchange_rate, 1.0)), 0) as total_purchases,
@@ -84,7 +85,8 @@ def get_purchases_trend(
         
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 invoice_date as date,
                 COUNT(*) as count,
@@ -115,7 +117,8 @@ def get_purchases_by_supplier(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 p.name as name,
                 COUNT(i.id) as invoice_count,
@@ -151,7 +154,8 @@ def get_purchases_aging_report(
         # document allocation is not available for every document type, so the
         # report uses supplier/currency net balance and the oldest contributing
         # date while preserving reconciliation to AP/subledger totals.
-        results = db.execute(text(f""" # noqa: sql-lint
+        results = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 p.name as supplier_name,
                 NULL::text AS document_number,
@@ -222,7 +226,8 @@ def get_supplier_statement(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         # T036: Opening balance from supplier_subledger (includes all document types)
-        opening_balance = db.execute(text(f""" # noqa: sql-lint
+        opening_balance = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT (COALESCE(SUM(credit), 0) - COALESCE(SUM(debit), 0)) as balance
             FROM supplier_subledger
             WHERE party_id = :sid AND document_date < :start
@@ -231,7 +236,8 @@ def get_supplier_statement(
 
         # T036: Transactions from supplier_subledger (includes all document types)
         params["end"] = end_date
-        transactions = db.execute(text(f""" # noqa: sql-lint
+        transactions = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT
                 document_id as id,
                 document_date as date,

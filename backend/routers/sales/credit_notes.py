@@ -201,7 +201,8 @@ def list_sales_credit_notes(
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(f""" # noqa: sql-lint
+        rows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT i.*,
                    p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,
@@ -581,7 +582,8 @@ def list_sales_debit_notes(
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(f""" # noqa: sql-lint
+        rows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT i.*,
                    p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,

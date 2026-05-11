@@ -737,7 +737,8 @@ def widget_sales_summary(
         pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params, branch_param="pos_bid")
 
         # Total Sales
-        sales = db.execute(text(f""" # noqa: sql-lint
+        sales = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total,
                    COUNT(*) as count
             FROM invoices i
@@ -746,7 +747,8 @@ def widget_sales_summary(
         """), params).fetchone()
 
         # POS Sales
-        pos = db.execute(text(f""" # noqa: sql-lint
+        pos = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total,
                    COUNT(*) as count
             FROM pos_orders o
@@ -766,14 +768,16 @@ def widget_sales_summary(
         invoice_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params_prev, branch_param="bid")
         pos_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params_prev, branch_param="pos_bid")
 
-        prev_sales = db.execute(text(f""" # noqa: sql-lint
+        prev_sales = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total
             FROM invoices i
             WHERE i.invoice_type = 'sales' AND i.status != 'cancelled'
             AND i.invoice_date >= :start AND i.invoice_date <= :end {invoice_branch_filter_prev}
         """), params_prev).scalar() or 0
 
-        prev_pos = db.execute(text(f""" # noqa: sql-lint
+        prev_pos = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total
             FROM pos_orders o
             WHERE o.status = 'paid'
@@ -828,7 +832,8 @@ def widget_top_products(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, branch_param="bid")
         line_total_base_sql = document_amount_base_sql("il.total", "i")
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT p.product_name as name,
                    SUM(il.quantity) as qty,
                    SUM({line_total_base_sql}) as value
@@ -867,7 +872,8 @@ def widget_low_stock(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params, branch_param="bid")
         branch_join = "JOIN warehouses w ON inv.warehouse_id = w.id" if branch_filter else ""
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT p.id, p.product_name, p.sku, p.reorder_level,
                    COALESCE(inv_sum.total_qty, 0) - COALESCE(inv_sum.reserved_qty, 0) as current_stock
             FROM products p
@@ -930,7 +936,8 @@ def widget_pending_tasks(
 
         # Unpaid invoices (filter by branch_id)
         try:
-            unpaid = db.execute(text(f""" # noqa: sql-lint
+            unpaid = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT COUNT(*) as cnt, COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as total
                 FROM invoices WHERE status IN ('pending', 'partially_paid')
                 AND invoice_type = 'sales'
@@ -948,7 +955,8 @@ def widget_pending_tasks(
 
         # Pending purchase orders (filter by branch_id)
         try:
-            pending_po = db.execute(text(f""" # noqa: sql-lint
+            pending_po = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT COUNT(*) as cnt FROM purchase_orders
                 WHERE status = 'pending'
                 {scope_clause('branch_id')}
@@ -967,7 +975,8 @@ def widget_pending_tasks(
         try:
             approval_scope = scope_clause('e.branch_id')
             if approval_scope:
-                pending_approvals = db.execute(text(f""" # noqa: sql-lint
+                pending_approvals = db.execute(text( # noqa: sql-lint
+                            f"""
                     SELECT COUNT(*) FROM approval_requests ar
                     LEFT JOIN employees e ON e.user_id = ar.requested_by
                     WHERE ar.status = 'pending'
@@ -988,7 +997,8 @@ def widget_pending_tasks(
 
         # Leave requests pending — JOIN employees to honour branch scope.
         try:
-            pending_leaves = db.execute(text(f""" # noqa: sql-lint
+            pending_leaves = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT COUNT(*) FROM leave_requests lr
                 JOIN employees e ON e.id = lr.employee_id
                 WHERE lr.status = 'pending'
@@ -1005,7 +1015,8 @@ def widget_pending_tasks(
 
         # Overdue invoices (filter by branch_id)
         try:
-            overdue = db.execute(text(f""" # noqa: sql-lint
+            overdue = db.execute(text( # noqa: sql-lint
+                        f"""
                 SELECT COUNT(*) as cnt FROM invoices
                 WHERE status IN ('pending', 'partially_paid')
                 AND due_date < CURRENT_DATE AND invoice_type = 'sales'
@@ -1044,7 +1055,8 @@ def widget_cash_flow(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", params, branch_param="bid")
 
         # Cash inflows (receipts) by day
-        inflows = db.execute(text(f""" # noqa: sql-lint
+        inflows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT t.transaction_date as dt,
                    COALESCE(SUM(t.amount), 0) as total
             FROM treasury_transactions t
@@ -1060,7 +1072,8 @@ def widget_cash_flow(
             inflow_map[d.isoformat()] = float(r.total)
 
         # Cash outflows (payments) by day
-        outflows = db.execute(text(f""" # noqa: sql-lint
+        outflows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT t.transaction_date as dt,
                    COALESCE(SUM(t.amount), 0) as total
             FROM treasury_transactions t

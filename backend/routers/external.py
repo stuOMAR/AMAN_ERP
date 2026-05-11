@@ -426,7 +426,8 @@ def list_wht_rates(
         if country_code:
             country_filter = "AND (country_code = :cc OR country_code IS NULL)"
             params["cc"] = country_code.upper()
-        rows = db.execute(text(f""" # noqa: sql-lint
+        rows = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT * FROM wht_rates
             WHERE is_active = TRUE {country_filter}
             ORDER BY category, name

@@ -1111,7 +1111,8 @@ async def get_expenses_by_type(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 expense_type,
                 COUNT(*) as count,
@@ -1153,7 +1154,8 @@ async def get_expenses_by_cost_center(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 COALESCE(cc.center_name, 'غير محدد') as cost_center_name,
                 COUNT(*) as count,
@@ -1189,7 +1191,8 @@ async def get_monthly_expenses(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT 
                 EXTRACT(MONTH FROM expense_date) as month,
                 COUNT(*) as count,

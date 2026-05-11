@@ -1127,7 +1127,8 @@ def _compute_total_allocation(db, employee_id: int, start_date, end_date, exclud
     if exclude_id:
         exclude_clause = "AND ra.id != :exclude_id"
         params["exclude_id"] = exclude_id
-    row = db.execute(text(f""" # noqa: sql-lint
+    row = db.execute(text( # noqa: sql-lint
+                f"""
         SELECT COALESCE(SUM(ra.allocation_percent), 0) AS total_pct
         FROM   resource_allocations ra
         WHERE  ra.employee_id = :eid

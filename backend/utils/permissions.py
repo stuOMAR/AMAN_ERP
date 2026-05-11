@@ -495,7 +495,8 @@ def validate_treasury_account_access(
     from sqlalchemy import text
 
     active_filter = "" if allow_inactive else " AND is_active = TRUE"
-    row = db.execute(text(f""" # noqa: sql-lint
+    row = db.execute(text( # noqa: sql-lint
+                f"""
         SELECT id, branch_id, gl_account_id, currency, account_type, current_balance
         FROM treasury_accounts
         WHERE id = :id{active_filter}

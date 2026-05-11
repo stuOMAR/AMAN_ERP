@@ -210,7 +210,8 @@ def list_invoices(
         where_sql = " AND ".join(where_clauses)
 
         # Count total
-        total = db.execute(text(f""" # noqa: sql-lint
+        total = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT COUNT(*) FROM invoices i
             JOIN parties p ON i.party_id = p.id
             WHERE {where_sql}
@@ -220,7 +221,8 @@ def list_invoices(
         params["limit"] = limit
         params["offset"] = (page - 1) * limit
 
-        result = db.execute(text(f""" # noqa: sql-lint
+        result = db.execute(text( # noqa: sql-lint
+                    f"""
             SELECT i.id, i.invoice_number, i.invoice_date, i.due_date,
                    i.total, i.paid_amount, i.status, p.name as customer_name,
                    i.currency, i.exchange_rate,
