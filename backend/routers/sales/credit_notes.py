@@ -27,6 +27,7 @@ from utils.accounting import (
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from services.tax_engine import resolve_line_tax
 from utils.party_balance import update_party_site_balance
+import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -39,6 +40,118 @@ _D4 = Decimal("0.0001")
 
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _json_param(value):
+    if value is None:
+        return None
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _line_key(product_id, unit_price, tax_rate) -> tuple[int, Decimal, Decimal]:
+    return (
+        int(product_id),
+        _dec(unit_price).quantize(_D2, ROUND_HALF_UP),
+        _dec(tax_rate).quantize(_D2, ROUND_HALF_UP),
+    )
+
+
+def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
+    raw_tax = Decimal("0")
+    for row in original_rows:
+        gross = (_dec(row.quantity) * _dec(row.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        taxable = gross - _dec(getattr(row, "discount", 0))
+        raw_tax += (taxable * _dec(row.tax_rate) / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+    if raw_tax <= 0:
+        return Decimal("1")
+    factor = (_dec(invoice_tax_amount) / raw_tax)
+    return max(Decimal("0"), min(Decimal("1"), factor))
+
+
+def _reversal_taxable_amount(original_line, quantity) -> Decimal:
+    original_qty = _dec(original_line.quantity)
+    if original_qty <= 0:
+        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+    gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
+    taxable = gross - _dec(getattr(original_line, "discount", 0))
+    ratio = _dec(quantity) / original_qty
+    return (taxable * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _reversal_discount_amount(original_line, quantity) -> Decimal:
+    original_qty = _dec(original_line.quantity)
+    if original_qty <= 0:
+        return Decimal("0")
+    ratio = _dec(quantity) / original_qty
+    return (_dec(getattr(original_line, "discount", 0)) * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _load_sales_invoice_reverse_context(db, invoice_id: int, party_id: int):
+    orig = db.execute(text("""
+        SELECT id, party_id, total, tax_amount, invoice_type, branch_id, invoice_date
+        FROM invoices
+        WHERE id = :id
+    """), {"id": invoice_id}).fetchone()
+    if not orig:
+        raise HTTPException(**http_error(400, "linked_invoice_not_found"))
+    if int(orig.party_id) != int(party_id):
+        raise HTTPException(**http_error(400, "invoice_not_for_customer"))
+    if orig.invoice_type not in ("sales",):
+        raise HTTPException(**http_error(400, "credit_note_must_link_sales_invoice", request))
+
+    rows = db.execute(text("""
+        SELECT product_id, quantity, unit_price, tax_rate, tax_rate_id, applied_taxes, discount
+        FROM invoice_lines
+        WHERE invoice_id = :id
+    """), {"id": invoice_id}).fetchall()
+    by_product: dict[int, list] = {}
+    for row in rows:
+        if row.product_id is not None:
+            by_product.setdefault(int(row.product_id), []).append(row)
+
+    credited = db.execute(text("""
+        SELECT il.product_id, il.unit_price, il.tax_rate, COALESCE(SUM(il.quantity), 0) AS qty
+        FROM invoices cn
+        JOIN invoice_lines il ON il.invoice_id = cn.id
+        WHERE cn.related_invoice_id = :id
+          AND cn.invoice_type = 'sales_credit_note'
+          AND COALESCE(cn.status, '') != 'cancelled'
+          AND il.product_id IS NOT NULL
+        GROUP BY il.product_id, il.unit_price, il.tax_rate
+    """), {"id": invoice_id}).fetchall()
+
+    returned = db.execute(text("""
+        SELECT srl.product_id, srl.unit_price, srl.tax_rate, COALESCE(SUM(srl.quantity), 0) AS qty
+        FROM sales_returns sr
+        JOIN sales_return_lines srl ON srl.return_id = sr.id
+        WHERE sr.invoice_id = :id
+          AND COALESCE(sr.status, '') != 'cancelled'
+          AND srl.product_id IS NOT NULL
+        GROUP BY srl.product_id, srl.unit_price, srl.tax_rate
+    """), {"id": invoice_id}).fetchall()
+
+    used_qty = {
+        _line_key(r.product_id, r.unit_price, r.tax_rate): _dec(r.qty)
+        for r in credited
+    }
+    for row in returned:
+        key = _line_key(row.product_id, row.unit_price, row.tax_rate)
+        used_qty[key] = used_qty.get(key, Decimal("0")) + _dec(row.qty)
+
+    return orig, by_product, used_qty, _line_tax_factor(orig.tax_amount, rows)
+
+
+def _original_line_for_reversal(original_lines: dict[int, list], product_id: int, unit_price) -> Any:
+    candidates = original_lines.get(int(product_id), [])
+    if not candidates:
+        raise HTTPException(**http_error(400, "item_not_in_invoice", request))
+    if len(candidates) == 1:
+        return candidates[0]
+    price = _dec(unit_price)
+    matched = [row for row in candidates if _dec(row.unit_price) == price]
+    if len(matched) == 1:
+        return matched[0]
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity", request))
 
 
 # ==================== CREDIT NOTES (إشعار دائن) ====================
@@ -181,17 +294,14 @@ def create_sales_credit_note(
         if not party_id:
             raise HTTPException(**http_error(400, "customer_required"))
 
-        # Validate related invoice exists and belongs to this customer
+        original_invoice = None
+        original_lines = {}
+        already_reversed_qty = {}
+        original_tax_factor = Decimal("1")
         if related_invoice_id:
-            orig = db.execute(text(
-                "SELECT id, party_id, total, invoice_type FROM invoices WHERE id = :id"
-            ), {"id": related_invoice_id}).fetchone()
-            if not orig:
-                raise HTTPException(**http_error(400, "linked_invoice_not_found"))
-            if orig.party_id != party_id:
-                raise HTTPException(**http_error(400, "invoice_not_for_customer"))
-            if orig.invoice_type not in ('sales',):
-                raise HTTPException(status_code=400, detail="يجب ربط الإشعار بفاتورة مبيعات")
+            original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_sales_invoice_reverse_context(
+                db, related_invoice_id, party_id
+            )
 
         # Calculate totals
         inv_date = data.get("invoice_date", str(date.today()))
@@ -204,7 +314,16 @@ def create_sales_credit_note(
         exchange_rate = _dec(data.get("exchange_rate", 1))
         if exchange_rate <= 0:
             raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
-        branch_id = validate_branch_access(current_user, data.get("branch_id"))
+        requested_branch_id = data.get("branch_id")
+        if original_invoice:
+            if (
+                requested_branch_id
+                and original_invoice.branch_id is not None
+                and int(requested_branch_id) != int(original_invoice.branch_id)
+            ):
+                raise HTTPException(**http_error(400, "credit_note_branch_mismatch", request))
+            requested_branch_id = original_invoice.branch_id
+        branch_id = validate_branch_access(current_user, requested_branch_id)
 
         subtotal = Decimal("0")
         tax_total = Decimal("0")
@@ -216,14 +335,36 @@ def create_sales_credit_note(
             price = _dec(line.get("unit_price", 0))
             disc = _dec(line.get("discount", 0))
             product_id = line.get("product_id")
-            if product_id and branch_id:
+            tax_rate_id = None
+            applied_taxes = None
+            if original_invoice:
+                if not product_id:
+                    raise HTTPException(**http_error(400, "item_required_for_credit_note", request))
+                original_line = _original_line_for_reversal(original_lines, int(product_id), price)
+                reverse_key = _line_key(original_line.product_id, original_line.unit_price, original_line.tax_rate)
+                already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
+                available_qty = _dec(original_line.quantity) - already_qty
+                if qty > available_qty:
+                    raise HTTPException(**http_error(400, "credit_note_qty_exceeds", request))
+                tax_rate = _dec(original_line.tax_rate)
+                tax_rate_id = original_line.tax_rate_id
+                applied_taxes = original_line.applied_taxes
+                price = _dec(original_line.unit_price)
+                disc = _reversal_discount_amount(original_line, qty)
+                line_net = _reversal_taxable_amount(original_line, qty)
+                already_reversed_qty[reverse_key] = already_qty + qty
+            elif product_id and branch_id:
                 tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
                 tax_rate = tax_info["tax_rate"]
+                tax_rate_id = tax_info.get("tax_rate_id")
+                line_gross = qty * price
+                line_net = line_gross - disc
             else:
                 tax_rate = _dec(line.get("tax_rate", 0))
-            line_gross = qty * price
-            line_net = line_gross - disc
-            line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+                line_gross = qty * price
+                line_net = line_gross - disc
+            tax_factor = original_tax_factor if original_invoice else Decimal("1")
+            line_tax = (line_net * tax_rate / Decimal("100") * tax_factor).quantize(_D2, ROUND_HALF_UP)
             line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
 
             subtotal += line_net
@@ -235,6 +376,8 @@ def create_sales_credit_note(
                 "quantity": qty,
                 "unit_price": price,
                 "tax_rate": tax_rate,
+                "tax_rate_id": tax_rate_id,
+                "applied_taxes": applied_taxes,
                 "discount": disc,
                 "total": line_total,
             })
@@ -269,12 +412,20 @@ def create_sales_credit_note(
         # Insert lines
         for cl in computed_lines:
             db.execute(text("""
-                INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, tax_rate, discount, total)
-                VALUES (:inv, :prod, :desc, :qty, :price, :tax, :disc, :total)
+                INSERT INTO invoice_lines (
+                    invoice_id, product_id, description, quantity, unit_price,
+                    tax_rate, tax_rate_id, applied_taxes, discount, total
+                )
+                VALUES (
+                    :inv, :prod, :desc, :qty, :price,
+                    :tax, :tax_rate_id, CAST(:applied_taxes AS jsonb), :disc, :total
+                )
             """), {
                 "inv": note_id, "prod": cl["product_id"],
                 "desc": cl["description"], "qty": cl["quantity"],
                 "price": cl["unit_price"], "tax": cl["tax_rate"],
+                "tax_rate_id": cl["tax_rate_id"],
+                "applied_taxes": _json_param(cl["applied_taxes"]),
                 "disc": cl["discount"], "total": cl["total"],
             })
 
@@ -285,7 +436,7 @@ def create_sales_credit_note(
         acc_vat = get_mapped_account_id(db, "acc_map_vat_out")
 
         if not acc_ar or not acc_sales:
-            raise HTTPException(status_code=400, detail="إعدادات الحسابات غير مكتملة (AR / Sales Revenue)")
+            raise HTTPException(**http_error(400, "ar_sales_revenue_accounts_incomplete", request))
 
         gl_sub = (subtotal * exchange_rate).quantize(_D4, ROUND_HALF_UP)
         gl_tax = (tax_total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
@@ -370,7 +521,7 @@ def create_sales_credit_note(
         return {
             "success": True, "id": note_id, "invoice_number": inv_num,
             "journal_entry_id": je_id, "journal_entry_number": je_num,
-            "message": f"تم إنشاء الإشعار الدائن {inv_num} بنجاح",
+            "message": i18n_message("credit_note_created_number", request),
         }
     except HTTPException:
         raise
@@ -614,7 +765,7 @@ def create_sales_debit_note(
         acc_vat = get_mapped_account_id(db, "acc_map_vat_out")
 
         if not acc_ar or not acc_sales:
-            raise HTTPException(status_code=400, detail="إعدادات الحسابات غير مكتملة (AR / Sales Revenue)")
+            raise HTTPException(**http_error(400, "ar_sales_revenue_accounts_incomplete", request))
 
         gl_sub = (subtotal * exchange_rate).quantize(_D4, ROUND_HALF_UP)
         gl_tax = (tax_total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
@@ -684,7 +835,7 @@ def create_sales_debit_note(
         return {
             "success": True, "id": note_id, "invoice_number": inv_num,
             "journal_entry_id": je_id, "journal_entry_number": je_num,
-            "message": f"تم إنشاء الإشعار المدين {inv_num} بنجاح",
+            "message": i18n_message("debit_note_created_number", request),
         }
     except HTTPException:
         raise

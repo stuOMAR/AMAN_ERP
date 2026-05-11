@@ -80,7 +80,7 @@ async def create_custom_report(
         }).scalar()
         
         db.commit()
-        return {"success": True, "id": report_id, "message": "تم حفظ التقرير بنجاح"}
+        return {"success": True, "id": report_id, "message": i18n_message("report_saved_success", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error saving report: {e}")
@@ -111,7 +111,7 @@ async def get_custom_report(report_id: int, current_user: dict = Depends(get_cur
     try:
         report = db.execute(text("SELECT * FROM custom_reports WHERE id = :id"), {"id": report_id}).fetchone()
         if not report:
-            raise HTTPException(status_code=404, detail="التقرير غير موجود")
+            raise HTTPException(**http_error(404, ("report_not_found", request)))
             
         config_dict = report.config if isinstance(report.config, dict) else json.loads(report.config)
         config = CustomReportConfig(**config_dict)
@@ -132,7 +132,7 @@ async def delete_custom_report(report_id: int, current_user: dict = Depends(get_
     try:
         db.execute(text("DELETE FROM custom_reports WHERE id = :id"), {"id": report_id})
         db.commit()
-        return {"success": True, "message": "تم حذف التقرير"}
+        return {"success": True, "message": i18n_message("report_deleted_success", request)}
     finally:
         db.close()
 

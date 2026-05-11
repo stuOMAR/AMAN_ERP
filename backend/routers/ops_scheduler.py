@@ -8,7 +8,9 @@ from __future__ import annotations
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -25,7 +27,7 @@ async def list_scheduler_jobs():
 
 
 @router.post("/jobs/{job_id}/run-now")
-async def run_job_now(job_id: str):
+async def run_job_now(job_id: str, request: Request):
     """Force-run a scheduled job. Gated by ops.scheduler.admin. Audited."""
     from services.scheduler import trigger_job
     from database import get_tenant_db
@@ -34,7 +36,7 @@ async def run_job_now(job_id: str):
     try:
         result = await trigger_job(job_id)
         if not result:
-            raise HTTPException(404, f"Job {job_id} not found")
+            raise HTTPException(**http_error(404, "scheduler_job_not_found", request, job_id=job_id))
 
         # Audit
         try:
@@ -55,4 +57,4 @@ async def run_job_now(job_id: str):
     except HTTPException:
         raise
     except Exception as exc:
-        raise HTTPException(500, f"Failed to trigger job: {exc}")
+        raise HTTPException(**http_error(500, "scheduler_job_trigger_failed", request))

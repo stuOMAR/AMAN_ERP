@@ -132,7 +132,7 @@ def resolve_item_price(
         )
 
         if price is None:
-            raise HTTPException(status_code=404, detail="pricelist.no_price")
+            raise HTTPException(**http_error(404, "pricelistno_price", request))
 
         return {"price": str(price), "level": level}
     finally:

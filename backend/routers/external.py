@@ -144,7 +144,7 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
             "id": row,
             "api_key": raw_key,
             "prefix": key_prefix,
-            "message": "احفظ المفتاح الآن — لن يظهر مرة أخرى"
+            "message": i18n_message("api_key_save_warning", request)
         }
 
 
@@ -158,7 +158,7 @@ def revoke_api_key(key_id: int, current_user=Depends(get_current_user)):
             action="revoke", resource_type="api_keys",
             resource_id=str(key_id), details={}
         )
-        return {"message": "تم إلغاء المفتاح"}
+        return {"message": i18n_message("api_key_revoked_success", request)}
 
 
 # ======================== API-002: Webhooks ========================
@@ -178,12 +178,12 @@ def list_webhooks(current_user=Depends(get_current_user)):
 
 
 @router.post("/webhooks", status_code=201, dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
-def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
+def create_webhook(data: WebhookCreate, request: Request, current_user=Depends(get_current_user)):
     """Create Webhook."""
     # Validate events
     invalid = [e for e in data.events if e not in WEBHOOK_EVENTS]
     if invalid:
-        raise HTTPException(400, f"أحداث غير معروفة: {invalid}")
+        raise HTTPException(**http_error(400, "zatca_unknown_events", request, events=", ".join(invalid)))
 
     try:
         validate_webhook_url(data.url)
@@ -211,7 +211,7 @@ def create_webhook(data: WebhookCreate, current_user=Depends(get_current_user)):
             action="create", resource_type="webhook",
             resource_id=str(row), details={"name": data.name, "url": data.url}
         )
-        return {"id": row, "secret": auto_secret, "message": "تم إنشاء الـ webhook"}
+        return {"id": row, "secret": auto_secret, "message": i18n_message("webhook_created", request)}
 
 
 @router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
@@ -243,7 +243,7 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
             action="update", resource_type="webhook",
             resource_id=str(webhook_id), details={k: v for k, v in updates.items() if k != "id"}
         )
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
 
 
 @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
@@ -256,7 +256,7 @@ def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
             action="delete", resource_type="webhook",
             resource_id=str(webhook_id), details={}
         )
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
 
 
 @router.get("/webhooks/{webhook_id}/logs", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=List[Dict[str, Any]])
@@ -275,6 +275,7 @@ def get_webhook_logs(webhook_id: int, limit: int = 50, current_user=Depends(get_
 @router.post("/zatca/generate-qr", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
 def generate_qr_code(
     body: ZatcaRequest,
+    request: Request,
     current_user=Depends(get_current_user)
 ):
     """Generate ZATCA QR code for an invoice."""
@@ -336,7 +337,7 @@ def generate_qr_code(
         except Exception:
             pass
             logger.exception("ZATCA QR generation failed")
-            raise HTTPException(500, "خطأ في توليد QR")
+            raise HTTPException(**http_error(500, "qr_generation_error", request))
 
 
 @router.post("/zatca/generate-keypair", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
@@ -363,13 +364,13 @@ def generate_keypair(current_user=Depends(get_current_user)):
                 """), {"key": key, "val": val})
 
         return {
-            "message": "تم توليد مفتاح التوقيع الرقمي",
+            "message": i18n_message("signing_key_generated", request),
             "public_key": public_pem
         }
 
 
 @router.get("/zatca/verify/{invoice_id}", dependencies=[Depends(require_permission(["sales.view", "accounting.view"]))], response_model=Dict[str, Any])
-def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
+def verify_invoice_qr(invoice_id: int, request: Request, current_user=Depends(get_current_user)):
     """Verify a ZATCA QR code and signature for an invoice."""
     with transactional(current_user.company_id) as db:
         inv = db.execute(text("""
@@ -378,7 +379,7 @@ def verify_invoice_qr(invoice_id: int, current_user=Depends(get_current_user)):
         """), {"id": invoice_id}).fetchone()
 
         if not inv or not inv.zatca_hash:
-            raise HTTPException(404, "لم يتم توليد بيانات ZATCA لهذه الفاتورة")
+            raise HTTPException(**http_error(404, "zatca_data_not_found", request))
 
         # Branch access validation
         if inv.branch_id:
@@ -463,7 +464,7 @@ def calculate_wht(data: WHTCalculateRequest, current_user=Depends(get_current_us
     with transactional(current_user.company_id) as db:
         branch_id = validate_branch_access(current_user, data.branch_id)
         if branch_id is None:
-            raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+            raise HTTPException(**http_error(400, ("branch_required", request)))
         rate_row = db.execute(text("SELECT rate, country_code FROM wht_rates WHERE id = :id AND is_active = TRUE"),
                               {"id": data.wht_rate_id}).fetchone()
         if not rate_row:
@@ -472,7 +473,7 @@ def calculate_wht(data: WHTCalculateRequest, current_user=Depends(get_current_us
             branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
             branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
             if rate_row.country_code.upper() != branch_cc:
-                raise HTTPException(status_code=400, detail="معدل ال withholding لا يتطابق مع دولة الفرع")
+                raise HTTPException(**http_error(400, "wht_rate_not_found", request))
 
         wht_rate = _dec(rate_row.rate)
         gross_amount = _dec(data.gross_amount)
@@ -497,7 +498,7 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
         try:
             branch_id = validate_branch_access(current_user, data.branch_id)
             if branch_id is None:
-                raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+                raise HTTPException(**http_error(400, ("branch_required", request)))
             idempotency_key = require_idempotency_key(
                 request,
                 operation="WHT transaction",
@@ -524,7 +525,58 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
                 branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
                 branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
                 if rate_row.country_code.upper() != branch_cc:
-                    raise HTTPException(status_code=400, detail="معدل ال withholding لا يتطابق مع دولة الفرع")
+                    raise HTTPException(**http_error(400, "wht_rate_not_found", request))
+
+            supplier = db.execute(text("""
+                SELECT id, branch_id
+                FROM parties
+                WHERE id = :sid
+                  AND COALESCE(is_supplier, FALSE) = TRUE
+            """), {"sid": data.supplier_id}).fetchone()
+            if not supplier:
+                raise HTTPException(**http_error(400, "supplier_not_found_or_inactive", request))
+            if supplier.branch_id is not None and int(supplier.branch_id) != int(branch_id):
+                raise HTTPException(**http_error(400, "supplier_not_in_selected_branch", request))
+
+            if data.invoice_id:
+                invoice = db.execute(text("""
+                    SELECT id, party_id, branch_id, invoice_type, total
+                    FROM invoices
+                    WHERE id = :id
+                """), {"id": data.invoice_id}).fetchone()
+                if not invoice:
+                    raise HTTPException(**http_error(404, "withholding_invoice_not_found", request))
+                if invoice.invoice_type != "purchase":
+                    raise HTTPException(**http_error(400, "withholding_only_purchase_invoices", request))
+                if int(invoice.party_id) != int(data.supplier_id):
+                    raise HTTPException(**http_error(400, "invoice_not_from_selected_supplier", request))
+                if invoice.branch_id is not None and int(invoice.branch_id) != int(branch_id):
+                    raise HTTPException(**http_error(400, "invoice_not_in_selected_branch", request))
+
+            if data.payment_id:
+                payment = db.execute(text("""
+                    SELECT id, party_id, branch_id, party_type, amount
+                    FROM payment_vouchers
+                    WHERE id = :id
+                """), {"id": data.payment_id}).fetchone()
+                if not payment:
+                    raise HTTPException(**http_error(404, "withholding_payment_not_found", request))
+                if payment.party_type != "supplier":
+                    raise HTTPException(**http_error(400, "withholding_only_supplier_payments", request))
+                if int(payment.party_id) != int(data.supplier_id):
+                    raise HTTPException(**http_error(400, "invoice_not_from_selected_supplier", request))
+                if payment.branch_id is not None and int(payment.branch_id) != int(branch_id):
+                    raise HTTPException(**http_error(400, "invoice_not_in_selected_branch", request))
+                if data.invoice_id:
+                    allocation = db.execute(text("""
+                        SELECT 1
+                        FROM payment_allocations
+                        WHERE voucher_id = :pay_id
+                          AND invoice_id = :inv_id
+                        LIMIT 1
+                    """), {"pay_id": data.payment_id, "inv_id": data.invoice_id}).fetchone()
+                    if not allocation:
+                        raise HTTPException(**http_error(400, "batch_not_assigned_to_invoice", request))
 
             wht_rate = _dec(rate_row.rate)
             gross_amount = _dec(data.gross_amount)
@@ -546,10 +598,7 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
                 ap_account_id = get_mapped_account_id(db, "acc_map_ap")
                 withholding_account_id = get_mapped_account_id(db, "acc_map_withholding_tax")
                 if not ap_account_id or not withholding_account_id:
-                    raise HTTPException(
-                        status_code=400,
-                        detail="حسابات الذمم الدائنة/ضريبة الاستقطاع غير مهيأة في الإعدادات",
-                    )
+                    raise HTTPException(**http_error(400, "ap_wht_accounts_not_configured", request))
 
             # Generate certificate number
             cert_num = f"WHT-{datetime.now().year}-{datetime.now().strftime('%m%d%H%M%S')}"
@@ -702,7 +751,7 @@ def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
         from reportlab.pdfgen import canvas
         from reportlab.lib.units import cm
     except ImportError:
-        raise HTTPException(status_code=500, detail="reportlab not installed")
+        raise HTTPException(**http_error(500, "reportlab_not_installed", request))
     from fastapi.responses import StreamingResponse
 
     with transactional(current_user.company_id) as db:

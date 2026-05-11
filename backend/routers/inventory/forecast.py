@@ -101,7 +101,7 @@ def get_forecast(
             {"fid": forecast_id},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Forecast not found")
+            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
 
         forecast = dict(row._mapping)
 
@@ -141,7 +141,7 @@ def adjust_forecast(
             {"fid": forecast_id},
         ).fetchone()
         if not exists:
-            raise HTTPException(status_code=404, detail="Forecast not found")
+            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
 
         result = manual_adjust(
             db,

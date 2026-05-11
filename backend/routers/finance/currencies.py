@@ -222,12 +222,12 @@ def create_currency(
         # Validate currency code format (ISO 4217: 3 uppercase letters)
         import re
         if not re.match(r'^[A-Z]{3}$', currency.code):
-            raise HTTPException(status_code=400, detail="كود العملة يجب أن يكون 3 أحرف إنجليزية كبيرة (مثال: USD, EUR, SAR)")
+            raise HTTPException(**http_error(400, "currency_code_must_be_3_chars", request))
 
         # Check if exists
         existing = db.execute(text("SELECT 1 FROM currencies WHERE code = :code"), {"code": currency.code}).fetchone()
         if existing:
-            raise HTTPException(status_code=400, detail="Currency code already exists")
+            raise HTTPException(**http_error(400, "currency_code_already_exists", request))
 
         # If is_base is True, unset other base currencies
         if currency.is_base:
@@ -283,7 +283,7 @@ def update_currency(
         
         result = db.execute(query, params).mappings().fetchone()
         if not result:
-            raise HTTPException(status_code=404, detail="Currency not found")
+            raise HTTPException(**http_error(404, "currency_not_found", request))
             
         db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
@@ -308,9 +308,9 @@ def delete_currency(
         # Don't delete base currency
         check = db.execute(text("SELECT is_base, code FROM currencies WHERE id = :id"), {"id": currency_id}).fetchone()
         if not check:
-            raise HTTPException(status_code=404, detail="العملة غير موجودة")
+            raise HTTPException(**http_error(404, "currency_not_found", request))
         if check.is_base:
-            raise HTTPException(status_code=400, detail="Cannot delete base currency")
+            raise HTTPException(**http_error(400, "cannot_delete_base_currency", request))
 
         # Check if currency is used in any transactions
         code = check.code
@@ -325,7 +325,7 @@ def delete_currency(
             try:
                 used = db.execute(text(check_query), {"code": code}).fetchone()
                 if used:
-                    raise HTTPException(status_code=400, detail=f"لا يمكن حذف العملة لأنها مستخدمة في {table_name}")
+                    raise HTTPException(status_code=400, detail=i18n_message("cannot_delete_currency_in_use", request))
             except HTTPException:
                 raise
             except Exception:
@@ -337,7 +337,7 @@ def delete_currency(
                      action="delete_currency", resource_type="currency",
                      resource_id=str(currency_id),
                      details={"code": code}, request=request)
-        return {"message": "Currency deleted"}
+        return {"message": i18n_message(("currency_deleted", request))}
     finally:
         db.close()
 
@@ -359,7 +359,7 @@ def add_exchange_rate(
         # Check currency exists
         curr = db.execute(text("SELECT code FROM currencies WHERE id = :id"), {"id": rate_data.currency_id}).fetchone()
         if not curr:
-            raise HTTPException(status_code=404, detail="Currency not found")
+            raise HTTPException(**http_error(404, "currency_not_found", request))
 
         # Insert exchange rate (immutable - no update allowed by trigger)
         query = text("""
@@ -512,12 +512,12 @@ def create_revaluation(
     try:
         # Validate new rate
         if req.new_rate is None or req.new_rate <= 0:
-            raise HTTPException(status_code=400, detail="سعر الصرف الجديد يجب أن يكون أكبر من صفر")
+            raise HTTPException(**http_error(400, "exchange_rate_must_be_greater_than_zero", request))
 
         # 1. Get Currency Info
         currency = db.execute(text("SELECT * FROM currencies WHERE id = :id"), {"id": req.currency_id}).fetchone()
         if not currency:
-            raise HTTPException(status_code=404, detail="Currency not found")
+            raise HTTPException(**http_error(404, "currency_not_found", request))
         
         code = currency.code
 
@@ -532,13 +532,13 @@ def create_revaluation(
               AND status = 'posted'
         """), {"currency_id": req.currency_id, "rate_date": req.rate_date}).fetchone()
         if existing_reval:
-            raise HTTPException(status_code=400, detail=f"تم إجراء إعادة تقييم لهذه العملة ({code}) بنفس التاريخ. يرجى إلغاء السابقة أولاً.")
+            raise HTTPException(status_code=400, detail=i18n_message("revaluation_already_done", request))
 
         # 2. Get all accounts with this currency
         accounts = db.execute(text("SELECT id, name, balance FROM accounts WHERE currency = :code"), {"code": code}).fetchall()
         
         if not accounts:
-            return {"message": "No accounts found with this currency", "entries_created": 0}
+            return {"message": i18n_message("no_accounts_with_currency", request), "entries_created": 0}
 
         # 3. Get GL Account IDs for Unrealized Gain/Loss
         # FIX (T1.2): resolve via (a) company_settings mapping (acc_map_ufx_gain/loss),
@@ -669,7 +669,7 @@ def create_revaluation(
                 journal_entry_lines.append({"account_id": gain_id, "debit": 0, "credit": abs_diff, "desc": f"Unrealized Gain - {acc.name}"})
 
         if not journal_entry_lines:
-            return {"message": "No revaluation needed", "entries_created": 0}
+            return {"message": i18n_message("no_revaluation_needed", request), "entries_created": 0}
 
         # 5. FIN-001: Create Journal Entry via centralized GL service
         try:
@@ -713,7 +713,7 @@ def create_revaluation(
                          details={"new_rate": float(req.new_rate), "je_id": je_id, "lines": len(journal_entry_lines)}, request=request)
             
             return {
-                "message": "Revaluation completed successfully",
+                "message": i18n_message("revaluation_completed", request),
                 "journal_entry_id": je_id,
                 "entry_number": entry_num,
                 "lines_count": len(journal_entry_lines),
@@ -725,6 +725,6 @@ def create_revaluation(
         except Exception:
             db.rollback()
             logger.exception("Error during currency revaluation")
-            raise HTTPException(status_code=500, detail="خطأ أثناء إعادة التقييم")
+            raise HTTPException(**http_error(500, "currency_revaluation_error", request))
     finally:
         db.close()

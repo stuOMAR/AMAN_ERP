@@ -138,7 +138,7 @@ def create_tax_return(
                     "success": True,
                     "id": existing_by_key.id,
                     "return_number": existing_by_key.return_number,
-                    "message": "تم العثور على الإقرار الضريبي نفسه مسبقاً",
+                    "message": i18n_message("tax_return_found_duplicate", request),
                     "idempotent": True,
                 }
 
@@ -182,7 +182,7 @@ def create_tax_return(
                 """
             ), {"period": period, "type": data.tax_type, "branch_id": branch_id}).fetchone()
             if dup:
-                raise HTTPException(status_code=409, detail=f"يوجد إقرار ضريبي لنفس الفترة ({period}) بالفعل")
+                raise HTTPException(status_code=409, detail=i18n_message("tax_return_already_exists_period", request))
     
             # Output VAT (sales) — aggregate at invoice level to respect header discounts
             output = db.execute(text(  # noqa: sql-lint
@@ -330,7 +330,7 @@ def create_tax_return(
     
             return {
                 "success": True, "id": new_id, "return_number": return_number,
-                "message": "تم إنشاء الإقرار الضريبي بنجاح",
+                "message": i18n_message("tax_return_created_success", request),
                 "summary": {
                     "output_vat": str(net_output_vat.quantize(_D2, ROUND_HALF_UP)),
                     "input_vat": str(net_input_vat.quantize(_D2, ROUND_HALF_UP)),
@@ -362,7 +362,7 @@ def file_tax_return(
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
             if row.status != "draft":
-                raise HTTPException(status_code=400, detail="لا يمكن تقديم إقرار غير في حالة مسودة")
+                raise HTTPException(**http_error(400, "tax_return_only_draft_submittable", request))
 
             check_fiscal_period_open(db, date.today())
     
@@ -385,7 +385,7 @@ def file_tax_return(
     
             return {
                 "success": True,
-                "message": "تم تقديم الإقرار الضريبي بنجاح",
+                "message": i18n_message("tax_return_submitted_success", request),
                 "status": "filed",
                 "filed_date": str(date.today()),
                 "total_amount": str(total)
@@ -409,13 +409,13 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
             if row.status == "paid":
-                raise HTTPException(status_code=400, detail="لا يمكن إلغاء إقرار مدفوع")
+                raise HTTPException(**http_error(400, "tax_return_paid_cannot_cancel", request))
     
             has_payments = db.execute(text(
                 "SELECT 1 FROM tax_payments WHERE tax_return_id = :id AND status = 'confirmed'"
             ), {"id": return_id}).fetchone()
             if has_payments:
-                raise HTTPException(status_code=400, detail="لا يمكن إلغاء إقرار له مدفوعات مؤكدة")
+                raise HTTPException(**http_error(400, "tax_return_confirmed_payments_cannot_cancel", request))
     
             check_fiscal_period_open(db, date.today())
 
@@ -426,7 +426,7 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
                          resource_id=str(return_id), details={"return_number": row.return_number},
                          request=request)
     
-            return {"success": True, "message": "تم إلغاء الإقرار الضريبي"}
+            return {"success": True, "message": i18n_message("tax_return_cancelled", request)}
         except HTTPException:
             raise
         except Exception:

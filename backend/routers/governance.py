@@ -101,7 +101,7 @@ def grant_document_permission(
 ):
     """Grant Document Permission."""
     if body.department_id is None and body.role_id is None and body.user_id is None:
-        raise HTTPException(status_code=400, detail="يجب تحديد قسم أو دور أو مستخدم")
+        raise HTTPException(**http_error(400, "section_role_or_user_required", request))
     with transactional(current_user.company_id) as db:
         db.execute(
             text(
@@ -420,7 +420,7 @@ def discount_note_receivable(
         if not note:
             raise HTTPException(**http_error(404, "note_not_found"))
         if note.status not in ("open", "issued"):
-            raise HTTPException(status_code=400, detail="لا يمكن خصم سند ليس مفتوحاً")
+            raise HTTPException(**http_error(400, "cannot_deduct_non_open_voucher", request))
 
         face = _dec(note.face_value)
         rate = _dec(body.discount_rate) / Decimal("100")
@@ -434,7 +434,7 @@ def discount_note_receivable(
         interest_acc = get_mapped_account_id(db, "acc_map_interest_expense")
         notes_acc = get_mapped_account_id(db, "acc_map_notes_receivable")
         if not interest_acc or not notes_acc:
-            raise HTTPException(status_code=400, detail="الحسابات المخصصة لسندات القبض غير مهيأة")
+            raise HTTPException(**http_error(400, "receipt_voucher_accounts_not_configured", request))
 
         lines = [
             {"account_id": body.bank_account_id, "debit": float(proceeds), "credit": 0,
@@ -530,7 +530,7 @@ def bounce_check_receivable(
         bank_acc = get_mapped_account_id(db, "acc_map_bank")
         ar_acc = get_mapped_account_id(db, "acc_map_ar")
         if not bank_acc or not ar_acc:
-            raise HTTPException(status_code=400, detail="حسابات البنك/الذمم المدينة غير مهيأة")
+            raise HTTPException(**http_error(400, "bank_ar_accounts_not_configured", request))
 
         amt = float(_dec(row.amount))
         lines = [
@@ -617,7 +617,7 @@ def revalue_asset(
         asset_acc = row.asset_account_id
         reserve_acc = get_mapped_account_id(db, "acc_map_revaluation_reserve")
         if not asset_acc or not reserve_acc:
-            raise HTTPException(status_code=400, detail="حسابات الأصل / احتياطي إعادة التقييم غير مهيأة")
+            raise HTTPException(**http_error(400, "asset_revaluation_reserve_accounts_not_configured", request))
 
         if delta > 0:
             lines = [
@@ -706,7 +706,7 @@ def depreciate_asset_uop(
         if not row:
             raise HTTPException(**http_error(404, "asset_not_found"))
         if not row.expected_production_units or _dec(row.expected_production_units) <= 0:
-            raise HTTPException(status_code=400, detail="expected_production_units غير محددة على الأصل")
+            raise HTTPException(**http_error(400, "expected_production_units_غير_محددة_على_الأصل", request))
 
         depreciable_base = _dec(row.cost) - _dec(row.salvage_value)
         per_unit = (depreciable_base / _dec(row.expected_production_units)).quantize(Decimal("0.000001"))
@@ -723,7 +723,7 @@ def depreciate_asset_uop(
         check_fiscal_period_open(db, txn_date)
 
         if not row.depreciation_expense_account_id or not row.accumulated_depreciation_account_id:
-            raise HTTPException(status_code=400, detail="حسابات الإهلاك غير مهيأة على الأصل")
+            raise HTTPException(**http_error(400, "depreciation_accounts_not_configured_on_asset", request))
 
         lines = [
             {"account_id": row.depreciation_expense_account_id, "debit": float(period_dep), "credit": 0,
@@ -824,7 +824,7 @@ def modify_lease(
         check_fiscal_period_open(db, txn_date)
 
         if not row.liability_account_id or not row.rou_asset_account_id:
-            raise HTTPException(status_code=400, detail="حسابات عقد الإيجار غير مهيأة")
+            raise HTTPException(**http_error(400, "lease_contract_accounts_not_configured", request))
 
         lines: List[dict] = []
         if drou > 0:
@@ -842,7 +842,7 @@ def modify_lease(
         if balance != 0:
             plug_acc = get_mapped_account_id(db, "acc_map_lease_modification") or get_mapped_account_id(db, "acc_map_other_expense")
             if not plug_acc:
-                raise HTTPException(status_code=400, detail="حساب تسوية تعديل الإيجار غير مهيأ")
+                raise HTTPException(**http_error(400, "lease_adjustment_account_not_configured", request))
             if balance > 0:
                 lines.append({"account_id": plug_acc, "debit": 0, "credit": float(balance), "description": "Lease modification P&L"})
             else:
@@ -935,12 +935,12 @@ def post_service_request_gl(
         if not row:
             raise HTTPException(**http_error(404, "maintenance_request_not_found"))
         if row.status in ("closed", "posted"):
-            raise HTTPException(status_code=400, detail="الطلب مغلق ومرحَّل بالفعل")
+            raise HTTPException(**http_error(400, "order_already_closed_and_posted", request))
 
         cost = _dec(row.cost)
         revenue = _dec(body.revenue_amount)
         if cost <= 0 and revenue <= 0:
-            raise HTTPException(status_code=400, detail="لا توجد قيمة لترحيلها")
+            raise HTTPException(**http_error(400, "no_value_difference", request))
 
         txn_date = body.completion_date or datetime.now().strftime("%Y-%m-%d")
         check_fiscal_period_open(db, txn_date)
@@ -982,9 +982,9 @@ def post_service_request_gl(
         parts_cost = _dec(consumed_parts)
         inventory_acc = get_mapped_account_id(db, "acc_map_inventory")
         if revenue > 0 and not (cash_acc and revenue_acc):
-            raise HTTPException(status_code=400, detail="حسابات الإيراد غير مهيأة")
+            raise HTTPException(**http_error(400, "revenue_accounts_not_configured", request))
         if cost > 0 and not (cost_acc and clearing_acc):
-            raise HTTPException(status_code=400, detail="حسابات التكلفة غير مهيأة")
+            raise HTTPException(**http_error(400, "cost_accounts_not_configured", request))
 
         lines: List[dict] = []
         if revenue > 0:
@@ -1093,7 +1093,7 @@ def run_bulk_cgu_impairment(
     from services.impairment_service import record_impairment_test
 
     if not body.items:
-        raise HTTPException(status_code=400, detail="items فارغة")
+        raise HTTPException(**http_error(400, "items_فارغة", request))
 
     with transactional(current_user.company_id) as db:
         as_of = body.as_of_date or _date.today().isoformat()
@@ -1102,7 +1102,7 @@ def run_bulk_cgu_impairment(
         exp_acc = get_mapped_account_id(db, "acc_map_impairment_expense") if body.post_journal else None
         acc_acc = get_mapped_account_id(db, "acc_map_accumulated_impairment") if body.post_journal else None
         if body.post_journal and not (exp_acc and acc_acc):
-            raise HTTPException(status_code=400, detail="حسابات اضمحلال CGU غير مهيأة")
+            raise HTTPException(**http_error(400, "cgu_accounts_not_configured", request))
 
         results = []
         total_loss = Decimal("0")

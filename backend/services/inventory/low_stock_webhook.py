@@ -33,9 +33,9 @@ def check_and_emit(
                 THEN quantity ELSE -quantity END
             ), 0) as available
             FROM inventory_transactions
-            WHERE tenant_id = :tid AND product_id = :item AND warehouse_id = :wid
+            WHERE product_id = :item AND warehouse_id = :wid
         """),
-        {"tid": tenant_id, "item": item_id, "wid": warehouse_id},
+        {"item": item_id, "wid": warehouse_id},
     ).fetchone()
 
     available = Decimal(str(row.available or 0)) if row else Decimal(0)

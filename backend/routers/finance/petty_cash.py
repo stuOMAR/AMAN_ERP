@@ -89,7 +89,7 @@ class PettyCashOp(BaseModel):
 # Helpers
 # --------------------------------------------------------------------------- #
 
-def _resolve_petty_cash_gl(db, fund_row) -> int:
+def _resolve_petty_cash_gl(db, fund_row, request=None) -> int:
     """Return the GL account id used as the petty-cash control account.
 
     Preference order:
@@ -104,12 +104,11 @@ def _resolve_petty_cash_gl(db, fund_row) -> int:
         {"id": fund_row.treasury_account_id},
     ).scalar()
     if not gl_id:
-        raise HTTPException(status_code=400,
-                            detail="Petty-cash fund has no GL account; set gl_account_id on the fund or its treasury")
+        raise HTTPException(**http_error(400, "petty_cash_no_gl_account", request))
     return gl_id
 
 
-def _resolve_expense_gl(db, expense_account_id: Optional[int]) -> int:
+def _resolve_expense_gl(db, expense_account_id: Optional[int], request=None) -> int:
     """Pick the expense GL for a disbursement. Falls back to the generic
     ``acc_map_general_expense`` mapping used by ``routers/finance/expenses.py``."""
     if expense_account_id:
@@ -118,8 +117,7 @@ def _resolve_expense_gl(db, expense_account_id: Optional[int]) -> int:
         "SELECT acc_id FROM acc_mappings WHERE map_key = 'acc_map_general_expense' LIMIT 1"
     )).fetchone()
     if not row or not row[0]:
-        raise HTTPException(status_code=400,
-                            detail="No expense_account_id supplied and acc_map_general_expense is not configured")
+        raise HTTPException(**http_error(400, "petty_cash_expense_account_not_configured", request))
     return row[0]
 
 
@@ -159,8 +157,7 @@ def create_fund(payload: PettyCashFundCreate, request: Request,
 
         # Verify treasury exists and currency matches.
         if treasury_account.get("currency") and payload.currency and treasury_account["currency"] != payload.currency:
-            raise HTTPException(status_code=400,
-                                detail="Petty-cash currency must match treasury currency")
+            raise HTTPException(**http_error(400, "petty_cash_currency_mismatch", request))
 
         gl_id = payload.gl_account_id or treasury_account.get("gl_account_id")
         row = db.execute(text("""
@@ -232,24 +229,22 @@ def replenish_fund(fund_id: int, payload: PettyCashOp, request: Request,
             {"id": fund_id},
         ).fetchone()
         if not fund or not fund.is_active:
-            raise HTTPException(status_code=404, detail="Fund not found")
+            raise HTTPException(**http_error(404, "fund_not_found", request))
         branch_id = validate_branch_access(current_user, fund.branch_id)
         treasury_account = validate_treasury_account_access(
             db, current_user, fund.treasury_account_id, branch_id
         )
 
         if fund.ceiling_amount and (fund.current_balance + payload.amount) > fund.ceiling_amount:
-            raise HTTPException(status_code=400,
-                                detail="Replenishment would exceed fund ceiling")
+            raise HTTPException(**http_error(400, "petty_cash_exceeds_ceiling", request))
 
         txn_date = payload.txn_date or date.today()
         check_fiscal_period_open(db, txn_date.isoformat())
 
-        petty_gl = _resolve_petty_cash_gl(db, fund)
+        petty_gl = _resolve_petty_cash_gl(db, fund, request)
         treasury_gl = treasury_account.get("gl_account_id")
         if not treasury_gl:
-            raise HTTPException(status_code=400,
-                                detail="Treasury account has no GL account configured")
+            raise HTTPException(**http_error(400, "treasury_no_gl_account", request))
 
         je_id = _post_je(
             db, company_id=current_user.company_id, user_id=current_user.id,
@@ -307,18 +302,17 @@ def disburse_fund(fund_id: int, payload: PettyCashOp, request: Request,
             {"id": fund_id},
         ).fetchone()
         if not fund or not fund.is_active:
-            raise HTTPException(status_code=404, detail="Fund not found")
+            raise HTTPException(**http_error(404, "fund_not_found", request))
         branch_id = validate_branch_access(current_user, fund.branch_id)
         validate_treasury_account_access(db, current_user, fund.treasury_account_id, branch_id)
         if payload.amount > fund.current_balance:
-            raise HTTPException(status_code=400,
-                                detail="Insufficient petty cash balance")
+            raise HTTPException(**http_error(400, "petty_cash_insufficient_balance", request))
 
         txn_date = payload.txn_date or date.today()
         check_fiscal_period_open(db, txn_date.isoformat())
 
-        petty_gl = _resolve_petty_cash_gl(db, fund)
-        expense_gl = _resolve_expense_gl(db, payload.expense_account_id)
+        petty_gl = _resolve_petty_cash_gl(db, fund, request)
+        expense_gl = _resolve_expense_gl(db, payload.expense_account_id, request)
 
         je_id = _post_je(
             db, company_id=current_user.company_id, user_id=current_user.id,
@@ -373,7 +367,7 @@ def list_transactions(fund_id: int, limit: int = 200,
             {"id": fund_id},
         ).fetchone()
         if not fund:
-            raise HTTPException(status_code=404, detail="Fund not found")
+            raise HTTPException(**http_error(404, "fund_not_found", request))
         branch_id = validate_branch_access(current_user, fund.branch_id)
         validate_treasury_account_access(db, current_user, fund.treasury_account_id, branch_id)
 

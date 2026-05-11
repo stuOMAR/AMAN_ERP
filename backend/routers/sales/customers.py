@@ -508,7 +508,7 @@ def delete_customer_group(
         # Check if any customers linked
         count = db.execute(text("SELECT COUNT(*) FROM parties WHERE party_group_id = :id"), {"id": group_id}).scalar()
         if count > 0:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف المجموعة لأنها مرتبطة بعملاء")
+            raise HTTPException(**http_error(400, "customer_group_has_customers", request))
         db.execute(text("DELETE FROM party_groups WHERE id = :id"), {"id": group_id})
         db.commit()
 

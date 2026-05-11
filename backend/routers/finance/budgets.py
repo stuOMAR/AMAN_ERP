@@ -27,7 +27,7 @@ def create_budget(budget: BudgetCreate, request: Request, current_user: UserResp
             # Check if name exists
             exists = conn.execute(text("SELECT 1 FROM budgets WHERE name = :name"), {"name": budget.name}).fetchone()
             if exists:
-                raise HTTPException(status_code=400, detail="Budget name already exists")
+                raise HTTPException(**http_error(400, "budget_name_already_exists", request))
                 
             result = conn.execute(text("""
                 INSERT INTO budgets (name, budget_name, start_date, end_date, description, status, created_by, branch_id, cost_center_id)
@@ -104,16 +104,16 @@ def delete_budget(budget_id: int, request: Request, current_user: UserResponse =
             # Verify budget exists
             budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not budget:
-                raise HTTPException(status_code=404, detail="Budget not found")
+                raise HTTPException(**http_error(404, "budget_not_found", request))
             if budget.status == 'active':
-                raise HTTPException(status_code=400, detail="لا يمكن حذف ميزانية نشطة. يرجى إلغاء تنشيطها أولاً.")
+                raise HTTPException(**http_error(400, "cannot_delete_active_budget", request))
                 
             conn.execute(text("DELETE FROM budgets WHERE id = :id"), {"id": budget_id})
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.delete", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": "Budget deleted successfully"}
+            return {"message": i18n_message(("budget_deleted", request))}
         except HTTPException:
             raise
         except Exception:
@@ -135,7 +135,7 @@ def set_budget_items(
             # Verify budget exists
             budget = conn.execute(text("SELECT id FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not budget:
-                raise HTTPException(status_code=404, detail="Budget not found")
+                raise HTTPException(**http_error(404, "budget_not_found", request))
                 
             # Insert or Update items
             for item in items:
@@ -163,7 +163,7 @@ def set_budget_items(
                          action="budgets.items.update", resource_type="budget",
                          resource_id=str(budget_id), details={"items_count": len(items)},
                          request=request)
-            return {"message": "Budget items updated successfully"}
+            return {"message": i18n_message(("budget_items_updated", request))}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -185,7 +185,7 @@ def get_budget_report(
         try:
             budget = conn.execute(text("SELECT start_date, end_date FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not budget:
-                 raise HTTPException(status_code=404, detail="Budget not found")
+                 raise HTTPException(**http_error(404, "budget_not_found", request))
                  
             # Determine actual report range
             report_start = from_date if from_date else budget.start_date
@@ -300,13 +300,13 @@ def update_budget(budget_id: int, budget: BudgetCreate, request: Request, curren
         try:
             existing = conn.execute(text("SELECT * FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not existing:
-                raise HTTPException(status_code=404, detail="Budget not found")
+                raise HTTPException(**http_error(404, "budget_not_found", request))
             
             # Check name uniqueness (exclude current)
             dup = conn.execute(text("SELECT 1 FROM budgets WHERE name = :name AND id != :id"), 
                               {"name": budget.name, "id": budget_id}).fetchone()
             if dup:
-                raise HTTPException(status_code=400, detail="Budget name already exists")
+                raise HTTPException(**http_error(400, "budget_name_already_exists", request))
             
             conn.execute(text("""
                 UPDATE budgets SET name = :name, budget_name = :name, start_date = :start, end_date = :end, 
@@ -348,21 +348,21 @@ def activate_budget(budget_id: int, request: Request, current_user: UserResponse
         try:
             budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not budget:
-                raise HTTPException(status_code=404, detail="Budget not found")
+                raise HTTPException(**http_error(404, "budget_not_found", request))
             if budget.status != 'draft':
-                raise HTTPException(status_code=400, detail="Only draft budgets can be activated")
+                raise HTTPException(**http_error(400, "only_draft_budgets_can_be_activated", request))
             
             # Check it has items
             items_count = conn.execute(text("SELECT COUNT(*) FROM budget_items WHERE budget_id = :id"), {"id": budget_id}).scalar()
             if items_count == 0:
-                raise HTTPException(status_code=400, detail="Cannot activate budget with no items")
+                raise HTTPException(**http_error(400, "cannot_activate_budget_with_no_items", request))
             
             conn.execute(text("UPDATE budgets SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = :id"), {"id": budget_id})
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.activate", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": "Budget activated successfully"}
+            return {"message": i18n_message(("budget_activated", request))}
         except HTTPException:
             raise
         except Exception:
@@ -379,16 +379,16 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
         try:
             budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
             if not budget:
-                raise HTTPException(status_code=404, detail="Budget not found")
+                raise HTTPException(**http_error(404, "budget_not_found", request))
             if budget.status not in ('active', 'draft'):
-                raise HTTPException(status_code=400, detail="Budget is already closed")
+                raise HTTPException(**http_error(400, "budget_is_already_closed", request))
             
             conn.execute(text("UPDATE budgets SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = :id"), {"id": budget_id})
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.close", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": "Budget closed successfully"}
+            return {"message": i18n_message(("budget_closed", request))}
         except HTTPException:
             raise
         except Exception:
@@ -404,7 +404,7 @@ def get_budget_items(request: Request, budget_id: int, current_user: UserRespons
     with transactional(current_user.company_id) as conn:
         budget = conn.execute(text("SELECT id FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
         if not budget:
-            raise HTTPException(status_code=404, detail="Budget not found")
+            raise HTTPException(**http_error(404, "budget_not_found", request))
         
         rows = conn.execute(text("""
             SELECT bi.id, bi.account_id, bi.planned_amount, bi.notes,
@@ -691,7 +691,7 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
         try:
             exists = conn.execute(text("SELECT 1 FROM budgets WHERE name = :name"), {"name": data["name"]}).fetchone()
             if exists:
-                raise HTTPException(status_code=400, detail="Budget name exists")
+                raise HTTPException(**http_error(400, "budget_name_exists", request))
             result = conn.execute(text("""
                 INSERT INTO budgets (name, start_date, end_date, description, status, created_by,
                     cost_center_id, budget_type, fiscal_year)
@@ -771,7 +771,7 @@ def compare_budgets(
         try:
             ids = [int(x.strip()) for x in budget_ids.split(",") if x.strip()]
             if len(ids) < 2:
-                raise HTTPException(status_code=400, detail="Need at least 2 budget IDs")
+                raise HTTPException(**http_error(400, "need_at_least_2_budget_ids", request))
             placeholders = ",".join([f":id{i}" for i in range(len(ids))])
             params = {f"id{i}": v for i, v in enumerate(ids)}
             budgets = conn.execute(text(f"""
@@ -799,7 +799,7 @@ def get_budget_detail(request: Request, budget_id: int, current_user: UserRespon
     with transactional(current_user.company_id) as conn:
         budget = conn.execute(text("SELECT * FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
         if not budget:
-            raise HTTPException(status_code=404, detail="Budget not found")
+            raise HTTPException(**http_error(404, "budget_not_found", request))
         
         # Summary: total planned, items count
         summary = conn.execute(text("""

@@ -14,7 +14,7 @@ import json
 import logging
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -75,14 +75,14 @@ def list_revenue_schedules(status_filter: Optional[str] = None, current_user=Dep
 
 @rev_router.post("/schedules", status_code=201,
                  dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
-def create_revenue_schedule(data: RevenueScheduleCreate, current_user=Depends(get_current_user)):
+def create_revenue_schedule(data: RevenueScheduleCreate, request: Request, current_user=Depends(get_current_user)):
     """إنشاء جدول اعتراف بالإيرادات — IFRS 15"""
     db = get_db_connection(current_user.company_id)
     try:
         start = datetime.strptime(data.start_date, "%Y-%m-%d").date()
         end = datetime.strptime(data.end_date, "%Y-%m-%d").date()
         if end <= start:
-            raise HTTPException(400, "تاريخ النهاية يجب أن يكون بعد تاريخ البداية")
+            raise HTTPException(**http_error(400, "end_date_after_start_date", request))
 
         lines = []
 
@@ -140,7 +140,7 @@ def create_revenue_schedule(data: RevenueScheduleCreate, current_user=Depends(ge
             "lines": json.dumps(lines), "uid": current_user.id,
         }).scalar()
         db.commit()
-        return {"id": sid, "periods": len(lines), "message": "تم إنشاء جدول الاعتراف بالإيرادات"}
+        return {"id": sid, "periods": len(lines), "message": i18n_message("revenue_schedule_created", request)}
     except HTTPException:
         raise
     except Exception:
@@ -152,7 +152,7 @@ def create_revenue_schedule(data: RevenueScheduleCreate, current_user=Depends(ge
 
 
 @rev_router.get("/schedules/{schedule_id}", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
-def get_revenue_schedule(schedule_id: int, current_user=Depends(get_current_user)):
+def get_revenue_schedule(schedule_id: int, request: Request, current_user=Depends(get_current_user)):
     """تفاصيل جدول الاعتراف"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -161,7 +161,7 @@ def get_revenue_schedule(schedule_id: int, current_user=Depends(get_current_user
             {"id": schedule_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "الجدول غير موجود")
+            raise HTTPException(**http_error(404, "revenue_schedule_not_found", request))
         result = dict(row._mapping)
         if isinstance(result.get("schedule_lines"), str):
             result["schedule_lines"] = json.loads(result["schedule_lines"])
@@ -172,7 +172,7 @@ def get_revenue_schedule(schedule_id: int, current_user=Depends(get_current_user
 
 @rev_router.post("/schedules/{schedule_id}/recognize",
                  dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
-def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_user=Depends(get_current_user)):
+def recognize_revenue_period(schedule_id: int, request: Request, period_index: int = 0, current_user=Depends(get_current_user)):
     """الاعتراف بإيرادات فترة محددة وإنشاء قيد محاسبي"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -180,7 +180,7 @@ def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_us
             "SELECT * FROM revenue_recognition_schedules WHERE id = :id AND status = 'active'"
         ), {"id": schedule_id}).fetchone()
         if not row:
-            raise HTTPException(404, "الجدول غير موجود أو غير نشط")
+            raise HTTPException(**http_error(404, "revenue_schedule_not_active", request))
 
         schedule = dict(row._mapping)
         lines = schedule.get("schedule_lines", [])
@@ -188,10 +188,10 @@ def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_us
             lines = json.loads(lines)
 
         if period_index >= len(lines):
-            raise HTTPException(400, "رقم الفترة غير صالح")
+            raise HTTPException(**http_error(400, "invalid_period_index", request))
         period = lines[period_index]
         if period.get("recognized"):
-            raise HTTPException(400, "تم الاعتراف بهذه الفترة مسبقاً")
+            raise HTTPException(**http_error(400, "period_already_recognized", request))
 
         amount = _dec(period["amount"]).quantize(_D2, ROUND_HALF_UP)
 
@@ -252,7 +252,7 @@ def recognize_revenue_period(schedule_id: int, period_index: int = 0, current_us
         })
         db.commit()
         return {
-            "message": f"تم الاعتراف بمبلغ {float(amount):.2f}",
+            "message": i18n_message("revenue_recognized_amount", request),
             "recognized_total": float(new_recognized.quantize(_D2, ROUND_HALF_UP)),
             "remaining": float(max(new_deferred, Decimal("0")).quantize(_D2, ROUND_HALF_UP)),
             "status": new_status,

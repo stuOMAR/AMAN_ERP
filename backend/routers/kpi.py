@@ -9,7 +9,8 @@ import logging
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
+from utils.i18n import http_error
 from pydantic import BaseModel
 
 logger = logging.getLogger(__name__)
@@ -41,7 +42,7 @@ class KPIDefinitionResponse(BaseModel):
 
 
 @router.post("/definitions", response_model=KPIDefinitionResponse)
-async def create_kpi_definition(body: KPIDefinitionCreate):
+async def create_kpi_definition(body: KPIDefinitionCreate, request: Request):
     """Create a new KPI definition. Gated by kpi.admin permission."""
     from database import get_tenant_db
     from sqlalchemy import text
@@ -51,11 +52,11 @@ async def create_kpi_definition(body: KPIDefinitionCreate):
 
     # Validate
     if body.metric_source not in ("report_key", "classifier_category"):
-        raise HTTPException(400, "metric_source must be report_key or classifier_category")
+        raise HTTPException(**http_error(400, "kpi_metric_source_invalid", request))
     if body.comparison_op not in ("lt", "lte", "gt", "gte", "eq"):
-        raise HTTPException(400, "comparison_op must be lt|lte|gt|gte|eq")
+        raise HTTPException(**http_error(400, "kpi_comparison_op_invalid", request))
     if body.evaluation_interval_minutes < 5:
-        raise HTTPException(400, "evaluation_interval_minutes must be >= 5")
+        raise HTTPException(**http_error(400, "kpi_interval_min", request))
 
     try:
         with get_tenant_db() as db:
@@ -85,7 +86,7 @@ async def create_kpi_definition(body: KPIDefinitionCreate):
             )
             db.commit()
     except Exception as exc:
-        raise HTTPException(500, f"Failed to create KPI: {exc}")
+        raise HTTPException(**http_error(500, "kpi_create_failed", request))
 
     return KPIDefinitionResponse(id=kpi_id, **body.model_dump())
 

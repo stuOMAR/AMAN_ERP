@@ -310,7 +310,7 @@ def create_tax_classification(
             "SELECT id FROM tax_classifications WHERE code = :code"
         ), {"code": data.code.upper()}).fetchone()
         if existing:
-            raise HTTPException(status_code=409, detail=f"Classification '{data.code}' already exists")
+            raise HTTPException(status_code=409, detail=i18n_message("classification_code_already_exists", request))
 
         result = db.execute(text("""
             INSERT INTO tax_classifications (code, name_ar, name_en, description)
@@ -352,7 +352,7 @@ def update_tax_classification(
             "SELECT id FROM tax_classifications WHERE id = :id"
         ), {"id": classification_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Classification not found")
+            raise HTTPException(**http_error(404, "classification_not_found", request))
 
         updates = []
         params = {"id": classification_id}
@@ -373,7 +373,7 @@ def update_tax_classification(
             params["active"] = data.is_active
 
         if not updates:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
 
         result = db.execute(text(f"""
             UPDATE tax_classifications SET {', '.join(updates)}
@@ -401,7 +401,7 @@ def delete_tax_classification(
             "SELECT id, code FROM tax_classifications WHERE id = :id"
         ), {"id": classification_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Classification not found")
+            raise HTTPException(**http_error(404, "classification_not_found", request))
 
         db.execute(text(
             "UPDATE tax_classifications SET is_active = FALSE WHERE id = :id"
@@ -412,7 +412,7 @@ def delete_tax_classification(
                      resource_type="tax_classification", resource_id=str(classification_id),
                      details={"code": existing.code}, request=request)
 
-        return {"message": f"Classification '{existing.code}' deactivated", "id": classification_id}
+        return {"message": i18n_message("tax_classification_deactivated", request), "id": classification_id}
 
 
 @router.get("/classifications/{classification_id}/rates", dependencies=[Depends(require_permission(["taxes.view", "accounting.view"]))], response_model=List[Dict[str, Any]])
@@ -456,18 +456,76 @@ def add_classification_rate(
 ):
     """إضافة معدل ضريبي لتصنيف في دولة معينة"""
     with transactional(current_user.company_id) as db:
+        cc = data.country_code.upper()
+        if bool(data.tax_rate_id) == bool(data.tax_group_id):
+            raise HTTPException(**http_error(400, "single_rate_or_group_required", request))
+
         existing = db.execute(text(
             "SELECT id FROM tax_classifications WHERE id = :id AND is_active = TRUE"
         ), {"id": classification_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Classification not found")
+            raise HTTPException(**http_error(404, "classification_not_found", request))
+
+        today = date.today()
+        if data.tax_rate_id:
+            rate = db.execute(text("""
+                SELECT id, country_code, effective_from, effective_to, is_active
+                FROM tax_rates
+                WHERE id = :id
+            """), {"id": data.tax_rate_id}).fetchone()
+            if not rate or not rate.is_active:
+                raise HTTPException(**http_error(404, "tax_rate_not_found_or_inactive", request))
+            if rate.country_code and rate.country_code.upper() != cc:
+                raise HTTPException(**http_error(400, "tax_rate_not_matching_country", request))
+            if rate.effective_from and rate.effective_from > today:
+                raise HTTPException(**http_error(400, "tax_rate_not_active_yet", request))
+            if rate.effective_to and rate.effective_to < today:
+                raise HTTPException(**http_error(400, "tax_rate_expired", request))
+
+        if data.tax_group_id:
+            group = db.execute(text("""
+                SELECT id, tax_ids, is_active
+                FROM tax_groups
+                WHERE id = :id
+            """), {"id": data.tax_group_id}).fetchone()
+            if not group or not group.is_active:
+                raise HTTPException(**http_error(404, "tax_group_not_found_or_inactive", request))
+            group_check = db.execute(text("""
+                WITH group_tax_ids AS (
+                    SELECT tax_id_text.value::int AS tax_id
+                    FROM tax_groups tg,
+                         jsonb_array_elements_text(COALESCE(tg.tax_ids, '[]'::jsonb)) AS tax_id_text(value)
+                    WHERE tg.id = :gid
+                )
+                SELECT
+                    COUNT(*) AS total_ids,
+                    COUNT(tr.id) AS found_ids,
+                    COALESCE(SUM(
+                        CASE
+                            WHEN tr.id IS NULL THEN 1
+                            WHEN tr.is_active IS NOT TRUE THEN 1
+                            WHEN tr.country_code IS NOT NULL AND UPPER(tr.country_code) != :cc THEN 1
+                            WHEN tr.effective_from IS NOT NULL AND tr.effective_from > :today THEN 1
+                            WHEN tr.effective_to IS NOT NULL AND tr.effective_to < :today THEN 1
+                            ELSE 0
+                        END
+                    ), 0) AS invalid_ids
+                FROM group_tax_ids gti
+                LEFT JOIN tax_rates tr ON tr.id = gti.tax_id
+            """), {"gid": data.tax_group_id, "cc": cc, "today": today}).fetchone()
+            if not group_check or int(group_check.total_ids or 0) == 0:
+                raise HTTPException(**http_error(400, "tax_group_no_rates", request))
+            if int(group_check.found_ids or 0) != int(group_check.total_ids or 0):
+                raise HTTPException(**http_error(400, "tax_group_has_nonexistent_rate", request))
+            if int(group_check.invalid_ids or 0) > 0:
+                raise HTTPException(**http_error(400, "tax_group_has_inactive_or_mismatched_rate", request))
 
         duplicate = db.execute(text("""
             SELECT id FROM tax_classification_rates
             WHERE classification_id = :cid AND country_code = :cc AND effective_from = CURRENT_DATE
-        """), {"cid": classification_id, "cc": data.country_code.upper()}).fetchone()
+        """), {"cid": classification_id, "cc": cc}).fetchone()
         if duplicate:
-            raise HTTPException(status_code=409, detail="Rate already exists for this country today")
+            raise HTTPException(**http_error(409, "rate_already_exists_for_this_country_today", request))
 
         result = db.execute(text("""
             INSERT INTO tax_classification_rates
@@ -476,7 +534,7 @@ def add_classification_rate(
             RETURNING id, country_code, tax_rate_id, tax_group_id, effective_from
         """), {
             "cid": classification_id,
-            "cc": data.country_code.upper(),
+            "cc": cc,
             "rid": data.tax_rate_id,
             "gid": data.tax_group_id,
         }).fetchone()
@@ -484,7 +542,7 @@ def add_classification_rate(
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="tax_compliance.classification_rate.create",
                      resource_type="tax_classification_rate", resource_id=str(result.id),
-                     details={"classification_id": classification_id, "country_code": data.country_code.upper()},
+                     details={"classification_id": classification_id, "country_code": cc},
                      request=request)
 
         return dict(result._mapping)
@@ -505,12 +563,12 @@ def delete_classification_rate(
              WHERE id = :rid AND classification_id = :cid
         """), {"rid": rate_link_id, "cid": classification_id})
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Rate link not found")
+            raise HTTPException(**http_error(404, "rate_link_not_found", request))
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="tax_compliance.classification_rate.deactivate",
                      resource_type="tax_classification_rate", resource_id=str(rate_link_id),
                      details={"classification_id": classification_id}, request=request)
-        return {"message": "Rate link deactivated", "soft_deleted": True}
+        return {"message": i18n_message("rate_link_deactivated_success", request), "soft_deleted": True}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -572,7 +630,7 @@ def update_company_tax_settings(
                      resource_id=data.country_code,
                      details=data.model_dump(), request=request)
 
-        return {"success": True, "message": "تم تحديث إعدادات الضرائب بنجاح"}
+        return {"success": True, "message": i18n_message("tax_settings_updated_success", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error updating company tax settings: {e}")
@@ -644,7 +702,7 @@ def update_branch_tax_setting(
         # Verify tax regime exists
         regime = db.execute(text("SELECT 1 FROM tax_regimes WHERE id = :id"), {"id": data.tax_regime_id}).fetchone()
         if not regime:
-            raise HTTPException(status_code=404, detail="نظام الضريبة غير موجود")
+            raise HTTPException(**http_error(404, "tax_system_not_found", request))
 
         db.execute(text("""
             INSERT INTO branch_tax_settings 
@@ -673,7 +731,7 @@ def update_branch_tax_setting(
                      resource_id=f"{branch_id}-{data.tax_regime_id}",
                      details=data.model_dump(mode="json"), request=request)
 
-        return {"success": True, "message": "تم تحديث إعدادات الضرائب للفرع بنجاح"}
+        return {"success": True, "message": i18n_message("tax_settings_updated_branch", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -819,7 +877,7 @@ def saudi_vat_return_report(
 
         # ── Box 4: Standard-rated purchases — use adjusted line CTE ─────────
         box4_cte = adjusted_line_taxable_cte(
-            f"AND i.invoice_type = 'purchase' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+            f"AND i.invoice_type IN ('purchase', 'purchase_debit_note') AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
         box4 = db.execute(text(f"""
             {box4_cte}
@@ -842,7 +900,7 @@ def saudi_vat_return_report(
 
         # ── Box 7: Purchase returns deductions — use adjusted line CTE ──────
         box7_cte = adjusted_line_taxable_cte(
-            f"AND i.invoice_type = 'purchase_return' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
+            f"AND i.invoice_type IN ('purchase_return', 'purchase_credit_note') AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
         box7 = db.execute(text(f"""
             {box7_cte}
@@ -998,7 +1056,7 @@ def syrian_income_tax_report(
             "SELECT default_rate FROM tax_regimes WHERE country_code = 'SY' AND tax_type = 'income_tax' LIMIT 1"
         )).fetchone()
         if not regime:
-            raise HTTPException(status_code=400, detail="نسبة ضريبة الدخل السورية غير مهيأة في tax_regimes")
+            raise HTTPException(**http_error(400, "income_tax_rate_not_configured_country", request))
         tax_rate_dec = _dec(regime.default_rate)
 
         tax_rate = rate_str(tax_rate_dec)
@@ -1258,7 +1316,7 @@ def egypt_vat_return_report(
             LIMIT 1
         """)).fetchone()
         if service_revenue > 0 and not stamp_regime:
-            raise HTTPException(status_code=400, detail="نسبة ضريبة الدمغة المصرية غير مهيأة في tax_regimes")
+            raise HTTPException(**http_error(400, "income_tax_rate_not_configured_country", request))
         stamp_rate = _dec(stamp_regime.default_rate if stamp_regime else 0)
         stamp_duty = (service_revenue * (stamp_rate / Decimal("100"))).quantize(_D2, ROUND_HALF_UP)
 
@@ -1347,7 +1405,7 @@ def generic_income_tax_report(
         """), {"cc": country_code.upper()}).fetchone()
 
         if not regime:
-            raise HTTPException(status_code=400, detail=f"نسبة ضريبة الدخل غير مهيأة في tax_regimes للدولة {country_code.upper()}")
+            raise HTTPException(status_code=400, detail=i18n_message("income_tax_rate_not_configured_country", request))
         tax_rate_dec = _dec(regime.default_rate)
         tax_rate = rate_str(tax_rate_dec)
         tax_name_ar = regime.name_ar

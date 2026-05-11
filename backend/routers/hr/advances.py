@@ -87,15 +87,14 @@ def create_advance(payload: AdvanceCreate, request: Request,
             "SELECT id, salary, branch_id FROM employees WHERE id = :id AND status = 'active'"
         ), {"id": payload.employee_id}).fetchone()
         if not emp:
-            raise HTTPException(status_code=404, detail="Active employee not found")
+            raise HTTPException(**http_error(404, "active_employee_not_found", request))
         branch_id = validate_branch_access(current_user, payload.branch_id or emp.branch_id)
         if payload.treasury_account_id:
             validate_treasury_account_access(db, current_user, payload.treasury_account_id, branch_id)
 
         # Sanity: block advances that exceed 100% of monthly salary.
         if emp.salary and payload.amount > Decimal(str(emp.salary)):
-            raise HTTPException(status_code=400,
-                                detail="Advance exceeds employee monthly salary")
+            raise HTTPException(**http_error(400, "advance_exceeds_monthly_salary", request))
 
         # Block stacked advances (one open at a time per employee).
         open_count = db.execute(text("""
@@ -104,8 +103,7 @@ def create_advance(payload: AdvanceCreate, request: Request,
               AND status NOT IN ('recovered', 'cancelled')
         """), {"eid": payload.employee_id}).scalar() or 0
         if open_count > 0:
-            raise HTTPException(status_code=400,
-                                detail="Employee already has an open advance")
+            raise HTTPException(**http_error(400, "employee_has_open_advance", request))
 
         row = db.execute(text("""
             INSERT INTO salary_advances
@@ -157,7 +155,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
             "SELECT * FROM salary_advances WHERE id = :id FOR UPDATE"
         ), {"id": advance_id}).fetchone()
         if not adv:
-            raise HTTPException(status_code=404, detail="Advance not found")
+            raise HTTPException(**http_error(404, "advance_not_found", request))
         if adv.status != "pending":
             raise HTTPException(status_code=400,
                                 detail=f"Advance is not pending (status={adv.status})")
@@ -168,8 +166,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
         treasury_account = validate_treasury_account_access(db, current_user, payload.treasury_account_id, branch_id)
         treasury_gl = treasury_account.get("gl_account_id")
         if not treasury_gl:
-            raise HTTPException(status_code=400,
-                                detail="Treasury account has no GL account configured")
+            raise HTTPException(**http_error(400, "treasury_no_gl_account_hr", request))
 
         adv_gl = db.execute(text(
             "SELECT acc_id FROM acc_mappings WHERE map_key = 'acc_map_employee_advances' LIMIT 1"
@@ -182,8 +179,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
                 "ORDER BY id LIMIT 1"
             )).scalar()
         if not adv_gl:
-            raise HTTPException(status_code=400,
-                                detail="No employee-advances GL account; configure acc_map_employee_advances")
+            raise HTTPException(**http_error(400, "employee_advances_account_not_configured", request))
 
         from services.gl_service import create_journal_entry
         je_id = create_journal_entry(
@@ -247,10 +243,9 @@ def cancel_advance(advance_id: int, request: Request,
             "SELECT status FROM salary_advances WHERE id = :id FOR UPDATE"
         ), {"id": advance_id}).fetchone()
         if not adv:
-            raise HTTPException(status_code=404, detail="Advance not found")
+            raise HTTPException(**http_error(404, "advance_not_found", request))
         if adv.status not in ("pending", "approved"):
-            raise HTTPException(status_code=400,
-                                detail="Only pending/approved advances can be cancelled")
+            raise HTTPException(**http_error(400, "only_pending_approved_advances_cancellable", request))
         db.execute(text(
             "UPDATE salary_advances SET status = 'cancelled', updated_at = NOW() WHERE id = :id"
         ), {"id": advance_id})

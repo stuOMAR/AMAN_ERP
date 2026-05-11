@@ -119,7 +119,7 @@ def get_projects_kpis(db, start_date: date, end_date: date,
     alerts = []
     if risks["high"] > 0:
         alerts.append({"severity": "high", "code": "HIGH_RISKS",
-                        "message": f"{risks['high']} high-risk items require attention",
+                        "message": i18n_message("kpi_high_risks", request),
                         "message_ar": f"{risks['high']} مخاطر عالية تحتاج متابعة",
                         "count": risks["high"], "link": "/projects/risks"})
 

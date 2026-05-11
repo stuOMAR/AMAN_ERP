@@ -2,7 +2,7 @@
 Inventory Module - Shared Pydantic Schemas
 """
 
-from pydantic import BaseModel, ConfigDict, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
 import re
@@ -15,9 +15,9 @@ class ProductCreate(BaseModel):
     item_name_en: Optional[str] = None
     item_type: str = 'product'  # product, service, consumable
     unit: str = 'قطعة'
-    selling_price: float = 0.0
-    buying_price: float = 0.0  # Represents WAC (Weighted Average Cost)
-    last_buying_price: float = 0.0  # Represents Last Purchase Price
+    selling_price: float = Field(default=0.0, ge=0)
+    buying_price: float = Field(default=0.0, ge=0)  # Represents WAC (Weighted Average Cost)
+    last_buying_price: float = Field(default=0.0, ge=0)  # Represents Last Purchase Price
     tax_rate: Optional[float] = None  # Ignored — resolved by tax engine; kept for backward compat
     tax_rate_id: Optional[int] = None  # Link to tax_rates table
     tax_group_id: Optional[int] = None  # Link to tax_groups table (multi-tax)
@@ -102,26 +102,26 @@ class StockTransferSingleCreate(BaseModel):
     product_id: int
     source_warehouse_id: int
     destination_warehouse_id: int
-    quantity: float
+    quantity: float = Field(..., gt=0)
     notes: Optional[str] = None
 
 
 class StockTransferItem(BaseModel):
     product_id: int
-    quantity: float
+    quantity: float = Field(..., gt=0)
 
 
 class StockTransferCreate(BaseModel):
     """Multi-item transfer"""
     source_warehouse_id: int
     destination_warehouse_id: int
-    items: List[StockTransferItem]
+    items: List[StockTransferItem] = Field(..., min_length=1)
     notes: Optional[str] = None
 
 
 class StockMovementCreate(BaseModel):
     warehouse_id: int
-    items: List[StockTransferItem]
+    items: List[StockTransferItem] = Field(..., min_length=1)
     notes: Optional[str] = None
     date: Optional[str] = None
     reference: Optional[str] = None
@@ -144,13 +144,13 @@ class PriceListItemUpdate(BaseModel):
 # --- Shipment Schemas ---
 class ShipmentItemCreate(BaseModel):
     product_id: int
-    quantity: float
+    quantity: float = Field(..., gt=0)
 
 
 class ShipmentCreate(BaseModel):
     source_warehouse_id: int
     destination_warehouse_id: int
-    items: List[ShipmentItemCreate]
+    items: List[ShipmentItemCreate] = Field(..., min_length=1)
     notes: Optional[str] = None
 
 
@@ -158,6 +158,6 @@ class ShipmentCreate(BaseModel):
 class StockAdjustmentCreate(BaseModel):
     warehouse_id: int
     product_id: int
-    new_quantity: float
+    new_quantity: float = Field(..., ge=0)
     reason: Optional[str] = "Physical Count"
     notes: Optional[str] = None

@@ -363,10 +363,7 @@ async def get_chart_of_accounts(
         return accounts
     except Exception as e:
         logger.error(f"Error fetching accounts: {str(e)}")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="حدث خطأ أثناء جلب شجرة الحسابات"
-        )
+        raise HTTPException(**http_error(500, "account_tree_fetch_error", request))
     finally:
         db.close()
 
@@ -396,23 +393,20 @@ async def create_account(
                 {"pid": account.parent_id},
             ).fetchone()
             if not parent:
-                raise HTTPException(status_code=400, detail="الحساب الأب غير موجود")
+                raise HTTPException(**http_error(400, ("parent_account_not_found", request)))
             if parent.account_type != account.account_type:
-                raise HTTPException(
-                    status_code=400,
-                    detail="نوع الحساب يجب أن يطابق نوع الحساب الأب",
-                )
+                raise HTTPException(**http_error(400, "account_type_must_match_parent", request))
 
         # Check if account number already exists
         exists = db.execute(text("SELECT 1 FROM accounts WHERE account_number = :num"), {"num": account.account_number}).fetchone()
         if exists:
-            raise HTTPException(status_code=400, detail="رقم الحساب موجود مسبقاً")
+            raise HTTPException(**http_error(400, ("account_number_exists", request)))
 
         # Check if account code already exists
         if account.account_code:
             code_exists = db.execute(text("SELECT 1 FROM accounts WHERE account_code = :code"), {"code": account.account_code}).fetchone()
             if code_exists:
-                raise HTTPException(status_code=400, detail="كود الحساب موجود مسبقاً")
+                raise HTTPException(**http_error(400, ("account_code_exists", request)))
 
         db.execute(text("""
             INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, balance, is_active)
@@ -441,7 +435,7 @@ async def create_account(
             request=request
         )
 
-        return {"success": True, "message": "تم إنشاء الحساب بنجاح"}
+        return {"success": True, "message": i18n_message("account_created", request)}
         
     except HTTPException:
         raise
@@ -471,32 +465,32 @@ async def delete_account(
             # 1. Check if has children
             has_children = db.execute(text("SELECT 1 FROM accounts WHERE parent_id = :id"), {"id": account_id}).fetchone()
             if has_children:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأنه يحتوي على حسابات فرعية")
+                raise HTTPException(**http_error(400, ("account_has_sub_accounts", request)))
     
             # 2. Check if has transactions (journal lines)
             has_tx = db.execute(text("SELECT 1 FROM journal_lines WHERE account_id = :id"), {"id": account_id}).fetchone()
             if has_tx:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأنه يحتوي على قيود محاسبية مسجلة")
+                raise HTTPException(**http_error(400, ("account_has_journal_entries", request)))
     
             # 2b. Check if linked to treasury accounts
             has_treasury = db.execute(text("SELECT 1 FROM treasury_accounts WHERE gl_account_id = :id"), {"id": account_id}).fetchone()
             if has_treasury:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأنه مرتبط بحساب خزينة")
+                raise HTTPException(**http_error(400, ("account_linked_to_treasury", request)))
     
             # 2c. Check if used in budget items
             has_budget = db.execute(text("SELECT 1 FROM budget_items WHERE account_id = :id LIMIT 1"), {"id": account_id}).fetchone()
             if has_budget:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأنه مستخدم في الميزانيات")
+                raise HTTPException(**http_error(400, "account_used_in_budgets", request))
     
             # 2d. Check if used in company_settings as mapped account
             has_mapping = db.execute(text("SELECT 1 FROM company_settings WHERE setting_value = :id_str AND setting_key LIKE 'acc_map_%' LIMIT 1"), {"id_str": str(account_id)}).fetchone()
             if has_mapping:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأنه معين كحساب افتراضي في الإعدادات")
+                raise HTTPException(**http_error(400, ("account_used_as_default", request)))
     
             # 3. Check for balance
             balance_row = db.execute(text("SELECT balance FROM accounts WHERE id = :id"), {"id": account_id}).fetchone()
             if balance_row and _dec(balance_row[0]).copy_abs() > _D2:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف الحساب لأن رصيده غير صفري")
+                raise HTTPException(**http_error(400, ("account_has_nonzero_balance", request)))
     
             # Capture account info before delete
             acct = db.execute(text("SELECT account_code, name FROM accounts WHERE id = :id"), {"id": account_id}).fetchone()
@@ -515,7 +509,7 @@ async def delete_account(
             except Exception:
                 pass
                 
-            return {"success": True, "message": "تم حذف الحساب بنجاح"}
+            return {"success": True, "message": i18n_message("account_deleted", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -546,7 +540,7 @@ async def update_account(
             if new_code:
                 dup = db.execute(text("SELECT 1 FROM accounts WHERE account_code = :code AND id != :id"), {"code": new_code, "id": account_id}).fetchone()
                 if dup:
-                    raise HTTPException(status_code=400, detail=f"رمز الحساب '{new_code}' مستخدم بالفعل")
+                    raise HTTPException(status_code=400, detail=i18n_message("account_code_already_in_use", request))
                  
             db.execute(text("""
                 UPDATE accounts 
@@ -584,7 +578,7 @@ async def update_account(
             except Exception:
                 pass
                 
-            return {"success": True, "message": "تم تحديث الحساب بنجاح"}
+            return {"success": True, "message": i18n_message("account_updated", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -662,7 +656,7 @@ def save_opening_balances(
             # Filter to only lines with actual values
             valid_lines = [l for l in lines if _dec(l.get("debit", 0)) != 0 or _dec(l.get("credit", 0)) != 0]
             if not valid_lines:
-                raise HTTPException(status_code=400, detail="لا توجد أرصدة لحفظها")
+                raise HTTPException(**http_error(400, "no_balances_to_save", request))
     
             total_debit = sum(_dec(l.get("debit", 0)) for l in valid_lines)
             total_credit = sum(_dec(l.get("credit", 0)) for l in valid_lines)
@@ -714,7 +708,7 @@ def save_opening_balances(
                         "SELECT id FROM accounts WHERE account_type = 'equity' ORDER BY account_number LIMIT 1"
                     )).fetchone()
                 if not suspense:
-                    raise HTTPException(status_code=400, detail="لا يوجد حساب حقوق ملكية لتعويض فرق الأرصدة الافتتاحية")
+                    raise HTTPException(**http_error(400, "equity_account_not_found_for_offset", request))
     
                 valid_lines.append({
                     "account_id": suspense.id,
@@ -749,7 +743,7 @@ def save_opening_balances(
                          resource_type="opening_balances", resource_id=str(entry_id),
                          details={"lines_count": len(valid_lines)})
             return {"success": True, "entry_id": entry_id, "lines_count": len(valid_lines),
-                    "message": "تم حفظ الأرصدة الافتتاحية بنجاح"}
+                    "message": i18n_message("opening_balances_saved_success", request)}
         except HTTPException:
             raise
         except Exception:

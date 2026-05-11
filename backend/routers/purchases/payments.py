@@ -20,21 +20,13 @@ from utils.permissions import branch_scope_filter_from_scope, require_permission
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
+from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
 )
-
-_D2 = Decimal("0.01")
-_D4 = Decimal("0.0001")
-
-
-def _dec(v) -> Decimal:
-    """Convert any numeric value to Decimal safely."""
-    return Decimal(str(v)) if v is not None else Decimal("0")
-
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -54,17 +46,23 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             # Fiscal-period lock: payment voucher posts at voucher_date.
             check_fiscal_period_open(db, data.voucher_date)
             
-            # Check supplier balance (total owed) from party_site_balances
-            supplier_balance = db.execute(text("""
-                SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as balance
-                FROM party_sites ps
-                JOIN party_site_balances psb ON psb.party_site_id = ps.id
-                LEFT JOIN currencies c ON psb.currency = c.code
+            # T028: Lock individual balance rows first, then aggregate in Python.
+            balance_rows = db.execute(text("""
+                SELECT psb.balance
+                FROM party_site_balances psb
+                JOIN party_sites ps ON psb.party_site_id = ps.id
                 WHERE ps.party_id = :sid
-                FOR UPDATE
-            """), {"sid": data.supplier_id}).fetchone()
-            if not supplier_balance:
-                raise HTTPException(**http_error(404, "supplier_not_found"))
+                  AND psb.account_type = 'payable'
+                FOR UPDATE OF psb
+            """), {"sid": data.supplier_id}).fetchall()
+            if not balance_rows:
+                supplier_exists = db.execute(text("""
+                    SELECT 1 FROM parties
+                    WHERE id = :sid AND (is_supplier = TRUE OR party_type = 'supplier')
+                """), {"sid": data.supplier_id}).fetchone()
+                if not supplier_exists:
+                    raise HTTPException(**http_error(404, "supplier_not_found"))
+            supplier_balance = sum((_dec(r.balance) for r in balance_rows), Decimal("0"))
             
             # For payments (not refunds), warn if paying more than owed
             voucher_rate = _dec(data.exchange_rate or 1)
@@ -78,9 +76,9 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     db, current_user, selected_treasury_id, validated_branch_id
                 )
             amount_base = (_dec(data.amount) * voucher_rate).quantize(_D2, ROUND_HALF_UP)
-            if data.voucher_type != 'refund' and amount_base > (_dec(supplier_balance.balance) + _D2):
+            if data.voucher_type != 'refund' and amount_base > (supplier_balance + _D2):
                 # Allow overpayment but log warning (some businesses prepay)
-                logger.warning(f"Supplier payment {data.amount} exceeds balance {supplier_balance.balance} for supplier {data.supplier_id}")
+                logger.warning(f"Supplier payment {data.amount} exceeds balance {supplier_balance} for supplier {data.supplier_id}")
             
             # Prefix based on type
             prefix = "PAY" if data.voucher_type != 'refund' else "RCT"
@@ -113,7 +111,7 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             total_allocated = Decimal('0')
             for alloc in data.allocations:
                 if alloc.allocated_amount is None or alloc.allocated_amount <= 0:
-                    raise HTTPException(status_code=400, detail="قيمة التخصيص يجب أن تكون أكبر من صفر")
+                    raise HTTPException(**http_error(400, ("allocation_must_be_positive", request)))
     
                 inv_row = db.execute(text("""
                     SELECT id, party_id, invoice_type, total, COALESCE(paid_amount, 0) AS paid_amount,
@@ -123,11 +121,13 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     FOR UPDATE
                 """), {"id": alloc.invoice_id}).fetchone()
                 if not inv_row:
-                    raise HTTPException(status_code=404, detail=f"الفاتورة {alloc.invoice_id} غير موجودة")
+                    raise HTTPException(status_code=404, detail=i18n_message("allocation_invoice_not_found", request))
                 if int(inv_row.party_id) != int(data.supplier_id):
-                    raise HTTPException(status_code=400, detail=f"الفاتورة {alloc.invoice_id} لا تتبع المورد المحدد")
-                if inv_row.invoice_type != 'purchase':
-                    raise HTTPException(status_code=400, detail=f"التخصيص مسموح لفواتير الشراء فقط. الفاتورة {alloc.invoice_id} نوعها {inv_row.invoice_type}")
+                    raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_supplier_mismatch", request))
+                # T029: Allow refund allocations to purchase returns and credit notes
+                valid_types = ('purchase', 'purchase_debit_note') if data.voucher_type != 'refund' else ('purchase_return', 'purchase_credit_note')
+                if inv_row.invoice_type not in valid_types:
+                    raise HTTPException(status_code=400, detail=i18n_message("allocation_only_purchase_invoices_type", request))
     
                 alloc_amount = _dec(alloc.allocated_amount)
                 total_allocated = (total_allocated + alloc_amount).quantize(_D4, ROUND_HALF_UP)
@@ -140,7 +140,7 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                 inv_curr = inv_row.currency or base_currency
                 inv_rate = _dec(inv_row.exchange_rate or 1)
                 if inv_rate <= 0:
-                    raise HTTPException(status_code=400, detail=f"سعر صرف الفاتورة {alloc.invoice_id} غير صالح")
+                    raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_rate_invalid", request))
     
                 # if voucher is SYP (rate 1) and invoice is USD (rate 3.75)
                 # allocated 375 SYP -> debt reduction = 375 / 3.75 = 100 USD
@@ -177,9 +177,15 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             
             # 3. Update Supplier Balance via party_site_balances
             amount_base = (_dec(data.amount) * voucher_rate).quantize(_D2, ROUND_HALF_UP)
-            balance_change_fc = float(_dec(data.amount) if data.voucher_type != 'refund' else -_dec(data.amount))
-            update_party_site_balance(db, party_id=data.supplier_id, branch_id=validated_branch_id or data.branch_id,
-                               currency=data.currency, amount=balance_change_fc)
+            balance_change_fc = _dec(data.amount) if data.voucher_type != 'refund' else -_dec(data.amount)
+            update_party_site_balance(
+                db,
+                party_id=data.supplier_id,
+                branch_id=validated_branch_id or data.branch_id,
+                currency=data.currency,
+                amount=balance_change_fc,
+                document_type="supplier_payment" if data.voucher_type != 'refund' else "supplier_refund",
+            )
             
             # 4. Create GL Entry
             # Dynamic Treasury Lookup
@@ -301,21 +307,21 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                     AND u.id != :current_uid
                 """), {
-                    "title": "💳 تم صرف سند لمورد",
-                    "message": f"تم صرف {data.amount:,.2f} للمورد {supp_name or ''} — سند {voucher_num}",
+                    "title": i18n_message("notif_payment_made", request),
+                    "message": i18n_message("payment_made_details", request),
                     "link": f"/buying/payments/{voucher_id}",
                     "current_uid": current_user.id
                 })
-                db.commit()
             except Exception:
-                pass
+                logger.exception("Failed to create supplier payment notification")
     
-            return {"id": voucher_id, "message": "تم حفظ السند بنجاح"}
+            return {"id": voucher_id, "message": i18n_message("payment_saved_success", request)}
     
+        except HTTPException:
+            raise
         except Exception as e:
-            pass
-            logger.error(f"Error creating payment: {e}")
-            raise HTTPException(status_code=500, detail="حدث خطأ أثناء إنشاء سند الصرف")
+            logger.exception("Error creating payment")
+            raise HTTPException(**http_error(500, "error_creating_payment_voucher", request))
         
 @router.get("/payments", response_model=List[dict], dependencies=[Depends(require_permission("buying.view"))])
 def list_supplier_payments(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
@@ -356,7 +362,7 @@ def get_payment_details(voucher_id: int, current_user: dict = Depends(get_curren
             """), {"id": voucher_id}).fetchone()
             
             if not header:
-                raise HTTPException(status_code=404, detail="Payment not found")
+                raise HTTPException(**http_error(404, "payment_not_found", request))
     
             from utils.permissions import validate_branch_access
             validate_branch_access(current_user, header._mapping.get("branch_id"))
@@ -395,7 +401,7 @@ def get_supplier_outstanding_invoices(
                        (total - COALESCE(paid_amount, 0)) as remaining_balance
                 FROM invoices
                 WHERE party_id = :sid
-                  AND invoice_type IN ('purchase', 'purchase_return')
+                  AND invoice_type IN ('purchase', 'purchase_return', 'purchase_credit_note', 'purchase_debit_note')
                   AND status IN ('unpaid', 'partial', 'posted')
             """
             params = {"sid": supplier_id}
@@ -548,14 +554,14 @@ def create_purchase_credit_note(
             if not lines:
                 raise HTTPException(**http_error(400, "min_one_item_required"))
             if not party_id:
-                raise HTTPException(status_code=400, detail="يجب تحديد المورد")
+                raise HTTPException(**http_error(400, ("supplier_required", request)))
     
             if related_invoice_id:
                 orig = db.execute(text(
                     "SELECT id, party_id, invoice_type FROM invoices WHERE id = :id"
                 ), {"id": related_invoice_id}).fetchone()
                 if not orig or orig.party_id != party_id:
-                    raise HTTPException(status_code=400, detail="الفاتورة المرتبطة غير موجودة أو لا تخص هذا المورد")
+                    raise HTTPException(**http_error(400, "linked_invoice_not_for_supplier", request))
     
             inv_date = data.get("invoice_date", str(date.today()))
             base_currency = get_base_currency(db)
@@ -629,7 +635,7 @@ def create_purchase_credit_note(
             acc_vat = get_mapped_account_id(db, "acc_map_vat_in")
     
             if not acc_ap or not acc_inv:
-                raise HTTPException(status_code=400, detail="إعدادات الحسابات غير مكتملة (AP / Inventory)")
+                raise HTTPException(**http_error(400, "ap_inventory_accounts_incomplete", request))
     
             # FISCAL-LOCK: Reject if accounting period is closed
             check_fiscal_period_open(db, inv_date)
@@ -679,8 +685,14 @@ def create_purchase_credit_note(
     
             # Update supplier balance via party_site_balances (credit note REDUCES what we owe supplier)
             gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
-            update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
-                               currency=currency, amount=-float(total))
+            update_party_site_balance(
+                db,
+                party_id=party_id,
+                branch_id=branch_id,
+                currency=currency,
+                amount=total,
+                document_type="purchase_credit_note",
+            )
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="buying.credit_note.create", resource_type="purchase_credit_note",
@@ -688,13 +700,11 @@ def create_purchase_credit_note(
                          request=request, branch_id=branch_id)
     
             return {"success": True, "id": note_id, "invoice_number": inv_num,
-                    "journal_entry_id": je_id, "message": f"تم إنشاء الإشعار الدائن {inv_num} بنجاح"}
+                    "journal_entry_id": je_id, "message": i18n_message("credit_note_created_number", request)}
         except HTTPException:
             raise
         except Exception as e:
-            pass
-            logger.error(f"Error creating purchase credit note: {e}")
-            logger.exception("Internal error")
+            logger.exception("Error creating purchase credit note")
             raise HTTPException(**http_error(500, "internal_error"))
 # ==================== INV-004: Purchase Debit Notes (إشعار مدين مشتريات) ====================
 # Debit Note to Supplier: Increases what we owe (e.g., undercharged, additional services)
@@ -810,7 +820,7 @@ def create_purchase_debit_note(
             if not lines:
                 raise HTTPException(**http_error(400, "min_one_item_required"))
             if not party_id:
-                raise HTTPException(status_code=400, detail="يجب تحديد المورد")
+                raise HTTPException(**http_error(400, ("supplier_required", request)))
     
             inv_date = data.get("invoice_date", str(date.today()))
             base_currency = get_base_currency(db)
@@ -884,7 +894,7 @@ def create_purchase_debit_note(
             acc_vat = get_mapped_account_id(db, "acc_map_vat_in")
     
             if not acc_ap or not acc_inv:
-                raise HTTPException(status_code=400, detail="إعدادات الحسابات غير مكتملة (AP / Inventory)")
+                raise HTTPException(**http_error(400, "ap_inventory_accounts_incomplete", request))
     
             # FISCAL-LOCK: Reject if accounting period is closed
             check_fiscal_period_open(db, inv_date)
@@ -926,8 +936,14 @@ def create_purchase_debit_note(
     
             # Update supplier balance via party_site_balances (debit note INCREASES what we owe supplier)
             gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
-            update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
-                               currency=currency, amount=float(total))
+            update_party_site_balance(
+                db,
+                party_id=party_id,
+                branch_id=branch_id,
+                currency=currency,
+                amount=-total,
+                document_type="purchase_debit_note",
+            )
     
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="buying.debit_note.create", resource_type="purchase_debit_note",
@@ -935,17 +951,14 @@ def create_purchase_debit_note(
                          request=request, branch_id=branch_id)
     
             return {"success": True, "id": note_id, "invoice_number": inv_num,
-                    "journal_entry_id": je_id, "message": f"تم إنشاء الإشعار المدين {inv_num} بنجاح"}
+                    "journal_entry_id": je_id, "message": i18n_message("debit_note_created_number", request)}
         except HTTPException:
             raise
         except Exception as e:
-            pass
-            logger.error(f"Error creating purchase debit note: {e}")
-            logger.exception("Internal error")
+            logger.exception("Error creating purchase debit note")
             raise HTTPException(**http_error(500, "internal_error"))
 # =====================================================
 # 8.11 PURCHASES IMPROVEMENTS
 # =====================================================
 
 # ---------- PUR-001: Request for Quotations ----------
-

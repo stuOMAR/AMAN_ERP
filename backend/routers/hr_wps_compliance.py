@@ -3,7 +3,7 @@ AMAN ERP — WPS Export, Saudization Tracking, End of Service Settlement
 نظام حماية الأجور (WPS) — السعودة — مكافأة نهاية الخدمة
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -95,12 +95,12 @@ def _sif_num(value, width: int, decimals: int = 0) -> str:
 def _validate_mol_establishment_id(value: str) -> str:
     mol_id = "".join(ch for ch in str(value or "") if ch.isdigit())
     if len(mol_id) != 10 or mol_id == "0" * 10:
-        raise HTTPException(status_code=400, detail="MOL establishment ID must be a real 10-digit value")
+        raise HTTPException(**http_error(400, "mol_establishment_id_must_be_a_real_10_digit_value", request))
     return mol_id
 
 
 @router.post("/wps/export", dependencies=[Depends(require_permission(["hr.manage", "hr.pii"]))])
-def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_user)):
+def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depends(get_current_user)):
     """
     تصدير ملف WPS (نظام حماية الأجور) بتنسيق SIF
     Saudi Bank SIF format compatible with GOSI and MOL
@@ -119,7 +119,7 @@ def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_use
             if not period:
                 raise HTTPException(**http_error(404, "payroll_period_not_found"))
             if period.status != 'posted':
-                raise HTTPException(400, "يجب ترحيل الرواتب أولاً قبل التصدير")
+                raise HTTPException(**http_error(400, "wps_must_post_payroll_first", request))
     
             # Get company info
             company = db.execute(text("""
@@ -150,7 +150,7 @@ def export_wps_file(body: WPSExportRequest, current_user=Depends(get_current_use
             entries = db.execute(text(wps_query), wps_params).fetchall()
     
             if not entries:
-                raise HTTPException(400, "لا توجد رواتب للتصدير")
+                raise HTTPException(**http_error(400, "wps_no_payroll_to_export", request))
     
             # ── Build SIF File ──
             lines = []
@@ -567,7 +567,7 @@ class EOSSettlementRequest(BaseModel):
 
 
 @router.post("/end-of-service/settle", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_current_user)):
+def settle_end_of_service(body: EOSSettlementRequest, request: Request, current_user=Depends(get_current_user)):
     """
     تسوية نهاية الخدمة — إنشاء قيد محاسبي وتسجيل المبلغ
     يشمل: مكافأة نهاية الخدمة + رصيد إجازات + راتب مستحق
@@ -593,7 +593,7 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
             term_date = datetime.strptime(body.termination_date, "%Y-%m-%d").date() if body.termination_date else date.today()
             join_date = emp.hire_date
             if not join_date:
-                raise HTTPException(400, "تاريخ التعيين غير محدد")
+                raise HTTPException(**http_error(400, "employment_date_not_set", request))
     
             delta = relativedelta(term_date, join_date)
             total_years = _dec(delta.years) + (_dec(delta.months) / Decimal('12')) + (_dec(delta.days) / Decimal('365.25'))
@@ -750,7 +750,7 @@ def settle_end_of_service(body: EOSSettlementRequest, current_user=Depends(get_c
                 "total_settlement": str(total_settlement),
                 "journal_entry_id": je_id,
                 "journal_entry_number": je_number,
-                "message": "تم تسوية نهاية الخدمة بنجاح"
+                "message": i18n_message("eos_settled", request)
             }
         except HTTPException:
             raise

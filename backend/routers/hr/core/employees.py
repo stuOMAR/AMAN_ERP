@@ -98,7 +98,7 @@ def get_employees(
             if branch_id is not None:
                 # If requesting specific branch, verify access
                 if int(branch_id) not in normalized_allowed_branches:
-                    raise HTTPException(status_code=403, detail="Unauthorized access to this branch")
+                    raise HTTPException(**http_error(403, ("unauthorized_branch_access", request)))
                 query += " AND (e.branch_id = :bid OR ub.branch_id = :bid)"
                 params["bid"] = branch_id
             else:
@@ -185,7 +185,7 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
             # Check if username exists
             exists = conn.execute(text("SELECT 1 FROM company_users WHERE username = :u"), {"u": employee.username}).fetchone()
             if exists:
-                raise HTTPException(status_code=400, detail="Username already exists")
+                raise HTTPException(**http_error(400, ("username_already_exists", request)))
             
             hashed = hash_password(employee.password)
             role_key = (employee.role or 'employee').strip().lower()
@@ -355,8 +355,8 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
                 WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                 AND u.id != :current_uid
             """), {
-                "title": "👤 موظف جديد",
-                "message": f"تم إضافة الموظف {employee.first_name} {employee.last_name} — {employee.position_title or ''}",
+                "title": i18n_message("notif_new_employee", request),
+                "message": i18n_message("employee_added_details", request),
                 "link": "/hr/employees",
                 "current_uid": current_user.get('id') if isinstance(current_user, dict) else current_user.id
             })
@@ -364,12 +364,12 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
         except Exception:
             pass
 
-        return {"message": "Success"}
+        return {"message": i18n_message(("record_created_success", request))}
         
     except Exception as e:
         trans.rollback()
         logger.exception("Internal error")
-        raise HTTPException(status_code=400, detail=f"Invalid data: {str(e)}")
+        raise HTTPException(status_code=400, detail=i18n_message("invalid_data_detail", request))
     finally:
         conn.close()
 
@@ -388,7 +388,7 @@ def update_employee(
         # Check existence
         existing = conn.execute(text("SELECT user_id FROM employees WHERE id = :id"), {"id": employee_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise HTTPException(**http_error(404, ("employee_not_found", request)))
         
         user_id = existing[0]
 
@@ -510,7 +510,7 @@ def update_employee(
             branch_id=employee.branch_id
         )
 
-        return {"message": "Updated successfully"}
+        return {"message": i18n_message(("updated_success", request))}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -545,7 +545,7 @@ def calculate_end_of_service(
             join_date = emp.hire_date
             
             if not join_date:
-                raise HTTPException(status_code=400, detail="تاريخ التعيين غير محدد للموظف")
+                raise HTTPException(**http_error(400, ("hire_date_not_set", request)))
             
             # Calculate service years
             from dateutil.relativedelta import relativedelta
@@ -553,7 +553,7 @@ def calculate_end_of_service(
             total_years = _dec(delta.years) + (_dec(delta.months) / Decimal('12')) + (_dec(delta.days) / Decimal('365.25'))
             
             if total_years < Decimal('0'):
-                raise HTTPException(status_code=400, detail="تاريخ الإنهاء قبل تاريخ التعيين")
+                raise HTTPException(**http_error(400, ("termination_before_hire", request)))
             
             # Total salary (basic + housing + transport) used as base
             base_salary = _dec(emp.basic_salary)

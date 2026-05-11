@@ -604,7 +604,7 @@ async def delete_project_document(project_id: int, doc_id: int, current_user: di
             safe_base = os.path.abspath("uploads")
             abs_path = os.path.abspath(rel_path)
             if not abs_path.startswith(safe_base):
-                raise HTTPException(status_code=400, detail="Invalid file path")
+                raise HTTPException(**http_error(400, ("invalid_file_path", request)))
             if os.path.exists(abs_path):
                 os.remove(abs_path)
                 
@@ -652,7 +652,13 @@ async def create_project_invoice(
                 effective_tax_rate = tax_info["tax_rate"]
             else:
                 effective_tax_rate = _dec(item.tax_rate or 0)
-            la = compute_line_amounts(item.quantity, item.unit_price, effective_tax_rate, item.discount)
+            la = compute_line_amounts(
+                item.quantity,
+                item.unit_price,
+                effective_tax_rate,
+                item.discount,
+                discount_is_percent=False,
+            )
             line_dicts.append({"quantity": item.quantity, "unit_price": item.unit_price,
                                "tax_rate": effective_tax_rate, "discount": item.discount})
             line_items_data.append({
@@ -662,13 +668,13 @@ async def create_project_invoice(
                 "price": item.unit_price,
                 "tax": effective_tax_rate,
                 "disc": item.discount,
-                "total": float(la['line_total'])
+                "total": la["line_total"]
             })
-        totals = compute_invoice_totals(line_dicts)
-        subtotal = float(totals["subtotal"])
-        total_tax = float(totals["total_tax"])
-        total_discount = float(totals["total_discount"])
-        grand_total = float(totals["grand_total"])
+        totals = compute_invoice_totals(line_dicts, discount_is_percent=False)
+        subtotal = totals["subtotal"]
+        total_tax = totals["total_tax"]
+        total_discount = totals["total_discount"]
+        grand_total = totals["grand_total"]
         
         # 3. Create Invoice Header
         inv_currency = invoice_data.currency or get_base_currency(db)
@@ -1130,5 +1136,4 @@ def _compute_total_allocation(db, employee_id: int, start_date, end_date, exclud
           {exclude_clause}
     """), params).fetchone()
     return float(row.total_pct)
-
 

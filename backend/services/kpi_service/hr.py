@@ -121,12 +121,12 @@ def get_hr_kpis(db, start_date: date, end_date: date,
     alerts = []
     if nitaqat in ("Red", "Yellow"):
         alerts.append({"severity": "high" if nitaqat == "Red" else "medium",
-                        "code": "SAUDIZATION", "message": f"Saudization at {saudization:.1f}% — {nitaqat} band",
+                        "code": "SAUDIZATION", "message": i18n_message("kpi_saudization", request),
                         "message_ar": f"نسبة السعودة {saudization:.1f}% — نطاق {'أحمر' if nitaqat == 'Red' else 'أصفر'}",
                         "link": "/hr/saudization"})
     if pending_leaves > 10:
         alerts.append({"severity": "medium", "code": "PENDING_LEAVES",
-                        "message": f"{pending_leaves} leave requests pending approval",
+                        "message": i18n_message("kpi_pending_leaves", request),
                         "message_ar": f"{pending_leaves} طلب إجازة بانتظار الاعتماد",
                         "count": pending_leaves, "link": "/hr/leaves"})
 

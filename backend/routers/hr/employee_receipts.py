@@ -101,7 +101,7 @@ def submit_settlement(
     except Exception:
         conn.rollback()
         logger.exception("Failed to submit settlement")
-        raise HTTPException(status_code=500, detail="Submission failed")
+        raise HTTPException(**http_error(500, "submission_failed", request))
     finally:
         conn.close()
 
@@ -130,7 +130,7 @@ def approve_settlement(
     except Exception:
         conn.rollback()
         logger.exception("Failed to approve settlement %s", settlement_id)
-        raise HTTPException(status_code=500, detail="Approval failed")
+        raise HTTPException(**http_error(500, "approval_failed", request))
     finally:
         conn.close()
 
@@ -160,7 +160,7 @@ def reject_settlement(
     except Exception:
         conn.rollback()
         logger.exception("Failed to reject settlement %s", settlement_id)
-        raise HTTPException(status_code=500, detail="Rejection failed")
+        raise HTTPException(**http_error(500, "rejection_failed", request))
     finally:
         conn.close()
 
@@ -189,6 +189,6 @@ def post_settlement(
     except Exception:
         conn.rollback()
         logger.exception("Failed to post settlement %s", settlement_id)
-        raise HTTPException(status_code=500, detail="Posting failed")
+        raise HTTPException(**http_error(500, "posting_failed", request))
     finally:
         conn.close()

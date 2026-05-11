@@ -10,7 +10,8 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from pydantic import BaseModel
+from decimal import Decimal, ROUND_HALF_UP
+from pydantic import BaseModel, Field
 import logging
 
 from database import get_db_connection
@@ -31,7 +32,7 @@ class BatchCreate(BaseModel):
     batch_number: str
     manufacturing_date: Optional[str] = None
     expiry_date: Optional[str] = None
-    quantity: float = 0
+    quantity: float = Field(default=0, ge=0)
     unit_cost: float = 0
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
@@ -271,7 +272,7 @@ def create_batch(
             """), {"pid": batch.product_id, "wid": batch.warehouse_id, "bn": batch.batch_number}).fetchone()
     
             if exists:
-                raise HTTPException(status_code=400, detail="رقم الدفعة موجود بالفعل لهذا المنتج في هذا المستودع")
+                raise HTTPException(**http_error(400, ("batch_number_duplicate", request)))
     
             result = db.execute(text("""
                 INSERT INTO product_batches (
@@ -298,21 +299,41 @@ def create_batch(
     
             # If quantity > 0, update inventory and log movement
             if batch.quantity > 0:
+                from services.costing_service import CostingService
+                unit_cost = Decimal(str(batch.unit_cost or 0))
+                CostingService.update_cost(
+                    db,
+                    product_id=batch.product_id,
+                    warehouse_id=batch.warehouse_id,
+                    new_qty=float(batch.quantity),
+                    new_price=float(unit_cost),
+                )
+                costing_method = CostingService._get_product_costing_method(db, batch.product_id, batch.warehouse_id)
+                if costing_method in ("fifo", "lifo"):
+                    CostingService.create_cost_layer(
+                        db,
+                        product_id=batch.product_id,
+                        warehouse_id=batch.warehouse_id,
+                        quantity=float(batch.quantity),
+                        unit_cost=float(unit_cost),
+                        source_document_type="batch",
+                        source_document_id=result.id,
+                        costing_method=costing_method,
+                    )
+
                 # Upsert inventory
-                inv = db.execute(text("""
-                    SELECT id FROM inventory WHERE product_id = :pid AND warehouse_id = :wid
-                """), {"pid": batch.product_id, "wid": batch.warehouse_id}).fetchone()
-    
-                if inv:
-                    db.execute(text("""
-                        UPDATE inventory SET quantity = quantity + :qty, updated_at = NOW()
-                        WHERE product_id = :pid AND warehouse_id = :wid
-                    """), {"qty": batch.quantity, "pid": batch.product_id, "wid": batch.warehouse_id})
-                else:
-                    db.execute(text("""
-                        INSERT INTO inventory (product_id, warehouse_id, quantity)
-                        VALUES (:pid, :wid, :qty)
-                    """), {"pid": batch.product_id, "wid": batch.warehouse_id, "qty": batch.quantity})
+                db.execute(text("""
+                    INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                    VALUES (:pid, :wid, :qty, :cost, NOW())
+                    ON CONFLICT (product_id, warehouse_id)
+                    DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                  updated_at = NOW()
+                """), {
+                    "pid": batch.product_id,
+                    "wid": batch.warehouse_id,
+                    "qty": batch.quantity,
+                    "cost": float(unit_cost),
+                })
     
                 # Log inventory transaction
                 db.execute(text("""
@@ -370,7 +391,7 @@ def create_batch(
             return {
                 "id": result.id,
                 "batch_number": batch.batch_number,
-                "message": "تم إنشاء الدفعة بنجاح"
+                "message": i18n_message("batch_created_success", request)
             }
         except HTTPException:
             raise
@@ -415,7 +436,7 @@ def update_batch(
                 db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params)
                 db.commit()
     
-            return {"message": "تم تحديث الدفعة بنجاح"}
+            return {"message": i18n_message("batch_updated_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -613,7 +634,7 @@ def create_serial(
             """), {"pid": serial.product_id, "sn": serial.serial_number}).fetchone()
     
             if exists:
-                raise HTTPException(status_code=400, detail="الرقم التسلسلي موجود بالفعل لهذا المنتج")
+                raise HTTPException(**http_error(400, ("serial_number_duplicate", request)))
     
             result = db.execute(text("""
                 INSERT INTO product_serials (
@@ -665,7 +686,7 @@ def create_serial(
                 details={"serial_number": serial.serial_number, "product_id": serial.product_id, "warehouse_id": serial.warehouse_id},
                 request=request
             )
-            return {"id": result.id, "serial_number": serial.serial_number, "message": "تم إنشاء الرقم التسلسلي بنجاح"}
+            return {"id": result.id, "serial_number": serial.serial_number, "message": i18n_message("serial_created_success", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -684,7 +705,7 @@ def create_serials_bulk(
     with transactional(current_user.company_id) as db:
         try:
             if data.count > 1000:
-                raise HTTPException(status_code=400, detail="الحد الأقصى 1000 رقم تسلسلي في المرة الواحدة")
+                raise HTTPException(**http_error(400, ("max_serials_exceeded", request)))
     
             product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": data.product_id}).fetchone()
             if not product:
@@ -737,7 +758,7 @@ def create_serials_bulk(
             db.execute(text("UPDATE products SET has_serial_tracking = TRUE WHERE id = :pid"), {"pid": data.product_id})
     
             return {
-                "message": f"تم إنشاء {len(created)} رقم تسلسلي",
+                "message": i18n_message("serials_created_count", request),
                 "created_count": len(created),
                 "failed_count": len(failed),
                 "created": created[:20],  # Return first 20 only
@@ -785,7 +806,7 @@ def update_serial(
                 db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params)
                 db.commit()
     
-            return {"message": "تم تحديث الرقم التسلسلي بنجاح"}
+            return {"message": i18n_message(("serial_number_updated", request))}
         except HTTPException:
             raise
         except Exception:
@@ -836,7 +857,7 @@ def update_product_tracking(
                 db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params)
                 db.commit()
     
-            return {"message": "تم تحديث إعدادات التتبع بنجاح"}
+            return {"message": i18n_message(("tracking_settings_updated", request))}
         except HTTPException:
             raise
         except Exception:
@@ -986,7 +1007,7 @@ def create_quality_inspection(
                     "expected": criterion.get("expected_value", "")
                 })
     
-            return {"id": result.id, "inspection_number": inspection_number, "message": "تم إنشاء فحص الجودة بنجاح"}
+            return {"id": result.id, "inspection_number": inspection_number, "message": i18n_message("quality_inspection_created", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -1046,7 +1067,7 @@ def complete_quality_inspection(
                         "id": criterion["id"]
                     })
     
-            return {"message": "تم إكمال فحص الجودة بنجاح"}
+            return {"message": i18n_message("quality_inspection_completed", request)}
         except HTTPException:
             raise
         except Exception:
@@ -1208,7 +1229,7 @@ def create_cycle_count(
                 "id": result.id,
                 "count_number": count_number,
                 "total_items": len(products),
-                "message": "تم إنشاء الجرد الدوري بنجاح"
+                "message": i18n_message("cycle_count_created_success", request)
             }
         except HTTPException:
             raise
@@ -1228,13 +1249,13 @@ def start_cycle_count(count_id: int, current_user: dict = Depends(get_current_us
             if not cc:
                 raise HTTPException(**http_error(404, "inventory_not_found"))
             if cc.status != 'draft':
-                raise HTTPException(status_code=400, detail="لا يمكن بدء جرد ليس في حالة مسودة")
+                raise HTTPException(**http_error(400, ("cycle_count_not_draft", request)))
     
             db.execute(text("""
                 UPDATE cycle_counts SET status = 'in_progress', start_date = NOW(), updated_at = NOW()
                 WHERE id = :id
             """), {"id": count_id})
-            return {"message": "تم بدء الجرد الدوري"}
+            return {"message": i18n_message(("cycle_count_started", request))}
         except HTTPException:
             raise
         except Exception:
@@ -1298,18 +1319,71 @@ def complete_cycle_count(
                     if data.auto_adjust:
                         # T024: Hard-block negative stock — check reserved qty
                         inv_row = db.execute(text("""
-                            SELECT reserved, available FROM inventory
+                            SELECT reserved_quantity, quantity - COALESCE(reserved_quantity, 0) as available
+                            FROM inventory
                             WHERE product_id = :pid AND warehouse_id = :wid
+                            FOR UPDATE
                         """), {"pid": cci.product_id, "wid": cc.warehouse_id}).fetchone()
-                        reserved = (inv_row.reserved if inv_row else 0) or 0
+                        reserved = (inv_row.reserved_quantity if inv_row else 0) or 0
                         new_available = item.counted_quantity - reserved
                         if new_available < 0:
-                            prod_name = db.execute(text("SELECT item_name FROM products WHERE id = :pid"), {"pid": cci.product_id}).scalar() or cci.product_id
+                            prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": cci.product_id}).scalar() or cci.product_id
                             raise HTTPException(
                                 status_code=400,
                                 detail=f"لا يمكن تعديل المخزون للمنتج {prod_name}: الكمية المحجوزة ({reserved}) أكبر من الكمية المحسوبة ({item.counted_quantity})"
                             )
-    
+
+                        from services.costing_service import CostingService
+                        movement_unit_cost = Decimal(str(cci.unit_cost or 0))
+                        variance_dec = Decimal(str(variance))
+                        movement_total_abs = (abs(variance_dec) * movement_unit_cost).quantize(Decimal("0.01"), ROUND_HALF_UP)
+                        costing_method = CostingService._get_product_costing_method(db, cci.product_id, cc.warehouse_id)
+                        if variance_dec > 0:
+                            CostingService.update_cost(
+                                db,
+                                product_id=cci.product_id,
+                                warehouse_id=cc.warehouse_id,
+                                new_qty=float(variance_dec),
+                                new_price=float(movement_unit_cost),
+                            )
+                            if costing_method in ("fifo", "lifo"):
+                                CostingService.create_cost_layer(
+                                    db,
+                                    product_id=cci.product_id,
+                                    warehouse_id=cc.warehouse_id,
+                                    quantity=float(variance_dec),
+                                    unit_cost=float(movement_unit_cost),
+                                    source_document_type="cycle_count",
+                                    source_document_id=count_id,
+                                    costing_method=costing_method,
+                                )
+                        elif variance_dec < 0 and costing_method in ("fifo", "lifo"):
+                            try:
+                                consumed_value = CostingService.consume_layers(
+                                    db,
+                                    product_id=cci.product_id,
+                                    warehouse_id=cc.warehouse_id,
+                                    quantity=float(abs(variance_dec)),
+                                    sale_document_type="cycle_count",
+                                    sale_document_id=count_id,
+                                    costing_method=costing_method,
+                                )
+                            except ValueError as exc:
+                                raise HTTPException(status_code=400, detail=str(exc))
+                            movement_total_abs = Decimal(str(consumed_value)).quantize(Decimal("0.01"), ROUND_HALF_UP)
+                            movement_unit_cost = (movement_total_abs / abs(variance_dec)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+
+                        variance_value = movement_total_abs if variance_dec > 0 else -movement_total_abs
+                        db.execute(text("""
+                            UPDATE cycle_count_items
+                            SET unit_cost = :uc, variance_value = :vv
+                            WHERE id = :id
+                        """), {
+                            "uc": float(movement_unit_cost),
+                            "vv": float(variance_value),
+                            "id": item.id,
+                        })
+
                         db.execute(text("""
                             UPDATE inventory SET quantity = :qty, updated_at = NOW()
                             WHERE product_id = :pid AND warehouse_id = :wid
@@ -1318,16 +1392,16 @@ def complete_cycle_count(
                             "pid": cci.product_id,
                             "wid": cc.warehouse_id
                         })
-    
+
                         # Log adjustment
-                        adj_type = 'adjustment_in' if variance > 0 else 'adjustment_out'
+                        adj_type = 'adjustment_in' if variance_dec > 0 else 'adjustment_out'
                         db.execute(text("""
                             INSERT INTO inventory_transactions (
                                 product_id, warehouse_id, transaction_type, reference_type,
-                                reference_id, quantity, notes, created_by
+                                reference_id, quantity, unit_cost, total_cost, notes, created_by
                             ) VALUES (
                                 :pid, :wid, :type, 'cycle_count', :ccid, :qty,
-                                :notes, :uid
+                                :uc, :tc, :notes, :uid
                             )
                         """), {
                             "pid": cci.product_id,
@@ -1335,6 +1409,8 @@ def complete_cycle_count(
                             "type": adj_type,
                             "ccid": count_id,
                             "qty": variance,
+                            "uc": float(movement_unit_cost),
+                            "tc": float(movement_total_abs),
                             "notes": f"تسوية جرد دوري {cc.count_number}",
                             "uid": current_user.id
                         })
@@ -1403,7 +1479,7 @@ def complete_cycle_count(
             """), {"counted": counted_count, "variance": variance_count, "id": count_id})
     
             return {
-                "message": "تم إكمال الجرد الدوري بنجاح",
+                "message": i18n_message("cycle_count_completed_success", request),
                 "counted_items": counted_count,
                 "variance_items": variance_count,
                 "auto_adjusted": data.auto_adjust

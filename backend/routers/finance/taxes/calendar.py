@@ -107,6 +107,7 @@ def tax_calendar_summary(
 @router.get("/calendar/{item_id}", response_model=Dict[str, Any])
 def get_tax_calendar_item(
     item_id: int,
+    request: Request,
     current_user=Depends(require_permission(["taxes.view"]))
 ):
     """Get Tax Calendar Item."""
@@ -114,7 +115,7 @@ def get_tax_calendar_item(
         try:
             row = db.execute(text("SELECT * FROM tax_calendar WHERE id = :id AND is_active = TRUE"), {"id": item_id}).fetchone()
             if not row:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
             return dict(row._mapping)
@@ -179,7 +180,7 @@ def update_tax_calendar_item(
                 "SELECT branch_id FROM tax_calendar WHERE id = :id AND is_active = TRUE"
             ), {"id": item_id}).fetchone()
             if not existing:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             if existing.branch_id:
                 validate_branch_access(current_user, existing.branch_id)
             updates = []
@@ -196,7 +197,7 @@ def update_tax_calendar_item(
                 updates.append("reminder_days = CAST(:reminder_days AS jsonb)")
                 params["reminder_days"] = json.dumps(data.reminder_days)
             if not updates:
-                raise HTTPException(400, "No fields to update")
+                raise HTTPException(**http_error(400, "pos_no_fields", request))
     
             row = db.execute(text(  # noqa: sql-lint
                 f"""
@@ -204,7 +205,7 @@ def update_tax_calendar_item(
                 UPDATE tax_calendar SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP WHERE id = :id RETURNING *
             """), params).fetchone()
             if not row:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.calendar.update", resource_type="tax_calendar",
                          resource_id=str(item_id), details={"fields": list(params.keys())},
@@ -232,7 +233,7 @@ def delete_tax_calendar_item(
                 "SELECT branch_id FROM tax_calendar WHERE id = :id AND is_active = TRUE"
             ), {"id": item_id}).fetchone()
             if not existing:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             if existing.branch_id:
                 validate_branch_access(current_user, existing.branch_id)
             result = db.execute(text("""
@@ -241,12 +242,12 @@ def delete_tax_calendar_item(
                  WHERE id = :id AND is_active = TRUE
             """), {"id": item_id})
             if result.rowcount == 0:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.calendar.delete", resource_type="tax_calendar",
                          resource_id=str(item_id), details={},
                          request=request)
-            return {"message": "Deleted", "soft_deleted": True}
+            return {"message": i18n_message("record_deleted", request), "soft_deleted": True}
         except HTTPException:
             raise
         except Exception:
@@ -266,7 +267,7 @@ def complete_tax_calendar_item(
         try:
             row = db.execute(text("SELECT * FROM tax_calendar WHERE id = :id AND is_active = TRUE FOR UPDATE"), {"id": item_id}).fetchone()
             if not row:
-                raise HTTPException(404, "Calendar item not found")
+                raise HTTPException(**http_error(404, "tax_calendar_item_not_found", request))
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
             item = dict(row._mapping)
@@ -307,7 +308,7 @@ def complete_tax_calendar_item(
                          action="taxes.calendar.complete", resource_type="tax_calendar",
                          resource_id=str(item_id), details={"next_recurrence_id": new_id},
                          request=request)
-            return {"message": "Completed", "next_recurrence_id": new_id}
+            return {"message": i18n_message("record_completed", request), "next_recurrence_id": new_id}
         except HTTPException:
             raise
         except Exception as e:

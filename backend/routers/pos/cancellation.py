@@ -46,13 +46,13 @@ async def cancel_pos_sale(
     ).fetchone()
 
     if not order:
-        raise HTTPException(status_code=404, detail="POS order not found")
+        raise HTTPException(**http_error(404, "pos_order_not_found", request))
 
     if order.status == 'cancelled':
-        raise HTTPException(status_code=400, detail="Order already cancelled")
+        raise HTTPException(**http_error(400, "order_already_cancelled", request))
 
     if order.status != 'paid':
-        raise HTTPException(status_code=400, detail="Only paid orders can be cancelled")
+        raise HTTPException(**http_error(400, "only_paid_orders_can_be_cancelled", request))
 
     # Get order lines for restocking
     lines = db.execute(
@@ -95,4 +95,4 @@ async def cancel_pos_sale(
 
     db.commit()
 
-    return {"id": sale_id, "status": "cancelled", "message": "POS order cancelled successfully"}
+    return {"id": sale_id, "status": "cancelled", "message": i18n_message("pos_order_cancelled_success", request)}

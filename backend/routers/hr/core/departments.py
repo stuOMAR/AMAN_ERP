@@ -52,7 +52,7 @@ def create_department(dept: DepartmentCreate, current_user: UserResponse = Depen
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="department.create",
                      resource_type="department", resource_id=0, details={"name": dept.department_name})
-        return {"message": "Department created"}
+        return {"message": i18n_message(("department_created", request))}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -69,7 +69,7 @@ def delete_department(dept_id: int, current_user: UserResponse = Depends(get_cur
         # Check usage via repository
         count = EmployeeRepository(conn).count(department_id=dept_id)
         if count > 0:
-            raise HTTPException(status_code=400, detail="Cannot delete department. It is assigned to employees.")
+            raise HTTPException(**http_error(400, "cannot_delete_department_it_is_assigned_to_employe", request))
 
         conn.execute(text("DELETE FROM departments WHERE id = :id"), {"id": dept_id})
         trans.commit()
@@ -77,7 +77,7 @@ def delete_department(dept_id: int, current_user: UserResponse = Depends(get_cur
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="department.delete",
                      resource_type="department", resource_id=dept_id, details={})
-        return {"message": "Department deleted"}
+        return {"message": i18n_message(("department_deleted", request))}
     except HTTPException:
         raise
     except Exception:
@@ -122,7 +122,7 @@ def create_position(pos: PositionCreate, current_user: UserResponse = Depends(ge
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="position.create",
                      resource_type="position", resource_id=0, details={"name": pos.position_name})
-        return {"message": "Position created"}
+        return {"message": i18n_message(("position_created", request))}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -139,7 +139,7 @@ def delete_position(pos_id: int, current_user: UserResponse = Depends(get_curren
         # Check usage
         count = conn.execute(text("SELECT COUNT(*) FROM employees WHERE position_id = :id"), {"id": pos_id}).scalar()
         if count > 0:
-            raise HTTPException(status_code=400, detail="Cannot delete position. It is assigned to employees.")
+            raise HTTPException(**http_error(400, "cannot_delete_position_it_is_assigned_to_employees", request))
 
         conn.execute(text("DELETE FROM employee_positions WHERE id = :id"), {"id": pos_id})
         trans.commit()
@@ -147,7 +147,7 @@ def delete_position(pos_id: int, current_user: UserResponse = Depends(get_curren
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="position.delete",
                      resource_type="position", resource_id=pos_id, details={})
-        return {"message": "Position deleted"}
+        return {"message": i18n_message(("position_deleted", request))}
     except HTTPException:
         raise
     except Exception:

@@ -41,7 +41,7 @@ def create_cost_center(request: Request, cc: CostCenterCreate, current_user: dic
         if cc.center_code:
             existing = conn.execute(text("SELECT 1 FROM cost_centers WHERE center_code = :code"), {"code": cc.center_code}).fetchone()
             if existing:
-                raise HTTPException(status_code=400, detail="Cost center code already exists")
+                raise HTTPException(**http_error(400, "cost_center_code_already_exists", request))
 
         result = conn.execute(text("""
             INSERT INTO cost_centers (center_code, center_name, center_name_en, department_id, manager_id, is_active)
@@ -79,14 +79,14 @@ def update_cost_center(request: Request, cc_id: int, cc: CostCenterUpdate, curre
         # Check existence
         existing = conn.execute(text("SELECT 1 FROM cost_centers WHERE id = :id"), {"id": cc_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Cost center not found")
+            raise HTTPException(**http_error(404, "cost_center_not_found", request))
 
         # Check duplicate code
         if cc.center_code:
             dup = conn.execute(text("SELECT 1 FROM cost_centers WHERE center_code = :code AND id != :id"), 
                                {"code": cc.center_code, "id": cc_id}).fetchone()
             if dup:
-                raise HTTPException(status_code=400, detail="Cost center code already exists")
+                raise HTTPException(**http_error(400, "cost_center_code_already_exists", request))
 
         # Dynamic Update
         update_fields = []
@@ -112,7 +112,7 @@ def update_cost_center(request: Request, cc_id: int, cc: CostCenterUpdate, curre
             params["active"] = cc.is_active
 
         if not update_fields:
-            raise HTTPException(status_code=400, detail="No fields to update")
+            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
 
         sql = f"UPDATE cost_centers SET {', '.join(update_fields)} WHERE id = :id RETURNING id, center_code, center_name, center_name_en, department_id, manager_id, is_active"
         
@@ -141,18 +141,18 @@ def delete_cost_center(request: Request, cc_id: int, current_user: dict = Depend
         # Check usage in journal lines
         usage = conn.execute(text("SELECT 1 FROM journal_lines WHERE cost_center_id = :id"), {"id": cc_id}).fetchone()
         if usage:
-             raise HTTPException(status_code=400, detail="Cannot delete cost center because it is used in accounting transactions")
+             raise HTTPException(**http_error(400, "cannot_delete_cost_center_because_it_is_used_in_ac", request))
         
         result = conn.execute(text("DELETE FROM cost_centers WHERE id = :id"), {"id": cc_id})
         if result.rowcount == 0:
-             raise HTTPException(status_code=404, detail="Cost center not found")
+             raise HTTPException(**http_error(404, "cost_center_not_found", request))
              
         conn.commit()
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_cost_center", resource_type="cost_center",
                      resource_id=str(cc_id),
                      details={}, request=request)
-        return {"message": "Cost center deleted successfully"}
+        return {"message": i18n_message(("cost_center_deleted", request))}
     except HTTPException:
         raise
     except Exception:

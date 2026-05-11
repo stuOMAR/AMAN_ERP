@@ -125,8 +125,8 @@ def create_contract(
                     WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                     AND u.id != :current_uid
                 """), {
-                    "title": "📝 عقد جديد",
-                    "message": f"تم إنشاء عقد {contract.contract_number or ''} — {party_name or ''} — {final_total:,.2f}",
+                    "title": i18n_message("notif_new_contract", request),
+                    "message": i18n_message("contract_created_details", request),
                     "link": f"/contracts/{contract_id}",
                     "current_uid": current_user.id
                 })

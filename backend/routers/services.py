@@ -386,7 +386,7 @@ def delete_service_request(request_id: int, request: Request, current_user: User
                          resource_id=request_id, details={},
                          request=request, branch_id=existing.branch_id)
     
-            return {"message": "تم حذف طلب الصيانة بنجاح"}
+            return {"message": i18n_message(("service_request_deleted", request))}
         except HTTPException:
             raise
         except Exception:
@@ -413,7 +413,7 @@ def assign_technician(request_id: int, data: TechnicianAssignRequest, request: R
                     WHERE u.id = :tech_id AND {TECHNICIAN_USER_FILTER}
                 """), {"tech_id": data.assigned_to}).fetchone()
                 if not technician:
-                    raise HTTPException(status_code=400, detail="المستخدم المحدد لا يملك دور أو صلاحية فني خدمة")
+                    raise HTTPException(**http_error(400, "user_no_service_role", request))
     
             db.execute(text("""
                 UPDATE service_requests
@@ -456,7 +456,7 @@ def add_service_cost(request_id: int, data: ServiceCostCreate, request: Request,
             unit = _dec(data.unit_cost if data.unit_cost is not None else 0)
             markup_pct = _dec(data.markup_pct if data.markup_pct is not None else 0)
             if markup_pct < 0:
-                raise HTTPException(status_code=400, detail="نسبة الهامش لا يمكن أن تكون سالبة")
+                raise HTTPException(**http_error(400, "margin_cannot_be_negative", request))
             total = (qty * unit * (Decimal("1") + (markup_pct / Decimal("100")))).quantize(_D2, ROUND_HALF_UP)
 
             cost_type = (data.cost_type or "other").strip().lower()
@@ -467,9 +467,9 @@ def add_service_cost(request_id: int, data: ServiceCostCreate, request: Request,
             # omitted only for free-form 'parts' descriptions (legacy).
             if cost_type == "parts" and product_id is not None:
                 if warehouse_id is None:
-                    raise HTTPException(status_code=400, detail="warehouse_id مطلوب عند صرف قطع لخدمة")
+                    raise HTTPException(**http_error(400, "warehouse_id_مطلوب_عند_صرف_قطع_لخدمة", request))
                 if qty <= 0:
-                    raise HTTPException(status_code=400, detail="الكمية المصروفة يجب أن تكون أكبر من صفر")
+                    raise HTTPException(**http_error(400, "dispensed_qty_must_be_positive", request))
                 # Lock + check available stock before decrementing.
                 row = db.execute(
                     text(
@@ -561,7 +561,7 @@ def delete_service_cost(request_id: int, cost_id: int, request: Request, current
                          resource_id=request_id, details={"cost_id": cost_id},
                          request=request, branch_id=None)
     
-            return {"message": "تم حذف التكلفة بنجاح"}
+            return {"message": i18n_message(("cost_deleted", request))}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -906,7 +906,7 @@ def delete_document(doc_id: int, current_user: UserResponse = Depends(get_curren
                 "DELETE FROM document_versions WHERE document_id = :id"
             ), {"id": doc_id})
     
-            return {"message": "تم حذف المستند بنجاح"}
+            return {"message": i18n_message(("document_deleted", request))}
         except HTTPException:
             raise
         except Exception:

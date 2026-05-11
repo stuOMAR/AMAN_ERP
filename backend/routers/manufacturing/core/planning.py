@@ -41,7 +41,7 @@ def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(
     try:
         order = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         
         # Branch validation
         from utils.permissions import validate_branch_access
@@ -49,7 +49,7 @@ def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(
             validate_branch_access(current_user, order.branch_id)
         
         if not order.bom_id:
-            raise HTTPException(status_code=400, detail="Order has no BOM assigned")
+            raise HTTPException(**http_error(400, ("order_has_no_bom", request)))
 
         # Fetch BOM components
         components = conn.execute(text("""
@@ -143,7 +143,7 @@ def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(
     except Exception as e:
         conn.rollback()
         logger.error(f"Error calculating MRP for order {order_id}: {e}")
-        raise HTTPException(status_code=500, detail="فشل في حساب تخطيط الاحتياجات")
+        raise HTTPException(**http_error(500, "mrp_calculation_failed", request))
     finally:
         conn.close()
 
@@ -192,6 +192,7 @@ def list_mrp_plans(
 
 @router.get("/capacity-plans", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=List[Dict[str, Any]])
 def list_capacity_plans(
+    request: Request,
     work_center_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
@@ -221,7 +222,7 @@ def list_capacity_plans(
         return [dict(r._mapping) for r in rows]
     except Exception as e:
         logger.error(f"Error listing capacity plans: {e}")
-        raise HTTPException(500, "فشل في جلب خطط الطاقة")
+        raise HTTPException(**http_error(500, "capacity_plan_fetch_failed", request))
     finally:
         conn.close()
 
@@ -249,11 +250,11 @@ def create_capacity_plan(plan: dict, request: Request, current_user=Depends(get_
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="create_capacity_plan", resource_type="capacity_plans",
                      resource_id=str(plan_id), request=request)
-        return {"id": plan_id, "message": "تم إنشاء خطة الطاقة بنجاح"}
+        return {"id": plan_id, "message": i18n_message("capacity_plan_created", request)}
     except Exception as e:
         conn.rollback()
         logger.error(f"Error creating capacity plan: {e}")
-        raise HTTPException(500, "فشل في إنشاء خطة الطاقة")
+        raise HTTPException(**http_error(500, "capacity_plan_create_failed", request))
     finally:
         conn.close()
 
@@ -278,10 +279,10 @@ def update_capacity_plan(plan_id: int, plan: dict, request: Request, current_use
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="update_capacity_plan", resource_type="capacity_plans",
                      resource_id=str(plan_id), request=request)
-        return {"message": "تم تحديث خطة الطاقة بنجاح"}
+        return {"message": i18n_message(("capacity_plan_updated", request))}
     except Exception as e:
         conn.rollback()
         logger.error(f"Error updating capacity plan {plan_id}: {e}")
-        raise HTTPException(500, "فشل في تحديث خطة الطاقة")
+        raise HTTPException(**http_error(500, "capacity_plan_update_failed", request))
     finally:
         conn.close()

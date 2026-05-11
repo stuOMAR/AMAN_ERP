@@ -27,9 +27,9 @@ def read_inventory_transactions(
 
     Used by valuation and historical balance reports that may span the archival cutoff.
     """
-    conditions_live = ["tenant_id = :tid"]
-    conditions_archive = ["tenant_id = :tid"]
-    params: dict = {"tid": tenant_id, "limit": limit, "offset": offset}
+    conditions_live = ["1=1"]
+    conditions_archive = ["1=1"]
+    params: dict = {"limit": limit, "offset": offset}
 
     if item_id:
         conditions_live.append("product_id = :item_id")
@@ -42,13 +42,13 @@ def read_inventory_transactions(
         params["wid"] = warehouse_id
 
     if since:
-        conditions_live.append("occurred_at >= :since")
-        conditions_archive.append("occurred_at >= :since")
+        conditions_live.append("created_at >= :since")
+        conditions_archive.append("created_at >= :since")
         params["since"] = since
 
     if until:
-        conditions_live.append("occurred_at <= :until")
-        conditions_archive.append("occurred_at <= :until")
+        conditions_live.append("created_at <= :until")
+        conditions_archive.append("created_at <= :until")
         params["until"] = until
 
     where_live = " AND ".join(conditions_live)
@@ -59,7 +59,7 @@ def read_inventory_transactions(
             SELECT * FROM inventory_transactions WHERE {where_live}
             UNION ALL
             SELECT * FROM inventory_transactions_archive WHERE {where_archive}
-            ORDER BY occurred_at DESC
+            ORDER BY created_at DESC
             LIMIT :limit OFFSET :offset
         """),
         params,

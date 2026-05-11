@@ -90,7 +90,7 @@ def retry_notification(
             {"nid": notif_id, "tnt": int(tenant_id)},
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Notification not found or not retryable")
+            raise HTTPException(**http_error(404, "notification_not_found_or_not_retryable", request))
         conn.commit()
         return {"retried": True, "id": notif_id}
     finally:
@@ -150,7 +150,7 @@ def requeue_from_dlq(
             {"nid": notif_id, "tnt": int(tenant_id)},
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Notification not found in DLQ")
+            raise HTTPException(**http_error(404, "notification_not_found_in_dlq", request))
         conn.commit()
         return {"requeued": True, "id": notif_id}
     finally:

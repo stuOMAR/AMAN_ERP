@@ -55,7 +55,7 @@ def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: di
         ufx_gain = gain_acc.id if gain_acc else None
         ufx_loss = loss_acc.id if loss_acc else None
         if not ufx_gain and not ufx_loss:
-            raise HTTPException(status_code=400, detail="لم يتم العثور على حسابات فروقات العملة غير المحققة")
+            raise HTTPException(**http_error(400, ("fx_accounts_not_found", request)))
 
         # Find all accounts with balances in this currency
         balances = db.execute(text("""
@@ -74,7 +74,7 @@ def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: di
         """), {"curr": req.currency_code}).fetchall()
 
         if not balances:
-            return {"success": True, "message": "لا توجد أرصدة بهذه العملة", "adjustments": []}
+            return {"success": True, "message": i18n_message("no_balances_with_currency", request), "adjustments": []}
 
         adjustments = []
         total_diff = Decimal("0")

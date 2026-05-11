@@ -125,7 +125,7 @@ def create_routing(
     except Exception as e:
         txn.rollback()
         logger.error(f"Error creating routing: {e}")
-        raise HTTPException(status_code=400, detail="فشل في إنشاء مسار التصنيع")
+        raise HTTPException(**http_error(400, "routing_create_failed", request))
     finally:
         db.close()
 
@@ -205,7 +205,7 @@ def get_routing(
     try:
         data = _fetch_routing(db, routing_id)
         if not data:
-            raise HTTPException(status_code=404, detail="Routing not found")
+            raise HTTPException(**http_error(404, ("routing_not_found", request)))
         return data
     finally:
         db.close()
@@ -230,7 +230,7 @@ def update_routing(
             {"rid": routing_id},
         ).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Routing not found")
+            raise HTTPException(**http_error(404, ("routing_not_found", request)))
 
         db.execute(
             text("""
@@ -289,7 +289,7 @@ def update_routing(
     except Exception as e:
         txn.rollback()
         logger.error(f"Error updating routing {routing_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في تحديث مسار التصنيع")
+        raise HTTPException(**http_error(400, "routing_update_failed", request))
     finally:
         db.close()
 
@@ -316,7 +316,7 @@ def get_routing_estimate(
             {"rid": routing_id},
         ).fetchone()
         if not route:
-            raise HTTPException(status_code=404, detail="Routing not found")
+            raise HTTPException(**http_error(404, ("routing_not_found", request)))
 
         ops = db.execute(
             text("""

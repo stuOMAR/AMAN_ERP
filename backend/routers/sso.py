@@ -23,6 +23,7 @@ from routers.auth import get_current_user
 from services import sso_service
 from utils.permissions import require_permission
 from utils.cache import cache
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ router = APIRouter(prefix="/auth/sso", tags=["SSO/LDAP"])
 def _get_company_id_from_user(current_user) -> str:
     cid = getattr(current_user, "company_id", None)
     if not cid:
-        raise HTTPException(status_code=400, detail="company_id not available")
+        raise HTTPException(**http_error(400, ("company_id_not_available", request)))
     return cid
 
 
@@ -51,9 +52,9 @@ def _resolve_company_id_public(company_id: Optional[str], company_code: Optional
             {"code": company_code.strip()},
         ).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Company not found or inactive")
+            raise HTTPException(**http_error(404, ("sso_company_not_found", request)))
         return row[0]
-    raise HTTPException(status_code=400, detail="company_id or company_code is required")
+    raise HTTPException(**http_error(400, ("sso_company_id_required", request)))
 
 
 # ---------------------------------------------------------------------------
@@ -62,7 +63,7 @@ def _resolve_company_id_public(company_id: Optional[str], company_code: Optional
 
 @router.get("/config", response_model=List[SsoConfigRead],
             dependencies=[Depends(require_permission("sso.manage"))])
-async def list_sso_configs(current_user=Depends(get_current_user)):
+async def list_sso_configs(request: Request, current_user=Depends(get_current_user)):
     """List Sso Configs."""
     company_id = _get_company_id_from_user(current_user)
     try:
@@ -70,21 +71,15 @@ async def list_sso_configs(current_user=Depends(get_current_user)):
         return configs
     except (OperationalError, ProgrammingError):
         logger.exception("SSO config listing failed for company %s due to DB/schema issue", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
     except Exception:
         logger.exception("Unexpected SSO config listing failure for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="تعذر تحميل إعدادات SSO حالياً",
-        )
+        raise HTTPException(**http_error(500, "sso_config_load_failed", request))
 
 
 @router.post("/config", response_model=SsoConfigRead, status_code=201,
              dependencies=[Depends(require_permission("sso.manage"))])
-async def create_sso_config(body: SsoConfigCreate, current_user=Depends(get_current_user)):
+async def create_sso_config(body: SsoConfigCreate, request: Request, current_user=Depends(get_current_user)):
     """Create Sso Config."""
     company_id = _get_company_id_from_user(current_user)
     try:
@@ -92,53 +87,41 @@ async def create_sso_config(body: SsoConfigCreate, current_user=Depends(get_curr
         return result
     except (OperationalError, ProgrammingError):
         logger.exception("SSO config creation failed for company %s due to DB/schema issue", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
 
 
 @router.put("/config/{config_id}", response_model=SsoConfigRead,
             dependencies=[Depends(require_permission("sso.manage"))])
-async def update_sso_config(config_id: int, body: SsoConfigUpdate, current_user=Depends(get_current_user)):
+async def update_sso_config(config_id: int, body: SsoConfigUpdate, request: Request, current_user=Depends(get_current_user)):
     """Update Sso Config."""
     company_id = _get_company_id_from_user(current_user)
     try:
         existing = sso_service.get_sso_config_by_id(config_id, company_id)
     except (OperationalError, ProgrammingError):
         logger.exception("SSO config fetch/update precheck failed for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
     if not existing:
-        raise HTTPException(status_code=404, detail="SSO configuration not found")
+        raise HTTPException(**http_error(404, ("sso_config_not_found", request)))
     try:
         result = sso_service.update_sso_config(config_id, body.model_dump(exclude_unset=True), company_id)
         return result
     except (OperationalError, ProgrammingError):
         logger.exception("SSO config update failed for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
 
 
 @router.delete("/config/{config_id}", status_code=200,
                dependencies=[Depends(require_permission("sso.manage"))], response_model=Dict[str, Any])
-async def deactivate_sso_config(config_id: int, current_user=Depends(get_current_user)):
+async def deactivate_sso_config(config_id: int, request: Request, current_user=Depends(get_current_user)):
     """Deactivate Sso Config."""
     company_id = _get_company_id_from_user(current_user)
     try:
         success = sso_service.deactivate_sso_config(config_id, company_id)
     except (OperationalError, ProgrammingError):
         logger.exception("SSO config deactivation failed for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
     if not success:
-        raise HTTPException(status_code=404, detail="SSO configuration not found")
+        raise HTTPException(**http_error(404, ("sso_config_not_found", request)))
     return {"detail": "SSO configuration deactivated"}
 
 
@@ -148,32 +131,26 @@ async def deactivate_sso_config(config_id: int, current_user=Depends(get_current
 
 @router.get("/mappings", response_model=List[GroupRoleMappingRead],
             dependencies=[Depends(require_permission("sso.manage"))])
-async def list_mappings(sso_configuration_id: Optional[int] = None, current_user=Depends(get_current_user)):
+async def list_mappings(request: Request, sso_configuration_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """List Mappings."""
     company_id = _get_company_id_from_user(current_user)
     try:
         return sso_service.get_group_role_mappings(company_id, sso_configuration_id)
     except (OperationalError, ProgrammingError):
         logger.exception("SSO mappings listing failed for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
 
 
 @router.post("/mappings", response_model=GroupRoleMappingRead, status_code=201,
              dependencies=[Depends(require_permission("sso.manage"))])
-async def create_mapping(body: GroupRoleMappingCreate, current_user=Depends(get_current_user)):
+async def create_mapping(body: GroupRoleMappingCreate, request: Request, current_user=Depends(get_current_user)):
     """Create Mapping."""
     company_id = _get_company_id_from_user(current_user)
     try:
         return sso_service.create_group_role_mapping(body.model_dump(), company_id)
     except (OperationalError, ProgrammingError):
         logger.exception("SSO mapping creation failed for company %s", company_id)
-        raise HTTPException(
-            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-            detail="قاعدة بيانات الشركة غير جاهزة لإعدادات SSO. راجع تهيئة قاعدة البيانات أو تواصل مع الدعم.",
-        )
+        raise HTTPException(**http_error(500, "sso_database_not_ready", request))
 
 
 # ---------------------------------------------------------------------------
@@ -234,7 +211,7 @@ async def saml_metadata(
     configs = sso_service.get_sso_configs(cid)
     saml_cfg = next((c for c in configs if c["provider_type"] == "saml" and c.get("is_active")), None)
     if not saml_cfg:
-        raise HTTPException(status_code=404, detail="No active SAML configuration found")
+        raise HTTPException(**http_error(404, ("sso_no_saml_config", request)))
     metadata_xml = sso_service.get_saml_sp_metadata(cid, saml_cfg)
     base_url = settings.FRONTEND_URL.rstrip("/")
     sp_entity_id = f"{base_url}/api/auth/sso/saml/metadata?company_id={cid}"
@@ -260,14 +237,14 @@ async def saml_acs(request: Request, response: Response):
     saml_response = form.get("SAMLResponse")
     relay_state = form.get("RelayState", "")
     if not saml_response:
-        raise HTTPException(status_code=400, detail="Missing SAMLResponse")
+        raise HTTPException(**http_error(400, ("sso_missing_saml_response", request)))
 
     # SEC-FIX: Look up server-side state by relay token instead of parsing URI
     if not relay_state:
-        raise HTTPException(status_code=400, detail="Missing RelayState")
+        raise HTTPException(**http_error(400, ("sso_missing_relay_state", request)))
     state_data = cache.get(f"saml_state:{relay_state}")
     if not state_data:
-        raise HTTPException(status_code=400, detail="Invalid or expired RelayState token")
+        raise HTTPException(**http_error(400, ("sso_invalid_relay_state", request)))
     company_id = state_data["company_id"]
     sso_config_id_str = str(state_data["sso_config_id"])
     # Delete used state token to prevent replay
@@ -275,7 +252,7 @@ async def saml_acs(request: Request, response: Response):
 
     sso_config = sso_service.get_sso_config_by_id(int(sso_config_id_str), company_id)
     if not sso_config or sso_config["provider_type"] != "saml":
-        raise HTTPException(status_code=400, detail="Invalid SSO configuration")
+        raise HTTPException(**http_error(400, ("sso_invalid_config", request)))
 
     try:
         assertion = sso_service.saml_process_acs(
@@ -344,10 +321,10 @@ async def sso_exchange(payload: dict):
     """
     ticket = (payload or {}).get("ticket")
     if not ticket:
-        raise HTTPException(status_code=400, detail="Missing ticket")
+        raise HTTPException(**http_error(400, ("sso_missing_ticket", request)))
     data = cache.get(f"sso_ticket:{ticket}")
     if not data:
-        raise HTTPException(status_code=400, detail="Invalid or expired ticket")
+        raise HTTPException(**http_error(400, ("sso_invalid_ticket", request)))
     cache.delete(f"sso_ticket:{ticket}")
     return {
         "access_token": data["access_token"],
@@ -374,11 +351,11 @@ async def sso_login(body: SsoLoginRequest, response: Response):
         # Try to find which company has this SSO config
         company_id = _find_company_for_sso_config(body.sso_configuration_id)
     if not company_id:
-        raise HTTPException(status_code=400, detail="Cannot determine company for this SSO configuration")
+        raise HTTPException(**http_error(400, ("sso_cannot_determine_company", request)))
 
     sso_config = sso_service.get_sso_config_by_id(body.sso_configuration_id, company_id)
     if not sso_config or not sso_config.get("is_active"):
-        raise HTTPException(status_code=404, detail="SSO configuration not found or inactive")
+        raise HTTPException(**http_error(404, ("sso_config_inactive", request)))
 
     if sso_config["provider_type"] == "saml":
         # Return redirect URL for SAML
@@ -395,14 +372,14 @@ async def sso_login(body: SsoLoginRequest, response: Response):
 
     elif sso_config["provider_type"] == "ldap":
         if not body.username or not body.password:
-            raise HTTPException(status_code=400, detail="Username and password required for LDAP login")
+            raise HTTPException(**http_error(400, ("sso_ldap_credentials_required", request)))
         try:
             ldap_result = sso_service.ldap_authenticate(sso_config, body.username, body.password)
         except ValueError as exc:
             raise HTTPException(status_code=401, detail=str(exc))
         except ConnectionError:
             # IdP down — check fallback admin
-            raise HTTPException(status_code=503, detail="LDAP server unreachable. Use local login if you are a fallback admin.")
+            raise HTTPException(**http_error(503, "ldap_server_unreachable_use_local_login_if_you_are", request))
 
         # Map groups → role
         role_name = sso_service.map_groups_to_role(
@@ -433,7 +410,7 @@ async def sso_login(body: SsoLoginRequest, response: Response):
             },
         }
 
-    raise HTTPException(status_code=400, detail=f"Unsupported provider type: {sso_config['provider_type']}")
+    raise HTTPException(status_code=400, detail=i18n_message("sso_unsupported_provider", request))
 
 
 # ---------------------------------------------------------------------------

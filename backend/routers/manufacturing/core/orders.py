@@ -48,7 +48,7 @@ def _validate_order_warehouse_access(conn, current_user: UserResponse, *warehous
             {"wid": warehouse_id},
         ).fetchone()
         if not warehouse:
-            raise HTTPException(status_code=404, detail="Warehouse not found")
+            raise HTTPException(**http_error(404, ("warehouse_not_found", request)))
         if warehouse.branch_id:
             validate_branch_access(current_user, warehouse.branch_id)
 
@@ -63,7 +63,7 @@ def estimate_production_cost(
     try:
         bom = conn.execute(text("SELECT * FROM bill_of_materials WHERE id = :bid AND is_deleted = false"), {"bid": bom_id}).fetchone()
         if not bom:
-            raise HTTPException(status_code=404, detail="BOM not found")
+            raise HTTPException(**http_error(404, ("bom_not_found", request)))
         cost = calculate_production_cost(conn, bom_id, quantity)
         return cost
     finally:
@@ -142,7 +142,7 @@ def get_production_order(order_id: int, current_user: UserResponse = Depends(get
         """), {"oid": order_id}).fetchone()
         
         if not o:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if o.branch_id:
             validate_branch_access(current_user, o.branch_id)
@@ -354,7 +354,7 @@ def create_production_order(order: ProductionOrderCreate, request: Request, curr
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating production order: {e}")
-        raise HTTPException(status_code=400, detail="فشل في إنشاء أمر الإنتاج")
+        raise HTTPException(**http_error(400, ("production_create_failed", request)))
     finally:
         conn.close()
 
@@ -376,14 +376,14 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status not in ['draft', 'confirmed']:
             logger.warning(f"Cannot start order {order_id} with status {order.status}")
-            raise HTTPException(status_code=400, detail="لا يمكن بدء الأمر في حالته الحالية")
+            raise HTTPException(**http_error(400, ("cannot_start_order_state", request)))
 
         # Check inventory sufficiency before starting
         if order.bom_id:
@@ -396,10 +396,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                     for s in shortages
                 )
                 logger.warning(f"Insufficient raw materials for order {order_id}: {shortage_details}")
-                raise HTTPException(
-                    status_code=400, 
-                    detail="المواد الخام غير كافية لبدء أمر الإنتاج"
-                )
+                raise HTTPException(**http_error(400, "insufficient_raw_materials_start", request))
 
         # Update status to in_progress
         updated = conn.execute(text("""
@@ -411,11 +408,13 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         
         # 1. Consume Raw Materials
         # Get BOM components
-        # T10.2 #206 \u2014 initialise outside the ``if order.bom_id`` block
+        # T10.2 #206 — initialise outside the ``if order.bom_id`` block
         # so the audit log on line ~487 doesn't raise NameError when the
         # production order has no BOM attached.
         total_material_cost = Decimal("0")
         if order.bom_id:
+            from services.costing_service import CostingService
+
             components = conn.execute(text("""
                 SELECT bc.*, p.cost_price, p.product_name, p.id as product_id
                 FROM bom_components bc
@@ -432,27 +431,75 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                     required_qty = (Decimal(str(comp.quantity)) / Decimal("100") * Decimal(str(order.quantity))) * waste_factor
                 else:
                     required_qty = Decimal(str(comp.quantity)) * Decimal(str(order.quantity)) * waste_factor
-                cost = required_qty * Decimal(str(comp.cost_price or 0))
+
+                # T058: Use actual costing for material cost
+                actual_unit_cost = Decimal("0")
+                if order.warehouse_id:
+                    # T058: Use CostingService.consume_layers for FIFO/LIFO products.
+                    # Do not fall back to product master cost on layer shortage.
+                    method = CostingService._get_product_costing_method(conn, comp.product_id, order.warehouse_id)
+                    if method in ("fifo", "lifo"):
+                        try:
+                            cogs = CostingService.consume_layers(
+                                conn,
+                                product_id=comp.product_id,
+                                warehouse_id=order.warehouse_id,
+                                quantity=float(required_qty),
+                                sale_document_type="production_out",
+                                sale_document_id=order_id,
+                                costing_method=method,
+                            )
+                        except ValueError as exc:
+                            raise HTTPException(status_code=400, detail=str(exc))
+                        actual_unit_cost = (cogs / required_qty).quantize(Decimal("0.0001")) if required_qty > 0 else Decimal("0")
+                    else:
+                        # WAC: lock inventory and use average_cost as the actual issue cost.
+                        inv_row = conn.execute(text("""
+                            SELECT quantity, reserved_quantity, average_cost
+                            FROM inventory
+                            WHERE product_id = :pid AND warehouse_id = :wh
+                            FOR UPDATE
+                        """), {"pid": comp.product_id, "wh": order.warehouse_id}).fetchone()
+                        available = (
+                            Decimal(str(inv_row.quantity or 0)) - Decimal(str(inv_row.reserved_quantity or 0))
+                        ) if inv_row else Decimal("0")
+                        if available < required_qty:
+                            raise HTTPException(
+                                status_code=400,
+                                detail=f"المخزون غير كافٍ للمادة {comp.product_name}. المتوفر: {available}, المطلوب: {required_qty}"
+                            )
+                        actual_unit_cost = Decimal(str(inv_row.average_cost or comp.cost_price or 0)) if inv_row else Decimal(str(comp.cost_price or 0))
+
+                    # T058: Deduct from inventory
+                    deducted = conn.execute(text("""
+                        UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW()
+                        WHERE product_id = :pid AND warehouse_id = :wh
+                          AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                        RETURNING id
+                    """), {"wh": order.warehouse_id, "pid": comp.product_id, "qty": float(required_qty)}).fetchone()
+                    if not deducted:
+                        raise HTTPException(
+                            status_code=400,
+                            detail=f"تعذر سحب المادة {comp.product_name}: الكمية المتاحة غير كافية"
+                        )
+
+                else:
+                    actual_unit_cost = Decimal(str(comp.cost_price or 0))
+
+                cost = required_qty * actual_unit_cost
                 total_material_cost += cost
                 
-                # Deduct from Source Warehouse
+                # T059: Create Transaction with actual cost
                 if order.warehouse_id:
-                    # Update Inventory Level
-                    conn.execute(text("""
-                        INSERT INTO inventory (warehouse_id, product_id, quantity, updated_at)
-                        VALUES (:whid, :pid, -:qty, NOW())
-                        ON CONFLICT (warehouse_id, product_id) 
-                        DO UPDATE SET quantity = inventory.quantity - :qty, updated_at = NOW()
-                    """), {"whid": order.warehouse_id, "pid": comp.product_id, "qty": required_qty})
-                    
-                    # Create Transaction
                     conn.execute(text("""
                         INSERT INTO inventory_transactions 
-                        (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type, notes, created_by)
-                        VALUES (:pid, :whid, 'production_out', :qty, :ref, 'production_order', :notes, :uid)
+                        (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type, notes, created_by, unit_cost, total_cost)
+                        VALUES (:pid, :whid, 'production_out', :qty, :ref, 'production_order', :notes, :uid, :uc, :tc)
                     """), {
-                        "pid": comp.product_id, "whid": order.warehouse_id, "qty": -required_qty,
-                        "ref": order_id, "notes": f"Consumed for Order {order.order_number}", "uid": current_user.id
+                        "pid": comp.product_id, "whid": order.warehouse_id, "qty": -float(required_qty),
+                        "ref": order_id, "notes": f"Consumed for Order {order.order_number}", "uid": current_user.id,
+                        "uc": str(actual_unit_cost.quantize(Decimal("0.0001"))),
+                        "tc": str(cost.quantize(Decimal("0.01"))),
                     })
 
             # 2. Journal Entry (WIP)
@@ -526,7 +573,7 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
-        # Check current status
+        # T060: Lock production order with SELECT ... FOR UPDATE
         order = conn.execute(text("""
             SELECT po.*, p.cost_price as product_cost, b.yield_quantity,
                    wc.cost_per_hour, wc.default_expense_account_id as overhead_account_id
@@ -534,22 +581,21 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             LEFT JOIN products p ON po.product_id = p.id
             LEFT JOIN bill_of_materials b ON po.bom_id = b.id
             LEFT JOIN manufacturing_routes mr ON po.route_id = mr.id 
-            -- Assuming primary WC for overhead/labor rate simplification, 
-            -- ideally should sum from operations. For now getting rate from first op's WC or Order's WC if exists
             LEFT JOIN manufacturing_operations mo ON mr.id = mo.route_id AND mo.sequence = 1
             LEFT JOIN work_centers wc ON mo.work_center_id = wc.id
             WHERE po.id=:id
+            FOR UPDATE OF po
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status != 'in_progress':
             logger.warning(f"Cannot complete order {order_id} with status {order.status}")
-            raise HTTPException(status_code=400, detail="لا يمكن إكمال الأمر في حالته الحالية")
+            raise HTTPException(**http_error(400, ("cannot_complete_order_state", request)))
 
         # Update status to completed
         updated = conn.execute(text("""
@@ -559,71 +605,23 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             RETURNING *
         """), {"id": order_id}).fetchone()
         
-        # 1. Add Finished Goods to Destination Warehouse
-        if order.destination_warehouse_id:
-            # Update Inventory Level (Main Product)
-            conn.execute(text("""
-                INSERT INTO inventory (warehouse_id, product_id, quantity, updated_at)
-                VALUES (:whid, :pid, :qty, NOW())
-                ON CONFLICT (warehouse_id, product_id) 
-                DO UPDATE SET quantity = inventory.quantity + :qty, updated_at = NOW()
-            """), {"whid": order.destination_warehouse_id, "pid": order.product_id, "qty": order.quantity})
-            
-            # Create Transaction (Main Product)
-            conn.execute(text("""
-                INSERT INTO inventory_transactions 
-                (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type, notes, created_by)
-                VALUES (:pid, :whid, 'production_in', :qty, :ref, 'production_order', :notes, :uid)
-            """), {
-                "pid": order.product_id, "whid": order.destination_warehouse_id, "qty": order.quantity,
-                "ref": order_id, "notes": f"Production Receipt for Order {order.order_number}", "uid": current_user.id
-            })
-
-            # 1.b Handle By-products (BOM Outputs)
-            if order.bom_id:
-                by_products = conn.execute(text("SELECT * FROM bom_outputs WHERE bom_id = :bid AND is_deleted = false"), {"bid": order.bom_id}).fetchall()
-                for bp in by_products:
-                    bp_qty = bp.quantity * order.quantity
-                    # Add to stock
-                    conn.execute(text("""
-                        INSERT INTO inventory (warehouse_id, product_id, quantity, updated_at)
-                        VALUES (:whid, :pid, :qty, NOW())
-                        ON CONFLICT (warehouse_id, product_id) 
-                        DO UPDATE SET quantity = inventory.quantity + :qty, updated_at = NOW()
-                    """), {"whid": order.destination_warehouse_id, "pid": bp.product_id, "qty": bp_qty})
-                    
-                    # Transaction
-                    conn.execute(text("""
-                        INSERT INTO inventory_transactions 
-                        (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type, notes, created_by)
-                        VALUES (:pid, :whid, 'production_in', :qty, :ref, 'production_order', :notes, :uid)
-                    """), {
-                        "pid": bp.product_id, "whid": order.destination_warehouse_id, "qty": bp_qty,
-                        "ref": order_id, "notes": f"By-product Receipt for Order {order.order_number}", "uid": current_user.id
-                    })
-
         # 2. Journal Entry (FG Capitalization)
         # Calculate Costs
         
-        # A. Material Cost
-        total_material_cost = Decimal("0")
-        if order.bom_id:
-            components = conn.execute(text("""
-                SELECT bc.*, p.cost_price 
-                FROM bom_components bc
-                JOIN products p ON bc.component_product_id = p.id
-                WHERE bc.bom_id = :bid AND bc.is_deleted = false
-            """), {"bid": order.bom_id}).fetchall()
-            
-            for comp in components:
-                waste_factor = 1 + Decimal(str(comp.waste_percentage or 0)) / Decimal("100")
-                # Handle percentage-based BOM components
-                if comp.is_percentage:
-                    base_qty = Decimal(str(comp.quantity)) / Decimal("100") * Decimal(str(order.quantity))
-                    required_qty = base_qty * waste_factor
-                else:
-                    required_qty = Decimal(str(comp.quantity)) * Decimal(str(order.quantity)) * waste_factor
-                total_material_cost += (required_qty * Decimal(str(comp.cost_price or 0)))
+        # A. Material Cost: use the actual production_out inventory transactions
+        # created when the order started, not current product master costs.
+        material_cost_row = conn.execute(text("""
+            SELECT COALESCE(
+                       SUM(ABS(total_cost)),
+                       SUM(ABS(quantity) * unit_cost),
+                       0
+                   ) AS total_material_cost
+            FROM inventory_transactions
+            WHERE reference_type = 'production_order'
+              AND reference_id = :oid
+              AND transaction_type = 'production_out'
+        """), {"oid": order_id}).fetchone()
+        total_material_cost = Decimal(str(material_cost_row.total_material_cost or 0))
 
         # B. Labor & Overhead Cost
         # Calculate actual run time from operations
@@ -698,29 +696,141 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                 idempotency_key=f"mfg-complete-{order_id}",
             )
 
-        # 3. Update product cost_price using Weighted Average Cost (WAC)
-        if order.quantity and total_production_cost > 0:
-            new_unit_cost = total_production_cost / order.quantity
-            # WAC: (existing_qty × old_cost + new_qty × new_cost) / (existing_qty + new_qty)
-            existing = conn.execute(text("""
-                SELECT COALESCE(SUM(quantity), 0) as qty FROM inventory 
-                                WHERE product_id = :pid
-                                    AND (:warehouse_id IS NULL OR warehouse_id = :warehouse_id)
-                        """), {"pid": order.product_id, "warehouse_id": order.destination_warehouse_id}).fetchone()
-            existing_qty = Decimal(str(existing.qty)) - Decimal(str(order.quantity))  # subtract newly added qty
-            old_cost_row = conn.execute(text(
-                "SELECT cost_price FROM products WHERE id = :pid"
-            ), {"pid": order.product_id}).fetchone()
-            old_cost = Decimal(str(old_cost_row.cost_price or 0)) if old_cost_row else Decimal("0")
-            
-            if existing_qty + Decimal(str(order.quantity)) > 0:
-                wac = (existing_qty * old_cost + Decimal(str(order.quantity)) * new_unit_cost) / (existing_qty + Decimal(str(order.quantity)))
-            else:
-                wac = new_unit_cost
-            
+        # T061-T062: Compute finished-good unit cost and update inventory only
+        # after costing succeeds.
+        from services.costing_service import CostingService
+
+        produced_qty = Decimal(str(order.quantity or 0))
+        by_products = []
+        if order.bom_id:
+            by_products = conn.execute(text("""
+                SELECT *
+                FROM bom_outputs
+                WHERE bom_id = :bid AND is_deleted = false
+            """), {"bid": order.bom_id}).fetchall()
+
+        allocation_pcts = [
+            max(Decimal("0"), Decimal(str(bp.cost_allocation_percentage or 0)))
+            for bp in by_products
+        ]
+        total_alloc_pct = sum(allocation_pcts, Decimal("0"))
+        alloc_scale = (Decimal("100") / total_alloc_pct) if total_alloc_pct > Decimal("100") else Decimal("1")
+        by_product_total_cost = sum(
+            (total_production_cost * pct * alloc_scale / Decimal("100"))
+            for pct in allocation_pcts
+        )
+        main_total_cost = total_production_cost - by_product_total_cost
+        main_unit_cost = (main_total_cost / produced_qty).quantize(Decimal("0.0001")) if produced_qty > 0 else Decimal("0")
+
+        if order.destination_warehouse_id and produced_qty > 0:
+            CostingService.update_cost(
+                conn,
+                product_id=order.product_id,
+                warehouse_id=order.destination_warehouse_id,
+                new_qty=float(produced_qty),
+                new_price=float(main_unit_cost),
+            )
+
+            main_method = CostingService._get_product_costing_method(conn, order.product_id, order.destination_warehouse_id)
+            if main_method in ("fifo", "lifo"):
+                CostingService.create_cost_layer(
+                    conn,
+                    product_id=order.product_id,
+                    warehouse_id=order.destination_warehouse_id,
+                    quantity=float(produced_qty),
+                    unit_cost=float(main_unit_cost),
+                    source_document_type="production_order",
+                    source_document_id=order_id,
+                    costing_method=main_method,
+                )
+
             conn.execute(text("""
-                UPDATE products SET cost_price = :cost, updated_at = NOW() WHERE id = :pid
-            """), {"cost": round(wac, 4), "pid": order.product_id})
+                INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                VALUES (:pid, :whid, :qty, :cost, NOW())
+                ON CONFLICT (product_id, warehouse_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                              updated_at = NOW()
+            """), {
+                "whid": order.destination_warehouse_id,
+                "pid": order.product_id,
+                "qty": float(produced_qty),
+                "cost": float(main_unit_cost),
+            })
+
+            conn.execute(text("""
+                INSERT INTO inventory_transactions
+                (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type,
+                 notes, created_by, unit_cost, total_cost)
+                VALUES (:pid, :whid, 'production_in', :qty, :ref, 'production_order',
+                        :notes, :uid, :uc, :tc)
+            """), {
+                "pid": order.product_id,
+                "whid": order.destination_warehouse_id,
+                "qty": float(produced_qty),
+                "ref": order_id,
+                "notes": f"Production Receipt for Order {order.order_number}",
+                "uid": current_user.id,
+                "uc": str(main_unit_cost),
+                "tc": str(main_total_cost.quantize(Decimal("0.01"))),
+            })
+
+            for idx, bp in enumerate(by_products):
+                bp_qty = Decimal(str(bp.quantity or 0)) * produced_qty
+                if bp_qty <= 0:
+                    continue
+                bp_total_cost = (total_production_cost * allocation_pcts[idx] * alloc_scale / Decimal("100"))
+                bp_unit_cost = (bp_total_cost / bp_qty).quantize(Decimal("0.0001")) if bp_qty > 0 else Decimal("0")
+
+                CostingService.update_cost(
+                    conn,
+                    product_id=bp.product_id,
+                    warehouse_id=order.destination_warehouse_id,
+                    new_qty=float(bp_qty),
+                    new_price=float(bp_unit_cost),
+                )
+
+                bp_method = CostingService._get_product_costing_method(conn, bp.product_id, order.destination_warehouse_id)
+                if bp_method in ("fifo", "lifo"):
+                    CostingService.create_cost_layer(
+                        conn,
+                        product_id=bp.product_id,
+                        warehouse_id=order.destination_warehouse_id,
+                        quantity=float(bp_qty),
+                        unit_cost=float(bp_unit_cost),
+                        source_document_type="production_order",
+                        source_document_id=order_id,
+                        costing_method=bp_method,
+                    )
+
+                conn.execute(text("""
+                    INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                    VALUES (:pid, :whid, :qty, :cost, NOW())
+                    ON CONFLICT (product_id, warehouse_id)
+                    DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                  updated_at = NOW()
+                """), {
+                    "whid": order.destination_warehouse_id,
+                    "pid": bp.product_id,
+                    "qty": float(bp_qty),
+                    "cost": float(bp_unit_cost),
+                })
+
+                conn.execute(text("""
+                    INSERT INTO inventory_transactions
+                    (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type,
+                     notes, created_by, unit_cost, total_cost)
+                    VALUES (:pid, :whid, 'production_in', :qty, :ref, 'production_order',
+                            :notes, :uid, :uc, :tc)
+                """), {
+                    "pid": bp.product_id,
+                    "whid": order.destination_warehouse_id,
+                    "qty": float(bp_qty),
+                    "ref": order_id,
+                    "notes": f"By-product Receipt for Order {order.order_number}",
+                    "uid": current_user.id,
+                    "uc": str(bp_unit_cost),
+                    "tc": str(bp_total_cost.quantize(Decimal("0.01"))),
+                })
 
         trans.commit()
 
@@ -771,14 +881,14 @@ def cancel_production_order(order_id: int, request: Request, current_user: UserR
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status not in ['draft', 'confirmed']:
             logger.warning(f"Cannot cancel order {order_id} with status {order.status}")
-            raise HTTPException(status_code=400, detail="لا يمكن إلغاء الأمر في حالته الحالية")
+            raise HTTPException(**http_error(400, ("cannot_cancel_order_state", request)))
         
         conn.execute(text("""
             UPDATE production_orders SET status = 'cancelled', updated_at = NOW() WHERE id = :id
@@ -805,7 +915,7 @@ def cancel_production_order(order_id: int, request: Request, current_user: UserR
     except Exception as e:
         trans.rollback()
         logger.error(f"Error cancelling production order {order_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في إلغاء أمر الإنتاج")
+        raise HTTPException(**http_error(400, ("production_cancel_failed", request)))
     finally:
         conn.close()
 
@@ -818,12 +928,12 @@ def delete_production_order(order_id: int, request: Request, current_user: UserR
     try:
         order = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         if order.status != 'draft':
-            raise HTTPException(status_code=400, detail="Only draft orders can be deleted")
+            raise HTTPException(**http_error(400, ("only_draft_orders_deletable", request)))
         
         # Delete operations first (cascade should handle, but be explicit)
         conn.execute(text("DELETE FROM production_order_operations WHERE production_order_id = :id"), {"id": order_id})
@@ -833,13 +943,13 @@ def delete_production_order(order_id: int, request: Request, current_user: UserR
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_production_order", resource_type="production_orders",
                      resource_id=str(order_id), request=request)
-        return {"message": "Production order deleted successfully"}
+        return {"message": i18n_message("production_order_deleted_success", request)}
     except HTTPException:
         raise
     except Exception as e:
         trans.rollback()
         logger.error(f"Error deleting production order {order_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في حذف أمر الإنتاج")
+        raise HTTPException(**http_error(400, ("production_delete_failed", request)))
     finally:
         conn.close()
 
@@ -852,12 +962,12 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
     try:
         existing = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Order not found")
+            raise HTTPException(**http_error(404, ("order_not_found", request)))
         from utils.permissions import validate_branch_access
         if existing.branch_id:
             validate_branch_access(current_user, existing.branch_id)
         if existing.status != 'draft':
-            raise HTTPException(status_code=400, detail="Only draft orders can be updated")
+            raise HTTPException(**http_error(400, ("only_draft_orders_updatable", request)))
 
         _validate_order_warehouse_access(conn, current_user, order.warehouse_id, order.destination_warehouse_id)
         
@@ -876,7 +986,7 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
         }).fetchone()
         
         if not updated:
-            raise HTTPException(status_code=500, detail="Update failed")
+            raise HTTPException(**http_error(500, ("update_failed", request)))
         
         # Re-create operations from new route if route changed
         if order.route_id and order.route_id != existing.route_id:
@@ -921,7 +1031,7 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
     except Exception as e:
         trans.rollback()
         logger.error(f"Error updating production order {order_id}: {e}")
-        raise HTTPException(status_code=400, detail="فشل في تحديث أمر الإنتاج")
+        raise HTTPException(**http_error(400, ("production_update_failed", request)))
     finally:
         conn.close()
 
@@ -935,7 +1045,7 @@ def start_operation(op_id: int, request: Request, current_user: UserResponse = D
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op:
-            raise HTTPException(status_code=404, detail="Operation not found")
+            raise HTTPException(**http_error(404, ("operation_not_found", request)))
         
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -944,7 +1054,7 @@ def start_operation(op_id: int, request: Request, current_user: UserResponse = D
             validate_branch_access(current_user, po.branch_id)
         
         if op.status == 'in_progress':
-            raise HTTPException(status_code=400, detail="Operation already in progress")
+            raise HTTPException(**http_error(400, ("operation_already_in_progress", request)))
 
         # Update status to in_progress
         conn.execute(text("""
@@ -974,7 +1084,7 @@ def pause_operation(op_id: int, request: Request, current_user: UserResponse = D
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op or op.status != 'in_progress':
-            raise HTTPException(status_code=400, detail="Only in-progress operations can be paused")
+            raise HTTPException(**http_error(400, ("only_in_progress_pausable", request)))
 
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -1003,7 +1113,7 @@ def complete_operation(op_id: int, completed_qty: float, request: Request, curre
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op:
-            raise HTTPException(status_code=404, detail="Operation not found")
+            raise HTTPException(**http_error(404, ("operation_not_found", request)))
 
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -1103,7 +1213,7 @@ def create_qc_check(
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         if order.status not in ("in_progress", "confirmed"):
-            raise HTTPException(status_code=400, detail="فحص الجودة يُضاف فقط للأوامر قيد التنفيذ أو المؤكدة")
+            raise HTTPException(**http_error(400, ("quality_check_only_active_orders", request)))
 
         qc_id = conn.execute(text("""
             INSERT INTO mfg_qc_checks (
@@ -1129,13 +1239,13 @@ def create_qc_check(
     except Exception as e:
         conn.rollback()
         logger.error(f"Error creating QC check: {e}")
-        raise HTTPException(status_code=500, detail="فشل في إنشاء فحص الجودة")
+        raise HTTPException(**http_error(500, ("quality_inspection_create_failed", request)))
     finally:
         conn.close()
 
 
 @router.post("/orders/{order_id}/calculate-cost", dependencies=[Depends(require_permission("manufacturing.manage"))], response_model=Dict[str, Any])
-def calculate_actual_cost(order_id: int, body: Optional[ActualCostUpdate] = None,
+def calculate_actual_cost(order_id: int, request: Request, body: Optional[ActualCostUpdate] = None,
                           current_user: UserResponse = Depends(get_current_user)):
     """
     حساب التكلفة الفعلية لأمر الإنتاج — المواد + العمالة + الأعباء
@@ -1332,15 +1442,13 @@ def calculate_actual_cost(order_id: int, body: Optional[ActualCostUpdate] = None
                 "journal_entry_id": variance_je_id,
             },
             "costing_status": "calculated",
-            "message": f"تم حساب التكلفة الفعلية — الانحراف: {variance:+.2f} ({variance_pct:+.1f}%)"
+            "message": i18n_message("actual_cost_calculated", request)
         }
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Error calculating actual cost for order {order_id}: {e}")
-        raise HTTPException(500, "فشل في حساب التكلفة الفعلية")
+        raise HTTPException(**http_error(500, "actual_cost_calc_failed", request))
     finally:
         conn.close()
-
-

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """List Warehouses."""
     if not current_user.company_id:
-        raise HTTPException(status_code=400, detail="Company ID missing")
+        raise HTTPException(**http_error(400, ("company_id_missing", request)))
 
     db = get_db_connection(current_user.company_id)
     try:
@@ -49,7 +49,7 @@ def list_warehouses(branch_id: Optional[int] = None, current_user: dict = Depend
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Error fetching warehouses")
-        raise HTTPException(status_code=500, detail="تعذّر جلب المستودعات")
+        raise HTTPException(**http_error(500, ("warehouse_load_failed", request)))
     finally:
         db.close()
 
@@ -62,7 +62,7 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
         # Check duplicate code
         exists = db.execute(text("SELECT 1 FROM warehouses WHERE warehouse_code = :code"), {"code": warehouse.code}).scalar()
         if exists:
-            raise HTTPException(status_code=400, detail="كود المستودع موجود مسبقاً")
+            raise HTTPException(**http_error(400, ("warehouse_code_duplicate", request)))
 
         result = db.execute(text("""
             INSERT INTO warehouses (warehouse_name, warehouse_code, branch_id) 
@@ -107,7 +107,7 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if existing.branch_id and existing.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك تعديل مستودع خارج فروعك")
+                raise HTTPException(**http_error(403, ("cross_branch_edit_denied", request)))
 
         # BUG-FIX: Convert branch_id to int if it's None or invalid
         safe_branch_id = warehouse.branch_id if warehouse.branch_id is not None else None
@@ -157,27 +157,27 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
 
         # INV-001: Block deleting default warehouse
         if getattr(warehouse, 'is_default', False):
-            raise HTTPException(status_code=400, detail="لا يمكن حذف المستودع الافتراضي")
+            raise HTTPException(**http_error(400, ("cannot_delete_default_warehouse", request)))
 
         # INV-003: Branch access enforcement
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if warehouse.branch_id and warehouse.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك حذف مستودع خارج فروعك")
+                raise HTTPException(**http_error(403, ("cross_branch_delete_denied", request)))
 
         # INV-001: Check if warehouse has inventory
         stock = db.execute(text(
             "SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE warehouse_id = :id"
         ), {"id": id}).scalar()
         if stock and abs(float(stock)) > 0.01:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف مستودع به رصيد مخزون")
+            raise HTTPException(**http_error(400, ("cannot_delete_warehouse_with_stock", request)))
 
         # INV-001: Check pending transactions
         txn_count = db.execute(text(
             "SELECT COUNT(*) FROM inventory_transactions WHERE warehouse_id = :id"
         ), {"id": id}).scalar()
         if txn_count and txn_count > 0:
-            raise HTTPException(status_code=400, detail="لا يمكن حذف مستودع له حركات سابقة")
+            raise HTTPException(**http_error(400, ("cannot_delete_warehouse_with_movements", request)))
 
         db.execute(text("DELETE FROM warehouses WHERE id = :id"), {"id": id})
 
@@ -190,7 +190,7 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
         )
         db.commit()
 
-        return {"message": "تم حذف المستودع بنجاح"}
+        return {"message": i18n_message(("warehouse_deleted_success", request))}
     except HTTPException:
         raise
     except Exception:
@@ -220,7 +220,7 @@ def get_warehouse(id: int, current_user: dict = Depends(get_current_user)):
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if warehouse.branch_id and warehouse.branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك الوصول لمستودع خارج فروعك")
+                raise HTTPException(**http_error(403, ("cross_branch_access_denied", request)))
 
         return {"id": warehouse.id, "name": warehouse.name, "code": warehouse.code, "branch_id": warehouse.branch_id, "branch_name": warehouse.branch_name}
     finally:

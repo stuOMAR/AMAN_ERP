@@ -116,7 +116,7 @@ def update_kitchen_status(ko_id: int, data: dict, request: Request, current_user
         details={"new_status": new_status},
         request=request,
     )
-    return {"message": f"Kitchen order {ko_id} → {new_status}"}
+    return {"message": i18n_message("kitchen_order_status_update", request)}
 
 
 # ===================== B7: PWA Support =====================

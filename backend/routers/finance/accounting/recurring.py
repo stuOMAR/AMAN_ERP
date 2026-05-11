@@ -98,12 +98,12 @@ def create_recurring_template(request: Request, data: dict = Body(...), current_
         try:
             lines = data.pop("lines", [])
             if not lines or len(lines) < 2:
-                raise HTTPException(status_code=400, detail="يجب إضافة سطرين على الأقل")
+                raise HTTPException(**http_error(400, ("at_least_two_lines_required", request)))
     
             total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
             total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
             if (total_debit - total_credit).copy_abs() > _D4:
-                raise HTTPException(status_code=400, detail=f"القيد غير متوازن: مدين={total_debit} دائن={total_credit}")
+                raise HTTPException(status_code=400, detail=i18n_message("journal_entry_unbalanced", request))
     
             result = db.execute(text("""
                 INSERT INTO recurring_journal_templates
@@ -151,7 +151,7 @@ def create_recurring_template(request: Request, data: dict = Body(...), current_
                          action="accounting.recurring_template.create",
                          resource_type="recurring_template", resource_id=str(template_id),
                          details={"name": data.get('name')})
-            return {"id": template_id, "message": "تم إنشاء القالب بنجاح"}
+            return {"id": template_id, "message": i18n_message("recurring_template_created", request)}
         except HTTPException:
             raise
         except Exception:
@@ -203,11 +203,11 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
     
             if lines is not None:
                 if len(lines) < 2:
-                    raise HTTPException(status_code=400, detail="يجب إضافة سطرين على الأقل")
+                    raise HTTPException(**http_error(400, ("at_least_two_lines_required", request)))
                 total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
                 total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
                 if (total_debit - total_credit).copy_abs() > _D4:
-                    raise HTTPException(status_code=400, detail=f"القيد غير متوازن: مدين={total_debit} دائن={total_credit}")
+                    raise HTTPException(status_code=400, detail=i18n_message("journal_entry_unbalanced", request))
     
                 db.execute(text("DELETE FROM recurring_journal_lines WHERE template_id = :tid"), {"tid": template_id})
                 for line in lines:
@@ -228,7 +228,7 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
                          action="accounting.recurring_template.update",
                          resource_type="recurring_template", resource_id=str(template_id),
                          details={"template_id": template_id})
-            return {"success": True, "message": "تم تعديل القالب بنجاح"}
+            return {"success": True, "message": i18n_message("recurring_template_updated", request)}
         except HTTPException:
             raise
         except Exception:
@@ -251,7 +251,7 @@ def delete_recurring_template(request: Request, template_id: int, current_user: 
                          action="accounting.recurring_template.delete",
                          resource_type="recurring_template", resource_id=str(template_id),
                          details={"name": existing.name})
-            return {"success": True, "message": "تم حذف القالب بنجاح"}
+            return {"success": True, "message": i18n_message("recurring_template_deleted", request)}
         except HTTPException:
             raise
         except Exception:
@@ -273,11 +273,11 @@ def generate_from_template(request: Request, template_id: int, current_user: dic
                 "SELECT * FROM recurring_journal_lines WHERE template_id = :tid ORDER BY id"
             ), {"tid": template_id}).fetchall()
             if not lines:
-                raise HTTPException(status_code=400, detail="القالب لا يحتوي على بنود")
+                raise HTTPException(**http_error(400, "template_has_no_lines", request))
     
             entry_id = _create_entry_from_template(db, tmpl, lines, current_user)
     
-            return {"success": True, "message": "تم توليد القيد بنجاح", "entry_id": entry_id}
+            return {"success": True, "message": i18n_message("recurring_entry_generated", request), "entry_id": entry_id}
         except HTTPException:
             raise
         except Exception:

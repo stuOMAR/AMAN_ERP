@@ -95,7 +95,7 @@ def create_fiscal_year(
             # Check duplicate
             existing = db.execute(text("SELECT 1 FROM fiscal_years WHERE year = :y"), {"y": data.year}).fetchone()
             if existing:
-                raise HTTPException(status_code=400, detail=f"السنة المالية {data.year} موجودة بالفعل")
+                raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_already_exists", request))
     
             # Find retained earnings account if not specified
             re_account_id = data.retained_earnings_account_id
@@ -153,7 +153,7 @@ def create_fiscal_year(
                          resource_type="fiscal_year", resource_id=str(fy_id),
                          details={"year": data.year})
     
-            return {"success": True, "id": fy_id, "message": f"تم إنشاء السنة المالية {data.year}"}
+            return {"success": True, "id": fy_id, "message": i18n_message("fiscal_year_created", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -172,9 +172,9 @@ def preview_year_end_closing(
         # Get fiscal year
         fy = db.execute(text("SELECT * FROM fiscal_years WHERE year = :y"), {"y": year}).fetchone()
         if not fy:
-            raise HTTPException(status_code=404, detail=f"السنة المالية {year} غير موجودة")
+            raise HTTPException(status_code=404, detail=i18n_message("fiscal_year_not_found", request))
         if fy.status == 'closed':
-            raise HTTPException(status_code=400, detail=f"السنة المالية {year} مقفلة بالفعل")
+            raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_already_closed", request))
 
         # Get all revenue accounts with their balances for this year
         revenue_accounts = db.execute(text("""
@@ -254,9 +254,9 @@ def close_fiscal_year(
             # 1. Validate fiscal year exists and is open
             fy = db.execute(text("SELECT * FROM fiscal_years WHERE year = :y"), {"y": year}).fetchone()
             if not fy:
-                raise HTTPException(status_code=404, detail=f"السنة المالية {year} غير موجودة")
+                raise HTTPException(status_code=404, detail=i18n_message("fiscal_year_not_found", request))
             if fy.status == 'closed':
-                raise HTTPException(status_code=400, detail=f"السنة المالية {year} مقفلة بالفعل")
+                raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_already_closed", request))
     
             # 2. Determine retained earnings account
             re_account_id = data.retained_earnings_account_id or fy.retained_earnings_account_id
@@ -271,8 +271,7 @@ def close_fiscal_year(
                 if re_acc:
                     re_account_id = re_acc.id
                 else:
-                    raise HTTPException(status_code=400,
-                        detail="لم يتم العثور على حساب الأرباح المبقاة. يرجى تحديده يدوياً")
+                    raise HTTPException(**http_error(400, "retained_earnings_not_found_manual", request))
     
             # 3. Calculate total revenue and expenses for the year
             revenue_data = db.execute(text("""
@@ -304,8 +303,7 @@ def close_fiscal_year(
             net_income = (total_revenue - total_expenses).quantize(_D4, ROUND_HALF_UP)
     
             if not revenue_data and not expense_data:
-                raise HTTPException(status_code=400,
-                    detail="لا توجد حركات إيرادات أو مصاريف لهذه السنة المالية")
+                raise HTTPException(**http_error(400, "no_revenue_expense_movements_year", request))
     
             # 4. Build and create the closing journal entry via centralized GL service
             closing_lines = []
@@ -424,7 +422,7 @@ def close_fiscal_year(
     
             return {
                 "success": True,
-                "message": f"تم إقفال السنة المالية {year} بنجاح",
+                "message": i18n_message("fiscal_year_closed", request),
                 "closing_entry_id": entry_id,
                 "closing_entry_number": entry_num,
                 "total_revenue": float(total_revenue),
@@ -453,9 +451,9 @@ def reopen_fiscal_year(
             # 1. Validate
             fy = db.execute(text("SELECT * FROM fiscal_years WHERE year = :y"), {"y": year}).fetchone()
             if not fy:
-                raise HTTPException(status_code=404, detail=f"السنة المالية {year} غير موجودة")
+                raise HTTPException(status_code=404, detail=i18n_message("fiscal_year_not_found", request))
             if fy.status != 'closed':
-                raise HTTPException(status_code=400, detail=f"السنة المالية {year} ليست مقفلة")
+                raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_not_locked", request))
     
             # 2. Reverse the closing journal entry
             if fy.closing_entry_id:
@@ -538,7 +536,7 @@ def reopen_fiscal_year(
     
             return {
                 "success": True,
-                "message": f"تم إعادة فتح السنة المالية {year}",
+                "message": i18n_message("fiscal_year_reopened", request),
                 "reversal_entry_id": rev_id if fy.closing_entry_id else None,
             }
         except HTTPException:
@@ -591,7 +589,7 @@ def toggle_fiscal_period(
         try:
             period = db.execute(text("SELECT * FROM fiscal_periods WHERE id = :id"), {"id": period_id}).fetchone()
             if not period:
-                raise HTTPException(status_code=404, detail="الفترة المحاسبية غير موجودة")
+                raise HTTPException(**http_error(404, ("accounting_period_not_found", request)))
     
             # Check if the parent fiscal year is closed
             if period.fiscal_year:
@@ -599,8 +597,7 @@ def toggle_fiscal_period(
                     "SELECT status FROM fiscal_years WHERE year = :y"
                 ), {"y": period.fiscal_year}).fetchone()
                 if fy and fy.status == 'closed' and period.is_closed:
-                    raise HTTPException(status_code=400,
-                        detail="لا يمكن فتح فترة في سنة مالية مقفلة. افتح السنة أولاً")
+                    raise HTTPException(**http_error(400, "cannot_open_period_closed_year", request))
     
             new_status = not period.is_closed
             db.execute(text("""
@@ -641,7 +638,7 @@ def toggle_fiscal_period(
                 details={"period_name": period.name, "new_status": "locked" if new_status else "unlocked"},
             )
     
-            return {"success": True, "message": f"تم {action} الفترة {period.name}", "is_closed": new_status}
+            return {"success": True, "message": i18n_message("fiscal_period_action", request), "is_closed": new_status}
         except HTTPException:
             raise
         except Exception:
@@ -748,7 +745,7 @@ def generate_closing_entries(
                     "SELECT id FROM accounts WHERE account_number IN ('RET', '3100', '32') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
                 )).fetchone()
                 if not ret:
-                    raise HTTPException(status_code=400, detail="لم يتم العثور على حساب الأرباح المبقاة")
+                    raise HTTPException(**http_error(400, ("retained_earnings_not_found", request)))
                 retained_earnings_id = ret.id
     
             revenues = db.execute(text(  # noqa: sql-lint
@@ -913,7 +910,7 @@ def generate_closing_entries(
                 "total_revenue": float(total_revenue),
                 "total_expense": float(total_expense),
                 "net_income": float(net_income),
-                "message": f"تم توليد {len(created_entries)} قيد إقفال بنجاح",
+                "message": i18n_message("closing_entries_generated", request),
             }
         except HTTPException:
             raise

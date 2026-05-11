@@ -2,7 +2,7 @@
 Checks Management Router - TRS-001 & TRS-002
 إدارة الشيكات تحت التحصيل والدفع
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from database import get_db_connection
@@ -194,7 +194,7 @@ def get_check_receivable(check_id: int, current_user=Depends(get_current_user)):
 
 
 @router.post("/receivable", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
+def create_check_receivable(data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Create a new check receivable.
     On creation: Dr. Checks Under Collection (1205) / Cr. Accounts Receivable
@@ -208,7 +208,7 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
             required = ["check_number", "amount", "due_date"]
             for f in required:
                 if not data.get(f):
-                    raise HTTPException(400, f"الحقل {f} مطلوب")
+                    raise HTTPException(**http_error(400, "required_field_missing", request))
     
             # T015: Duplicate check number warning per branch
             dup = db.execute(text("""
@@ -236,7 +236,7 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
             )).fetchone()
     
             if not checks_account or not ar_account:
-                raise HTTPException(500, "حسابات الشيكات (1205) أو العملاء (1200/1201) غير موجودة. يرجى إعداد دليل الحسابات أولاً.")
+                raise HTTPException(**http_error(500, "check_accounts_not_found", request))
     
             check_fiscal_period_open(db, data.get("issue_date", str(date.today())))
             
@@ -288,7 +288,7 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_receivable", str(result.id),
                          {"check_number": data["check_number"], "amount": float(amount)})
-            return {"id": result.id, "message": "تم تسجيل الشيك بنجاح"}
+            return {"id": result.id, "message": i18n_message("check_registered", request)}
         except HTTPException:
             raise
         except Exception:
@@ -298,7 +298,7 @@ def create_check_receivable(data: dict, current_user=Depends(get_current_user)):
 
 
 @router.post("/receivable/{check_id}/collect", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get_current_user)):
+def collect_check_receivable(check_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Mark check as collected.
     GL: Dr. Bank (treasury) / Cr. Checks Under Collection (1205)
@@ -312,7 +312,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
             branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status != 'pending':
-                raise HTTPException(400, "الشيك ليس في حالة معلق")
+                raise HTTPException(**http_error(400, "check_not_pending", request))
     
             collection_date = data.get("collection_date", str(date.today()))
             treasury_id = data.get("treasury_account_id") or check.treasury_account_id
@@ -324,7 +324,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
     
             checks_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1205' LIMIT 1")).fetchone()
             if not checks_account:
-                raise HTTPException(500, "حساب الشيكات تحت التحصيل (1205) غير موجود")
+                raise HTTPException(**http_error(500, "checks_receivable_account_not_found", request))
     
             amount = _dec(check.amount).quantize(_D2, ROUND_HALF_UP)
     
@@ -359,7 +359,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
             """), {"id": check_id, "cdate": collection_date, "je_id": coll_je_id, "treasury_id": treasury_id})
             log_activity(db, current_user.id, current_user.username, "collect", "checks_receivable", str(check_id),
                          {"collection_date": collection_date})
-            return {"message": "تم تحصيل الشيك بنجاح"}
+            return {"message": i18n_message(("check_collected_success", request))}
         except HTTPException:
             raise
         except Exception:
@@ -369,7 +369,7 @@ def collect_check_receivable(check_id: int, data: dict, current_user=Depends(get
 
 
 @router.post("/receivable/{check_id}/bounce", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_current_user)):
+def bounce_check_receivable(check_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Mark check as bounced.
     If pending: Dr. AR / Cr. Checks Under Collection (reverse original)
@@ -384,7 +384,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
             branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status not in ('pending', 'collected'):
-                raise HTTPException(400, "لا يمكن ارتجاع هذا الشيك")
+                raise HTTPException(**http_error(400, "check_cannot_bounce", request))
     
             bounce_reason = data.get("bounce_reason", "")
             bounce_date = data.get("bounce_date", str(date.today()))
@@ -396,7 +396,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
             checks_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1205' LIMIT 1")).fetchone()
     
             if not ar_account:
-                raise HTTPException(500, "حساب العملاء (1200/1201) غير موجود")
+                raise HTTPException(**http_error(500, "ar_account_not_found", request))
     
             check_fiscal_period_open(db, bounce_date)
             bounce_je_id = None
@@ -406,7 +406,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
                     db, current_user, check.treasury_account_id, branch_id
                 ) if check.treasury_account_id else None
                 if not treasury:
-                    raise HTTPException(400, "حساب الخزينة غير مرتبط بالشيك المحصّل")
+                    raise HTTPException(**http_error(400, "treasury_not_linked_to_check", request))
     
                 je_lines = [
                     {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
@@ -429,7 +429,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
                 recalc_treasury_from_gl(db, check.treasury_account_id)
             else:
                 if not checks_account:
-                    raise HTTPException(500, "حساب الشيكات تحت التحصيل (1205) غير موجود")
+                    raise HTTPException(**http_error(500, "checks_receivable_account_not_found", request))
     
                 je_lines = [
                     {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
@@ -454,7 +454,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
             """), {"id": check_id, "bdate": bounce_date, "reason": bounce_reason, "je_id": bounce_je_id})
             log_activity(db, current_user.id, current_user.username, "bounce", "checks_receivable", str(check_id),
                          {"bounce_reason": bounce_reason})
-            return {"message": "تم تسجيل الشيك كمرتجع"}
+            return {"message": i18n_message(("check_bounced_success", request))}
         except HTTPException:
             raise
         except Exception:
@@ -464,7 +464,7 @@ def bounce_check_receivable(check_id: int, data: dict, current_user=Depends(get_
 
 
 @router.post("/receivable/{check_id}/represent", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def represent_check_receivable(check_id: int, data: dict = None, current_user=Depends(get_current_user)):
+def represent_check_receivable(check_id: int, request: Request, data: dict = None, current_user=Depends(get_current_user)):
     """
     Re-present a bounced check receivable.
     Sets status back to 'pending', posts GL entry (Dr. 1205 / Cr. AR),
@@ -481,7 +481,7 @@ def represent_check_receivable(check_id: int, data: dict = None, current_user=De
             validate_branch_access(current_user, check.branch_id)
     
             if check.status != 'bounced':
-                raise HTTPException(400, "لا يمكن إعادة تقديم شيك غير مرتجع")
+                raise HTTPException(**http_error(400, "check_cannot_represent", request))
     
             represent_date = data.get("represent_date", str(date.today()))
             amount = _dec(check.amount).quantize(_D2, ROUND_HALF_UP)
@@ -491,7 +491,7 @@ def represent_check_receivable(check_id: int, data: dict = None, current_user=De
                 "SELECT id FROM accounts WHERE account_code IN ('1201', '1200') AND is_active = TRUE ORDER BY account_code LIMIT 1"
             )).fetchone()
             if not checks_account or not ar_account:
-                raise HTTPException(500, "حسابات الشيكات (1205) أو العملاء (1200/1201) غير موجودة")
+                raise HTTPException(**http_error(500, "check_accounts_not_found", request))
     
             check_fiscal_period_open(db, represent_date)
     
@@ -524,7 +524,7 @@ def represent_check_receivable(check_id: int, data: dict = None, current_user=De
     
             log_activity(db, current_user.id, current_user.username, "represent", "checks_receivable", str(check_id),
                          {"re_presentation_count": new_count})
-            return {"message": "تم إعادة تقديم الشيك بنجاح", "journal_entry_id": je_id}
+            return {"message": i18n_message("check_represented_success", request), "journal_entry_id": je_id}
         except HTTPException:
             raise
         except Exception:
@@ -675,7 +675,7 @@ def get_check_payable(check_id: int, current_user=Depends(get_current_user)):
 
 
 @router.post("/payable", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def create_check_payable(data: dict, current_user=Depends(get_current_user)):
+def create_check_payable(data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Create a new check payable (issued check).
     GL: Dr. Accounts Payable / Cr. Checks Payable Account (2105)
@@ -689,7 +689,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
             required = ["check_number", "amount", "due_date", "issue_date"]
             for f in required:
                 if not data.get(f):
-                    raise HTTPException(400, f"الحقل {f} مطلوب")
+                    raise HTTPException(**http_error(400, "required_field_missing", request))
     
             # --- T021: Duplicate check number warning ---
             dup = db.execute(text("""
@@ -698,7 +698,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
                 LIMIT 1
             """), {"cn": data["check_number"], "bid": data.get("branch_id")}).fetchone()
             if dup:
-                raise HTTPException(409, f"يوجد شيك صادر بنفس الرقم (معرف={dup.id}, حالة={dup.status})")
+                raise HTTPException(**http_error(409, "payable_check_number_duplicate", request))
     
             _ensure_checks_accounts(db)
     
@@ -713,7 +713,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
             )).fetchone()
     
             if not checks_pay_account or not ap_account:
-                raise HTTPException(500, "حسابات الشيكات (2105) أو الموردين (2100/2101) غير موجودة. يرجى إعداد دليل الحسابات أولاً.")
+                raise HTTPException(**http_error(500, "check_payable_accounts_not_found", request))
     
             check_fiscal_period_open(db, data["issue_date"])
             
@@ -765,7 +765,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_payable", str(result.id),
                          {"check_number": data["check_number"], "amount": float(amount)})
-            return {"id": result.id, "message": "تم تسجيل الشيك بنجاح"}
+            return {"id": result.id, "message": i18n_message("check_registered", request)}
         except HTTPException:
             raise
         except Exception:
@@ -775,7 +775,7 @@ def create_check_payable(data: dict, current_user=Depends(get_current_user)):
 
 
 @router.post("/payable/{check_id}/clear", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_current_user)):
+def clear_check_payable(check_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Mark check as cleared (presented and paid by bank).
     GL: Dr. Checks Payable (2105) / Cr. Bank
@@ -789,7 +789,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
             branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status != 'issued':
-                raise HTTPException(400, "الشيك ليس في حالة صادر")
+                raise HTTPException(**http_error(400, "check_not_issued", request))
     
             clearance_date = data.get("clearance_date", str(date.today()))
             treasury_id = data.get("treasury_account_id") or check.treasury_account_id
@@ -801,7 +801,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
     
             checks_pay_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2105' LIMIT 1")).fetchone()
             if not checks_pay_account:
-                raise HTTPException(500, "حساب الشيكات تحت الدفع (2105) غير موجود")
+                raise HTTPException(**http_error(500, "checks_payable_account_not_found", request))
     
             amount = _dec(check.amount).quantize(_D2, ROUND_HALF_UP)
     
@@ -845,7 +845,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
             """), {"id": check_id, "cdate": clearance_date, "je_id": clear_je_id, "treasury_id": treasury_id})
             log_activity(db, current_user.id, current_user.username, "clear", "checks_payable", str(check_id),
                          {"clearance_date": clearance_date})
-            return {"message": "تم صرف الشيك بنجاح"}
+            return {"message": i18n_message(("check_dispensed_success", request))}
         except HTTPException:
             raise
         except Exception:
@@ -855,7 +855,7 @@ def clear_check_payable(check_id: int, data: dict, current_user=Depends(get_curr
 
 
 @router.post("/payable/{check_id}/bounce", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_current_user)):
+def bounce_check_payable(check_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """
     Mark issued check as bounced.
     GL: Dr. Checks Payable (2105) / Cr. Accounts Payable
@@ -869,7 +869,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
             branch_id = validate_branch_access(current_user, check.branch_id)
             
             if check.status not in ('issued', 'cleared'):
-                raise HTTPException(400, "لا يمكن ارتجاع هذا الشيك")
+                raise HTTPException(**http_error(400, "check_cannot_bounce", request))
     
             bounce_reason = data.get("bounce_reason", "")
             bounce_date = data.get("bounce_date", str(date.today()))
@@ -881,7 +881,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
             )).fetchone()
     
             if not checks_pay_account or not ap_account:
-                raise HTTPException(500, "حسابات الشيكات أو الموردين غير موجودة")
+                raise HTTPException(**http_error(500, "check_or_supplier_accounts_not_found", request))
     
             check_fiscal_period_open(db, bounce_date)
             bounce_je_id = None
@@ -893,7 +893,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
                     db, current_user, check.treasury_account_id, branch_id
                 ) if check.treasury_account_id else None
                 if not treasury:
-                    raise HTTPException(400, "حساب الخزينة غير مرتبط بالشيك")
+                    raise HTTPException(**http_error(400, "treasury_not_linked_to_check", request))
     
                 je_lines = [
                     {
@@ -962,7 +962,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
             """), {"id": check_id, "bdate": bounce_date, "reason": bounce_reason, "je_id": bounce_je_id})
             log_activity(db, current_user.id, current_user.username, "bounce", "checks_payable", str(check_id),
                          {"bounce_reason": bounce_reason})
-            return {"message": "تم تسجيل الشيك كمرتجع"}
+            return {"message": i18n_message(("check_bounced_success", request))}
         except HTTPException:
             raise
         except Exception:
@@ -972,7 +972,7 @@ def bounce_check_payable(check_id: int, data: dict, current_user=Depends(get_cur
 
 
 @router.post("/payable/{check_id}/represent", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def represent_check_payable(check_id: int, data: dict = {}, current_user=Depends(get_current_user)):
+def represent_check_payable(check_id: int, request: Request, data: dict = {}, current_user=Depends(get_current_user)):
     """
     Re-present a bounced payable check.
     GL: Dr. Accounts Payable / Cr. Checks Payable (2105)
@@ -987,7 +987,7 @@ def represent_check_payable(check_id: int, data: dict = {}, current_user=Depends
             validate_branch_access(current_user, check.branch_id)
     
             if check.status != 'bounced':
-                raise HTTPException(400, "لا يمكن إعادة تقديم شيك غير مرتجع")
+                raise HTTPException(**http_error(400, "check_cannot_represent", request))
     
             represent_date = data.get("represent_date", str(date.today()))
             amount = _dec(check.amount).quantize(_D2, ROUND_HALF_UP)
@@ -998,7 +998,7 @@ def represent_check_payable(check_id: int, data: dict = {}, current_user=Depends
             )).fetchone()
     
             if not checks_pay_account or not ap_account:
-                raise HTTPException(500, "حسابات الشيكات أو الموردين غير موجودة")
+                raise HTTPException(**http_error(500, "check_or_supplier_accounts_not_found", request))
     
             check_fiscal_period_open(db, represent_date)
     
@@ -1035,7 +1035,7 @@ def represent_check_payable(check_id: int, data: dict = {}, current_user=Depends
     
             log_activity(db, current_user.id, current_user.username, "represent", "checks_payable", str(check_id),
                          {"re_presentation_count": new_count, "represent_date": represent_date})
-            return {"message": "تم إعادة تقديم الشيك بنجاح", "re_presentation_count": new_count}
+            return {"message": i18n_message("check_represented_success", request), "re_presentation_count": new_count}
         except HTTPException:
             raise
         except Exception:

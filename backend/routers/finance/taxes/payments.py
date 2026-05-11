@@ -105,7 +105,7 @@ def create_tax_payment(
                     "id": existing_by_key.id,
                     "payment_number": existing_by_key.payment_number,
                     "journal_entry_id": existing_by_key.journal_entry_id,
-                    "message": "تم العثور على الدفعة الضريبية نفسها مسبقاً",
+                    "message": i18n_message("tax_payment_found_duplicate", request),
                     "idempotent": True,
                 }
 
@@ -114,7 +114,7 @@ def create_tax_payment(
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
             branch_id = validate_branch_access(current_user, tr.branch_id)
             if tr.status in ("cancelled", "draft"):
-                raise HTTPException(status_code=400, detail="لا يمكن الدفع على إقرار ملغى أو مسودة. يجب تقديمه أولاً")
+                raise HTTPException(**http_error(400, "tax_return_must_submit_before_pay", request))
 
             check_fiscal_period_open(db, data.payment_date)
     
@@ -124,7 +124,7 @@ def create_tax_payment(
             remaining = (_dec(tr.total_amount) - _dec(paid)).quantize(_D2, ROUND_HALF_UP)
             amount_dec = _dec(data.amount).quantize(_D2, ROUND_HALF_UP)
             if amount_dec > (remaining + _D2):
-                raise HTTPException(status_code=400, detail=f"المبلغ يتجاوز المتبقي ({money_str(remaining)})")
+                raise HTTPException(status_code=400, detail=i18n_message("amount_exceeds_remaining", request))
     
             payment_number = generate_sequential_number(db, "TP", "tax_payments", "payment_number")
             base_currency = get_base_currency(db)
@@ -166,7 +166,7 @@ def create_tax_payment(
             # ===== ACCOUNTING INTEGRATION =====
             vat_account_id = get_mapped_account_id(db, "acc_map_vat_out")
             if not vat_account_id:
-                raise HTTPException(status_code=400, detail="حساب ضريبة المخرجات (VAT Output) غير محدد في الإعدادات")
+                raise HTTPException(**http_error(400, "vat_output_account_not_configured", request))
     
             bank_account_id = None
             if data.treasury_account_id:
@@ -195,7 +195,7 @@ def create_tax_payment(
                     bank_account_id = bank_row.gl_account_id
     
             if not bank_account_id:
-                raise HTTPException(status_code=400, detail="حساب البنك/الخزينة غير مهيأ لترحيل دفعة الضريبة")
+                raise HTTPException(**http_error(400, "bank_cash_account_not_configured_for_tax", request))
 
             je_lines = [
                 {
@@ -242,7 +242,7 @@ def create_tax_payment(
     
             return {"success": True, "id": new_id, "payment_number": payment_number,
                     "journal_entry_id": je_id, "journal_entry": entry_number,
-                    "message": "تم تسجيل الدفعة الضريبية بنجاح"}
+                    "message": i18n_message("tax_payment_recorded_success", request)}
         except HTTPException:
             raise
         except Exception as e:

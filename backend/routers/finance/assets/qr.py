@@ -41,7 +41,7 @@ def update_asset_qr(asset_id: int, data: AssetQRUpdate, current_user: dict = Dep
     with transactional(current_user.company_id) as conn:
         conn.execute(text("UPDATE assets SET qr_code = :qr, barcode = :bc WHERE id = :id"),
                      {"qr": data.qr_code, "bc": data.barcode, "id": asset_id})
-        return {"message": "QR/Barcode updated"}
+        return {"message": i18n_message(("qr_updated", request))}
 
 
 @router.get("/{asset_id}/qr", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
@@ -51,7 +51,7 @@ def get_asset_qr(asset_id: int, current_user: dict = Depends(get_current_user)):
         row = conn.execute(text("SELECT id, name, code, qr_code, barcode FROM assets WHERE id = :id"),
                            {"id": asset_id}).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="Asset not found")
+            raise HTTPException(**http_error(404, "asset_not_found", request))
         return dict(row._mapping)
 
 

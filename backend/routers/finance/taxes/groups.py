@@ -72,7 +72,7 @@ def create_tax_group(request: Request, data: TaxGroupCreate, current_user: dict 
         try:
             exists = db.execute(text("SELECT 1 FROM tax_groups WHERE group_code = :code"), {"code": data.group_code}).fetchone()
             if exists:
-                raise HTTPException(status_code=400, detail="كود المجموعة موجود مسبقاً")
+                raise HTTPException(**http_error(400, "tax_group_code_already_exists", request))
     
             import json
             result = db.execute(text("""
@@ -90,7 +90,7 @@ def create_tax_group(request: Request, data: TaxGroupCreate, current_user: dict 
                          resource_id=str(new_id), details={"group_code": data.group_code},
                          request=request)
     
-            return {"success": True, "id": new_id, "message": "تم إنشاء المجموعة الضريبية بنجاح"}
+            return {"success": True, "id": new_id, "message": i18n_message("tax_group_created", request)}
         except HTTPException:
             raise
         except Exception:

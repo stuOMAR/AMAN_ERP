@@ -99,7 +99,7 @@ def approve_pending_review(
     except Exception:
         conn.rollback()
         logger.exception("Failed to approve pending review %s", pending_id)
-        raise HTTPException(status_code=500, detail="Approval failed")
+        raise HTTPException(**http_error(500, "approval_failed", request))
     finally:
         conn.close()
 
@@ -131,6 +131,6 @@ def reject_pending_review(
     except Exception:
         conn.rollback()
         logger.exception("Failed to reject pending review %s", pending_id)
-        raise HTTPException(status_code=500, detail="Rejection failed")
+        raise HTTPException(**http_error(500, "rejection_failed", request))
     finally:
         conn.close()

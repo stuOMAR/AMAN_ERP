@@ -8,10 +8,12 @@ from sqlalchemy import text
 from datetime import datetime
 import logging
 
+from utils.i18n import http_error
+
 logger = logging.getLogger(__name__)
 
 
-def check_fiscal_period_open(db, entry_date, raise_error=True):
+def check_fiscal_period_open(db, entry_date, raise_error=True, request=None):
     """
     Check if a fiscal period is open for the given date.
     Used as a utility function called from endpoints that create journal entries.
@@ -42,12 +44,7 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
         if locked:
             if raise_error:
                 locked_date = locked.locked_at.strftime("%Y-%m-%d") if locked.locked_at else "—"
-                raise HTTPException(
-                    400,
-                    f"لا يمكن الترحيل — الفترة المحاسبية مقفلة: {locked.period_name} "
-                    f"(تم القفل بتاريخ {locked_date}). "
-                    "يرجى التواصل مع المدير لفتح الفترة."
-                )
+                raise HTTPException(**http_error(400, "fiscal_period_locked", request, name=locked.period_name))
             return False
 
         # 2. Year-end closed period — fiscal_periods.is_closed
@@ -70,11 +67,7 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
 
         if closed:
             if raise_error:
-                raise HTTPException(
-                    400,
-                    f"لا يمكن الترحيل — الفترة المحاسبية مغلقة: {closed.name}. "
-                    "يرجى التواصل مع المدير لإعادة فتح الفترة."
-                )
+                raise HTTPException(**http_error(400, "fiscal_period_closed_post", request, name=closed.name))
             return False
 
         return True
@@ -100,10 +93,7 @@ def check_fiscal_period_open(db, entry_date, raise_error=True):
         # Unexpected DB error — don't silently allow; fail closed.
         logger.error("Fiscal period check failed with unexpected error: %s", e)
         if raise_error:
-            raise HTTPException(
-                500,
-                "تعذّر التحقّق من قفل الفترة المحاسبية. يرجى المحاولة لاحقاً.",
-            )
+            raise HTTPException(**http_error(500, "fiscal_lock_check_failed", request))
         return False
 
 

@@ -44,7 +44,7 @@ def complete_maintenance(maint_id: int, data: MaintenanceComplete = MaintenanceC
                 cost = COALESCE(:cost, cost) WHERE id = :id
         """), {"d": (data.completed_date or date.today()).isoformat(),
                "cost": data.actual_cost, "id": maint_id})
-        return {"message": "Maintenance completed"}
+        return {"message": i18n_message(("maintenance_completed", request))}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

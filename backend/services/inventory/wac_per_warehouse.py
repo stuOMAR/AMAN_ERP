@@ -117,8 +117,7 @@ def _get_current_stock(db: Any, item_id: int, warehouse_id: int, tenant_id: int 
             COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity * unit_cost ELSE 0 END), 0) as inbound_value
         FROM inventory_transactions
         WHERE product_id = :item AND warehouse_id = :wid
-          AND (:tid IS NULL OR tenant_id = :tid)
-    """), {"item": item_id, "wid": warehouse_id, "tid": tenant_id}).fetchone()
+    """), {"item": item_id, "wid": warehouse_id}).fetchone()
 
     qty = Decimal(str(row.inbound_qty or 0))
     value = Decimal(str(row.inbound_value or 0))
@@ -135,14 +134,14 @@ def _insert_transaction(
     """Insert an inventory transaction."""
     db.execute(text("""
         INSERT INTO inventory_transactions (
-            tenant_id, product_id, warehouse_id, quantity, unit_cost,
-            transaction_type, transaction_date, created_at
+            product_id, warehouse_id, quantity, unit_cost,
+            transaction_type, created_at
         ) VALUES (
-            :tid, :item, :wid, :qty, :cost,
-            :type, CURRENT_DATE, clock_timestamp()
+            :item, :wid, :qty, :cost,
+            :type, clock_timestamp()
         )
     """), {
-        "tid": tenant_id, "item": item_id, "wid": warehouse_id,
+        "item": item_id, "wid": warehouse_id,
         "qty": float(qty), "cost": float(unit_cost),
         "type": "purchase" if direction == "inbound" else "sale",
     })

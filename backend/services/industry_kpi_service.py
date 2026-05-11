@@ -231,7 +231,7 @@ def get_retail_kpis(db, start_date: date, end_date: date,
     alerts = []
     if oos_rate > 5:
         alerts.append({"severity": "high", "code": "HIGH_OOS",
-                        "message": f"Out-of-stock rate at {oos_rate:.1f}% — {oos_skus} SKUs",
+                        "message": i18n_message("kpi_out_of_stock_rate", request),
                         "message_ar": f"نسبة نفاد المخزون {oos_rate:.1f}% — {oos_skus} صنف",
                         "link": "/stock/products?filter=out_of_stock"})
 
@@ -341,7 +341,7 @@ def get_fnb_kpis(db, start_date: date, end_date: date,
     alerts = []
     if prime_cost_pct > 70:
         alerts.append({"severity": "high", "code": "HIGH_PRIME_COST",
-                        "message": f"Prime cost at {prime_cost_pct:.1f}% — exceeds 70% threshold",
+                        "message": i18n_message("kpi_prime_cost_high", request),
                         "message_ar": f"التكلفة الأساسية {prime_cost_pct:.1f}% — تتجاوز حد 70%",
                         "link": "/reports/income-statement"})
 
@@ -471,7 +471,7 @@ def get_manufacturing_industry_kpis(db, start_date: date, end_date: date,
     alerts = []
     if oee > 0 and oee < 60:
         alerts.append({"severity": "high", "code": "LOW_OEE",
-                        "message": f"OEE at {oee:.1f}% — significantly below world-class 85%",
+                        "message": i18n_message("kpi_oee_low", request),
                         "message_ar": f"الفعالية الكلية {oee:.1f}% — أقل بكثير من المعيار العالمي 85%",
                         "link": "/manufacturing/work-centers"})
 
@@ -582,7 +582,7 @@ def get_construction_kpis(db, start_date: date, end_date: date,
     alerts = []
     if avg_cpi > 0 and avg_cpi < 0.9:
         alerts.append({"severity": "high", "code": "COST_OVERRUN",
-                        "message": f"CPI at {avg_cpi:.2f} — projects running over budget",
+                        "message": i18n_message("kpi_cpi_over_budget", request),
                         "message_ar": f"مؤشر التكلفة {avg_cpi:.2f} — المشاريع تتجاوز الميزانية",
                         "link": "/projects"})
 
@@ -803,7 +803,7 @@ def get_wholesale_kpis(db, start_date: date, end_date: date,
     alerts = []
     if concentration > 30:
         alerts.append({"severity": "medium", "code": "CUSTOMER_CONCENTRATION",
-                        "message": f"Top customer represents {concentration:.0f}% of revenue — diversification risk",
+                        "message": i18n_message("kpi_customer_concentration", request),
                         "message_ar": f"أكبر عميل يمثل {concentration:.0f}% من الإيرادات — خطر التركز",
                         "link": "/sales/customers"})
 

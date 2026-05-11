@@ -100,11 +100,11 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
                 WHERE id = :qid
             """), {"qid": data.quotation_id}).fetchone()
             if not quot:
-                raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
+                raise HTTPException(**http_error(404, ("quotation_not_found", request)))
             if quot.status in ('expired', 'converted', 'cancelled'):
-                raise HTTPException(status_code=400, detail=f"عرض السعر لا يمكن تحويله (الحالة: {quot.status})")
+                raise HTTPException(status_code=400, detail=i18n_message("quotation_cannot_convert_status", request))
             if quot.party_id and quot.party_id != data.customer_id:
-                raise HTTPException(status_code=400, detail="العميل المختار لا يطابق عميل عرض السعر")
+                raise HTTPException(**http_error(400, "customer_mismatch_quotation", request))
 
         # 1. Generate Sequential SO Number
         from utils.accounting import generate_sequential_number
@@ -113,31 +113,43 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         # 2. Calculate Totals (tax resolved via engine)
         validated_branch_id = validate_branch_access(current_user, data.branch_id)
         if validated_branch_id is None:
-            raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
-        subtotal = Decimal('0')
-        total_tax = Decimal('0')
-        total_discount = Decimal('0')
+            raise HTTPException(**http_error(400, ("branch_required", request)))
+        from utils.accounting import compute_invoice_totals, compute_line_amounts
         items_to_save = []
 
         for item in data.items:
             tax_info = resolve_line_tax(validated_branch_id, item.product_id, db, data.order_date, customer_id=data.customer_id)
-            line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
-            taxable = line_subtotal - _dec(item.discount)
-            line_tax = taxable * (_dec(tax_info["tax_rate"]) / Decimal('100'))
-            line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
-
-            subtotal += line_subtotal
-            total_tax += line_tax
-            total_discount += _dec(item.discount)
+            line_amounts = compute_line_amounts(
+                item.quantity,
+                item.unit_price,
+                tax_info["tax_rate"],
+                item.discount,
+                discount_is_percent=False,
+            )
 
             items_to_save.append({
                 **item.model_dump(),
                 "tax_rate": tax_info["tax_rate"],
                 "tax_rate_id": tax_info["tax_rate_id"],
-                "total": line_total
+                "total": line_amounts["line_total"],
             })
 
-        grand_total = (subtotal - total_discount + total_tax).quantize(_D2, ROUND_HALF_UP)
+        totals = compute_invoice_totals(
+            [
+                {
+                    "quantity": item["quantity"],
+                    "unit_price": item["unit_price"],
+                    "tax_rate": item["tax_rate"],
+                    "discount": item["discount"],
+                }
+                for item in items_to_save
+            ],
+            discount_is_percent=False,
+        )
+        subtotal = totals["subtotal"]
+        total_tax = totals["total_tax"]
+        total_discount = totals["total_discount"]
+        grand_total = totals["grand_total"]
 
         # 3. Save Header
         res = db.execute(text("""

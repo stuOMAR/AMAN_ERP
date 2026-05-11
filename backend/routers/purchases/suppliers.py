@@ -113,7 +113,7 @@ def create_supplier_group(
                 details={"group_name": group.group_name},
                 request=request
             )
-            return {"message": "تم إنشاء المجموعة بنجاح"}
+            return {"message": i18n_message(("group_created_success", request))}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -168,7 +168,7 @@ def update_supplier_group(
                 details={"group_name": group.group_name},
                 request=request
             )
-            return {"message": "تم تحديث المجموعة بنجاح"}
+            return {"message": i18n_message(("group_updated_success", request))}
         except HTTPException:
             raise
         except Exception:
@@ -189,7 +189,7 @@ def delete_supplier_group(
             # Check usage first
             usage = db.execute(text("SELECT COUNT(*) FROM parties WHERE party_group_id = :id"), {"id": id}).scalar()
             if usage > 0:
-                raise HTTPException(status_code=400, detail="لا يمكن حذف المجموعة لأنها مرتبطة بموردين")
+                raise HTTPException(**http_error(400, "supplier_group_has_suppliers", request))
                 
             result = db.execute(text("DELETE FROM supplier_groups WHERE id = :id"), {"id": id})
             
@@ -208,7 +208,7 @@ def delete_supplier_group(
                 details=None,
                 request=request
             )
-            return {"message": "تم حذف المجموعة بنجاح"}
+            return {"message": i18n_message(("group_deleted_success", request))}
         except HTTPException:
             raise
         except Exception:

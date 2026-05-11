@@ -12,6 +12,7 @@ from utils.cache import invalidate_company_cache, invalidate_aggregates
 from utils.party_balance import update_party_site_balance
 
 _D2 = Decimal('0.01')
+_D4 = Decimal('0.0001')
 _D6 = Decimal('0.000001')
 _MAX_RATE_AGE_DAYS = 31
 
@@ -125,7 +126,7 @@ def preview_invoice_totals(invoice: InvoiceCreate, current_user: dict = Depends(
     try:
         # Validate branch
         if not invoice.branch_id:
-            raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+            raise HTTPException(**http_error(400, ("branch_required", request)))
         validate_branch_access(current_user, invoice.branch_id)
 
         line_details = []
@@ -186,7 +187,7 @@ def list_invoices(
 ):
     """عرض قائمة فواتير المبيعات مع ترقيم الصفحات"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    
+
     db = get_db_connection(current_user.company_id)
     try:
         where_clauses = ["i.invoice_type = 'sales'"]
@@ -220,7 +221,7 @@ def list_invoices(
         params["offset"] = (page - 1) * limit
 
         result = db.execute(text(f"""
-            SELECT i.id, i.invoice_number, i.invoice_date, i.due_date, 
+            SELECT i.id, i.invoice_number, i.invoice_date, i.due_date,
                    i.total, i.paid_amount, i.status, p.name as customer_name,
                    i.currency, i.exchange_rate,
                    c.code AS base_currency,
@@ -282,21 +283,21 @@ def create_sales_invoice(
         # If currency is different from base and no rate provided, fetch latest rate
         if inv_currency != base_currency and conversion_rate_needed(invoice.exchange_rate):
              rate_row = db.execute(text("""
-                SELECT rate_date, rate FROM exchange_rates 
-                WHERE currency_id = (SELECT id FROM currencies WHERE code = :code) 
-                AND rate_date <= :date 
+                SELECT rate_date, rate FROM exchange_rates
+                WHERE currency_id = (SELECT id FROM currencies WHERE code = :code)
+                AND rate_date <= :date
                 ORDER BY rate_date DESC LIMIT 1
              """), {"code": inv_currency, "date": invoice.invoice_date}).fetchone()
 
              if not rate_row:
-                 raise HTTPException(status_code=400, detail=f"No exchange rate found for {inv_currency}")
+                 raise HTTPException(status_code=400, detail=i18n_message("no_exchange_rate_for_currency", request))
              age_days = (invoice.invoice_date - rate_row.rate_date).days if rate_row.rate_date else 0
              if age_days > _MAX_RATE_AGE_DAYS:
-                 raise HTTPException(status_code=400, detail=f"Exchange rate for {inv_currency} is expired ({age_days} days old)")
+                 raise HTTPException(status_code=400, detail=i18n_message("exchange_rate_expired", request))
              exchange_rate = _dec(rate_row.rate)
 
         if inv_currency != base_currency and exchange_rate <= 0:
-            raise HTTPException(status_code=400, detail="Exchange rate must be greater than zero")
+            raise HTTPException(**http_error(400, ("exchange_rate_must_be_positive", request)))
 
         def to_base(amount):
             return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
@@ -400,10 +401,7 @@ def create_sales_invoice(
             """), {"pid": invoice.customer_id}).scalar() or 0
             new_balance = _dec(current_balance_sar) + remaining_gl
             if new_balance > _dec(customer.credit_limit):
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"تجاوز الحد الائتماني. الحد: {customer.credit_limit}, الرصيد الحالي: {_dec(current_balance_sar).quantize(_D2)}, المطلوب: {remaining_gl}"
-                )
+                raise HTTPException(**http_error(400, "credit_limit_exceeded", request, limit=str(customer.credit_limit), balance=str(_dec(current_balance_sar).quantize(_D2))))
 
         # --- 5. Save Invoice Header (schema-drift tolerant) ---
         # T10.1 P1 #62 — served from process cache.
@@ -413,7 +411,7 @@ def create_sales_invoice(
         party_id = invoice.customer_id
         party_site_id = None
         if invoice.party_site_id:
-            site = db.execute(text("SELECT party_id FROM party_sites WHERE id = :sid"), 
+            site = db.execute(text("SELECT party_id FROM party_sites WHERE id = :sid"),
                             {"sid": invoice.party_site_id}).fetchone()
             if site:
                 party_id = site.party_id
@@ -501,46 +499,17 @@ def create_sales_invoice(
         has_line_markup_col = "markup" in invoice_line_cols
 
         for item in items_to_save:
-            # CONC-FIX: Lock inventory row before deduction to prevent overselling
-            inv_row = db.execute(text("""
-                SELECT quantity FROM inventory
-                WHERE product_id = :pid AND warehouse_id = :wh
-                FOR UPDATE
-            """), {"pid": item["product_id"], "wh": wh_id}).fetchone()
-
-            if inv_row and _dec(inv_row.quantity) < _dec(item["quantity"]):
-                prod_name = item.get("description", str(item["product_id"]))
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"المخزون غير كافٍ للمنتج {prod_name}. المتوفر: {inv_row.quantity}, المطلوب: {item['quantity']}"
-                )
-
-            # Deduct inventory (row is locked by FOR UPDATE above)
-            db.execute(text("""
-                UPDATE inventory SET quantity = quantity - :qty
-                WHERE product_id = :pid AND warehouse_id = :wh
-            """), {"qty": item["quantity"], "pid": item["product_id"], "wh": wh_id})
-
-            # Release reservation if from SO
-            if invoice.sales_order_id:
-                db.execute(text("""
-                    UPDATE inventory 
-                    SET reserved_quantity = GREATEST(0, reserved_quantity - :qty),
-                        available_quantity = quantity - GREATEST(0, reserved_quantity - :qty)
-                    WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"qty": item["quantity"], "pid": item["product_id"], "wh": wh_id})
-
-            # Calculate COGS using costing service
+            # T028: Calculate COGS before stock deduction so FIFO/LIFO sees the
+            # pre-sale available balance while keeping all locks in one tx.
+            qty = _dec(item["quantity"])
+            method = costing_methods.get(int(item["product_id"]), "wac")
             try:
-                qty = _dec(item["quantity"])
-                method = costing_methods.get(int(item["product_id"]), "wac")
                 if method in ("fifo", "lifo"):
-                    # FIFO/LIFO: consume cost layers and get precise COGS
                     item_cogs = _dec(costing_service.consume_layers(
                         db,
                         product_id=item["product_id"],
                         warehouse_id=wh_id,
-                        quantity=_dec(qty),
+                        quantity=qty,
                         sale_document_type="sales_invoice",
                         sale_document_id=invoice_id,
                         costing_method=method,
@@ -549,12 +518,45 @@ def create_sales_invoice(
                 else:
                     unit_cost = _dec(prefetched_unit_costs.get(int(item["product_id"]), 0))
                     item_cogs = (unit_cost * qty).quantize(_D2, ROUND_HALF_UP)
-            except Exception:
-                # Fallback: use product cost_price
-                qty = _dec(item["quantity"])
-                fallback_cost = _dec(prefetched_unit_costs.get(int(item["product_id"]), 0))
-                unit_cost = fallback_cost
-                item_cogs = (fallback_cost * qty).quantize(_D2, ROUND_HALF_UP)
+            except ValueError as e:
+                # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
+                raise HTTPException(status_code=400, detail=str(e))
+
+            # T026: Atomic deduction with authoritative available formula
+            inv_row = db.execute(text("""
+                UPDATE inventory
+                SET quantity = quantity - :qty,
+                    last_movement_date = NOW(),
+                    updated_at = NOW()
+                WHERE product_id = :pid AND warehouse_id = :wh
+                  AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                RETURNING id, quantity
+            """), {"qty": item["quantity"], "pid": item["product_id"], "wh": wh_id}).fetchone()
+
+            if not inv_row:
+                # Distinguish missing row from insufficient stock
+                exists = db.execute(text(
+                    "SELECT 1 FROM inventory WHERE product_id = :pid AND warehouse_id = :wh"
+                ), {"pid": item["product_id"], "wh": wh_id}).scalar()
+                if not exists:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=i18n_message("no_inventory_record_product", request)
+                    )
+                else:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=i18n_message("insufficient_stock_product", request)
+                    )
+
+            # T027: Release reservation if from SO (available_quantity is generated, don't set it)
+            if invoice.sales_order_id:
+                db.execute(text("""
+                    UPDATE inventory
+                    SET reserved_quantity = GREATEST(0, reserved_quantity - :qty),
+                        updated_at = NOW()
+                    WHERE product_id = :pid AND warehouse_id = :wh
+                """), {"qty": item["quantity"], "pid": item["product_id"], "wh": wh_id})
 
             total_cogs += item_cogs
 
@@ -596,7 +598,7 @@ def create_sales_invoice(
                     quantity, unit_cost, total_cost, created_by
                 ) VALUES (
                     :pid, :wh, 'sale',
-                    'invoice', :ref_id, :ref_doc,
+                    'sales_invoice', :ref_id, :ref_doc,
                     :qty, :cost, :total_cost, :user
                 )
             """), {
@@ -751,7 +753,7 @@ def create_sales_invoice(
         if inv_currency != base_currency:
              db.execute(text("""
                  INSERT INTO currency_transactions (
-                     transaction_type, transaction_id, account_id, 
+                     transaction_type, transaction_id, account_id,
                      currency_code, exchange_rate, amount_fc, amount_bc, description
                  ) VALUES (
                      'invoice', :tid, :aid, :curr, :rate, :fc, :bc, :desc
@@ -772,7 +774,7 @@ def create_sales_invoice(
         invalidate_aggregates(str(current_user.company_id),
                               "invoices", "sales_kpi", "reports",
                               "dashboard", "chart_of_accounts")
-        
+
 
         cust_name = db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": invoice.customer_id}).scalar()
 
@@ -854,8 +856,8 @@ def create_sales_invoice(
                 WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
                 AND u.id != :current_uid
             """), {
-                "title": "🧾 فاتورة مبيعات جديدة",
-                "message": f"فاتورة {inv_num} — {cust_name or ''} — {grand_total:,.2f}",
+                "title": i18n_message("notif_new_sales_invoice", request),
+                "message": i18n_message("invoice_notification_details", request),
                 "link": f"/sales/invoices/{invoice_id}",
                 "current_uid": current_user.id
             })
@@ -889,12 +891,12 @@ def get_invoice(
 ):
     """جلب تفاصيل فاتورة مبيعات محددة"""
     from utils.permissions import validate_branch_access
-    
+
     db = get_db_connection(current_user.company_id)
     try:
         # 1. Fetch Header
         query = """
-            SELECT i.*, i.party_id as customer_id, p.name as customer_name 
+            SELECT i.*, i.party_id as customer_id, p.name as customer_name
             FROM invoices i
             JOIN parties p ON i.party_id = p.id
             WHERE i.id = :id AND i.invoice_type = 'sales'
@@ -954,13 +956,13 @@ def cancel_invoice(
         if not inv:
             raise HTTPException(**http_error(404, "invoice_not_found"))
         if inv.status == 'cancelled':
-            raise HTTPException(status_code=400, detail="الفاتورة ملغاة بالفعل")
+            raise HTTPException(**http_error(400, ("invoice_already_cancelled", request)))
         if _dec(inv.paid_amount or 0) > _D2:
-            raise HTTPException(status_code=400, detail="لا يمكن إلغاء فاتورة تم السداد عليها. قم بإنشاء مرتجع بدلاً من ذلك")
+            raise HTTPException(**http_error(400, "invoice_paid_cannot_cancel", request))
 
         exchange_rate = _dec(inv.exchange_rate or 1)
         if exchange_rate <= 0:
-            raise HTTPException(status_code=400, detail="سعر الصرف غير صالح")
+            raise HTTPException(**http_error(400, ("invalid_exchange_rate", request)))
         total_base = (_dec(inv.total) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
         # 2. Reverse customer balance via party_site_balances
@@ -979,28 +981,93 @@ def cancel_invoice(
         if product_lines:
             inv_tx_count = db.execute(text("""
                 SELECT COUNT(*) FROM inventory_transactions
-                WHERE reference_type = 'invoice' AND reference_id = :inv_id
+                WHERE reference_type IN ('sales_invoice', 'invoice') AND reference_id = :inv_id
             """), {"inv_id": invoice_id}).scalar() or 0
             if inv_tx_count == 0:
-                raise HTTPException(
-                    status_code=400,
-                    detail=(
-                        "لا توجد حركات مخزون مرتبطة بهذه الفاتورة — "
-                        "لا يمكن إلغاء الفاتورة لأن عكس المخزون غير ممكن. "
-                        "تواصل مع المسؤول لمراجعة سلامة البيانات."
-                    ),
-                )
+                raise HTTPException(**http_error(400, "no_inventory_transactions_for_invoice", request))
 
         for line in inv_lines:
             if line.product_id:
-                db.execute(text("""
-                    UPDATE inventory SET quantity = quantity + :qty 
-                    WHERE product_id = :pid AND warehouse_id = (
-                        SELECT warehouse_id FROM inventory_transactions 
-                        WHERE reference_id = :inv_id AND reference_type = 'invoice' AND product_id = :pid
-                        LIMIT 1
-                    )
-                """), {"qty": line.quantity, "pid": line.product_id, "inv_id": invoice_id})
+                # T032: Cancellation is idempotent — already checked status above
+                # Get the warehouse_id and original unit_cost first
+                wh_id_row = db.execute(text("""
+                    SELECT warehouse_id FROM inventory_transactions
+                    WHERE reference_id = :inv_id
+                      AND reference_type IN ('sales_invoice', 'invoice')
+                      AND product_id = :pid
+                    LIMIT 1
+                """), {"inv_id": invoice_id, "pid": line.product_id}).fetchone()
+
+                line_cost = db.execute(text("""
+                    SELECT unit_cost FROM invoice_lines
+                    WHERE invoice_id = :inv_id AND product_id = :pid
+                    LIMIT 1
+                """), {"inv_id": invoice_id, "pid": line.product_id}).fetchone()
+                orig_unit_cost = _dec(line_cost.unit_cost) if line_cost and line_cost.unit_cost else Decimal("0")
+
+                if wh_id_row:
+                    # T033: Call handle_return to restore FIFO/LIFO layers FIRST.
+                    # WAC returns recalculate average cost and do not create layers.
+                    from services.costing_service import CostingService
+                    costing_method = CostingService._get_product_costing_method(db, line.product_id, wh_id_row.warehouse_id)
+                    if costing_method in ("fifo", "lifo"):
+                        return_result = CostingService.handle_return(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=wh_id_row.warehouse_id,
+                            quantity=line.quantity,
+                            unit_cost=float(orig_unit_cost),
+                            source_document_type="sales_cancellation",
+                            source_document_id=invoice_id,
+                            costing_method=costing_method,
+                            original_source_document_type="sales_invoice",
+                            original_source_document_id=invoice_id,
+                        )
+                        restored_cost = return_result.get("restored_unit_cost", orig_unit_cost)
+                        restored_total = return_result.get("restored_total_cost", orig_unit_cost * _dec(line.quantity))
+                    else:
+                        restored_cost = orig_unit_cost
+                        restored_total = (orig_unit_cost * _dec(line.quantity)).quantize(_D4, ROUND_HALF_UP)
+                        CostingService.update_cost(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=wh_id_row.warehouse_id,
+                            new_qty=float(line.quantity),
+                            new_price=float(orig_unit_cost),
+                        )
+
+                    # Now add stock back (after handle_return succeeded)
+                    db.execute(text("""
+                        INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                        VALUES (:pid, :wh, :qty, :cost, NOW())
+                        ON CONFLICT (product_id, warehouse_id)
+                        DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                      updated_at = NOW()
+                    """), {
+                        "qty": line.quantity,
+                        "pid": line.product_id,
+                        "wh": wh_id_row.warehouse_id,
+                        "cost": float(restored_cost),
+                    })
+
+                    # T034: Create reverse inventory transaction with proper reference
+                    db.execute(text("""
+                        INSERT INTO inventory_transactions (
+                            product_id, warehouse_id, transaction_type,
+                            reference_type, reference_id, reference_document,
+                            quantity, unit_cost, total_cost, created_by
+                        ) VALUES (
+                            :pid, :wh, 'return_in',
+                            'sales_cancellation', :inv_id, :inv_num,
+                            :qty, :cost, :total_cost, :user
+                        )
+                    """), {
+                        "pid": line.product_id, "wh": wh_id_row.warehouse_id,
+                        "inv_id": invoice_id, "inv_num": inv.invoice_number,
+                        "qty": line.quantity, "cost": float(restored_cost),
+                        "total_cost": float(restored_total),
+                        "user": current_user.id
+                    })
 
         # 4. Reverse GL entries
         # T3.8: locate the originating JE by (source, source_id) instead of the
@@ -1044,7 +1111,7 @@ def cancel_invoice(
         invalidate_aggregates(str(current_user.company_id),
                               "invoices", "sales_kpi", "reports",
                               "dashboard", "chart_of_accounts")
-        
+
 
         log_activity(
             db,
@@ -1058,7 +1125,7 @@ def cancel_invoice(
             branch_id=inv.branch_id
         )
 
-        return {"success": True, "message": "تم إلغاء الفاتورة وعكس جميع القيود بنجاح"}
+        return {"success": True, "message": i18n_message("invoice_cancelled_reversed", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1127,19 +1194,13 @@ def amend_invoice_header(invoice_id: int, payload: InvoiceHeaderAmend,
             "SELECT id, status, paid_amount, zatca_status FROM invoices WHERE id = :id FOR UPDATE"
         ), {"id": invoice_id}).fetchone()
         if not inv:
-            raise HTTPException(status_code=404, detail="Invoice not found")
+            raise HTTPException(**http_error(404, ("invoice_not_found", request)))
         if inv.status == "cancelled":
-            raise HTTPException(status_code=400, detail="Cancelled invoices cannot be amended")
+            raise HTTPException(**http_error(400, ("cancelled_invoices_cannot_amend", request)))
         if inv.paid_amount and Decimal(str(inv.paid_amount)) > 0:
-            raise HTTPException(
-                status_code=400,
-                detail="Invoice has payments \u2014 issue a credit note rather than amending"
-            )
+            raise HTTPException(**http_error(400, "invoice_has_payments_use_credit_note", request))
         if (inv.zatca_status or "").startswith("cleared"):
-            raise HTTPException(
-                status_code=400,
-                detail="ZATCA-cleared invoice cannot be amended; use credit note + reissue"
-            )
+            raise HTTPException(**http_error(400, "zatca_cleared_invoice_no_amend", request))
 
         # Build a SET clause from only the fields actually supplied. Column
         # names come from a fixed whitelist \u2014 never from the request body
@@ -1187,7 +1248,7 @@ def get_invoice_payment_history(invoice_id: int, current_user: dict = Depends(ge
     db = get_db_connection(current_user.company_id)
     try:
         result = db.execute(text("""
-            SELECT 
+            SELECT
                 pv.id as voucher_id,
                 pv.voucher_number,
                 pv.voucher_date,

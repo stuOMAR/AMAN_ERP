@@ -37,7 +37,7 @@ def compare_profit_loss(
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
-            raise HTTPException(status_code=400, detail="يجب تحديد فترتين على الأقل للمقارنة")
+            raise HTTPException(**http_error(400, "at_least_two_periods_for_comparison", request))
 
         # Fetch all revenue/expense accounts once
         all_accounts = db.execute(text("""
@@ -119,7 +119,7 @@ def compare_balance_sheet(
     try:
         dates = [d.strip() for d in periods.split(",") if d.strip()]
         if len(dates) < 2:
-            raise HTTPException(status_code=400, detail="يجب تحديد تاريخين على الأقل")
+            raise HTTPException(**http_error(400, "at_least_two_dates_required", request))
 
         all_accounts = db.execute(text("""
             SELECT id, account_number, name, name_en, account_type, parent_id
@@ -205,7 +205,7 @@ def export_profit_loss(
         s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
         e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
 
     # Reuse get_profit_loss logic (call it directly or refactor)
     # For simplicity, calling the function logic essentially
@@ -258,7 +258,7 @@ def export_balance_sheet(
     try:
         target_date = datetime.strptime(as_of_date, "%Y-%m-%d").date() if as_of_date else date.today()
     except ValueError:
-        raise HTTPException(status_code=400, detail="Invalid date format. Use YYYY-MM-DD")
+        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
         
     data = get_balance_sheet(as_of_date=target_date, branch_id=branch_id, current_user=current_user)
     
@@ -304,7 +304,7 @@ def compare_trial_balance(
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
-            raise HTTPException(status_code=400, detail="يجب تحديد فترتين على الأقل")
+            raise HTTPException(**http_error(400, "at_least_two_periods_required", request))
 
         all_accounts = db.execute(text("""
             SELECT id, account_number, name, name_en, account_type, parent_id

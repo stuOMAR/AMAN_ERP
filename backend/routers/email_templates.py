@@ -4,13 +4,14 @@ Allows administrators to view, create, update, and delete email templates
 stored in the ``email_templates`` table so that notification content can be
 customised without code changes.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.i18n import http_error
 from utils.permissions import require_permission
 
 router = APIRouter(prefix="/email-templates", tags=["Email Templates"])
@@ -55,11 +56,11 @@ async def list_email_templates(current_user=Depends(get_current_user)):
 
 
 @router.get("/{template_id}", dependencies=[Depends(require_permission(["settings.view", "admin"]))], response_model=Dict[str, Any])
-async def get_email_template(template_id: int, current_user=Depends(get_current_user)):
+async def get_email_template(template_id: int, request: Request, current_user=Depends(get_current_user)):
     """Return a single email template including its body."""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "company_id required")
+        raise HTTPException(**http_error(400, "company_id_required", request))
     db = get_db_connection(company_id)
     try:
         row = db.execute(
@@ -70,19 +71,19 @@ async def get_email_template(template_id: int, current_user=Depends(get_current_
             {"id": template_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "Template not found")
+            raise HTTPException(**http_error(404, "template_not_found", request))
         return dict(row._mapping)
     finally:
         db.close()
 
 
 @router.post("", dependencies=[Depends(require_permission(["settings.edit", "admin"]))], response_model=Dict[str, Any])
-async def create_email_template(data: EmailTemplateCreate, current_user=Depends(get_current_user)):
+async def create_email_template(data: EmailTemplateCreate, request: Request, current_user=Depends(get_current_user)):
     """Create a new email template."""
     import json
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "company_id required")
+        raise HTTPException(**http_error(400, "company_id_required", request))
     db = get_db_connection(company_id)
     try:
         existing = db.execute(
@@ -92,7 +93,7 @@ async def create_email_template(data: EmailTemplateCreate, current_user=Depends(
             {"name": data.template_name},
         ).fetchone()
         if existing:
-            raise HTTPException(409, f"Template '{data.template_name}' already exists")
+            raise HTTPException(**http_error(409, "template_name_duplicate", request, name=data.template_name))
         row = db.execute(
             text(
                 "INSERT INTO email_templates (template_name, subject, body, variables, is_active) "
@@ -112,7 +113,7 @@ async def create_email_template(data: EmailTemplateCreate, current_user=Depends(
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(500, f"Error creating template: {exc}") from exc
+        raise HTTPException(**http_error(500, "template_create_error", request)) from exc
     finally:
         db.close()
 
@@ -121,13 +122,14 @@ async def create_email_template(data: EmailTemplateCreate, current_user=Depends(
 async def update_email_template(
     template_id: int,
     data: EmailTemplateUpdate,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
     """Update an existing email template (partial update)."""
     import json
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "company_id required")
+        raise HTTPException(**http_error(400, "company_id_required", request))
     db = get_db_connection(company_id)
     try:
         existing = db.execute(
@@ -135,7 +137,7 @@ async def update_email_template(
             {"id": template_id},
         ).fetchone()
         if not existing:
-            raise HTTPException(404, "Template not found")
+            raise HTTPException(**http_error(404, "template_not_found", request))
 
         # Build partial UPDATE
         fields = []
@@ -164,17 +166,17 @@ async def update_email_template(
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(500, f"Error updating template: {exc}") from exc
+        raise HTTPException(**http_error(500, "template_update_error", request)) from exc
     finally:
         db.close()
 
 
 @router.delete("/{template_id}", dependencies=[Depends(require_permission(["settings.edit", "admin"]))], response_model=Dict[str, Any])
-async def delete_email_template(template_id: int, current_user=Depends(get_current_user)):
+async def delete_email_template(template_id: int, request: Request, current_user=Depends(get_current_user)):
     """Soft-delete: deactivate a template rather than removing the row."""
     company_id = getattr(current_user, "company_id", None)
     if not company_id:
-        raise HTTPException(400, "company_id required")
+        raise HTTPException(**http_error(400, "company_id_required", request))
     db = get_db_connection(company_id)
     try:
         result = db.execute(
@@ -185,12 +187,12 @@ async def delete_email_template(template_id: int, current_user=Depends(get_curre
         )
         db.commit()
         if result.rowcount == 0:
-            raise HTTPException(404, "Template not found")
+            raise HTTPException(**http_error(404, "template_not_found", request))
         return {"detail": "Template deactivated"}
     except HTTPException:
         raise
     except Exception as exc:
         db.rollback()
-        raise HTTPException(500, f"Error deleting template: {exc}") from exc
+        raise HTTPException(**http_error(500, "template_delete_error", request)) from exc
     finally:
         db.close()

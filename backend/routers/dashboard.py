@@ -574,14 +574,14 @@ class LayoutUpdate(BaseModel):
 
 # Default widgets for new users
 DEFAULT_WIDGETS = [
-    {"id": "sales_today", "type": "stat", "title": "مبيعات اليوم", "x": 0, "y": 0, "w": 1, "h": 1, "config": {"period": "today"}},
-    {"id": "sales_month", "type": "stat", "title": "مبيعات الشهر", "x": 1, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
-    {"id": "expenses_month", "type": "stat", "title": "مصروفات الشهر", "x": 2, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
-    {"id": "cash_balance", "type": "stat", "title": "الرصيد النقدي", "x": 3, "y": 0, "w": 1, "h": 1, "config": {}},
-    {"id": "financial_chart", "type": "chart", "title": "المبيعات والمصروفات", "x": 0, "y": 1, "w": 2, "h": 2, "config": {"days": 30}},
-    {"id": "top_products", "type": "chart", "title": "أفضل المنتجات", "x": 2, "y": 1, "w": 2, "h": 2, "config": {"limit": 5}},
-    {"id": "low_stock", "type": "list", "title": "المخزون المنخفض", "x": 0, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
-    {"id": "pending_tasks", "type": "list", "title": "المهام المعلقة", "x": 2, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
+    {"id": "sales_today", "type": "stat", "title": i18n_message("dashboard_sales_today", request), "x": 0, "y": 0, "w": 1, "h": 1, "config": {"period": "today"}},
+    {"id": "sales_month", "type": "stat", "title": i18n_message("dashboard_sales_month", request), "x": 1, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
+    {"id": "expenses_month", "type": "stat", "title": i18n_message("dashboard_expenses_month", request), "x": 2, "y": 0, "w": 1, "h": 1, "config": {"period": "month"}},
+    {"id": "cash_balance", "type": "stat", "title": i18n_message("dashboard_cash_balance", request), "x": 3, "y": 0, "w": 1, "h": 1, "config": {}},
+    {"id": "financial_chart", "type": "chart", "title": i18n_message("dashboard_financial_chart", request), "x": 0, "y": 1, "w": 2, "h": 2, "config": {"days": 30}},
+    {"id": "top_products", "type": "chart", "title": i18n_message("dashboard_top_products", request), "x": 2, "y": 1, "w": 2, "h": 2, "config": {"limit": 5}},
+    {"id": "low_stock", "type": "list", "title": i18n_message("dashboard_low_stock", request), "x": 0, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
+    {"id": "pending_tasks", "type": "list", "title": i18n_message("dashboard_pending_tasks", request), "x": 2, "y": 3, "w": 2, "h": 1, "config": {"limit": 10}},
 ]
 
 
@@ -637,7 +637,7 @@ def save_dashboard_layout(data: LayoutCreate, current_user=Depends(get_current_u
 
         layout_id = result.fetchone()[0]
         db.commit()
-        return {"id": layout_id, "message": "تم حفظ التخطيط بنجاح"}
+        return {"id": layout_id, "message": i18n_message("layout_saved", request)}
     except Exception:
         db.rollback()
         logger.exception("Failed to save dashboard layout")
@@ -659,7 +659,7 @@ def update_dashboard_layout(layout_id: int, data: LayoutUpdate, current_user=Dep
             WHERE id = :lid AND user_id = :uid
         """), {"lid": layout_id, "uid": current_user.id, "widgets": widgets_json})
         db.commit()
-        return {"message": "تم تحديث التخطيط بنجاح"}
+        return {"message": i18n_message(("dashboard_layout_updated", request))}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -678,7 +678,7 @@ def delete_dashboard_layout(layout_id: int, current_user=Depends(get_current_use
             DELETE FROM dashboard_layouts WHERE id = :lid AND user_id = :uid
         """), {"lid": layout_id, "uid": current_user.id})
         db.commit()
-        return {"message": "تم حذف التخطيط"}
+        return {"message": i18n_message(("dashboard_layout_deleted", request))}
     except Exception:
         db.rollback()
         logger.exception("Internal error")
@@ -1107,18 +1107,18 @@ def get_available_widgets(current_user=Depends(get_current_user)):
     }
     user_perms = current_user.get("permissions", []) if isinstance(current_user, dict) else getattr(current_user, "permissions", []) or []
     widgets = [
-        {"id": "sales_today", "type": "stat", "title": "مبيعات اليوم", "default_w": 1, "default_h": 1},
-        {"id": "sales_week", "type": "stat", "title": "مبيعات الأسبوع", "default_w": 1, "default_h": 1},
-        {"id": "sales_month", "type": "stat", "title": "مبيعات الشهر", "default_w": 1, "default_h": 1},
-        {"id": "expenses_month", "type": "stat", "title": "مصروفات الشهر", "default_w": 1, "default_h": 1},
-        {"id": "cash_balance", "type": "stat", "title": "الرصيد النقدي", "default_w": 1, "default_h": 1},
-        {"id": "profit_month", "type": "stat", "title": "صافي الربح", "default_w": 1, "default_h": 1},
-        {"id": "financial_chart", "type": "chart", "title": "المبيعات والمصروفات", "default_w": 2, "default_h": 2},
-        {"id": "top_products", "type": "chart", "title": "أفضل المنتجات", "default_w": 2, "default_h": 2},
-        {"id": "cash_flow", "type": "chart", "title": "التدفق النقدي", "default_w": 2, "default_h": 2},
-        {"id": "low_stock", "type": "list", "title": "المخزون المنخفض", "default_w": 2, "default_h": 1},
-        {"id": "pending_tasks", "type": "list", "title": "المهام المعلقة", "default_w": 2, "default_h": 1},
-        {"id": "recent_invoices", "type": "table", "title": "آخر الفواتير", "default_w": 2, "default_h": 2},
+        {"id": "sales_today", "type": "stat", "title": i18n_message("dashboard_sales_today", request), "default_w": 1, "default_h": 1},
+        {"id": "sales_week", "type": "stat", "title": i18n_message("dashboard_sales_week", request), "default_w": 1, "default_h": 1},
+        {"id": "sales_month", "type": "stat", "title": i18n_message("dashboard_sales_month", request), "default_w": 1, "default_h": 1},
+        {"id": "expenses_month", "type": "stat", "title": i18n_message("dashboard_expenses_month", request), "default_w": 1, "default_h": 1},
+        {"id": "cash_balance", "type": "stat", "title": i18n_message("dashboard_cash_balance", request), "default_w": 1, "default_h": 1},
+        {"id": "profit_month", "type": "stat", "title": i18n_message("dashboard_profit_month", request), "default_w": 1, "default_h": 1},
+        {"id": "financial_chart", "type": "chart", "title": i18n_message("dashboard_financial_chart", request), "default_w": 2, "default_h": 2},
+        {"id": "top_products", "type": "chart", "title": i18n_message("dashboard_top_products", request), "default_w": 2, "default_h": 2},
+        {"id": "cash_flow", "type": "chart", "title": i18n_message("dashboard_cash_flow", request), "default_w": 2, "default_h": 2},
+        {"id": "low_stock", "type": "list", "title": i18n_message("dashboard_low_stock", request), "default_w": 2, "default_h": 1},
+        {"id": "pending_tasks", "type": "list", "title": i18n_message("dashboard_pending_tasks", request), "default_w": 2, "default_h": 1},
+        {"id": "recent_invoices", "type": "table", "title": i18n_message("dashboard_recent_invoices", request), "default_w": 2, "default_h": 2},
         {"id": "receivables_aging", "type": "chart", "title": "أعمار الذمم المدينة", "default_w": 2, "default_h": 1},
     ]
     return {
@@ -1497,9 +1497,9 @@ def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = De
         if payload.widgets:
             for w in payload.widgets:
                 if w.widget_type not in VALID_WIDGET_TYPES:
-                    raise HTTPException(status_code=400, detail=f"Invalid widget_type: {w.widget_type}")
+                    raise HTTPException(status_code=400, detail=i18n_message("invalid_widget_type", request))
                 if w.data_source not in VALID_DATA_SOURCES:
-                    raise HTTPException(status_code=400, detail=f"Invalid data_source: {w.data_source}")
+                    raise HTTPException(status_code=400, detail=i18n_message("invalid_data_source", request))
                 db.execute(text("""
                     INSERT INTO analytics_dashboard_widgets
                         (dashboard_id, widget_type, title, data_source, filters, position, sort_order, created_by)
@@ -1516,7 +1516,7 @@ def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = De
                 })
 
         db.commit()
-        return {"id": dashboard_id, "message": "Dashboard created successfully"}
+        return {"id": dashboard_id, "message": i18n_message("dashboard_created", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1572,9 +1572,9 @@ def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, curr
             db.execute(text("DELETE FROM analytics_dashboard_widgets WHERE dashboard_id = :did"), {"did": dashboard_id})
             for w in payload.widgets:
                 if w.widget_type not in VALID_WIDGET_TYPES:
-                    raise HTTPException(status_code=400, detail=f"Invalid widget_type: {w.widget_type}")
+                    raise HTTPException(status_code=400, detail=i18n_message("invalid_widget_type", request))
                 if w.data_source not in VALID_DATA_SOURCES:
-                    raise HTTPException(status_code=400, detail=f"Invalid data_source: {w.data_source}")
+                    raise HTTPException(status_code=400, detail=i18n_message("invalid_data_source", request))
                 db.execute(text("""
                     INSERT INTO analytics_dashboard_widgets
                         (dashboard_id, widget_type, title, data_source, filters, position, sort_order, created_by)
@@ -1591,7 +1591,7 @@ def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, curr
                 })
 
         db.commit()
-        return {"message": "Dashboard updated successfully"}
+        return {"message": i18n_message(("dashboard_updated_success", request))}
     except HTTPException:
         raise
     except Exception as e:
@@ -1621,7 +1621,7 @@ def delete_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(g
         # Widgets cascade-deleted via FK constraint
         db.execute(text("DELETE FROM analytics_dashboards WHERE id = :id"), {"id": dashboard_id})
         db.commit()
-        return {"message": "Dashboard deleted successfully"}
+        return {"message": i18n_message(("dashboard_deleted_success", request))}
     except HTTPException:
         raise
     except Exception as e:

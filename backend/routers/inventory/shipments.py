@@ -7,7 +7,7 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from database import get_db_connection
@@ -36,7 +36,7 @@ def create_shipment(
     db = get_db_connection(company_id)
     try:
         if shipment.source_warehouse_id == shipment.destination_warehouse_id:
-            raise HTTPException(status_code=400, detail="لا يمكن الشحن لنفس المستودع")
+            raise HTTPException(**http_error(400, ("same_warehouse_shipment", request)))
 
         # Validate warehouses
         src = db.execute(text("SELECT warehouse_name, branch_id FROM warehouses WHERE id = :id"),
@@ -51,7 +51,7 @@ def create_shipment(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if (src.branch_id and src.branch_id not in allowed) or (dst.branch_id and dst.branch_id not in allowed):
-                raise HTTPException(status_code=403, detail="لا يمكنك إنشاء شحنة بين مستودعات خارج فروعك")
+                raise HTTPException(**http_error(403, ("cross_branch_shipment_create_denied", request)))
 
         import random
         shipment_ref = f"SHP-{datetime.now().year}-{random.randint(10000, 99999)}"
@@ -83,7 +83,7 @@ def create_shipment(
                 prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"),
                                       {"pid": item.product_id}).scalar()
                 db.rollback()
-                raise HTTPException(status_code=400, detail=f"الكمية غير متوفرة للمنتج: {prod_name}")
+                raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
 
             db.execute(text("""
                 INSERT INTO stock_shipment_items (shipment_id, product_id, quantity)
@@ -107,8 +107,8 @@ def create_shipment(
                 WHERE u.is_active = TRUE 
                 AND (ub.branch_id = :bid OR u.id = :mid OR u.role = 'superuser' OR u.role = 'admin')
             """), {
-                "title": "📦 شحنة واردة جديدة",
-                "message": f"شحنة {shipment_ref} من {src.warehouse_name} إلى {dst.warehouse_name} في انتظار التأكيد",
+                "title": i18n_message("notif_incoming_shipment", request),
+                "message": i18n_message("shipment_pending_confirmation", request),
                 "link": "/stock/shipments/incoming",
                 "bid": d_branch_id,
                 "mid": d_manager_id
@@ -127,7 +127,7 @@ def create_shipment(
         except Exception:
             pass
 
-        return {"message": "تم إنشاء الشحنة بنجاح", "reference": shipment_ref, "id": shipment_id}
+        return {"message": i18n_message("shipment_created_success", request), "reference": shipment_ref, "id": shipment_id}
 
     except HTTPException:
         raise
@@ -209,7 +209,7 @@ def list_incoming_shipments(
             JOIN warehouses sw ON s.source_warehouse_id = sw.id
             JOIN warehouses dw ON s.destination_warehouse_id = dw.id
             LEFT JOIN company_users u ON s.created_by = u.id
-            WHERE s.status = 'pending'
+            WHERE s.status = 'dispatched'
         """
         params = {}
         query += branch_scope_filter_from_scope(branch_scope, "dw.branch_id", params)
@@ -249,7 +249,7 @@ def get_shipment_details(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if (src_branch and src_branch not in allowed) and (dst_branch and dst_branch not in allowed):
-                raise HTTPException(status_code=403, detail="لا يمكنك عرض هذه الشحنة")
+                raise HTTPException(**http_error(403, ("shipment_not_viewable", request)))
 
         items = db.execute(text("""
             SELECT i.*, p.product_name, p.product_code
@@ -266,95 +266,277 @@ def get_shipment_details(
         db.close()
 
 
-@shipments_router.post("/shipments/{id}/confirm", dependencies=[Depends(require_permission("stock.transfer"))], response_model=Dict[str, Any])
-def confirm_shipment(
+@shipments_router.post("/shipments/{id}/dispatch", dependencies=[Depends(require_permission("stock.transfer"))], response_model=Dict[str, Any])
+def dispatch_shipment(
     id: int,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """تأكيد استلام الشحنة"""
+    """T052-T054: Dispatch shipment — move source stock to in-transit."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     username = current_user.get("username") if isinstance(current_user, dict) else getattr(current_user, "username", None)
     db = get_db_connection(company_id)
     try:
-        # Get shipment
+        # T052: Lock shipment row FOR UPDATE
         shipment = db.execute(text("""
             SELECT s.*, sw.warehouse_name as source_name, dw.warehouse_name as dest_name
             FROM stock_shipments s
             JOIN warehouses sw ON s.source_warehouse_id = sw.id
             JOIN warehouses dw ON s.destination_warehouse_id = dw.id
             WHERE s.id = :id
+            FOR UPDATE OF s
         """), {"id": id}).fetchone()
 
         if not shipment:
             raise HTTPException(**http_error(404, "shipment_not_found"))
 
+        # T052: Reject already dispatched/received/cancelled
         if shipment.status != 'pending':
-            raise HTTPException(status_code=400, detail="لا يمكن تأكيد هذه الشحنة")
+            raise HTTPException(status_code=400, detail=i18n_message("shipment_invalid_status", request))
 
-        # INV-S04: Branch access check on destination warehouse
+        # Branch access check
         dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.destination_warehouse_id}).scalar()
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
-            if dst_branch and dst_branch not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك تأكيد شحنة لمستودع خارج فروعك")
+            src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.source_warehouse_id}).scalar()
+            if src_branch and src_branch not in allowed:
+                raise HTTPException(**http_error(403, ("cross_branch_shipment_dispatch_denied", request)))
 
-        # Get items
+        # T053: Validate account mappings
+        inv_acc = get_mapped_account_id(db, "acc_map_inventory")
+        intransit_acc = get_mapped_account_id(db, "acc_map_in_transit")
+        if not inv_acc:
+            raise HTTPException(**http_error(400, ("inventory_account_not_configured", request)))
+        if not intransit_acc:
+            raise HTTPException(**http_error(400, ("in_transit_account_not_configured", request)))
+
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        check_fiscal_period_open(db, today_str)
+
         items = db.execute(text("""
             SELECT * FROM stock_shipment_items WHERE shipment_id = :id
         """), {"id": id}).fetchall()
 
         from services.costing_service import CostingService
-
-        # TASK-026: accumulate inventory value in transit for GL posting
         total_transit_value = Decimal("0")
 
-        # Process each item
         for item in items:
-            # INV-S05: Lock source inventory row with FOR UPDATE to prevent race conditions
+            # T053: Lock source inventory, check available quantity
             src_inv = db.execute(text("""
-                SELECT quantity FROM inventory
+                SELECT quantity, reserved_quantity, in_transit_quantity FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": item.product_id, "wh": shipment.source_warehouse_id}).fetchone()
 
-            src_qty = float(src_inv.quantity) if src_inv else 0
-            if src_qty < item.quantity:
+            src_qty = Decimal(str(src_inv.quantity)) if src_inv else Decimal("0")
+            reserved = Decimal(str(src_inv.reserved_quantity or 0)) if src_inv else Decimal("0")
+            item_qty = Decimal(str(item.quantity))
+            available = src_qty - reserved
+            if available < item_qty:
                 prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
-                raise HTTPException(status_code=400, detail=f"الكمية غير متوفرة للمنتج: {prod_name}. المتوفر: {src_qty}")
+                raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
 
-            # 1. Deduct from source (row already locked)
+            # T054: Consume FIFO/LIFO source layers before deducting source qty.
+            method = CostingService._get_product_costing_method(db, item.product_id, shipment.source_warehouse_id)
+            try:
+                if method in ("fifo", "lifo"):
+                    item_value = Decimal(str(CostingService.consume_layers(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=shipment.source_warehouse_id,
+                        quantity=item_qty,
+                        sale_document_type="shipment_dispatch",
+                        sale_document_id=id,
+                        costing_method=method,
+                    )))
+                    source_cost = (item_value / item_qty).quantize(Decimal("0.0001"), ROUND_HALF_UP) if item_qty else Decimal("0")
+                else:
+                    source_cost = Decimal(str(CostingService.get_cogs_cost(db, item.product_id, shipment.source_warehouse_id) or 0))
+                    item_value = (item_qty * source_cost).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+
+            # T053: Atomically deduct source quantity and increase in_transit_quantity
             db.execute(text("""
-                UPDATE inventory SET quantity = quantity - :qty
+                UPDATE inventory
+                SET quantity = quantity - :qty,
+                    in_transit_quantity = COALESCE(in_transit_quantity, 0) + :qty,
+                    updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
             """), {"qty": item.quantity, "pid": item.product_id, "wh": shipment.source_warehouse_id})
 
-            # 2. Get Source Cost for Valuation
-            source_cost = CostingService.get_cogs_cost(db, item.product_id, shipment.source_warehouse_id)
-            total_transit_value += (Decimal(str(item.quantity)) * Decimal(str(source_cost or 0)))
+            total_transit_value += item_value
 
-            # T3.9: move FIFO/LIFO cost layers from source → destination so
-            # the destination warehouse keeps an auditable cost history per
-            # batch. Without this the cost basis at the destination collapses
-            # to a single WAC update and any subsequent FIFO/LIFO valuation
-            # at the destination is wrong.
-            try:
-                policy = CostingService.get_active_policy(db) or "fifo"
-                CostingService.consume_layers(
-                    db,
-                    product_id=item.product_id,
-                    warehouse_id=shipment.source_warehouse_id,
-                    quantity=item.quantity,
-                    sale_document_type="shipment_dispatch",
-                    sale_document_id=id,
-                    costing_method=policy,
-                )
-                # T10.1 P1 #101 — recreate one destination layer per
-                # *source* layer (preserving its original unit_cost) so
-                # FIFO/LIFO valuation at the destination matches the
-                # source. Old code created a single bulk layer at the
-                # WAC source_cost, which lost the basis.
+            # T053: Create shipment_dispatch inventory transaction
+            db.execute(text("""
+                INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type,
+                                                   reference_type, reference_id, quantity, notes, created_by, unit_cost, total_cost)
+                VALUES (:pid, :wh, 'shipment_out', 'shipment_dispatch', :sid, :qty, :notes, :user, :uc, :tc)
+            """), {
+                "pid": item.product_id,
+                "wh": shipment.source_warehouse_id,
+                "sid": id,
+                "qty": -item.quantity,
+                "notes": f"Shipment Dispatch {shipment.shipment_ref} to {shipment.dest_name}",
+                "user": user_id,
+                "uc": str(source_cost or 0),
+                "tc": str(item_value),
+            })
+
+        # T053: Post GL — Dr In-Transit / Cr Source Inventory
+        if total_transit_value > Decimal("0"):
+            value_f = float(total_transit_value)
+            create_journal_entry(
+                db=db,
+                company_id=str(company_id),
+                date=today_str,
+                description=f"Shipment {shipment.shipment_ref}: dispatch to in-transit",
+                lines=[
+                    {"account_id": intransit_acc, "debit": value_f, "credit": 0},
+                    {"account_id": inv_acc, "debit": 0, "credit": value_f},
+                ],
+                user_id=user_id,
+                reference=shipment.shipment_ref,
+                source="shipment_dispatch",
+                source_id=id,
+                username=username,
+                idempotency_key=f"shipment_dispatch:{id}",
+            )
+
+        # Update shipment status
+        db.execute(text("""
+            UPDATE stock_shipments SET status = 'dispatched', shipped_at = NOW() WHERE id = :id
+        """), {"id": id})
+
+        db.commit()
+
+        log_activity(
+            db, user_id=user_id, username=username,
+            action="shipment.dispatch", resource_type="stock_shipment",
+            resource_id=str(id), details={"shipment_ref": shipment.shipment_ref, "items_count": len(items)},
+            request=request,
+        )
+
+        return {"message": i18n_message("shipment_dispatched_success", request), "status": "dispatched"}
+
+    except HTTPException:
+        raise
+    except Exception:
+        db.rollback()
+        logger.exception("Internal error")
+        raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
+@shipments_router.post("/shipments/{id}/confirm", dependencies=[Depends(require_permission("stock.transfer"))], response_model=Dict[str, Any])
+def confirm_shipment(
+    id: int,
+    request: Request,
+    current_user: dict = Depends(get_current_user)
+):
+    """T055-T056: Confirm/receive shipment — move in-transit to destination.
+
+    Idempotent: rejects already received/cancelled shipments.
+    Only allowed from 'dispatched' state.
+    """
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+    username = current_user.get("username") if isinstance(current_user, dict) else getattr(current_user, "username", None)
+    db = get_db_connection(company_id)
+    try:
+        # T055: Lock shipment row FOR UPDATE
+        shipment = db.execute(text("""
+            SELECT s.*, sw.warehouse_name as source_name, dw.warehouse_name as dest_name
+            FROM stock_shipments s
+            JOIN warehouses sw ON s.source_warehouse_id = sw.id
+            JOIN warehouses dw ON s.destination_warehouse_id = dw.id
+            WHERE s.id = :id
+            FOR UPDATE OF s
+        """), {"id": id}).fetchone()
+
+        if not shipment:
+            raise HTTPException(**http_error(404, "shipment_not_found"))
+
+        # T055: Idempotent — reject already received/cancelled
+        if shipment.status == 'received':
+            raise HTTPException(**http_error(400, ("shipment_already_received", request)))
+        if shipment.status == 'cancelled':
+            raise HTTPException(**http_error(400, ("cannot_receive_cancelled", request)))
+        if shipment.status != 'dispatched':
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_receive_shipment_status", request))
+
+        # Branch access check on destination warehouse
+        dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.destination_warehouse_id}).scalar()
+        allowed = getattr(current_user, 'allowed_branches', []) or []
+        if allowed and "*" not in getattr(current_user, 'permissions', []):
+            if dst_branch and dst_branch not in allowed:
+                raise HTTPException(**http_error(403, ("cross_branch_receive_denied", request)))
+
+        # T056: Validate account mappings
+        inv_acc = get_mapped_account_id(db, "acc_map_inventory")
+        intransit_acc = get_mapped_account_id(db, "acc_map_in_transit")
+        if not inv_acc or not intransit_acc:
+            raise HTTPException(**http_error(400, ("inventory_transit_accounts_not_configured", request)))
+
+        today_str = datetime.utcnow().strftime("%Y-%m-%d")
+        check_fiscal_period_open(db, today_str)
+
+        items = db.execute(text("""
+            SELECT * FROM stock_shipment_items WHERE shipment_id = :id
+        """), {"id": id}).fetchall()
+
+        from services.costing_service import CostingService
+        total_transit_value = Decimal("0")
+
+        for item in items:
+            # T055: Lock source inventory for in_transit_quantity deduction
+            src_inv = db.execute(text("""
+                SELECT in_transit_quantity FROM inventory
+                WHERE product_id = :pid AND warehouse_id = :wh
+                FOR UPDATE
+            """), {"pid": item.product_id, "wh": shipment.source_warehouse_id}).fetchone()
+
+            in_transit = Decimal(str(src_inv.in_transit_quantity or 0)) if src_inv else Decimal("0")
+            if in_transit < Decimal(str(item.quantity)):
+                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
+                raise HTTPException(status_code=400, detail=i18n_message("transit_qty_insufficient", request))
+
+            # T055: Deduct from source in_transit_quantity
+            db.execute(text("""
+                UPDATE inventory SET in_transit_quantity = in_transit_quantity - :qty, updated_at = NOW()
+                WHERE product_id = :pid AND warehouse_id = :wh
+            """), {"qty": item.quantity, "pid": item.product_id, "wh": shipment.source_warehouse_id})
+
+            item_qty = Decimal(str(item.quantity))
+            dispatch_cost_row = db.execute(text("""
+                SELECT COALESCE(
+                           SUM(ABS(total_cost)) / NULLIF(SUM(ABS(quantity)), 0),
+                           MAX(unit_cost),
+                           0
+                       ) AS unit_cost,
+                       COALESCE(SUM(ABS(total_cost)), 0) AS total_cost,
+                       COUNT(*) AS tx_count
+                FROM inventory_transactions
+                WHERE reference_type = 'shipment_dispatch'
+                  AND reference_id = :sid
+                  AND product_id = :pid
+                  AND warehouse_id = :wid
+            """), {
+                "sid": id,
+                "pid": item.product_id,
+                "wid": shipment.source_warehouse_id,
+            }).fetchone()
+            if not dispatch_cost_row or Decimal(str(dispatch_cost_row.tx_count or 0)) <= 0:
+                raise HTTPException(**http_error(400, ("no_valid_stock_movement", request)))
+            source_cost = Decimal(str(dispatch_cost_row.unit_cost or 0))
+            item_value = Decimal(str(dispatch_cost_row.total_cost or 0))
+            total_transit_value += item_value
+
+            # T055: Create destination cost layers from dispatch consumption details
+            dest_method = CostingService._get_product_costing_method(db, item.product_id, shipment.destination_warehouse_id)
+            if dest_method in ("fifo", "lifo"):
                 consumed = db.execute(text("""
                     SELECT cl.unit_cost, clc.quantity_consumed
                       FROM cost_layer_consumptions clc
@@ -364,10 +546,8 @@ def confirm_shipment(
                        AND cl.product_id = :pid
                        AND cl.warehouse_id = :wid
                 """), {
-                    "sid": id,
-                    "pid": item.product_id,
-                    "wid": shipment.source_warehouse_id,
-                }).fetchall()
+                        "sid": id, "pid": item.product_id, "wid": shipment.source_warehouse_id,
+                    }).fetchall()
                 if consumed:
                     for src_layer in consumed:
                         CostingService.create_cost_layer(
@@ -378,11 +558,9 @@ def confirm_shipment(
                             unit_cost=float(src_layer.unit_cost or 0),
                             source_document_type="shipment_receive",
                             source_document_id=id,
-                            costing_method=policy,
+                            costing_method=dest_method,
                         )
                 else:
-                    # Defensive fallback (no consumption rows): keep the
-                    # legacy single-layer behaviour using the WAC cost.
                     CostingService.create_cost_layer(
                         db,
                         product_id=item.product_id,
@@ -391,145 +569,88 @@ def confirm_shipment(
                         unit_cost=float(source_cost or 0),
                         source_document_type="shipment_receive",
                         source_document_id=id,
-                        costing_method=policy,
+                        costing_method=dest_method,
                     )
-            except ValueError:
-                # Source warehouse has no cost layers (legacy stock created
-                # outside the layered system). Leave the WAC update below
-                # to keep the valuation reasonable; do NOT block the move.
-                pass
 
-            # 3. Update Destination Cost (WAC Calculation)
+            # T055: Update destination WAC
             CostingService.update_cost(
                 db,
                 product_id=item.product_id,
                 warehouse_id=shipment.destination_warehouse_id,
                 new_qty=float(item.quantity),
-                new_price=float(source_cost)
+                new_price=float(source_cost or 0),
             )
 
-            # 4. Add to destination Qty
-            exists = db.execute(text("""
-                SELECT 1 FROM inventory WHERE product_id = :pid AND warehouse_id = :wh
-            """), {"pid": item.product_id, "wh": shipment.destination_warehouse_id}).scalar()
-
-            if exists:
-                db.execute(text("""
-                    UPDATE inventory SET quantity = quantity + :qty
-                    WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"qty": item.quantity, "pid": item.product_id, "wh": shipment.destination_warehouse_id})
-            else:
-                exists_now = db.execute(text("""
-                    SELECT 1 FROM inventory WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"pid": item.product_id, "wh": shipment.destination_warehouse_id}).scalar()
-
-                if exists_now:
-                    db.execute(text("UPDATE inventory SET quantity = quantity + :qty WHERE product_id = :pid AND warehouse_id = :wh"),
-                               {"qty": item.quantity, "pid": item.product_id, "wh": shipment.destination_warehouse_id})
-                else:
-                    db.execute(text("""
-                        INSERT INTO inventory (product_id, warehouse_id, quantity)
-                        VALUES (:pid, :wh, :qty)
-                    """), {"pid": item.product_id, "wh": shipment.destination_warehouse_id, "qty": item.quantity})
-
-            # 5. Log transactions
+            # T055: Add to destination quantity
             db.execute(text("""
-                INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type, 
-                                                   reference_type, quantity, notes, created_by)
-                VALUES (:pid, :wh, 'shipment_out', 'shipment', :qty, :notes, :user)
-            """), {
-                "pid": item.product_id,
-                "wh": shipment.source_warehouse_id,
-                "qty": -item.quantity,
-                "notes": f"Shipment {shipment.shipment_ref} to {shipment.dest_name}",
-                "user": user_id
-            })
-
-            db.execute(text("""
-                INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type, 
-                                                   reference_type, quantity, notes, created_by)
-                VALUES (:pid, :wh, 'shipment_in', 'shipment', :qty, :notes, :user)
+                INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                VALUES (:pid, :wh, :qty, :cost, NOW())
+                ON CONFLICT (product_id, warehouse_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                              updated_at = NOW()
             """), {
                 "pid": item.product_id,
                 "wh": shipment.destination_warehouse_id,
                 "qty": item.quantity,
-                "notes": f"Shipment {shipment.shipment_ref} from {shipment.source_name}",
-                "user": user_id
+                "cost": float(source_cost or 0),
             })
 
-            # 5b. Log in stock_transfer_log (V2 Upgrade)
+            # T056: Create receipt inventory transaction
+            db.execute(text("""
+                INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type,
+                                                   reference_type, reference_id, quantity, notes, created_by, unit_cost, total_cost)
+                VALUES (:pid, :wh, 'shipment_in', 'shipment_receive', :sid, :qty, :notes, :user, :uc, :tc)
+            """), {
+                "pid": item.product_id,
+                "wh": shipment.destination_warehouse_id,
+                "sid": id,
+                "qty": item.quantity,
+                "notes": f"Shipment Receive {shipment.shipment_ref} from {shipment.source_name}",
+                "user": user_id,
+                "uc": str(source_cost or 0),
+                "tc": str(item_value),
+            })
+
+            # Transfer log
             dest_stats_after = db.execute(text("""
-                SELECT average_cost FROM inventory 
+                SELECT average_cost FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
             """), {"pid": item.product_id, "wh": shipment.destination_warehouse_id}).fetchone()
-
             db.execute(text("""
-                INSERT INTO stock_transfer_log 
-                (shipment_id, product_id, from_warehouse_id, to_warehouse_id, quantity, transfer_cost, 
+                INSERT INTO stock_transfer_log
+                (shipment_id, product_id, from_warehouse_id, to_warehouse_id, quantity, transfer_cost,
                  from_avg_cost_before, to_avg_cost_before, to_avg_cost_after)
                 VALUES (:sid, :pid, :fwh, :twh, :qty, :tcost, :fcast, :tcast_b, :tcast_a)
             """), {
-                "sid": id,
-                "pid": item.product_id,
-                "fwh": shipment.source_warehouse_id,
-                "twh": shipment.destination_warehouse_id,
-                "qty": item.quantity,
-                "tcost": source_cost,
-                "fcast": source_cost,
-                "tcast_b": 0,
-                "tcast_a": float(dest_stats_after.average_cost if dest_stats_after else 0)
+                "sid": id, "pid": item.product_id,
+                "fwh": shipment.source_warehouse_id, "twh": shipment.destination_warehouse_id,
+                "qty": item.quantity, "tcost": source_cost, "fcast": source_cost,
+                "tcast_b": 0, "tcast_a": float(dest_stats_after.average_cost if dest_stats_after else 0),
             })
 
-        # TASK-026: Post GL entries recording the inter-warehouse transfer via
-        # the Inventory-in-Transit bridge account. We emit two balanced JEs so
-        # that the In-Transit account has a visible (net-zero) round trip in the
-        # GL, which auditors expect for warehouse-to-warehouse movements.
+        # T056: Post GL — Dr Destination Inventory / Cr In-Transit
         if total_transit_value > Decimal("0"):
-            inv_acc = get_mapped_account_id(db, "acc_map_inventory")
-            intransit_acc = get_mapped_account_id(db, "acc_map_in_transit")
-            if inv_acc and intransit_acc:
-                today_str = datetime.utcnow().strftime("%Y-%m-%d")
-                # Fiscal-period lock: block posting into a closed period.
-                check_fiscal_period_open(db, today_str)
-                value_f = float(total_transit_value)
-                # Leg A: dispatch — Dr In-Transit / Cr Source Inventory
-                create_journal_entry(
-                    db=db,
-                    company_id=str(company_id),
-                    date=today_str,
-                    description=f"Shipment {shipment.shipment_ref}: dispatch to in-transit",
-                    lines=[
-                        {"account_id": intransit_acc, "debit": value_f, "credit": 0},
-                        {"account_id": inv_acc, "debit": 0, "credit": value_f},
-                    ],
-                    user_id=user_id,
-                    reference=shipment.shipment_ref,
-                    source="shipment_dispatch",
-                    source_id=id,
-                    username=username,
-                    idempotency_key=f"shipment_dispatch:{id}",
-                )
-                # Leg B: receipt — Dr Destination Inventory / Cr In-Transit
-                create_journal_entry(
-                    db=db,
-                    company_id=str(company_id),
-                    date=today_str,
-                    description=f"Shipment {shipment.shipment_ref}: received into destination",
-                    lines=[
-                        {"account_id": inv_acc, "debit": value_f, "credit": 0},
-                        {"account_id": intransit_acc, "debit": 0, "credit": value_f},
-                    ],
-                    user_id=user_id,
-                    reference=shipment.shipment_ref,
-                    source="shipment_receive",
-                    source_id=id,
-                    username=username,
-                    idempotency_key=f"shipment_receive:{id}",
-                )
+            value_f = float(total_transit_value)
+            create_journal_entry(
+                db=db,
+                company_id=str(company_id),
+                date=today_str,
+                description=f"Shipment {shipment.shipment_ref}: received into destination",
+                lines=[
+                    {"account_id": inv_acc, "debit": value_f, "credit": 0},
+                    {"account_id": intransit_acc, "debit": 0, "credit": value_f},
+                ],
+                user_id=user_id,
+                reference=shipment.shipment_ref,
+                source="shipment_receive",
+                source_id=id,
+                username=username,
+                idempotency_key=f"shipment_receive:{id}",
+            )
 
         # Update shipment status
         db.execute(text("""
-            UPDATE stock_shipments 
+            UPDATE stock_shipments
             SET status = 'received', received_at = NOW(), received_by = :user
             WHERE id = :id
         """), {"id": id, "user": user_id})
@@ -540,8 +661,8 @@ def confirm_shipment(
             VALUES (:user, 'shipment_confirmed', :title, :message, :link, NOW())
         """), {
             "user": shipment.created_by,
-            "title": "✅ تم تأكيد استلام الشحنة",
-            "message": f"تم تأكيد استلام الشحنة {shipment.shipment_ref} في {shipment.dest_name}",
+            "title": i18n_message("notif_shipment_received", request),
+            "message": i18n_message("shipment_received_at", request),
             "link": f"/stock/shipments/{id}"
         })
 
@@ -558,7 +679,7 @@ def confirm_shipment(
         except Exception:
             pass
 
-        return {"message": "تم تأكيد استلام الشحنة بنجاح"}
+        return {"message": i18n_message("shipment_received_success", request)}
 
     except HTTPException:
         raise
@@ -592,13 +713,13 @@ def cancel_shipment(
             raise HTTPException(**http_error(404, "shipment_not_found"))
 
         if shipment.status != 'pending':
-            raise HTTPException(status_code=400, detail="لا يمكن إلغاء هذه الشحنة")
+            raise HTTPException(**http_error(400, ("shipment_cannot_cancel", request)))
 
         # INV-S06: Branch access check
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if shipment.src_branch_id and shipment.src_branch_id not in allowed:
-                raise HTTPException(status_code=403, detail="لا يمكنك إلغاء هذه الشحنة")
+                raise HTTPException(**http_error(403, ("cross_branch_cancel_denied", request)))
 
         db.execute(text("""
             UPDATE stock_shipments SET status = 'cancelled' WHERE id = :id
@@ -617,7 +738,7 @@ def cancel_shipment(
         except Exception:
             pass
 
-        return {"message": "تم إلغاء الشحنة"}
+        return {"message": i18n_message("shipment_cancelled_success", request)}
 
     except HTTPException:
         raise

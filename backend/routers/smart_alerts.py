@@ -61,11 +61,11 @@ def create_alert_rule(data: dict, current_user=Depends(get_current_user)):
             "users": json.dumps(data.get("notify_users", [])),
         }).fetchone()
         db.commit()
-        return {"id": row[0], "message": "تم إنشاء قاعدة التنبيه"}
+        return {"id": row[0], "message": i18n_message("alert_rule_created", request)}
     except Exception:
         db.rollback()
         logger.exception("create_alert_rule error")
-        raise HTTPException(status_code=500, detail="خطأ داخلي")
+        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
     finally:
         db.close()
 
@@ -77,7 +77,7 @@ def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="القاعدة غير موجودة")
+            raise HTTPException(**http_error(404, ("smart_alert_rule_not_found", request)))
         db.execute(text("""
             UPDATE alert_rules SET
                 name = COALESCE(:name, name),
@@ -98,13 +98,13 @@ def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current
             "id": rule_id,
         })
         db.commit()
-        return {"success": True, "message": "تم تحديث القاعدة"}
+        return {"success": True, "message": i18n_message("alert_rule_updated", request)}
     except HTTPException:
         raise
     except Exception:
         db.rollback()
         logger.exception("update_alert_rule error")
-        raise HTTPException(status_code=500, detail="خطأ داخلي")
+        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
     finally:
         db.close()
 
@@ -116,7 +116,7 @@ def delete_alert_rule(rule_id: int, current_user=Depends(get_current_user)):
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="القاعدة غير موجودة")
+            raise HTTPException(**http_error(404, ("smart_alert_rule_not_found", request)))
         db.execute(text("DELETE FROM alert_rules WHERE id=:id"), {"id": rule_id})
         db.commit()
         return {"success": True}
@@ -124,7 +124,7 @@ def delete_alert_rule(rule_id: int, current_user=Depends(get_current_user)):
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="خطأ داخلي")
+        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
     finally:
         db.close()
 
@@ -163,7 +163,7 @@ def resolve_alert(alert_id: int, current_user=Depends(get_current_user)):
     try:
         existing = db.execute(text("SELECT id FROM alerts WHERE id=:id"), {"id": alert_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="التنبيه غير موجود")
+            raise HTTPException(**http_error(404, ("smart_alert_not_found", request)))
         db.execute(text("""
             UPDATE alerts SET status='resolved', resolved_at=CURRENT_TIMESTAMP WHERE id=:id
         """), {"id": alert_id})
@@ -172,12 +172,12 @@ def resolve_alert(alert_id: int, current_user=Depends(get_current_user)):
             VALUES (:aid, 'resolved', :uid, CURRENT_TIMESTAMP)
         """), {"aid": alert_id, "uid": current_user.id})
         db.commit()
-        return {"success": True, "message": "تم حل التنبيه"}
+        return {"success": True, "message": i18n_message("alert_resolved", request)}
     except HTTPException:
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(status_code=500, detail="خطأ داخلي")
+        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
     finally:
         db.close()
 
@@ -187,7 +187,7 @@ _VALID_RULE_TYPES = {"low_stock", "overdue_receivable", "budget_overspend", "cus
 
 def _validate_rule(data: dict):
     if not data.get("name"):
-        raise HTTPException(status_code=400, detail="اسم القاعدة مطلوب")
+        raise HTTPException(**http_error(400, ("smart_alert_rule_name_required", request)))
     if data.get("rule_type") not in _VALID_RULE_TYPES:
         raise HTTPException(
             status_code=400,

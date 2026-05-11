@@ -65,7 +65,7 @@ def open_session(
     ).fetchone()
 
     if existing_session:
-        raise HTTPException(status_code=400, detail="User already has an open session")
+        raise HTTPException(**http_error(400, ("pos_session_already_open", request)))
 
     # Create new session
     # Generate session code
@@ -91,7 +91,7 @@ def open_session(
     db.commit()
     
     if not result:
-        raise HTTPException(status_code=500, detail="Failed to create POS session")
+        raise HTTPException(**http_error(500, ("pos_session_create_failed", request)))
     
     session_id = result._mapping["id"]
 
@@ -123,13 +123,13 @@ def close_session(
     base_currency = get_base_currency(db)
     sess = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
     if not sess:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(**http_error(404, ("pos_session_not_found", request)))
         
     # Validate branch access
     validate_branch_access(current_user, sess.branch_id)
     
     if sess.status != 'opened':
-        raise HTTPException(status_code=400, detail="Session is not open")
+        raise HTTPException(**http_error(400, ("pos_session_not_open", request)))
         
     # Recalculate difference using actual data with safety for None values
     opening_bal = _dec(sess.opening_balance)
@@ -260,7 +260,7 @@ def session_detailed_report(
     """Session Detailed Report."""
     session = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
     if not session:
-        raise HTTPException(status_code=404, detail="Session not found")
+        raise HTTPException(**http_error(404, ("pos_session_not_found", request)))
 
     # Sales by product
     by_product = db.execute(text("""

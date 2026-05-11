@@ -581,7 +581,7 @@ def get_general_ledger(
 ):
     """جلب دفتر الأستاذ العام - حركات حساب محدد مع كل حساباته الفرعية"""
     if not account_id:
-        raise HTTPException(status_code=400, detail="يجب تحديد الحساب")
+        raise HTTPException(**http_error(400, ("account_required", request)))
     
     branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)

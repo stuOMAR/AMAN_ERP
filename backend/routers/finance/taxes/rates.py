@@ -119,14 +119,11 @@ def create_tax_rate(
                 requested_cc = data.country_code.upper()
 
                 if user_cc != requested_cc:
-                    raise HTTPException(**http_error(
-                        403, "cross_country_tax_create",
-                        detail=f"Cannot create tax for country '{requested_cc}' from a '{user_cc}' branch"
-                    ))
+                    raise HTTPException(**http_error(403, "cross_country_tax_create", request))
 
             exists = db.execute(text("SELECT 1 FROM tax_rates WHERE tax_code = :code"), {"code": data.tax_code}).fetchone()
             if exists:
-                raise HTTPException(status_code=400, detail="كود الضريبة موجود مسبقاً")
+                raise HTTPException(**http_error(400, "tax_code_already_exists", request))
     
             result = db.execute(text("""
                 INSERT INTO tax_rates (tax_code, tax_name, tax_name_en, rate_type, rate_value,
@@ -148,7 +145,7 @@ def create_tax_rate(
                          resource_id=str(new_id), details={"tax_code": data.tax_code, "rate": data.rate_value},
                          request=request)
     
-            return {"success": True, "id": new_id, "message": "تم إنشاء نوع الضريبة بنجاح"}
+            return {"success": True, "id": new_id, "message": i18n_message("tax_rate_created_success", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -172,11 +169,9 @@ def update_tax_rate(
             # Require effective_from and reason for rate changes
             if data.rate_value is not None:
                 if not data.effective_from:
-                    raise HTTPException(**http_error(400, "effective_from_required",
-                        detail="effective_from is required when changing rate_value"))
+                    raise HTTPException(**http_error(400, "effective_from_required", request))
                 if not data.reason:
-                    raise HTTPException(**http_error(400, "reason_required",
-                        detail="reason is required when changing rate_value"))
+                    raise HTTPException(**http_error(400, "reason_required", request))
 
                 # Use engine for immutable rate update
                 new_record = engine_update_tax_rate(
@@ -196,7 +191,7 @@ def update_tax_rate(
                              request=request)
 
                 return {"success": True, "new_tax_id": new_record["id"],
-                        "message": "تم تحديث نوع الضريبة بنجاح (سجل جديد)"}
+                        "message": i18n_message("tax_type_updated_new_record", request)}
 
             # For non-rate updates (name, description, etc.) — direct update is OK
             existing = db.execute(text("SELECT 1 FROM tax_rates WHERE id = :id"), {"id": rate_id}).fetchone()
@@ -220,7 +215,7 @@ def update_tax_rate(
                          action="taxes.rate.update", resource_type="tax_rate",
                          resource_id=str(rate_id), details=params, request=request)
 
-            return {"success": True, "message": "تم تحديث نوع الضريبة بنجاح"}
+            return {"success": True, "message": i18n_message("tax_rate_updated_success", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -246,7 +241,7 @@ def delete_tax_rate(rate_id: int, request: Request, current_user: dict = Depends
                          resource_id=str(rate_id), details={"tax_code": existing.tax_code},
                          request=request)
     
-            return {"success": True, "message": "تم إيقاف نوع الضريبة بنجاح"}
+            return {"success": True, "message": i18n_message("tax_type_deactivated", request)}
         except HTTPException:
             raise
         except Exception:

@@ -16,23 +16,24 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
+from utils.permissions import (
+    branch_scope_filter_from_scope,
+    require_permission,
+    require_module,
+    resolve_branch_scope,
+    validate_branch_access,
+    validate_treasury_account_access,
+)
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.party_balance import update_party_site_balance
+from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate,
 )
-
-_D2 = Decimal("0.01")
-_D4 = Decimal("0.0001")
-
-
-def _dec(v) -> Decimal:
-    """Convert any numeric value to Decimal safely."""
-    return Decimal(str(v)) if v is not None else Decimal("0")
 
 
 router = APIRouter()
@@ -147,7 +148,9 @@ def get_purchase_order(
                 "tax_rate": l.tax_rate,
                 "discount": l.discount,
                 "total": l.total,
-                "received_quantity": l.received_quantity
+                "received_quantity": l.received_quantity,
+                "invoiced_quantity": getattr(l, 'invoiced_quantity', 0) or 0,
+                "remaining_to_invoice": str(max(Decimal('0'), _dec(l.received_quantity or 0) - _dec(getattr(l, 'invoiced_quantity', 0) or 0)))
             } for l in lines],
             "related_documents": {
                 "journal_entries": [{
@@ -195,25 +198,31 @@ def create_purchase_order(
 
             validated_branch_id = validate_branch_access(current_user, po.branch_id)
             if validated_branch_id is None:
-                raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+                raise HTTPException(**http_error(400, ("branch_required", request)))
 
             lines_data = []
             for item in po.items:
                 # Validate quantities and prices
                 if _dec(item.quantity) <= 0:
-                    raise HTTPException(status_code=400, detail=f"الكمية يجب أن تكون أكبر من صفر: {item.description}")
+                    raise HTTPException(status_code=400, detail=i18n_message("qty_must_be_positive", request))
                 if _dec(item.unit_price) < 0:
-                    raise HTTPException(status_code=400, detail=f"سعر الوحدة لا يمكن أن يكون سالباً: {item.description}")
+                    raise HTTPException(status_code=400, detail=i18n_message("unit_price_negative", request))
     
                 line_total_gross = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
                 line_discount = _dec(item.discount)
                 if line_discount < 0:
-                    raise HTTPException(status_code=400, detail=f"الخصم لا يمكن أن يكون سالباً: {item.description}")
+                    raise HTTPException(status_code=400, detail=i18n_message("discount_cannot_be_negative_with_desc", request))
                 if line_discount > line_total_gross:
-                    raise HTTPException(status_code=400, detail=f"الخصم ({line_discount}) يتجاوز إجمالي السطر ({line_total_gross}): {item.description}")
+                    raise HTTPException(status_code=400, detail=i18n_message("discount_exceeds_line", request))
     
                 tax_info = resolve_line_tax(validated_branch_id, item.product_id, db, po.order_date, customer_id=po.supplier_id)
-                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount)
+                la = compute_line_amounts(
+                    item.quantity,
+                    item.unit_price,
+                    tax_info["tax_rate"],
+                    item.discount,
+                    discount_is_percent=False,
+                )
                 lines_data.append({
                     "product_id": item.product_id,
                     "description": item.description,
@@ -244,7 +253,7 @@ def create_purchase_order(
                     "discount": it["discount"],
                 }
                 for it in lines_data
-            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount)
+            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount, discount_is_percent=False)
             subtotal = totals["subtotal"]
             total_tax = totals["total_tax"]
             total_discount = totals["total_discount"]
@@ -331,17 +340,14 @@ def create_purchase_order(
                     description=f"أمر شراء {po_num} - {supp_name} - {grand_total:,.2f}",
                     link=f"/purchases/orders/{po_id}"
                 )
-                if approval_result:
-                    db.commit()
             except Exception:
-                pass  # Non-blocking
+                logger.exception("Failed to submit purchase order for approval")
     
-            response = {"message": "تم إنشاء أمر الشراء بنجاح", "id": po_id}
+            response = {"message": i18n_message("purchase_order_created_success", request), "id": po_id}
             if approval_result:
                 response["approval"] = approval_result
             return response
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 
@@ -365,7 +371,7 @@ def approve_purchase_order(
                 raise HTTPException(**http_error(404, "purchase_order_not_found"))
             
             if po.status != 'draft':
-                raise HTTPException(status_code=400, detail="يمكن اعتماد أوامر الشراء في حالة 'مسودة' فقط")
+                raise HTTPException(**http_error(400, ("po_approve_only_draft", request)))
     
             # PUR-F1: Budget guard on PO approval.
             # When an active budget exists for the PO's branch/fiscal period,
@@ -438,16 +444,15 @@ def approve_purchase_order(
                     WHERE u.is_active = TRUE
                     AND u.role IN ('admin', 'superuser')
                 """), {
-                    "title": "✅ تم اعتماد أمر شراء",
-                    "message": f"تم اعتماد أمر الشراء {po.po_number}" + (f" — المورد: {supplier.name}" if supplier else ""),
+                    "title": i18n_message("notif_po_approved", request),
+                    "message": i18n_message("po_approved_with_supplier", request, number=po.po_number, supplier=supplier.name if supplier else ""),
                     "link": f"/buying/orders/{id}"
                 })
-                db.commit()
             except Exception:
-                pass  # Non-blocking
+                logger.exception("Failed to create purchase order approval notification")
     
             return {
-                "message": "تم اعتماد أمر الشراء بنجاح",
+                "message": i18n_message("po_approved_success", request),
                 "id": id,
                 "status": "approved",
                 "supplier_notified": bool(supplier and (supplier.email or supplier.phone))
@@ -455,7 +460,6 @@ def approve_purchase_order(
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 
@@ -469,17 +473,36 @@ def receive_purchase_order(
     """استلام أمر الشراء (جزئي أو كامل)"""
     with transactional(current_user.company_id) as db:
         try:
-            # Check PO exists and is approved
+            # T008: Lock PO header FOR UPDATE to prevent status races
             po = db.execute(text("""
                 SELECT id, status, po_number, party_id as supplier_id, branch_id, exchange_rate, currency 
                 FROM purchase_orders WHERE id = :id
+                FOR UPDATE
             """), {"id": id}).fetchone()
             
             if not po:
                 raise HTTPException(**http_error(404, "purchase_order_not_found"))
             
             if po.status not in ('approved', 'partial'):
-                raise HTTPException(status_code=400, detail="يجب اعتماد أمر الشراء أولاً قبل الاستلام")
+                raise HTTPException(**http_error(400, ("po_must_be_approved", request)))
+
+            validate_branch_access(current_user, po.branch_id)
+            if not receive_data.items:
+                raise HTTPException(**http_error(400, ("at_least_one_line_required", request)))
+            exchange_rate = _dec(1 if po.exchange_rate is None else po.exchange_rate)
+            if exchange_rate <= 0:
+                raise HTTPException(**http_error(400, ("po_exchange_rate_invalid", request)))
+
+            wh_row = db.execute(text("""
+                SELECT id, branch_id
+                FROM warehouses
+                WHERE id = :id
+                FOR UPDATE
+            """), {"id": receive_data.warehouse_id}).fetchone()
+            if not wh_row:
+                raise HTTPException(**http_error(400, ("warehouse_not_found", request)))
+            if po.branch_id and wh_row.branch_id and int(wh_row.branch_id) != int(po.branch_id):
+                raise HTTPException(**http_error(400, ("warehouse_not_in_po_branch", request)))
     
             # QA-F1: block receiving when any quality inspection tied to this PO is FAILED.
             try:
@@ -490,23 +513,21 @@ def receive_purchase_order(
                       AND UPPER(COALESCE(status, '')) IN ('FAILED', 'REJECTED')
                 """), {"po_id": id}).scalar() or 0
                 if failed_insp > 0:
-                    raise HTTPException(
-                        status_code=409,
-                        detail="لا يمكن استلام هذا الأمر: يوجد فحص جودة فاشل مرتبط به"
-                    )
+                    raise HTTPException(**http_error(400, "po_blocked_qc_fail_receive", request))
             except HTTPException:
                 raise
             except Exception:
                 # quality_inspections table may not exist yet on some tenants; skip silently.
-                pass
+                logger.debug("Skipping purchase order quality inspection check", exc_info=True)
     
-            # Get all lines with their current received quantities
+            # T007: Lock PO lines FOR UPDATE to prevent concurrent receive races
             lines = db.execute(text("""
                 SELECT l.id, l.product_id, l.quantity, l.unit_price, COALESCE(l.received_quantity, 0) as received_quantity,
                        p.product_name
                 FROM purchase_order_lines l
                 LEFT JOIN products p ON l.product_id = p.id
                 WHERE l.po_id = :po_id
+                FOR UPDATE
             """), {"po_id": id}).fetchall()
             
             lines_map = {line.id: line for line in lines}
@@ -516,12 +537,21 @@ def receive_purchase_order(
             total_expected = 0
             receipt_details = []
             receipt_value_base = Decimal('0')
-            exchange_rate = _dec(po.exchange_rate or 1)
+            user_id = int(current_user.get("id") if isinstance(current_user, dict) else current_user.id)
+
+            # Create the receipt header before line processing so all stock,
+            # costing, inventory transactions and GL entries share one stable id.
+            receipt_row = db.execute(text("""
+                INSERT INTO po_receipts (po_id, warehouse_id, receipt_date, created_by)
+                VALUES (:po_id, :wh_id, CURRENT_DATE, :uid)
+                RETURNING id
+            """), {"po_id": id, "wh_id": receive_data.warehouse_id, "uid": user_id}).fetchone()
+            receipt_id = receipt_row.id
             
             for item in receive_data.items:
                 line = lines_map.get(item.line_id)
                 if not line:
-                    raise HTTPException(status_code=400, detail=f"البند {item.line_id} غير موجود في أمر الشراء")
+                    raise HTTPException(status_code=400, detail=i18n_message("po_line_not_found", request))
                 
                 # Defensive quantity casting
                 line_qty = _dec(line.quantity or 0)
@@ -536,16 +566,72 @@ def receive_purchase_order(
                     )
                 
                 if item_qty > 0:
-                    # Update received quantity on line
-                    new_received = line_received + item_qty
-                    db.execute(text("""
+                    # T009: Atomic quantity check — update only if sufficient remaining
+                    updated = db.execute(text("""
                         UPDATE purchase_order_lines 
-                        SET received_quantity = :received
+                        SET received_quantity = received_quantity + :qty
                         WHERE id = :line_id
-                    """), {"received": new_received, "line_id": item.line_id})
+                          AND received_quantity + :qty <= quantity
+                    """), {"qty": item_qty, "line_id": item.line_id})
+                    if updated.rowcount == 0:
+                        raise HTTPException(
+                            status_code=409,
+                            detail=i18n_message("qty_exceeds_remaining", request)
+                        )
                     
                     # Add to inventory
                     if line.product_id:
+                        from services.costing_service import CostingService
+                        unit_price = _dec(line.unit_price or 0)
+                        unit_price_base = (unit_price * exchange_rate).quantize(_D4, ROUND_HALF_UP)
+                        line_total_cost = (_dec(item_qty) * unit_price_base).quantize(_D2, ROUND_HALF_UP)
+                        receipt_line = db.execute(text("""
+                            INSERT INTO po_receipt_lines (
+                                receipt_id, po_line_id, product_id, warehouse_id,
+                                quantity, unit_cost, total_cost
+                            ) VALUES (
+                                :receipt_id, :po_line_id, :product_id, :warehouse_id,
+                                :quantity, :unit_cost, :total_cost
+                            )
+                            RETURNING id
+                        """), {
+                            "receipt_id": receipt_id,
+                            "po_line_id": item.line_id,
+                            "product_id": line.product_id,
+                            "warehouse_id": receive_data.warehouse_id,
+                            "quantity": item_qty,
+                            "unit_cost": unit_price_base,
+                            "total_cost": line_total_cost,
+                        }).fetchone()
+                        receipt_line_id = receipt_line.id
+
+                        # T038: Call update_cost BEFORE inventory quantity update for WAC.
+                        # Costing failures must roll back the receipt; otherwise stock
+                        # and valuation diverge.
+                        CostingService.update_cost(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=receive_data.warehouse_id,
+                            new_qty=float(item_qty),
+                            new_price=str(unit_price_base),
+                        )
+
+                        # T039: Create provisional cost layer for FIFO/LIFO
+                        costing_method = CostingService._get_product_costing_method(db, line.product_id, receive_data.warehouse_id)
+                        if costing_method in ("fifo", "lifo"):
+                            # T010: receipt_id will be set after po_receipts insert below
+                            # Store cost layer with placeholder, will update source_document_id
+                            CostingService.create_cost_layer(
+                                db,
+                                product_id=line.product_id,
+                                warehouse_id=receive_data.warehouse_id,
+                                quantity=item_qty,
+                                unit_cost=str(unit_price_base),
+                                source_document_type="po_receipt_line",
+                                source_document_id=receipt_line_id,
+                                costing_method=costing_method,
+                            )
+
                         # Check if inventory record exists
                         existing = db.execute(text("""
                             SELECT id, quantity FROM inventory 
@@ -563,28 +649,29 @@ def receive_purchase_order(
                                 INSERT INTO inventory (product_id, warehouse_id, quantity, reserved_quantity)
                                 VALUES (:pid, :wid, :qty, 0)
                             """), {"pid": line.product_id, "wid": receive_data.warehouse_id, "qty": item_qty})
-                        
-                        # Create inventory transaction (replacing non-existent stock_movements)
-                        unit_price = _dec(line.unit_price or 0)
+                        # T040: Create exactly one inventory_transactions row for received qty
+                        # T012: Use standardized transaction type constant
+                        from utils.inventory_constants import TX_PURCHASE_RECEIPT
                         db.execute(text("""
                             INSERT INTO inventory_transactions (
-                                product_id, warehouse_id, transaction_type, 
+                                product_id, warehouse_id, transaction_type,
                                 reference_type, reference_id, reference_document,
                                 quantity, unit_cost, total_cost, created_by
                             ) VALUES (
-                                :pid, :wid, 'purchase_in', 
-                                'purchase_order', :po_id, :po_num,
+                                :pid, :wid, :tx_type,
+                                'po_receipt', :receipt_id, :po_num,
                                 :qty, :cost, :total_cost, :uid
                             )
                         """), {
-                            "pid": line.product_id, 
-                            "wid": receive_data.warehouse_id, 
+                            "pid": line.product_id,
+                            "wid": receive_data.warehouse_id,
+                            "tx_type": TX_PURCHASE_RECEIPT,
                             "qty": item_qty,
-                            "po_id": id,
+                            "receipt_id": receipt_id,
                             "po_num": po.po_number,
-                            "cost": unit_price,
-                            "total_cost": _dec(item_qty) * unit_price,
-                            "uid": int(current_user.get("id") if isinstance(current_user, dict) else current_user.id)
+                            "cost": unit_price_base,
+                            "total_cost": line_total_cost,
+                            "uid": user_id
                         })
                     
                     receipt_details.append({
@@ -593,7 +680,7 @@ def receive_purchase_order(
                     })
                     
                     # Calculate accrual value
-                    unit_price_base = (_dec(line.unit_price or 0) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+                    unit_price_base = (_dec(line.unit_price or 0) * exchange_rate).quantize(_D4, ROUND_HALF_UP)
                     receipt_value_base += (_dec(item_qty) * unit_price_base).quantize(_D2, ROUND_HALF_UP)
             
             # Calculate new total received vs expected
@@ -617,7 +704,7 @@ def receive_purchase_order(
             db.execute(text("""
                 UPDATE purchase_orders SET status = :status WHERE id = :id
             """), {"status": new_status, "id": id})
-            
+
             # --- ACCOUNTING ENTRY (ACCRUAL) ---
             # FISCAL-LOCK: Reject if accounting period is closed
             check_fiscal_period_open(db, datetime.now().date())
@@ -639,12 +726,12 @@ def receive_purchase_order(
                         description=f"استحقاق توريد بضاعة - {po.po_number}",
                         reference=po.po_number,
                         lines=je_lines,
-                        user_id=int(current_user.get("id") if isinstance(current_user, dict) else current_user.id),
+                        user_id=user_id,
                         branch_id=po.branch_id,
                         currency=po.currency,
                         exchange_rate=1.0,  # amounts already in base currency
                         source="purchase_order_receipt",
-                        source_id=id
+                        source_id=receipt_id  # T011: receipt-level ID, not PO ID
                     )
             
             
@@ -666,7 +753,7 @@ def receive_purchase_order(
             )
             
             return {
-                "message": "تم استلام البضاعة بنجاح",
+                "message": i18n_message("stock_received_success", request),
                 "id": int(id),
                 "status": str(new_status),
                 "total_expected": str(total_expected_dec),
@@ -676,7 +763,6 @@ def receive_purchase_order(
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 
@@ -757,7 +843,7 @@ def get_rfq(rfq_id: int, current_user=Depends(get_current_user)):
     with transactional(current_user.company_id) as db:
         rfq = db.execute(text("SELECT * FROM request_for_quotations WHERE id = :id"), {"id": rfq_id}).fetchone()
         if not rfq:
-            raise HTTPException(status_code=404, detail="RFQ not found")
+            raise HTTPException(**http_error(404, "rfq_not_found", request))
         lines = db.execute(text("SELECT * FROM rfq_lines WHERE rfq_id = :id"), {"id": rfq_id}).fetchall()
         responses = db.execute(text("SELECT * FROM rfq_responses WHERE rfq_id = :id ORDER BY total_price ASC"), {"id": rfq_id}).fetchall()
         return {
@@ -786,6 +872,12 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
                     VALUES (:rid, :pid, :pname, :qty, :unit, :specs)
                 """), {"rid": rfq.id, "pid": line.get("product_id"), "pname": line.get("product_name"),
                        "qty": line["quantity"], "unit": line.get("unit"), "specs": line.get("specifications")})
+            # T046: Store supplier invitations
+            for supplier_id in data.get("supplier_ids", []):
+                db.execute(text("""
+                    INSERT INTO rfq_suppliers (rfq_id, party_id, status)
+                    VALUES (:rid, :sid, 'invited')
+                """), {"rid": rfq.id, "sid": supplier_id})
             log_activity(
                 db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
                 action="buying.rfq.create", resource_type="rfq",
@@ -796,7 +888,6 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.put("/rfq/{rfq_id}/send", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -810,7 +901,7 @@ def send_rfq(rfq_id: int, request: Request, current_user=Depends(get_current_use
             resource_id=str(rfq_id), details={},
             request=request
         )
-        return {"message": "RFQ sent to suppliers"}
+        return {"message": i18n_message("rfq_sent_success", request)}
 @router.post("/rfq/{rfq_id}/responses", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """Add RFQ Response."""
@@ -825,6 +916,30 @@ def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Dep
                 "uprice": data.get("unit_price", 0), "total": data.get("total_price", 0),
                 "days": data.get("delivery_days"), "notes": data.get("notes"),
             }).fetchone()
+            for line in data.get("lines", []):
+                rfq_line_id = line.get("rfq_line_id") or line.get("line_id")
+                if not rfq_line_id:
+                    continue
+                unit_price = _dec(line.get("unit_price", 0))
+                qty = _dec(db.execute(
+                    text("SELECT quantity FROM rfq_lines WHERE id = :id AND rfq_id = :rid"),
+                    {"id": rfq_line_id, "rid": rfq_id},
+                ).scalar() or 0)
+                total_price = _dec(line.get("total_price")) if line.get("total_price") is not None else (qty * unit_price)
+                db.execute(text("""
+                    INSERT INTO rfq_response_lines (response_id, rfq_line_id, unit_price, total_price, notes)
+                    VALUES (:response_id, :line_id, :unit_price, :total_price, :notes)
+                    ON CONFLICT (response_id, rfq_line_id)
+                    DO UPDATE SET unit_price = EXCLUDED.unit_price,
+                                  total_price = EXCLUDED.total_price,
+                                  notes = EXCLUDED.notes
+                """), {
+                    "response_id": result.id,
+                    "line_id": rfq_line_id,
+                    "unit_price": unit_price,
+                    "total_price": total_price,
+                    "notes": line.get("notes"),
+                })
             log_activity(
                 db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
                 action="buying.rfq.add_response", resource_type="rfq_response",
@@ -833,7 +948,6 @@ def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Dep
             )
             return dict(result._mapping)
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/rfq/{rfq_id}/compare", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
@@ -845,30 +959,92 @@ def compare_rfq_responses(rfq_id: int, current_user=Depends(get_current_user)):
         """), {"rid": rfq_id}).fetchall()
         data = [dict(r._mapping) for r in responses]
         best = data[0] if data else None
+        if best:
+            db.execute(text("UPDATE request_for_quotations SET status = 'compared', updated_at = NOW() WHERE id = :id"), {"id": rfq_id})
         return {"responses": data, "recommended": best}
 @router.post("/rfq/{rfq_id}/convert", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def convert_rfq_to_po(rfq_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
-    """Convert selected RFQ response to Purchase Order."""
+    """T047: Convert selected RFQ response to an actual Purchase Order."""
     with transactional(current_user.company_id) as db:
         try:
             response_id = data.get("response_id")
+            if not response_id:
+                response_id = db.execute(text("""
+                    SELECT id
+                    FROM rfq_responses
+                    WHERE rfq_id = :rid
+                    ORDER BY total_price ASC, id ASC
+                    LIMIT 1
+                """), {"rid": rfq_id}).scalar()
             resp = db.execute(text("SELECT * FROM rfq_responses WHERE id = :id AND rfq_id = :rid"),
                               {"id": response_id, "rid": rfq_id}).fetchone()
             if not resp:
-                raise HTTPException(status_code=404, detail="Response not found")
+                raise HTTPException(**http_error(404, "rfq_response_not_found", request))
+
+            # Get RFQ lines to create PO lines
+            rfq_lines = db.execute(text("SELECT * FROM rfq_lines WHERE rfq_id = :rid"), {"rid": rfq_id}).fetchall()
+            if not rfq_lines:
+                raise HTTPException(**http_error(400, "rfq_no_lines", request))
+            response_prices = {
+                row.rfq_line_id: row
+                for row in db.execute(text("""
+                    SELECT rfq_line_id, unit_price, total_price
+                    FROM rfq_response_lines
+                    WHERE response_id = :response_id
+                """), {"response_id": response_id}).fetchall()
+            }
+
+            # Generate PO number
+            from utils.accounting import generate_sequential_number
+            po_num = generate_sequential_number(db, f"PO-{date.today().year}", "purchase_orders", "po_number")
+
+            # Create PO header
+            po = db.execute(text("""
+                INSERT INTO purchase_orders (po_number, party_id, order_date, expected_date, status, notes, branch_id, currency, exchange_rate, created_by)
+                VALUES (:num, :party, CURRENT_DATE, :expected, 'draft', :notes, :branch, :curr, :rate, :uid)
+                RETURNING id, po_number
+            """), {
+                "num": po_num,
+                "party": resp.supplier_id,
+                "expected": data.get("expected_date"),
+                "notes": f"Converted from RFQ #{rfq_id}",
+                "branch": data.get("branch_id"),
+                "curr": data.get("currency", "SAR"),
+                "rate": data.get("exchange_rate", 1.0),
+                "uid": current_user.id,
+            }).fetchone()
+
+            # Create PO lines from RFQ lines
+            for line in rfq_lines:
+                response_line = response_prices.get(line.id)
+                line_price = response_line.unit_price if response_line else (resp.unit_price or 0)
+                line_total = _dec(line.quantity) * _dec(line_price)
+                db.execute(text("""
+                    INSERT INTO purchase_order_lines (po_id, product_id, description, quantity, unit_price, total)
+                    VALUES (:po_id, :pid, :desc, :qty, :price, :total)
+                """), {
+                    "po_id": po.id,
+                    "pid": line.product_id,
+                    "desc": line.product_name or line.specifications,
+                    "qty": line.quantity,
+                    "price": line_price,
+                    "total": line_total,
+                })
+
+            # Mark RFQ as converted and response as selected
             db.execute(text("UPDATE rfq_responses SET is_selected = true WHERE id = :id"), {"id": response_id})
             db.execute(text("UPDATE request_for_quotations SET status = 'converted', updated_at = NOW() WHERE id = :id"), {"id": rfq_id})
+
             log_activity(
                 db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
                 action="buying.rfq.convert", resource_type="rfq",
-                resource_id=str(rfq_id), details={"response_id": response_id, "supplier_id": resp.supplier_id},
+                resource_id=str(rfq_id), details={"response_id": response_id, "supplier_id": resp.supplier_id, "po_id": po.id},
                 request=request
             )
-            return {"message": "RFQ converted. Create PO from supplier.", "supplier_id": resp.supplier_id, "total_price": str(resp.total_price)}
+            return {"message": i18n_message("po_quotation_converted", request), "po_id": po.id, "po_number": po.po_number, "supplier_id": resp.supplier_id}
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # ---------- PUR-002: Supplier Ratings ----------
@@ -891,7 +1067,7 @@ def get_agreement(agr_id: int, current_user=Depends(get_current_user)):
     with transactional(current_user.company_id) as db:
         agr = db.execute(text("SELECT * FROM purchase_agreements WHERE id = :id"), {"id": agr_id}).fetchone()
         if not agr:
-            raise HTTPException(status_code=404, detail="Agreement not found")
+            raise HTTPException(**http_error(404, "agreement_not_found", request))
         lines = db.execute(text("SELECT * FROM purchase_agreement_lines WHERE agreement_id = :id"), {"id": agr_id}).fetchall()
         return {"agreement": dict(agr._mapping), "lines": [dict(r._mapping) for r in lines]}
 @router.post("/agreements", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -928,7 +1104,6 @@ def create_agreement(data: dict, request: Request, current_user=Depends(get_curr
             )
             return dict(agr._mapping)
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.put("/agreements/{agr_id}/activate", dependencies=[Depends(require_permission("buying.approve"))], response_model=Dict[str, Any])
@@ -942,7 +1117,7 @@ def activate_agreement(agr_id: int, request: Request, current_user=Depends(get_c
             resource_id=str(agr_id), details={},
             request=request
         )
-        return {"message": "Agreement activated"}
+        return {"message": i18n_message("agreement_activated_success", request)}
 @router.post("/agreements/{agr_id}/call-off", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def create_call_off(agr_id: int, data: dict, request: Request, current_user=Depends(get_current_user)):
     """Create a call-off (partial order) against a blanket agreement."""
@@ -950,12 +1125,12 @@ def create_call_off(agr_id: int, data: dict, request: Request, current_user=Depe
         try:
             agr = db.execute(text("SELECT * FROM purchase_agreements WHERE id = :id AND status = 'active'"), {"id": agr_id}).fetchone()
             if not agr:
-                raise HTTPException(status_code=404, detail="Active agreement not found")
+                raise HTTPException(**http_error(404, "active_agreement_not_found", request))
             amount = _dec(data.get("amount", 0))
             consumed_amount = _dec(agr.consumed_amount)
             total_amount = _dec(agr.total_amount)
             if consumed_amount + amount > total_amount:
-                raise HTTPException(status_code=400, detail="Call-off exceeds agreement total")
+                raise HTTPException(**http_error(400, "call_off_exceeds_agreement", request))
             db.execute(text("UPDATE purchase_agreements SET consumed_amount = consumed_amount + :amt WHERE id = :id"),
                        {"amt": amount, "id": agr_id})
             log_activity(
@@ -965,11 +1140,10 @@ def create_call_off(agr_id: int, data: dict, request: Request, current_user=Depe
                 request=request
             )
             remaining = (total_amount - consumed_amount - amount).quantize(_D2, ROUND_HALF_UP)
-            return {"message": f"Call-off of {str(amount)} created", "remaining": str(remaining)}
+            return {"message": i18n_message("call_off_created_amount", request), "remaining": str(remaining)}
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # =====================================================================

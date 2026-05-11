@@ -145,24 +145,28 @@ def get_purchases_aging_report(
     db = get_db_connection(current_user.company_id)
     try:
         params = {}
-        branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "sl.branch_id", params)
 
+        # Query net supplier exposure from supplier_subledger. Aging by open
+        # document allocation is not available for every document type, so the
+        # report uses supplier/currency net balance and the oldest contributing
+        # date while preserving reconciliation to AP/subledger totals.
         results = db.execute(text(f"""
             SELECT 
                 p.name as supplier_name,
-                i.invoice_number,
-                i.invoice_date,
-                i.due_date,
-                (i.total - COALESCE(i.paid_amount, 0)) as due_amount_fc,
-                (i.total - COALESCE(i.paid_amount, 0)) * COALESCE(i.exchange_rate, 1) as due_amount,
-                GREATEST(CURRENT_DATE - COALESCE(i.due_date, i.invoice_date), 0) as days_old,
-                i.currency
-            FROM invoices i
-            JOIN parties p ON i.party_id = p.id
-            WHERE i.invoice_type = 'purchase'
-            AND i.status NOT IN ('draft', 'cancelled', 'paid')
-            AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
+                NULL::text AS document_number,
+                MIN(sl.document_date) AS document_date,
+                MIN(sl.document_date) AS due_date,
+                SUM(sl.credit - sl.debit) as due_amount_fc,
+                SUM(sl.base_credit - sl.base_debit) as due_amount,
+                GREATEST(CURRENT_DATE - MIN(sl.document_date), 0) as days_old,
+                sl.currency
+            FROM supplier_subledger sl
+            JOIN parties p ON sl.party_id = p.id
+            WHERE 1=1
             {branch_filter}
+            GROUP BY sl.party_id, p.name, sl.currency
+            HAVING SUM(sl.base_credit - sl.base_debit) > 0.01
             ORDER BY days_old DESC
         """), params).fetchall()
 
@@ -182,8 +186,8 @@ def get_purchases_aging_report(
             totals[bucket] += amount
             report.append({
                 "supplier": row.supplier_name,
-                "invoice": row.invoice_number,
-                "date": row.invoice_date,
+                "invoice": row.document_number or "-",
+                "date": row.document_date,
                 "due_date": row.due_date,
                 "amount": amount,
                 "amount_fc": Decimal(str(row.due_amount_fc or 0)),
@@ -217,59 +221,30 @@ def get_supplier_statement(
         params = {"sid": supplier_id, "start": start_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        # 1. Get Opening Balance (Before start_date)
-        # For suppliers: Invoices (credit/increase) - Payments (debit/decrease)
+        # T036: Opening balance from supplier_subledger (includes all document types)
         opening_balance = db.execute(text(f"""
-            WITH all_movements AS (
-                SELECT 
-                    0 as debit, (total * COALESCE(exchange_rate, 1.0)) as credit,
-                    invoice_date as txn_date,
-                    branch_id,
-                    party_id
-                FROM invoices
-                WHERE invoice_type = 'purchase' AND status NOT IN ('cancelled', 'draft')
-                
-                UNION ALL
-                
-                SELECT 
-                    (amount * COALESCE(exchange_rate, 1.0)) as debit, 0 as credit,
-                    voucher_date as txn_date,
-                    branch_id,
-                    party_id
-                FROM payment_vouchers
-                WHERE party_type = 'supplier' AND voucher_type = 'payment' AND status != 'cancelled'
-            )
             SELECT (COALESCE(SUM(credit), 0) - COALESCE(SUM(debit), 0)) as balance
-            FROM all_movements
-            WHERE party_id = :sid AND txn_date < :start
+            FROM supplier_subledger
+            WHERE party_id = :sid AND document_date < :start
             {branch_filter}
         """), params).scalar() or 0
 
-        # 2. Get Transactions (invoices + payment vouchers)
+        # T036: Transactions from supplier_subledger (includes all document types)
         params["end"] = end_date
         transactions = db.execute(text(f"""
-            WITH all_movements AS (
-                SELECT 
-                    id, invoice_date as date, invoice_number as ref, 
-                    'invoice' as type, (total * COALESCE(exchange_rate, 1.0)) as credit, 0 as debit,
-                    party_id, branch_id
-                FROM invoices
-                WHERE invoice_type = 'purchase' AND status NOT IN ('cancelled', 'draft')
-                
-                UNION ALL
-                
-                SELECT 
-                    id, voucher_date as date, voucher_number as ref,
-                    'payment' as type, 0 as credit,
-                    (amount * COALESCE(exchange_rate, 1.0)) as debit,
-                    party_id, branch_id
-                FROM payment_vouchers
-                WHERE party_type = 'supplier' AND voucher_type = 'payment' AND status != 'cancelled'
-            )
-            SELECT * FROM all_movements
-            WHERE party_id = :sid AND date BETWEEN :start AND :end
+            SELECT
+                document_id as id,
+                document_date as date,
+                document_number as ref,
+                document_type as type,
+                credit,
+                debit,
+                party_id,
+                branch_id
+            FROM supplier_subledger
+            WHERE party_id = :sid AND document_date BETWEEN :start AND :end
             {branch_filter}
-            ORDER BY date
+            ORDER BY document_date
         """), params).fetchall()
 
         # 3. Running Balance
@@ -302,4 +277,3 @@ def get_supplier_statement(
         db.close()
 
 # --- HR Reports ---
-

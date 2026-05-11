@@ -65,7 +65,7 @@ def create_salary_structure(data: SalaryStructureCreate, request: Request, curre
             action="hr.salary_structure.create", resource_type="salary_structure",
             resource_id=str(sid), details={"name": data.name}, request=request
         )
-        return {"id": sid, "message": "تم إنشاء هيكل الراتب بنجاح"}
+        return {"id": sid, "message": i18n_message("salary_structure_created", request)}
 
 
 @router.put("/salary-structures/{structure_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -87,7 +87,7 @@ def update_salary_structure(structure_id: int, data: SalaryStructureUpdate, requ
             action="hr.salary_structure.update", resource_type="salary_structure",
             resource_id=str(structure_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم التحديث بنجاح"}
+        return {"message": i18n_message(("hr_update_success", request))}
 
 
 @router.delete("/salary-structures/{structure_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -100,7 +100,7 @@ def delete_salary_structure(structure_id: int, request: Request, current_user: U
             action="hr.salary_structure.delete", resource_type="salary_structure",
             resource_id=str(structure_id), details={}, request=request
         )
-        return {"message": "تم الحذف بنجاح"}
+        return {"message": i18n_message(("hr_delete_success", request))}
 
 
 # =============================================
@@ -141,7 +141,7 @@ def create_salary_component(data: SalaryComponentCreate, request: Request, curre
             action="hr.salary_component.create", resource_type="salary_component",
             resource_id=str(cid), details={"name": data.name}, request=request
         )
-        return {"id": cid, "message": "تم إنشاء مكون الراتب بنجاح"}
+        return {"id": cid, "message": i18n_message("salary_component_created", request)}
 
 
 @router.put("/salary-components/{component_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -162,7 +162,7 @@ def update_salary_component(component_id: int, data: SalaryComponentUpdate, requ
             action="hr.salary_component.update", resource_type="salary_component",
             resource_id=str(component_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم التحديث بنجاح"}
+        return {"message": i18n_message(("hr_update_success", request))}
 
 
 # =============================================
@@ -197,7 +197,7 @@ def assign_salary_component(data: EmployeeSalaryComponentCreate, request: Reques
             action="hr.employee_salary_component.assign", resource_type="employee_salary_component",
             resource_id=str(data.employee_id), details={"component_id": data.component_id, "amount": str(data.amount) if data.amount else "0"}, request=request
         )
-        return {"message": "تم تعيين مكون الراتب بنجاح"}
+        return {"message": i18n_message(("salary_component_set", request))}
 
 
 # =============================================
@@ -294,7 +294,7 @@ def create_overtime_request(data: OvertimeRequestCreate, request: Request, curre
             action="hr.overtime.create", resource_type="overtime_request",
             resource_id=str(ot_id), details={"employee_id": data.employee_id, "hours": data.hours}, request=request
         )
-        return {"id": ot_id, "calculated_amount": amount, "message": "تم إنشاء طلب العمل الإضافي"}
+        return {"id": ot_id, "calculated_amount": amount, "message": i18n_message("overtime_request_created", request)}
 
 
 @router.put("/overtime/{overtime_id}/approve", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -311,7 +311,7 @@ def approve_overtime(overtime_id: int, data: OvertimeRequestUpdate, request: Req
             action="hr.overtime.approve", resource_type="overtime_request",
             resource_id=str(overtime_id), details={"status": data.status}, request=request
         )
-        return {"message": "تم تحديث حالة الطلب"}
+        return {"message": i18n_message(("request_status_updated", request))}
 
 
 # =============================================
@@ -348,7 +348,7 @@ def save_gosi_settings(data: GOSISettingsCreate, request: Request, current_user:
             action="hr.gosi_settings.save", resource_type="gosi_settings",
             resource_id=str(gosi_id), details={"employee_share": data.employee_share_percentage, "employer_share": data.employer_share_percentage}, request=request
         )
-        return {"id": gosi_id, "message": "تم حفظ إعدادات GOSI"}
+        return {"id": gosi_id, "message": i18n_message("gosi_settings_saved", request)}
 
 
 @router.get("/gosi-calculation", response_model=List[GOSICalculationResponse], dependencies=[Depends(require_permission("hr.view"))])
@@ -572,7 +572,7 @@ def create_document(data: EmployeeDocumentCreate, request: Request, current_user
             action="hr.document.create", resource_type="employee_document",
             resource_id=str(doc_id), details={"employee_id": data.employee_id, "type": data.document_type}, request=request
         )
-        return {"id": doc_id, "message": "تم إضافة المستند"}
+        return {"id": doc_id, "message": i18n_message("document_added", request)}
 
 
 @router.put("/documents/{doc_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -594,7 +594,7 @@ def update_document(doc_id: int, data: EmployeeDocumentUpdate, request: Request,
             action="hr.document.update", resource_type="employee_document",
             resource_id=str(doc_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
 
 
 @router.delete("/documents/{doc_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -607,7 +607,7 @@ def delete_document(doc_id: int, request: Request, current_user: UserResponse = 
             action="hr.document.delete", resource_type="employee_document",
             resource_id=str(doc_id), details={}, request=request
         )
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
 
 
 # =============================================
@@ -655,7 +655,7 @@ def create_performance_review(data: PerformanceReviewCreate, request: Request, c
             action="hr.performance_review.create", resource_type="performance_review",
             resource_id=str(pr_id), details={"employee_id": data.employee_id}, request=request
         )
-        return {"id": pr_id, "message": "تم إنشاء التقييم"}
+        return {"id": pr_id, "message": i18n_message("review_created", request)}
 
 
 @router.put("/performance-reviews/{review_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -677,7 +677,7 @@ def update_performance_review(review_id: int, data: PerformanceReviewUpdate, req
             action="hr.performance_review.update", resource_type="performance_review",
             resource_id=str(review_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم تحديث التقييم"}
+        return {"message": i18n_message(("evaluation_updated", request))}
 
 
 # =============================================
@@ -716,7 +716,7 @@ def create_training_program(data: TrainingProgramCreate, request: Request, curre
             action="hr.training.create", resource_type="training_program",
             resource_id=str(tp_id), details={"name": data.name}, request=request
         )
-        return {"id": tp_id, "message": "تم إنشاء البرنامج التدريبي"}
+        return {"id": tp_id, "message": i18n_message("training_program_created", request)}
 
 
 @router.put("/training/{training_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -737,7 +737,7 @@ def update_training_program(training_id: int, data: TrainingProgramUpdate, reque
             action="hr.training.update", resource_type="training_program",
             resource_id=str(training_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
 
 
 @router.post("/training/{training_id}/participants", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -755,10 +755,10 @@ def add_training_participant(training_id: int, data: TrainingParticipantCreate, 
             resource_id=str(training_id), details={"employee_id": data.employee_id}, request=request
         )
         conn.commit()
-        return {"message": "تم تسجيل المشارك"}
+        return {"message": i18n_message(("participant_registered", request))}
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
-            raise HTTPException(status_code=400, detail="المشارك مسجل مسبقاً")
+            raise HTTPException(**http_error(400, "participant_already_registered", request))
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -797,7 +797,7 @@ def update_training_participant(participant_id: int, data: TrainingParticipantUp
             action="hr.training.update_participant", resource_type="training_participant",
             resource_id=str(participant_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
 
 
 # =============================================
@@ -844,7 +844,7 @@ def create_violation(data: ViolationCreate, request: Request, current_user: User
             action="hr.violation.create", resource_type="employee_violation",
             resource_id=str(v_id), details={"employee_id": data.employee_id, "type": data.violation_type}, request=request
         )
-        return {"id": v_id, "message": "تم تسجيل المخالفة"}
+        return {"id": v_id, "message": i18n_message("violation_recorded", request)}
 
 
 @router.put("/violations/{violation_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -866,7 +866,7 @@ def update_violation(violation_id: int, data: ViolationUpdate, request: Request,
             action="hr.violation.update", resource_type="employee_violation",
             resource_id=str(violation_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم تحديث المخالفة"}
+        return {"message": i18n_message(("violation_updated", request))}
 
 
 # =============================================
@@ -914,7 +914,7 @@ def create_custody(data: CustodyCreate, request: Request, current_user: UserResp
             action="hr.custody.create", resource_type="employee_custody",
             resource_id=str(c_id), details={"employee_id": data.employee_id, "item": data.item_name}, request=request
         )
-        return {"id": c_id, "message": "تم تسليم العهدة"}
+        return {"id": c_id, "message": i18n_message("custody_handed_over", request)}
 
 
 @router.put("/custody/{custody_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -936,7 +936,7 @@ def update_custody(custody_id: int, data: CustodyUpdate, request: Request, curre
             action="hr.custody.update", resource_type="employee_custody",
             resource_id=str(custody_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": "تم تحديث العهدة"}
+        return {"message": i18n_message(("custody_updated", request))}
 
 
 @router.put("/custody/{custody_id}/return", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -953,4 +953,4 @@ def return_custody(custody_id: int, data: CustodyUpdate, request: Request, curre
             action="hr.custody.return", resource_type="employee_custody",
             resource_id=str(custody_id), details={}, request=request
         )
-        return {"message": "تم استلام العهدة"}
+        return {"message": i18n_message(("custody_received", request))}

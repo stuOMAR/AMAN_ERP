@@ -225,7 +225,7 @@ def create_asset(asset: AssetCreate, current_user: dict = Depends(get_current_us
                 })
         
         trans.commit()
-        return {"id": asset_id, "message": "Asset created successfully"}
+        return {"id": asset_id, "message": i18n_message("asset_created_success", request)}
     except HTTPException:
         trans.rollback()
         raise
@@ -245,7 +245,7 @@ def get_asset(asset_id: int, current_user: dict = Depends(get_current_user)):
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
-            raise HTTPException(status_code=404, detail="Asset not found")
+            raise HTTPException(**http_error(404, "asset_not_found", request))
             
         schedule = conn.execute(text("""
             SELECT * FROM asset_depreciation_schedule 
@@ -268,7 +268,7 @@ def update_asset(asset_id: int, data: AssetUpdate, current_user: dict = Depends(
         if not existing:
             raise HTTPException(**http_error(404, "asset_not_found"))
         if existing.status == 'disposed':
-            raise HTTPException(status_code=400, detail="لا يمكن تعديل أصل مستبعد")
+            raise HTTPException(**http_error(400, "asset_already_disposed", request))
         
         allowed_fields = ['name', 'code', 'type', 'status', 'cost', 'residual_value', 'life_years', 
                          'location', 'branch_id', 'notes', 'purchase_date']
@@ -284,7 +284,7 @@ def update_asset(asset_id: int, data: AssetUpdate, current_user: dict = Depends(
             conn.execute(text(f"UPDATE assets SET {', '.join(updates)} WHERE id = :id"), params)
             trans.commit()
         
-        return {"message": "تم تحديث الأصل بنجاح"}
+        return {"message": i18n_message(("asset_updated_success_msg", request))}
     except HTTPException:
         trans.rollback()
         raise
@@ -306,7 +306,7 @@ def dispose_asset(asset_id: int, disposal: AssetDisposal, current_user: dict = D
         # 1. Get Asset & Accumulated Depreciation
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id FOR UPDATE"), {"id": asset_id}).fetchone()
         if not asset or asset.status == 'disposed':
-            raise HTTPException(status_code=400, detail="الأصل غير موجود أو تم استبعاده مسبقاً")
+            raise HTTPException(**http_error(400, "asset_not_found_or_already_disposed", request))
             
         acc_depr_recorded = conn.execute(text("""
             SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule 
@@ -370,7 +370,7 @@ def dispose_asset(asset_id: int, disposal: AssetDisposal, current_user: dict = D
         # Check if JE exists for this asset disposal (to avoid double posting)
         exists = conn.execute(text("SELECT 1 FROM journal_entries WHERE reference = :ref"), {"ref": f"ASSET-DISP-{asset_id}"}).fetchone()
         if exists:
-             raise HTTPException(status_code=400, detail="تم ترحيل قيد استبعاد لهذا الأصل مسبقاً")
+             raise HTTPException(**http_error(400, "asset_disposal_entry_already_posted", request))
 
         check_fiscal_period_open(conn, disposal.disposal_date)
         

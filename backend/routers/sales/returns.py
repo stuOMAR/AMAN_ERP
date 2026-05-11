@@ -5,6 +5,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+import json
 import logging
 
 from database import get_db_connection
@@ -21,12 +22,117 @@ from .schemas import SalesReturnCreate
 returns_router = APIRouter()
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
+_D4 = Decimal('0.0001')
 _MAX_RATE_AGE_DAYS = 31
 _TABLE_COLUMNS_CACHE: dict[tuple[str, str], frozenset[str]] = {}
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _json_param(value):
+    if value is None:
+        return None
+    return value if isinstance(value, str) else json.dumps(value)
+
+
+def _line_key(product_id, unit_price, tax_rate) -> tuple[int, Decimal, Decimal]:
+    return (
+        int(product_id),
+        _dec(unit_price).quantize(_D2, ROUND_HALF_UP),
+        _dec(tax_rate).quantize(_D2, ROUND_HALF_UP),
+    )
+
+
+def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
+    raw_tax = Decimal("0")
+    for row in original_rows:
+        gross = (_dec(row.quantity) * _dec(row.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        taxable = gross - _dec(getattr(row, "discount", 0))
+        raw_tax += (taxable * _dec(row.tax_rate) / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+    if raw_tax <= 0:
+        return Decimal("1")
+    factor = _dec(invoice_tax_amount) / raw_tax
+    return max(Decimal("0"), min(Decimal("1"), factor))
+
+
+def _reversal_taxable_amount(original_line, quantity) -> Decimal:
+    original_qty = _dec(original_line.quantity)
+    if original_qty <= 0:
+        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+    gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
+    taxable = gross - _dec(getattr(original_line, "discount", 0))
+    ratio = _dec(quantity) / original_qty
+    return (taxable * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _load_original_sales_invoice_for_return(db, invoice_id: int, customer_id: int):
+    invoice = db.execute(text("""
+        SELECT id, party_id, branch_id, invoice_type, invoice_date, tax_amount
+        FROM invoices
+        WHERE id = :id
+    """), {"id": invoice_id}).fetchone()
+    if not invoice:
+        raise HTTPException(**http_error(404, ("original_invoice_not_found", request)))
+    if invoice.invoice_type != "sales":
+        raise HTTPException(**http_error(400, "return_must_link_sales_invoice", request))
+    if int(invoice.party_id) != int(customer_id):
+        raise HTTPException(**http_error(400, "invoice_not_for_customer", request))
+
+    rows = db.execute(text("""
+        SELECT product_id, quantity, unit_price, tax_rate, tax_rate_id, applied_taxes, discount
+        FROM invoice_lines
+        WHERE invoice_id = :id
+          AND product_id IS NOT NULL
+    """), {"id": invoice_id}).fetchall()
+    by_product: dict[int, list] = {}
+    for row in rows:
+        by_product.setdefault(int(row.product_id), []).append(row)
+
+    returned = db.execute(text("""
+        SELECT srl.product_id, srl.unit_price, srl.tax_rate, COALESCE(SUM(srl.quantity), 0) AS qty
+        FROM sales_returns sr
+        JOIN sales_return_lines srl ON srl.return_id = sr.id
+        WHERE sr.invoice_id = :id
+          AND COALESCE(sr.status, '') != 'cancelled'
+          AND srl.product_id IS NOT NULL
+        GROUP BY srl.product_id, srl.unit_price, srl.tax_rate
+    """), {"id": invoice_id}).fetchall()
+
+    credited = db.execute(text("""
+        SELECT il.product_id, il.unit_price, il.tax_rate, COALESCE(SUM(il.quantity), 0) AS qty
+        FROM invoices cn
+        JOIN invoice_lines il ON il.invoice_id = cn.id
+        WHERE cn.related_invoice_id = :id
+          AND cn.invoice_type = 'sales_credit_note'
+          AND COALESCE(cn.status, '') != 'cancelled'
+          AND il.product_id IS NOT NULL
+        GROUP BY il.product_id, il.unit_price, il.tax_rate
+    """), {"id": invoice_id}).fetchall()
+
+    used_qty = {
+        _line_key(r.product_id, r.unit_price, r.tax_rate): _dec(r.qty)
+        for r in returned
+    }
+    for row in credited:
+        key = _line_key(row.product_id, row.unit_price, row.tax_rate)
+        used_qty[key] = used_qty.get(key, Decimal("0")) + _dec(row.qty)
+
+    return invoice, by_product, used_qty, _line_tax_factor(invoice.tax_amount, rows)
+
+
+def _original_line_for_return(original_lines: dict[int, list], product_id: int, unit_price):
+    candidates = original_lines.get(int(product_id), [])
+    if not candidates:
+        raise HTTPException(**http_error(400, "item_not_in_invoice", request))
+    if len(candidates) == 1:
+        return candidates[0]
+    price = _dec(unit_price)
+    matched = [row for row in candidates if _dec(row.unit_price) == price]
+    if len(matched) == 1:
+        return matched[0]
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity", request))
 
 
 def _table_columns(db, table_name: str) -> frozenset[str]:
@@ -93,7 +199,7 @@ def list_unified_returns(
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
     if source not in (None, "sales", "pos"):
-        raise HTTPException(status_code=400, detail="source must be 'sales' or 'pos'")
+        raise HTTPException(**http_error(400, "source_must_be_sales_or_pos", request))
     limit = max(1, min(int(limit or 200), 1000))
 
     db = get_db_connection(current_user.company_id)
@@ -155,7 +261,7 @@ def get_sales_return(return_id: int, current_user: dict = Depends(get_current_us
         """), {"id": return_id}).fetchone()
 
         if not header:
-            raise HTTPException(status_code=404, detail="المرتجع غير موجود")
+            raise HTTPException(**http_error(404, ("return_not_found", request)))
 
         # Enforce branch access for single resource
         if header.branch_id:
@@ -185,10 +291,21 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         from utils.accounting import generate_sequential_number
         ret_num = generate_sequential_number(db, f"RET-{datetime.now().year}", "sales_returns", "return_number")
 
+        original_invoice = None
+        original_lines = {}
+        already_reversed_qty = {}
+        original_tax_factor = Decimal("1")
+        if data.invoice_id:
+            original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_original_sales_invoice_for_return(
+                db, data.invoice_id, data.customer_id
+            )
+
         # Determine Branch
         branch_id = data.branch_id
-        if not branch_id and data.invoice_id:
-            branch_id = db.execute(text("SELECT branch_id FROM invoices WHERE id = :id"), {"id": data.invoice_id}).scalar()
+        if original_invoice:
+            if branch_id and original_invoice.branch_id is not None and int(branch_id) != int(original_invoice.branch_id):
+                raise HTTPException(**http_error(400, "return_branch_mismatch_invoice", request))
+            branch_id = original_invoice.branch_id
         branch_id = validate_branch_access(current_user, branch_id) if branch_id else None
         selected_treasury_id = data.bank_account_id
         selected_treasury = None
@@ -241,12 +358,28 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
 
         for item in data.items:
             line_total = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
-            if item.product_id and branch_id:
+            tax_rate_id = None
+            applied_taxes = None
+            if original_invoice:
+                original_line = _original_line_for_return(original_lines, item.product_id, item.unit_price)
+                reverse_key = _line_key(original_line.product_id, original_line.unit_price, original_line.tax_rate)
+                already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
+                available_qty = _dec(original_line.quantity) - already_qty
+                if _dec(item.quantity) > available_qty:
+                    raise HTTPException(**http_error(400, "return_qty_exceeds_invoice", request))
+                effective_tax_rate = _dec(original_line.tax_rate)
+                tax_rate_id = original_line.tax_rate_id
+                applied_taxes = original_line.applied_taxes
+                line_total = _reversal_taxable_amount(original_line, item.quantity)
+                already_reversed_qty[reverse_key] = already_qty + _dec(item.quantity)
+            elif item.product_id and branch_id:
                 tax_info = resolve_line_tax(branch_id, item.product_id, db, data.return_date, customer_id=data.customer_id)
                 effective_tax_rate = tax_info["tax_rate"]
+                tax_rate_id = tax_info.get("tax_rate_id")
             else:
                 effective_tax_rate = _dec(item.tax_rate or 0)
-            line_tax = (line_total * effective_tax_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
+            tax_factor = original_tax_factor if original_invoice else Decimal("1")
+            line_tax = (line_total * effective_tax_rate / Decimal('100') * tax_factor).quantize(_D2, ROUND_HALF_UP)
             final_total = line_total + line_tax
 
             subtotal += line_total
@@ -255,6 +388,8 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
             lines_to_save.append({
                 **item.model_dump(),
                 "tax_rate": effective_tax_rate,
+                "tax_rate_id": tax_rate_id,
+                "applied_taxes": applied_taxes,
                 "total": final_total
             })
 
@@ -270,7 +405,7 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         ret_rate = _dec(data.exchange_rate or 1)
         if ret_currency != base_currency:
             if ret_rate <= 0:
-                raise HTTPException(status_code=400, detail="Exchange rate must be greater than zero")
+                raise HTTPException(**http_error(400, ("exchange_rate_must_be_positive", request)))
             latest_rate_row = db.execute(text("""
                 SELECT rate_date
                 FROM exchange_rates
@@ -280,10 +415,10 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
                 LIMIT 1
             """), {"code": ret_currency, "date": data.return_date}).fetchone()
             if not latest_rate_row:
-                raise HTTPException(status_code=400, detail=f"No exchange rate found for {ret_currency}")
+                raise HTTPException(status_code=400, detail=i18n_message("no_exchange_rate_for_currency", request))
             age_days = (data.return_date - latest_rate_row.rate_date).days if latest_rate_row.rate_date else 0
             if age_days > _MAX_RATE_AGE_DAYS:
-                raise HTTPException(status_code=400, detail=f"Exchange rate for {ret_currency} is expired ({age_days} days old)")
+                raise HTTPException(status_code=400, detail=i18n_message("exchange_rate_expired", request))
 
         # Save Header
         res = db.execute(text("""
@@ -323,9 +458,11 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
             db.execute(
                 text("""
                     INSERT INTO sales_return_lines (
-                        return_id, product_id, description, quantity, unit_price, tax_rate, total, reason
+                        return_id, product_id, description, quantity, unit_price,
+                        tax_rate, tax_rate_id, applied_taxes, total, reason
                     ) VALUES (
-                        :ret_id, :pid, :desc, :qty, :price, :tax_rate, :total, :reason
+                        :ret_id, :pid, :desc, :qty, :price,
+                        :tax_rate, :tax_rate_id, CAST(:applied_taxes AS jsonb), :total, :reason
                     )
                 """),
                 [
@@ -336,6 +473,8 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
                         "qty": line["quantity"],
                         "price": line["unit_price"],
                         "tax_rate": line["tax_rate"],
+                        "tax_rate_id": line["tax_rate_id"],
+                        "applied_taxes": _json_param(line["applied_taxes"]),
                         "total": line["total"],
                         "reason": line["reason"],
                     }
@@ -384,7 +523,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
         # 1. Fetch Return details
         header = db.execute(text("SELECT * FROM sales_returns WHERE id = :id"), {"id": return_id}).fetchone()
         if not header or header.status != 'draft':
-            raise HTTPException(status_code=400, detail="المرتجع غير موجود أو تم اعتماده مسبقاً")
+            raise HTTPException(**http_error(400, "return_not_found_or_already_approved", request))
         branch_id = validate_branch_access(current_user, header.branch_id)
         selected_treasury_id = header.treasury_account_id or header.bank_account_id
         selected_treasury = None
@@ -401,7 +540,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             # Try to fetch warehouse from original invoice transactions
             orig_wh = db.execute(text("""
                 SELECT warehouse_id FROM inventory_transactions 
-                WHERE reference_id = :id AND reference_type = 'invoice' 
+                WHERE reference_id = :id AND reference_type IN ('sales_invoice', 'invoice')
                 LIMIT 1
             """), {"id": header.invoice_id}).scalar()
             if orig_wh:
@@ -421,6 +560,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                         SELECT unit_cost FROM inventory_transactions 
                         WHERE product_id = :pid 
                           AND reference_id = :inv_id 
+                          AND reference_type IN ('sales_invoice', 'invoice')
                           AND quantity < 0 
                         LIMIT 1
                     """), {"pid": line.product_id, "inv_id": header.invoice_id}).scalar()
@@ -433,11 +573,50 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                     cost_price = db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": line.product_id}).scalar() or 0
                     cost_price = _dec(cost_price)
 
+                from services.costing_service import CostingService
+                costing_method = CostingService._get_product_costing_method(db, line.product_id, wh_id)
+                if costing_method in ("fifo", "lifo"):
+                    try:
+                        return_result = CostingService.handle_return(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=wh_id,
+                            quantity=line.quantity,
+                            unit_cost=float(cost_price),
+                            source_document_type="sales_return",
+                            source_document_id=return_id,
+                            costing_method=costing_method,
+                            original_source_document_type="sales_invoice" if header.invoice_id else None,
+                            original_source_document_id=header.invoice_id,
+                        )
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc))
+                    restored_cost = _dec(return_result.get("restored_unit_cost", cost_price))
+                    restored_total = _dec(return_result.get("restored_total_cost", cost_price * _dec(line.quantity)))
+                else:
+                    restored_cost = cost_price
+                    restored_total = (cost_price * _dec(line.quantity)).quantize(_D4, ROUND_HALF_UP)
+                    CostingService.update_cost(
+                        db,
+                        product_id=line.product_id,
+                        warehouse_id=wh_id,
+                        new_qty=float(line.quantity),
+                        new_price=float(restored_cost),
+                    )
+
                 # Update Inventory
                 db.execute(text("""
-                    UPDATE inventory SET quantity = quantity + :qty 
-                    WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"qty": line.quantity, "pid": line.product_id, "wh": wh_id})
+                    INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                    VALUES (:pid, :wh, :qty, :cost, NOW())
+                    ON CONFLICT (product_id, warehouse_id)
+                    DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                  updated_at = NOW()
+                """), {
+                    "qty": line.quantity,
+                    "pid": line.product_id,
+                    "wh": wh_id,
+                    "cost": float(restored_cost),
+                })
 
                 # Log Inventory Transaction
                 db.execute(text("""
@@ -455,12 +634,12 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                     "ret_id": return_id,
                     "doc_num": header.return_number,
                     "qty": line.quantity,
-                    "cost": cost_price,
-                    "total_cost": (cost_price * _dec(line.quantity)).quantize(_D2, ROUND_HALF_UP),
+                    "cost": restored_cost,
+                    "total_cost": restored_total.quantize(_D2, ROUND_HALF_UP),
                     "user": current_user.id if not isinstance(current_user, dict) else current_user.get("id")
                 })
 
-                total_cost_reversal += (cost_price * _dec(line.quantity)).quantize(_D2, ROUND_HALF_UP)
+                total_cost_reversal += restored_total.quantize(_D2, ROUND_HALF_UP)
 
         # 3. Update Status
         db.execute(text("UPDATE sales_returns SET status = 'approved' WHERE id = :id"), {"id": return_id})
@@ -476,10 +655,10 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                 LIMIT 1
             """), {"code": header.currency, "date": header.return_date}).fetchone()
             if not rate_row:
-                raise HTTPException(status_code=400, detail=f"No exchange rate found for {header.currency}")
+                raise HTTPException(status_code=400, detail=i18n_message("no_exchange_rate_for_currency", request))
             age_days = (header.return_date - rate_row.rate_date).days if rate_row.rate_date else 0
             if age_days > _MAX_RATE_AGE_DAYS:
-                raise HTTPException(status_code=400, detail=f"Exchange rate for {header.currency} is expired ({age_days} days old)")
+                raise HTTPException(status_code=400, detail=i18n_message("exchange_rate_expired", request))
 
         def to_base(amount):
             return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
@@ -624,7 +803,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             branch_id=header.branch_id
         )
 
-        return {"status": "approved", "message": "تم اعتماد المرتجع بنجاح وتحديث المخزون والقيود المحاسبية"}
+        return {"status": "approved", "message": i18n_message("return_approved", request)}
     except HTTPException:
         db.rollback()
         raise

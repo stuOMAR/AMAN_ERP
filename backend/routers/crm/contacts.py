@@ -78,7 +78,7 @@ def create_contact(data: ContactCreate, request: Request, current_user=Depends(g
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_contact", resource_type="contact", resource_id=str(cid), details={"customer_id": data.customer_id, "first_name": data.first_name}, request=request)
-        return {"id": cid, "message": "تم إنشاء جهة الاتصال"}
+        return {"id": cid, "message": i18n_message("contact_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating contact: {e}")
@@ -110,7 +110,7 @@ def update_contact(contact_id: int, data: ContactUpdate, request: Request, curre
         db.execute(text(f"UPDATE crm_contacts SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_contact", resource_type="contact", resource_id=str(contact_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
     finally:
         db.close()
 
@@ -123,7 +123,7 @@ def delete_contact(contact_id: int, request: Request, current_user=Depends(get_c
         db.execute(text("DELETE FROM crm_contacts WHERE id = :id"), {"id": contact_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_contact", resource_type="contact", resource_id=str(contact_id), details={}, request=request)
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
     finally:
         db.close()
 

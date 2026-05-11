@@ -174,7 +174,7 @@ def create_opportunity(data: OpportunityCreate, request: Request, current_user=D
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_opportunity", resource_type="opportunity", resource_id=str(opp_id), details={"title": data.title, "stage": data.stage}, request=request)
-        return {"id": opp_id, "message": "تم إنشاء الفرصة البيعية"}
+        return {"id": opp_id, "message": i18n_message("opportunity_created", request)}
     finally:
         db.close()
 
@@ -225,7 +225,7 @@ async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Requ
             except Exception as notif_err:
                 logger.warning("Failed to dispatch opportunity stage notification: %s", notif_err)
 
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
     finally:
         db.close()
 
@@ -252,7 +252,7 @@ def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_c
         if not existing:
             raise HTTPException(**http_error(404, "opportunity_not_found"))
         if existing.is_deleted:
-            return {"message": "تم حذف الفرصة مسبقاً"}
+            return {"message": i18n_message(("opportunity_already_deleted", request))}
         db.execute(
             text(
                 "UPDATE sales_opportunities "
@@ -263,7 +263,7 @@ def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_c
         )
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_opportunity", resource_type="opportunity", resource_id=str(opp_id), details={"soft_delete": True}, request=request)
-        return {"message": "تم حذف الفرصة"}
+        return {"message": i18n_message(("opportunity_deleted", request))}
     finally:
         db.close()
 
@@ -286,7 +286,7 @@ def add_activity(opp_id: int, data: ActivityCreate, request: Request, current_us
                 {"id": data.contact_id},
             ).fetchone()
             if not contact or (opp.customer_id and contact.customer_id != opp.customer_id):
-                raise HTTPException(status_code=400, detail="contact_not_linked_to_opportunity_customer")
+                raise HTTPException(**http_error(400, "contact_not_linked_to_opportunity_customer", request))
 
         # T10.2 #151: persist the new completion-tracking fields. ``completed``
         # is the existing column on opportunity_activities; ``is_completed``
@@ -340,7 +340,7 @@ def update_activity(opp_id: int, aid: int, data: ActivityUpdate, request: Reques
             "WHERE id = :aid AND opportunity_id = :opp"
         ), {"aid": aid, "opp": opp_id}).fetchone()
         if not existing:
-            raise HTTPException(status_code=404, detail="Activity not found")
+            raise HTTPException(**http_error(404, "activity_not_found", request))
 
         sets = []
         params: Dict[str, Any] = {"aid": aid, "opp": opp_id}
@@ -357,7 +357,7 @@ def update_activity(opp_id: int, aid: int, data: ActivityUpdate, request: Reques
                           AND (o.customer_id IS NULL OR c.customer_id = o.customer_id)
                     """), {"cid": val, "opp": opp_id}).fetchone()
                     if not contact:
-                        raise HTTPException(status_code=400, detail="contact_not_linked_to_opportunity_customer")
+                        raise HTTPException(**http_error(400, "contact_not_linked_to_opportunity_customer", request))
                 sets.append(f"{field} = :{field}")
                 params[field] = val
         if data.is_completed is not None:
@@ -543,7 +543,7 @@ def convert_to_quotation(
         db.commit()
 
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_convert_opportunity_to_quotation", resource_type="opportunity", resource_id=str(opp_id), details={"quotation_id": quot_id, "quotation_number": quot_num}, request=request)
-        return {"quotation_id": quot_id, "quotation_number": quot_num, "message": "تم تحويل الفرصة إلى عرض سعر"}
+        return {"quotation_id": quot_id, "quotation_number": quot_num, "message": i18n_message("opportunity_converted_to_quotation", request)}
     except HTTPException:
         raise
     except Exception as e:

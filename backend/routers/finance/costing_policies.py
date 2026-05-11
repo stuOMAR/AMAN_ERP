@@ -49,7 +49,7 @@ def get_current_policy(request: Request, current_user: dict = Depends(get_curren
 def set_costing_policy(request: Request, policy_data: CostingPolicySet, current_user: dict = Depends(get_current_user)):
     """Change the costing policy with impact analysis"""
     if policy_data.policy_type not in ['global_wac', 'per_warehouse_wac', 'hybrid', 'smart']:
-        raise HTTPException(status_code=400, detail="Invalid policy type")
+        raise HTTPException(**http_error(400, "invalid_policy_type", request))
         
     db = get_db_connection(current_user.company_id)
     try:
@@ -57,7 +57,7 @@ def set_costing_policy(request: Request, policy_data: CostingPolicySet, current_
         current_policy = db.execute(text("SELECT policy_type FROM costing_policies WHERE is_active = TRUE LIMIT 1")).scalar()
         
         if current_policy == policy_data.policy_type:
-             return {"message": "Policy is already set to this type", "status": "no_change"}
+             return {"message": i18n_message("policy_already_set", request), "status": "no_change"}
              
         # 2. PERFORM IMPACT ANALYSIS (V2)
         impact = CostingService.validate_policy_switch(db, policy_data.policy_type)
@@ -131,7 +131,7 @@ def set_costing_policy(request: Request, policy_data: CostingPolicySet, current_
             logger.warning("Failed to log costing policy change activity")
              
         db.commit()
-        return {"message": f"Policy updated to {new_name}", "status": "success", "impact": impact}
+        return {"message": i18n_message("policy_updated_to", request), "status": "success", "impact": impact}
     except Exception:
         db.rollback()
         logger.exception("Internal error")

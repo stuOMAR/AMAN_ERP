@@ -49,7 +49,7 @@ async def forgot_password(request: Request, body: ForgotPasswordRequest):
     company_code = (body.company_code or "").strip()
 
     # SEC-FIX: unified success message; do not expose whether email/tenant exists
-    success_msg = {"message": "إذا كان البريد مسجلاً، سيتم إرسال رابط إعادة التعيين"}
+    success_msg = {"message": i18n_message("password_reset_email_sent", request)}
 
     def _constant_time_return(value):
         elapsed = _time.monotonic() - started
@@ -208,7 +208,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest):
         """), {"hash": token_hash}).fetchone()
 
         if not token_row:
-            raise HTTPException(400, "الرابط غير صالح أو منتهي الصلاحية")
+            raise HTTPException(**http_error(400, "password_reset_token_invalid", request))
 
         username = token_row.username
         company_id = token_row.company_id
@@ -235,7 +235,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest):
                         """), {"uid": user_row[0], "limit": prevent_reuse}).fetchall()
                         for old_pw in old_passwords:
                             if verify_password(body.new_password, old_pw[0]):
-                                raise HTTPException(400, f"لا يمكن استخدام كلمة مرور مستخدمة في آخر {prevent_reuse} مرات")
+                                raise HTTPException(**http_error(400, "password_reuse_not_allowed", request, prevent_reuse=prevent_reuse))
             except HTTPException:
                 raise
             except Exception as hist_err:
@@ -264,7 +264,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest):
             raise
         except Exception as e:
             logger.error(f"Failed to update password: {e}")
-            raise HTTPException(500, "فشل في تحديث كلمة المرور")
+            raise HTTPException(**http_error(500, "password_update_failed", request))
 
         # Mark token as used
         conn.execute(text(
@@ -282,7 +282,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest):
             request=request
         )
 
-        return {"message": "تم تغيير كلمة المرور بنجاح. يرجى تسجيل الدخول"}
+        return {"message": i18n_message(("password_changed_success", request))}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

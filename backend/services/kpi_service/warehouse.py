@@ -17,6 +17,9 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     base_currency = get_base_currency(db) or "SAR"
 
     # Inventory Valuation at Cost (always in base currency)
+    # T068: NOTE: Uses products.cost_price for fast approximate KPI.
+    # For financial valuation, use CostingService.calculate_inventory_valuation
+    # which reads from cost_layers for FIFO/LIFO accuracy.
     inv_valuation_cost = 0
     try:
         wh_branch_sql, wh_bp = build_branch_filter(branch_id, table_alias="w")
@@ -139,12 +142,12 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     alerts = []
     if low_stock > 0:
         alerts.append({"severity": "high", "code": "LOW_STOCK",
-                        "message": f"{low_stock} products below reorder level",
+                        "message": i18n_message("kpi_low_stock_products", request),
                         "message_ar": f"{low_stock} منتج تحت حد إعادة الطلب",
                         "count": low_stock, "link": "/stock/products?filter=low_stock"})
     if out_of_stock > 0:
         alerts.append({"severity": "high", "code": "OUT_OF_STOCK",
-                        "message": f"{out_of_stock} products out of stock",
+                        "message": i18n_message("kpi_out_of_stock_products", request),
                         "message_ar": f"{out_of_stock} منتج نفد من المخزون",
                         "count": out_of_stock, "link": "/stock/products?filter=out_of_stock"})
 

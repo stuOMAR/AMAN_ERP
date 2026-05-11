@@ -16,9 +16,18 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
-from utils.accounting import compute_invoice_totals, compute_line_amounts, get_mapped_account_id, generate_sequential_number, get_base_currency
+from utils.permissions import (
+    branch_scope_filter_from_scope,
+    require_permission,
+    require_module,
+    resolve_branch_scope,
+    validate_branch_access,
+    validate_treasury_account_access,
+)
+from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.party_balance import update_party_site_balance
+from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from utils.party_balance import update_party_site_balance
@@ -27,13 +36,101 @@ from schemas.purchases import (
     SupplierPaymentCreate,
 )
 
-_D2 = Decimal("0.01")
-_D4 = Decimal("0.0001")
+
+def _line_key(product_id, unit_price, tax_rate, po_line_id=None):
+    if po_line_id:
+        return ("po_line", int(po_line_id))
+    return (
+        "product_price_tax",
+        int(product_id),
+        _dec(unit_price).quantize(_D2, ROUND_HALF_UP),
+        _dec(tax_rate).quantize(_D2, ROUND_HALF_UP),
+    )
 
 
-def _dec(v) -> Decimal:
-    """Convert any numeric value to Decimal safely."""
-    return Decimal(str(v)) if v is not None else Decimal("0")
+def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
+    raw_tax = Decimal("0")
+    for row in original_rows:
+        gross = (_dec(row.quantity) * _dec(row.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        taxable = gross - _dec(getattr(row, "discount", 0))
+        raw_tax += (taxable * _dec(row.tax_rate) / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+    if raw_tax <= 0:
+        return Decimal("1")
+    factor = _dec(invoice_tax_amount) / raw_tax
+    return max(Decimal("0"), min(Decimal("1"), factor))
+
+
+def _reversal_taxable_amount(original_line, quantity) -> Decimal:
+    original_qty = _dec(original_line.quantity)
+    if original_qty <= 0:
+        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+    gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
+    taxable = gross - _dec(getattr(original_line, "discount", 0))
+    ratio = _dec(quantity) / original_qty
+    return (taxable * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _reversal_discount_amount(original_line, quantity) -> Decimal:
+    original_qty = _dec(original_line.quantity)
+    if original_qty <= 0:
+        return Decimal("0")
+    ratio = _dec(quantity) / original_qty
+    return (_dec(getattr(original_line, "discount", 0)) * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _load_original_purchase_invoice_for_return(db, invoice_id: int, supplier_id: int):
+    invoice = db.execute(text("""
+        SELECT id, party_id, branch_id, invoice_type, invoice_date, tax_amount
+        FROM invoices
+        WHERE id = :id
+        FOR UPDATE
+    """), {"id": invoice_id}).fetchone()
+    if not invoice:
+        raise HTTPException(**http_error(404, ("purchase_invoice_not_found", request)))
+    if invoice.invoice_type != "purchase":
+        raise HTTPException(**http_error(400, ("return_must_link_invoice", request)))
+    if int(invoice.party_id) != int(supplier_id):
+        raise HTTPException(**http_error(400, ("return_invoice_supplier_mismatch", request)))
+
+    rows = db.execute(text("""
+        SELECT id, product_id, po_line_id, quantity, unit_price, tax_rate, tax_rate_id, discount
+        FROM invoice_lines
+        WHERE invoice_id = :id
+          AND product_id IS NOT NULL
+        FOR UPDATE
+    """), {"id": invoice_id}).fetchall()
+    by_product: dict[int, list] = {}
+    for row in rows:
+        by_product.setdefault(int(row.product_id), []).append(row)
+
+    returned = db.execute(text("""
+        SELECT il.product_id, il.po_line_id, il.unit_price, il.tax_rate, COALESCE(SUM(il.quantity), 0) AS qty
+        FROM invoices pr
+        JOIN invoice_lines il ON il.invoice_id = pr.id
+        WHERE pr.related_invoice_id = :id
+          AND pr.invoice_type = 'purchase_return'
+          AND COALESCE(pr.status, '') != 'cancelled'
+          AND il.product_id IS NOT NULL
+        GROUP BY il.product_id, il.po_line_id, il.unit_price, il.tax_rate
+    """), {"id": invoice_id}).fetchall()
+    used_qty = {
+        _line_key(row.product_id, row.unit_price, row.tax_rate, row.po_line_id): _dec(row.qty)
+        for row in returned
+    }
+    return invoice, by_product, used_qty, _line_tax_factor(invoice.tax_amount, rows)
+
+
+def _original_purchase_line_for_return(original_lines: dict[int, list], product_id: int, unit_price):
+    candidates = original_lines.get(int(product_id), [])
+    if not candidates:
+        raise HTTPException(**http_error(400, ("item_not_in_invoice", request)))
+    if len(candidates) == 1:
+        return candidates[0]
+    price = _dec(unit_price)
+    matched = [row for row in candidates if _dec(row.unit_price) == price]
+    if len(matched) == 1:
+        return matched[0]
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity_purchase", request))
 
 
 router = APIRouter()
@@ -97,7 +194,7 @@ def get_purchase_return(
         invoice = db.execute(text(query), {"id": id}).fetchone()
         
         if not invoice:
-            raise HTTPException(status_code=404, detail="مردود المشتريات غير موجود")
+            raise HTTPException(**http_error(404, ("return_not_found_msg", request)))
 
         from utils.permissions import validate_branch_access
         validate_branch_access(current_user, invoice.branch_id)
@@ -142,12 +239,23 @@ def create_purchase_return(
             if not supplier:
                 raise HTTPException(**http_error(404, "supplier_not_found"))
 
+            original_invoice = None
+            original_lines = {}
+            already_reversed_qty = {}
+            original_tax_factor = Decimal("1")
+            if invoice.original_invoice_id:
+                original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_original_purchase_invoice_for_return(
+                    db, invoice.original_invoice_id, invoice.supplier_id
+                )
+
             branch_id = invoice.branch_id
-            if not branch_id and invoice.original_invoice_id:
-                branch_id = db.execute(text("SELECT branch_id FROM invoices WHERE id = :id"), {"id": invoice.original_invoice_id}).scalar()
+            if original_invoice:
+                if branch_id and original_invoice.branch_id is not None and int(branch_id) != int(original_invoice.branch_id):
+                    raise HTTPException(**http_error(400, ("return_branch_mismatch", request)))
+                branch_id = original_invoice.branch_id
             branch_id = validate_branch_access(current_user, branch_id)
             if branch_id is None:
-                raise HTTPException(status_code=400, detail="يجب تحديد الفرع")
+                raise HTTPException(**http_error(400, ("branch_required", request)))
     
             # 2. Generate Return Number (PR-YYYY-XXXX)
             year = date.today().year
@@ -157,13 +265,45 @@ def create_purchase_return(
             # 3. Create Invoice Record (Type: purchase_return)
             lines_to_save = []
             for item in invoice.items:
-                tax_info = resolve_line_tax(branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.supplier_id)
-                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount, discount_is_percent=False)
+                if original_invoice:
+                    if not item.product_id:
+                        raise HTTPException(**http_error(400, "item_required_for_purchase_return", request))
+                    original_line = _original_purchase_line_for_return(original_lines, item.product_id, item.unit_price)
+                    reverse_key = _line_key(
+                        original_line.product_id,
+                        original_line.unit_price,
+                        original_line.tax_rate,
+                        getattr(original_line, "po_line_id", None),
+                    )
+                    already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
+                    available_qty = _dec(original_line.quantity) - already_qty
+                    if _dec(item.quantity) > available_qty:
+                        raise HTTPException(**http_error(400, ("return_qty_exceeds_invoice", request)))
+                    tax_info = {
+                        "tax_rate": _dec(original_line.tax_rate),
+                        "tax_rate_id": original_line.tax_rate_id,
+                    }
+                    taxable_base = _reversal_taxable_amount(original_line, item.quantity)
+                    effective_discount = _reversal_discount_amount(original_line, item.quantity)
+                    tax_amount = (taxable_base * tax_info["tax_rate"] / Decimal("100") * original_tax_factor).quantize(_D2, ROUND_HALF_UP)
+                    line_total = (taxable_base + tax_amount).quantize(_D2, ROUND_HALF_UP)
+                    already_reversed_qty[reverse_key] = already_qty + _dec(item.quantity)
+                else:
+                    tax_info = resolve_line_tax(branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.supplier_id)
+                    la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount, discount_is_percent=False)
+                    taxable_base = la["taxable"]
+                    effective_discount = _dec(item.discount)
+                    tax_amount = la["tax_amount"]
+                    line_total = la["line_total"]
                 lines_to_save.append({
                     "item": item,
+                    "original_line": original_line if original_invoice else None,
                     "tax_rate": tax_info["tax_rate"],
                     "tax_rate_id": tax_info.get("tax_rate_id"),
-                    "line_total": la["line_total"],
+                    "discount": effective_discount,
+                    "taxable_base": taxable_base,
+                    "tax_amount": tax_amount,
+                    "line_total": line_total,
                 })
 
             header_discount_pct = (
@@ -176,24 +316,41 @@ def create_purchase_return(
                 if getattr(invoice, "effect_type", "discount") == "markup"
                 else Decimal("0")
             )
-            totals = compute_invoice_totals([
-                {
-                    "quantity": line["item"].quantity,
-                    "unit_price": line["item"].unit_price,
-                    "tax_rate": line["tax_rate"],
-                    "discount": line["item"].discount,
-                }
-                for line in lines_to_save
-            ], header_discount_pct=header_discount_pct, markup_amount=markup_amount, discount_is_percent=False)
-            subtotal = totals["subtotal"]
-            tax_total = totals["total_tax"]
-            total = totals["grand_total"]
+            if original_invoice:
+                subtotal = sum((line["taxable_base"] for line in lines_to_save), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
+                tax_total = sum((line["tax_amount"] for line in lines_to_save), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
+                total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
+            else:
+                totals = compute_invoice_totals([
+                    {
+                        "quantity": line["item"].quantity,
+                        "unit_price": line["item"].unit_price,
+                        "tax_rate": line["tax_rate"],
+                        "discount": line["item"].discount,
+                    }
+                    for line in lines_to_save
+                ], header_discount_pct=header_discount_pct, markup_amount=markup_amount, discount_is_percent=False)
+                subtotal = totals["subtotal"]
+                tax_total = totals["total_tax"]
+                total = totals["grand_total"]
     
             # Determine warehouse: Use original invoice's warehouse if possible
             wh_id = invoice.warehouse_id
             if not wh_id and invoice.original_invoice_id:
-                # Try to fetch warehouse from original invoice (if stored in a column or logically linked)
-                # Check if original invoice has a warehouse_id stored in its records
+                orig_wh = db.execute(text("""
+                    SELECT prl.warehouse_id
+                    FROM invoice_lines il
+                    JOIN po_receipt_lines prl ON prl.po_line_id = il.po_line_id
+                    WHERE il.invoice_id = :id
+                      AND il.po_line_id IS NOT NULL
+                    GROUP BY prl.warehouse_id
+                    ORDER BY SUM(prl.quantity) DESC
+                    LIMIT 1
+                """), {"id": invoice.original_invoice_id}).scalar()
+                if orig_wh:
+                    wh_id = orig_wh
+
+            if not wh_id and invoice.original_invoice_id:
                 orig_wh = db.execute(text("""
                     SELECT warehouse_id FROM inventory_transactions 
                     WHERE reference_id = :id AND reference_type = 'invoice' 
@@ -208,13 +365,13 @@ def create_purchase_return(
                     wh_id = db.execute(text("SELECT id FROM warehouses LIMIT 1")).scalar()
             
             if not wh_id:
-                 raise HTTPException(status_code=400, detail="يجب تعريف مستودع واحد على الأقل")
+                 raise HTTPException(**http_error(400, ("at_least_one_warehouse_required", request)))
     
             # 3.5 Validate Warehouse-Branch Association (for Return)
             if wh_id and branch_id:
                 wh_check = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": wh_id}).fetchone()
                 if wh_check and wh_check[0] and wh_check[0] != branch_id:
-                    raise HTTPException(status_code=400, detail="المستودع المختار لا يتبع للفرع الحالي")
+                    raise HTTPException(**http_error(400, ("warehouse_not_in_current_branch", request)))
     
             for item in invoice.items:
                 current_stock = db.execute(text(
@@ -260,50 +417,29 @@ def create_purchase_return(
                 "paid": invoice.paid_amount or 0,
                 "status": return_status, "notes": invoice.notes, "uid": user_id,
                 "rel_id": invoice.original_invoice_id, "bid": branch_id,
-                "currency": invoice.currency or base_currency, "exchange_rate": invoice.exchange_rate or 1.0,
+                "currency": invoice.currency or base_currency, "exchange_rate": 1.0 if invoice.exchange_rate is None else invoice.exchange_rate,
                 "party_site_id": invoice.party_site_id,
             }).fetchone()[0]
     
             # 4. Add Items & Update Stock (DEDUCT)
+            return_lines_data = []  # T024: Track actual costs per line
             for line in lines_to_save:
                 item = line["item"]
                 item_total = line["line_total"]
                 db.execute(text("""
                     INSERT INTO invoice_lines (
-                        invoice_id, product_id, description, quantity, unit_price,
+                        invoice_id, product_id, po_line_id, description, quantity, unit_price,
                         tax_rate, tax_rate_id, discount, total
                     ) VALUES (
-                        :iid, :pid, :desc, :qty, :price,
+                        :iid, :pid, :po_line_id, :desc, :qty, :price,
                         :tax, :tax_id, :disc, :total
                     )
                 """), {
                     "iid": new_invoice_id, "pid": item.product_id, "desc": item.description,
+                    "po_line_id": getattr(line.get("original_line"), "po_line_id", None) if original_invoice else None,
                     "qty": item.quantity, "price": item.unit_price, "tax": line["tax_rate"],
                     "tax_id": line["tax_rate_id"],
-                    "disc": item.discount, "total": item_total
-                })
-    
-                # Update Inventory (DECREASE QUANTITY)
-                db.execute(text("""
-                    UPDATE inventory 
-                    SET quantity = quantity - :qty, last_movement_date = NOW()
-                    WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"qty": abs(item.quantity), "pid": item.product_id, "wh": wh_id})
-                
-                # Log Transaction
-                db.execute(text("""
-                    INSERT INTO inventory_transactions (
-                        product_id, warehouse_id, transaction_type, 
-                        reference_type, reference_id,
-                        quantity, notes, created_by
-                    ) VALUES (
-                        :pid, :wh, 'purchase_return',
-                        'invoice', :ref_id,
-                        :qty, 'مردود مشتريات', :uid
-                    )
-                """), {
-                    "pid": item.product_id, "wh": wh_id, "ref_id": new_invoice_id,
-                    "qty": -abs(item.quantity), "uid": user_id
+                    "disc": line["discount"], "total": item_total
                 })
     
                 # T3.9: reverse the original purchase's cost layer instead of
@@ -311,26 +447,108 @@ def create_purchase_return(
                 # remaining_quantity of the matching layer when we pass the
                 # original purchase invoice id; this keeps FIFO/LIFO valuation
                 # consistent across purchase returns.
-                if invoice.original_invoice_id:
-                    from services.costing_service import CostingService
+                from services.costing_service import CostingService
+                return_qty = abs(_dec(item.quantity))
+                return_unit_cost = _dec(item.unit_price)
+                costing_method = CostingService._get_product_costing_method(db, item.product_id, wh_id)
+                if costing_method in ("fifo", "lifo"):
                     try:
-                        CostingService.handle_return(
-                            db,
-                            product_id=item.product_id,
-                            warehouse_id=wh_id,
-                            quantity=abs(item.quantity),
-                            unit_cost=item.unit_price,
-                            source_document_type="purchase_return",
-                            source_document_id=new_invoice_id,
-                            costing_method=CostingService.get_active_policy(db) or "fifo",
-                            original_source_document_type="purchase_invoice",
-                            original_source_document_id=invoice.original_invoice_id,
-                        )
+                        if invoice.original_invoice_id:
+                            # Trace the original invoice line to the exact PO receipt layer.
+                            original_line = line.get("original_line")
+                            po_line_id = getattr(original_line, "po_line_id", None)
+                            if not po_line_id:
+                                raise HTTPException(**http_error(400, "po_line_link_missing", request))
+                            receipt_row = db.execute(text("""
+                                SELECT prl.id
+                                FROM po_receipt_lines prl
+                                WHERE prl.po_line_id = :po_line_id
+                                  AND prl.product_id = :product_id
+                                  AND prl.warehouse_id = :warehouse_id
+                                ORDER BY prl.id ASC
+                                LIMIT 1
+                            """), {
+                                "po_line_id": po_line_id,
+                                "product_id": item.product_id,
+                                "warehouse_id": wh_id,
+                            }).fetchone()
+                            if not receipt_row:
+                                raise HTTPException(**http_error(400, "no_grn_linked_to_po_line", request))
+
+                            result = CostingService.handle_return(
+                                db,
+                                product_id=item.product_id,
+                                warehouse_id=wh_id,
+                                quantity=return_qty,
+                                unit_cost=float(return_unit_cost),
+                                source_document_type="purchase_return",
+                                source_document_id=new_invoice_id,
+                                costing_method=costing_method,
+                                # Legacy tests looked for original_source_document_type="purchase_invoice";
+                                # production now traces the invoice line to the exact receipt layer.
+                                original_source_document_type="po_receipt_line",
+                                original_source_document_id=receipt_row.id,
+                            )
+                            return_unit_cost = _dec(result.get("restored_unit_cost", return_unit_cost))
+                        else:
+                            consumed_value = CostingService.consume_layers(
+                                db,
+                                product_id=item.product_id,
+                                warehouse_id=wh_id,
+                                quantity=return_qty,
+                                sale_document_type="purchase_return",
+                                sale_document_id=new_invoice_id,
+                                costing_method=costing_method,
+                            )
+                            return_unit_cost = (_dec(consumed_value) / return_qty).quantize(_D4, ROUND_HALF_UP) if return_qty else Decimal("0")
                     except ValueError as exc:
                         raise HTTPException(status_code=400, detail=str(exc))
+                else:
+                    inv_cost_row = db.execute(text("""
+                        SELECT average_cost
+                        FROM inventory
+                        WHERE product_id = :pid AND warehouse_id = :wh
+                        FOR UPDATE
+                    """), {"pid": item.product_id, "wh": wh_id}).fetchone()
+                    return_unit_cost = _dec(inv_cost_row.average_cost or item.unit_price) if inv_cost_row else return_unit_cost
+
+                # Update Inventory (DECREASE QUANTITY) after costing succeeds.
+                inv_update = db.execute(text("""
+                    UPDATE inventory
+                    SET quantity = quantity - :qty, last_movement_date = NOW(), updated_at = NOW()
+                    WHERE product_id = :pid AND warehouse_id = :wh
+                      AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                    RETURNING id
+                """), {"qty": float(return_qty), "pid": item.product_id, "wh": wh_id}).fetchone()
+                if not inv_update:
+                    raise HTTPException(**http_error(400, ("insufficient_stock_for_return", request)))
+
+                return_total_cost = (return_unit_cost * return_qty).quantize(_D2, ROUND_HALF_UP)
+                return_lines_data.append({"return_total_cost": return_total_cost})
+
+                # Log Transaction
+                db.execute(text("""
+                    INSERT INTO inventory_transactions (
+                        product_id, warehouse_id, transaction_type,
+                        reference_type, reference_id,
+                        quantity, unit_cost, total_cost, notes, created_by
+                    ) VALUES (
+                        :pid, :wh, 'purchase_return',
+                        'purchase_return', :ref_id,
+                        :qty, :unit_cost, :total_cost, 'مردود مشتريات', :uid
+                    )
+                """), {
+                    "pid": item.product_id,
+                    "wh": wh_id,
+                    "ref_id": new_invoice_id,
+                    "qty": -float(return_qty),
+                    "unit_cost": float(return_unit_cost),
+                    "total_cost": float(return_total_cost),
+                    "uid": user_id,
+                })
     
             # 5. Update Supplier Balance (Logic: Return reduces balance)
-            exchange_rate = _dec(invoice.exchange_rate or 1)
+            exchange_rate = _dec(1 if invoice.exchange_rate is None else invoice.exchange_rate)
             if exchange_rate <= 0:
                 raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
             def to_base(amount):
@@ -339,10 +557,31 @@ def create_purchase_return(
             gl_total = to_base(total)
             gl_subtotal = to_base(subtotal)
             gl_tax = to_base(tax_total)
-    
+
+            # T024: Use actual cost from cost layers for inventory credit
+            # Compute actual inventory cost from all line return_total_cost values
+            actual_inventory_base = Decimal('0')
+            for item_data in return_lines_data:
+                actual_inventory_base += to_base(item_data.get("return_total_cost", 0))
+            if actual_inventory_base > 0:
+                gl_subtotal = actual_inventory_base
+
+            # T025: Post price variance if invoice price differs from actual cost
+            variance_base = gl_total - gl_subtotal - (gl_tax if gl_tax > 0 else 0)
+            variance_acc = None
+            if abs(variance_base) > _D2:
+                variance_acc = get_mapped_account_id(db, "acc_map_purchase_variance") or get_mapped_account_id(db, "acc_map_price_variance")
+
             # Update supplier balance via party_site_balances
-            update_party_site_balance(db, party_id=invoice.supplier_id, branch_id=branch_id,
-                                      currency=invoice.currency or base_currency, amount=-float(gl_total))
+            # T026: Returns should be positive (reduces what we owe)
+            update_party_site_balance(
+                db,
+                party_id=invoice.supplier_id,
+                branch_id=branch_id,
+                currency=invoice.currency or base_currency,
+                amount=total,
+                document_type="purchase_return",
+            )
     
             # 6. Accounting Entries (Return Itself)
             # FISCAL-LOCK: Reject if accounting period is closed
@@ -365,6 +604,14 @@ def create_purchase_return(
                     {"account_id": ap_acc, "debit": gl_total, "credit": 0, "description": "مردود مشتريات", "amount_currency": total, "currency": invoice.currency or base_currency},
                     {"account_id": inventory_acc, "debit": 0, "credit": gl_subtotal, "description": "تكلفة البضاعة", "amount_currency": subtotal, "currency": invoice.currency or base_currency}
                 ]
+                # T025: Add variance line if actual cost differs from invoice price
+                if variance_acc and abs(variance_base) > _D2:
+                    if variance_base > 0:
+                        # Invoice price > actual cost: credit variance
+                        je_lines.append({"account_id": variance_acc, "debit": 0, "credit": abs(variance_base), "description": "فرق سعر مردود", "currency": invoice.currency or base_currency})
+                    else:
+                        # Actual cost > invoice price: debit variance
+                        je_lines.append({"account_id": variance_acc, "debit": abs(variance_base), "credit": 0, "description": "فرق سعر مردود", "currency": invoice.currency or base_currency})
                 if gl_tax > 0 and vat_acc:
                     je_lines.append({"account_id": vat_acc, "debit": 0, "credit": gl_tax, "description": "استرداد ضريبة", "amount_currency": tax_total, "currency": invoice.currency or base_currency})
     
@@ -414,9 +661,15 @@ def create_purchase_return(
                     VALUES (:vid, :iid, :amt)
                 """), {"vid": vid, "iid": new_invoice_id, "amt": invoice.paid_amount})
     
-                # Update Supplier Balance via party_site_balances (Refund INCREASES balance: Debit Cash, Credit AP)
-                update_party_site_balance(db, party_id=invoice.supplier_id, branch_id=branch_id,
-                                          currency=invoice.currency or base_currency, amount=-float(gl_paid))
+                # Refund received settles the positive return balance.
+                update_party_site_balance(
+                    db,
+                    party_id=invoice.supplier_id,
+                    branch_id=branch_id,
+                    currency=invoice.currency or base_currency,
+                    amount=-_dec(invoice.paid_amount),
+                    document_type="supplier_refund",
+                )
     
                 # GL for Refund
                 cash_acc = get_mapped_account_id(db, "acc_map_cash_main")
@@ -457,12 +710,10 @@ def create_purchase_return(
                 branch_id=branch_id
             )
     
-            return {"id": new_invoice_id, "message": "تم إنشاء مردود المشتريات بنجاح"}
+            return {"id": new_invoice_id, "message": i18n_message("purchase_return_created_success", request)}
     
         except ValueError as ve:
-            pass
             raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
-            pass
-            logger.error(f"Error creating return: {e}")
-            raise HTTPException(status_code=500, detail="حدث خطأ أثناء إنشاء مردود المشتريات")
+            logger.exception("Error creating return")
+            raise HTTPException(**http_error(500, ("return_creation_error", request)))

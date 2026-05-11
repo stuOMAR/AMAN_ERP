@@ -14,7 +14,8 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.i18n import http_error
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -35,17 +36,17 @@ def _close(db):
         pass
 
 
-def _load_cfg(db, carrier: str) -> Dict[str, Any]:
+def _load_cfg(db, carrier: str, request: Request = None) -> Dict[str, Any]:
     row = db.execute(
         text("SELECT setting_value FROM company_settings WHERE setting_key = :k LIMIT 1"),
         {"k": f"shipping_carriers.{carrier.lower()}"},
     ).fetchone()
     if not row or not row[0]:
-        raise HTTPException(412, f"shipping carrier '{carrier}' is not configured")
+        raise HTTPException(**http_error(412, "shipping_carrier_not_configured", request, carrier=carrier))
     try:
         return row[0] if isinstance(row[0], dict) else json.loads(row[0])
     except Exception as e:
-        raise HTTPException(500, f"shipping config is not valid JSON: {e}")
+        raise HTTPException(**http_error(500, "shipping_config_invalid_json", request))
 
 
 class AddressModel(BaseModel):
@@ -80,11 +81,11 @@ class CreateShipmentRequest(BaseModel):
 
 @router.post("/shipments",
              dependencies=[Depends(require_permission("inventory.shipments_create"))], response_model=Dict[str, Any])
-def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_current_user)):
+def create_shipment(body: CreateShipmentRequest, request: Request, current_user=Depends(get_current_user)):
     """Create Shipment."""
     db = get_db_connection(current_user.company_id)
     try:
-        cfg = _load_cfg(db, body.carrier)
+        cfg = _load_cfg(db, body.carrier, request)
         carrier = get_carrier(body.carrier, **cfg)
         req = ShipmentRequest(
             reference=body.reference,
@@ -138,14 +139,14 @@ def create_shipment(body: CreateShipmentRequest, current_user=Depends(get_curren
     except Exception as e:
         db.rollback()
         logger.exception("shipment create failed")
-        raise HTTPException(500, f"shipment create failed: {e}")
+        raise HTTPException(**http_error(500, "shipping_create_failed", request))
     finally:
         _close(db)
 
 
 @router.post("/shipments/{shipment_id}/track",
              dependencies=[Depends(require_permission("inventory.shipments_view"))], response_model=Dict[str, Any])
-def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
+def track_shipment(shipment_id: int, request: Request, current_user=Depends(get_current_user)):
     """Track Shipment."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -154,11 +155,11 @@ def track_shipment(shipment_id: int, current_user=Depends(get_current_user)):
             {"id": shipment_id},
         ).fetchone()
         if not row:
-            raise HTTPException(404, "shipment not found")
+            raise HTTPException(**http_error(404, "shipping_shipment_not_found", request))
         carrier_name, tracking = row[0], row[1]
         if not tracking:
-            raise HTTPException(400, "shipment has no tracking number")
-        cfg = _load_cfg(db, carrier_name)
+            raise HTTPException(**http_error(400, "shipping_no_tracking", request))
+        cfg = _load_cfg(db, carrier_name, request)
         carrier = get_carrier(carrier_name, **cfg)
         events = carrier.track(tracking)
         return {

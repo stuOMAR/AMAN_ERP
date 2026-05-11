@@ -2,7 +2,7 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -37,6 +37,7 @@ router = APIRouter()
 @router.post("/treasury/bank-import", dependencies=[Depends(require_permission("accounting.manage"))],
              tags=["Treasury"], response_model=Dict[str, Any])
 async def import_bank_statement(
+    request: Request,
     file: UploadFile = File(...),
     bank_account_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
@@ -50,7 +51,7 @@ async def import_bank_statement(
     with transactional(company_id) as db:
         try:
             if not file.filename.lower().endswith(('.csv', '.txt')):
-                raise HTTPException(400, "يرجى رفع ملف CSV")
+                raise HTTPException(**http_error(400, "csv_file_required", request))
     
             content = await file.read()
             try:
@@ -62,7 +63,7 @@ async def import_bank_statement(
             rows_list = list(reader)
     
             if len(rows_list) < 2:
-                raise HTTPException(400, "الملف فارغ أو لا يحتوي على بيانات")
+                raise HTTPException(**http_error(400, "file_empty", request))
     
             # Auto-detect header
             header = [h.strip().lower() for h in rows_list[0]]
@@ -86,7 +87,7 @@ async def import_bank_statement(
                     col_map['amount'] = i
     
             if 'date' not in col_map:
-                raise HTTPException(400, "لم يتم العثور على عمود التاريخ في الملف")
+                raise HTTPException(**http_error(400, "date_column_not_found", request))
     
             # Create batch
             batch_result = db.execute(text("""
@@ -180,7 +181,7 @@ async def import_bank_statement(
                 "total_lines": len(rows_list) - 1,
                 "imported": imported,
                 "errors": errors[:20],
-                "message": f"تم استيراد {imported} حركة بنكية"
+                "message": i18n_message("bank_transactions_imported", request)
             }
         except HTTPException:
             raise
@@ -310,7 +311,7 @@ def auto_match_bank_lines(batch_id: int, current_user: dict = Depends(get_curren
                 "total_unmatched": len(lines),
                 "matched": matched,
                 "remaining": len(lines) - matched,
-                "message": f"تمت مطابقة {matched} من {len(lines)} حركة"
+                "message": i18n_message("bank_transactions_matched", request)
             }
         except Exception:
             pass

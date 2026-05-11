@@ -2,7 +2,7 @@
 Inventory Module - Reports (Summary, Warehouse Stock, Movements, Valuation)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -157,6 +157,7 @@ def get_warehouse_stock(
 
 @reports_router.get("/movements", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))], response_model=List[Dict[str, Any]])
 def get_stock_movements(
+    request: Request,
     item_name: Optional[str] = None,
     warehouse: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -192,8 +193,13 @@ def get_stock_movements(
             params['warehouse'] = int(warehouse)
 
         if transaction_type:
+            # T038: Include all purchase-related transaction types
+            from utils.inventory_constants import TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN
             types = {
-                'purchase_in': ['purchase_in'],
+                'purchase_in': [TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN],
+                'purchase_receipt': [TX_PURCHASE_RECEIPT],
+                'purchase_invoice': [TX_PURCHASE_INVOICE],
+                'purchase_return': [TX_PURCHASE_RETURN],
                 'sales_out': ['sales_out'],
                 'transfer': ['transfer_in', 'transfer_out'],
                 'adjustment': ['adjustment_in', 'adjustment_out'],
@@ -219,10 +225,7 @@ def get_stock_movements(
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Error fetching stock movements")
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="تعذّر جلب حركات المخزون"
-        )
+        raise HTTPException(**http_error(500, "inventory_movements_fetch_failed", request))
     finally:
         db.close()
 
@@ -233,18 +236,41 @@ def get_valuation_report(
     warehouse_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """تقرير تقييم المخزون (الكمية * التكلفة المتحركة)"""
+    """تقرير تقييم المخزون — T064: uses CostingService.calculate_inventory_valuation"""
     company_id = current_user.company_id if not isinstance(current_user, dict) else current_user.get("company_id")
     db = get_db_connection(company_id)
     try:
-        query = """
-            SELECT 
-                p.id, p.product_code as code, p.product_name as name,
-                u.unit_name as unit, 
-                p.cost_price as moving_avg_cost,
-                cat.category_name,
-                SUM(i.quantity) as total_quantity,
-                SUM(i.quantity * p.cost_price) as total_valuation
+        from services.costing_service import CostingService
+        from utils.permissions import validate_branch_access
+
+        # T066: Validate branch access for explicit warehouse_id filters
+        if warehouse_id:
+            wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()
+            if wh_branch:
+                validate_branch_access(current_user, wh_branch)
+
+        # T064: Use CostingService for valuation
+        branch_ids = None
+        if branch_id:
+            branch_ids = [branch_id]
+        elif hasattr(current_user, 'allowed_branches'):
+            allowed = getattr(current_user, 'allowed_branches', []) or []
+            if allowed and "*" not in getattr(current_user, 'permissions', []):
+                branch_ids = allowed
+
+        valuation = CostingService.calculate_inventory_valuation(
+            db,
+            warehouse_id=warehouse_id,
+            branch_id=branch_id,
+            branch_ids=branch_ids,
+        )
+
+        # Also get selling price data for the response
+        sell_query = """
+            SELECT p.id, p.product_code as code, p.product_name as name,
+                   u.unit_name as unit, cat.category_name,
+                   SUM(i.quantity) as total_quantity,
+                   p.selling_price
             FROM products p
             JOIN inventory i ON p.id = i.product_id
             JOIN warehouses w ON i.warehouse_id = w.id
@@ -252,29 +278,45 @@ def get_valuation_report(
             LEFT JOIN product_categories cat ON p.category_id = cat.id
             WHERE p.product_type = 'product'
         """
-
-        params = {}
-        query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params, branch_param="bid")
+        sell_params = {}
         if warehouse_id:
-            query += " AND w.id = :wid"
-            params["wid"] = warehouse_id
+            sell_query += " AND w.id = :wid"
+            sell_params["wid"] = warehouse_id
+        elif branch_ids:
+            sell_query += " AND w.branch_id = ANY(:bids)"
+            sell_params["bids"] = branch_ids
 
-        query += " GROUP BY p.id, u.unit_name, cat.category_name, p.product_code, p.product_name, p.cost_price ORDER BY total_valuation DESC"
-
-        result = db.execute(text(query), params).fetchall()
-
-        return [
-            {
-                "id": r.id,
-                "code": r.code,
-                "name": r.name,
-                "unit": r.unit,
+        sell_query += " GROUP BY p.id, u.unit_name, cat.category_name, p.product_code, p.product_name, p.selling_price"
+        sell_rows = db.execute(text(sell_query), sell_params).fetchall()
+        sell_map = {}
+        for r in sell_rows:
+            sell_map[r.id] = {
+                "code": r.code, "name": r.name, "unit": r.unit,
                 "category": r.category_name,
-                "quantity": str(r.total_quantity or 0),
-                "cost": str(r.moving_avg_cost or 0),
-                "valuation": str(r.total_valuation or 0)
+                "selling_price": float(r.selling_price or 0),
+                "total_quantity": float(r.total_quantity or 0),
             }
-            for r in result
-        ]
+
+        items = []
+        for item in valuation.get("items", []):
+            pid = item["product_id"]
+            sell_info = sell_map.get(pid, {})
+            qty = item["total_quantity"]
+            cost_price = item["weighted_avg_cost"]
+            selling_price = sell_info.get("selling_price", 0)
+            items.append({
+                "id": pid,
+                "code": sell_info.get("code", ""),
+                "name": item["product_name"],
+                "unit": sell_info.get("unit", ""),
+                "category": sell_info.get("category", ""),
+                "quantity": str(qty),
+                "cost": str(cost_price),
+                "valuation": str(item["total_value"]),
+                "selling_price": str(selling_price),
+                "total_value_sell": str(qty * selling_price),
+            })
+
+        return items
     finally:
         db.close()

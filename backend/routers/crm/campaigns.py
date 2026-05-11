@@ -71,7 +71,7 @@ def get_campaign(campaign_id: int, current_user=Depends(get_current_user)):
             WHERE c.id = :id
         """), {"id": campaign_id}).fetchone()
         if not row:
-            raise HTTPException(status_code=404, detail="الحملة غير موجودة")
+            raise HTTPException(**http_error(404, "campaign_not_found", request))
         data = dict(row._mapping)
         # Compute rates
         sent = data.get("total_sent") or 0
@@ -115,7 +115,7 @@ def create_campaign(data: CampaignCreate, request: Request, current_user=Depends
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_campaign", resource_type="campaign", resource_id=str(cid), details={"name": data.name, "campaign_type": data.campaign_type}, request=request)
-        return {"id": cid, "message": "تم إنشاء الحملة"}
+        return {"id": cid, "message": i18n_message("campaign_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating campaign: {e}")
@@ -138,7 +138,7 @@ def update_campaign(campaign_id: int, data: CampaignUpdate, request: Request, cu
         db.execute(text(f"UPDATE marketing_campaigns SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_campaign", resource_type="campaign", resource_id=str(campaign_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": "تم تحديث الحملة"}
+        return {"message": i18n_message(("campaign_updated", request))}
     finally:
         db.close()
 
@@ -151,7 +151,7 @@ def delete_campaign(campaign_id: int, request: Request, current_user=Depends(get
         db.execute(text("DELETE FROM marketing_campaigns WHERE id = :id"), {"id": campaign_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_campaign", resource_type="campaign", resource_id=str(campaign_id), details={}, request=request)
-        return {"message": "تم حذف الحملة"}
+        return {"message": i18n_message(("campaign_deleted", request))}
     finally:
         db.close()
 
@@ -173,14 +173,14 @@ async def execute_campaign(campaign_id: int, request: Request, current_user=Depe
         """), {"id": campaign_id}).fetchone()
 
         if not campaign:
-            raise HTTPException(status_code=404, detail="Campaign not found")
+            raise HTTPException(**http_error(404, "campaign_not_found", request))
 
         c = dict(campaign._mapping)
         if c["status"] not in ("draft", "scheduled"):
-            raise HTTPException(status_code=400, detail="Campaign must be in draft or scheduled status to execute")
+            raise HTTPException(**http_error(400, "campaign_must_be_in_draft_or_scheduled_status_to_e", request))
 
         if not c["segment_id"]:
-            raise HTTPException(status_code=400, detail="Campaign must have a segment to execute")
+            raise HTTPException(**http_error(400, "campaign_must_have_a_segment_to_execute", request))
 
         # CRM-F2: Idempotency — prevent double-execution (backed by the
         # row-level lock above so two concurrent requests serialize here).
@@ -188,7 +188,7 @@ async def execute_campaign(campaign_id: int, request: Request, current_user=Depe
             "SELECT COUNT(*) FROM campaign_recipients WHERE campaign_id = :id"
         ), {"id": campaign_id}).scalar()
         if existing_recipients > 0:
-            raise HTTPException(status_code=400, detail="Campaign already has recipients — it may have been executed already")
+            raise HTTPException(**http_error(400, "campaign_already_has_recipients__it_may_have_been_", request))
 
         # Fetch segment contacts
         contacts = db.execute(text("""
@@ -199,7 +199,7 @@ async def execute_campaign(campaign_id: int, request: Request, current_user=Depe
         """), {"seg_id": c["segment_id"]}).fetchall()
 
         if not contacts:
-            raise HTTPException(status_code=400, detail="No contacts found in the target segment")
+            raise HTTPException(**http_error(400, "no_contacts_found_in_the_target_segment", request))
 
         campaign_type = c["campaign_type"] or "email"
         total_created = 0
@@ -265,7 +265,7 @@ async def execute_campaign(campaign_id: int, request: Request, current_user=Depe
                 logger.warning("Failed to dispatch campaign execution notification: %s", notif_err)
 
         return {
-            "message": "Campaign executed successfully",
+            "message": i18n_message("campaign_executed", request),
             "total_recipients": total_created,
             "campaign_id": campaign_id,
         }
@@ -274,7 +274,7 @@ async def execute_campaign(campaign_id: int, request: Request, current_user=Depe
     except Exception as e:
         db.rollback()
         logger.error(f"Failed to execute campaign: {e}")
-        raise HTTPException(status_code=500, detail="Failed to execute campaign")
+        raise HTTPException(**http_error(500, "failed_to_execute_campaign", request))
     finally:
         db.close()
 
@@ -330,11 +330,11 @@ def campaign_tracking_webhook(payload: TrackingWebhookPayload, company_id: str):
     import hmac as hmac_lib
     webhook_secret = os.environ.get("CAMPAIGN_WEBHOOK_SECRET")
     if not webhook_secret:
-        raise HTTPException(status_code=500, detail="Webhook secret not configured")
+        raise HTTPException(**http_error(500, "webhook_secret_not_configured", request))
     expected_sig = hashlib.sha256(f"{payload.recipient_id}:{payload.event}:{webhook_secret}".encode()).hexdigest()
 
     if not hmac_lib.compare_digest(expected_sig, payload.signature):
-        raise HTTPException(status_code=403, detail="Invalid signature")
+        raise HTTPException(**http_error(403, "invalid_signature", request))
 
     db = get_db_connection(company_id)
     try:
@@ -389,7 +389,7 @@ def campaign_tracking_webhook(payload: TrackingWebhookPayload, company_id: str):
     except Exception as e:
         db.rollback()
         logger.error(f"Tracking webhook error: {e}")
-        raise HTTPException(status_code=500, detail="Tracking webhook failed")
+        raise HTTPException(**http_error(500, "tracking_webhook_failed", request))
     finally:
         db.close()
 
@@ -404,12 +404,12 @@ def attribute_lead_to_campaign(campaign_id: int, lead_id: int, request: Request,
         # Verify campaign exists
         campaign = db.execute(text("SELECT id FROM marketing_campaigns WHERE id = :id"), {"id": campaign_id}).fetchone()
         if not campaign:
-            raise HTTPException(status_code=404, detail="Campaign not found")
+            raise HTTPException(**http_error(404, "campaign_not_found", request))
 
         # Verify lead exists
         lead = db.execute(text("SELECT id FROM sales_opportunities WHERE id = :id"), {"id": lead_id}).fetchone()
         if not lead:
-            raise HTTPException(status_code=404, detail="Lead/opportunity not found")
+            raise HTTPException(**http_error(404, "leadopportunity_not_found", request))
 
         # Check for duplicate
         existing = db.execute(text("""
@@ -417,7 +417,7 @@ def attribute_lead_to_campaign(campaign_id: int, lead_id: int, request: Request,
             WHERE campaign_id = :cid AND lead_id = :lid
         """), {"cid": campaign_id, "lid": lead_id}).fetchone()
         if existing:
-            raise HTTPException(status_code=400, detail="Lead already attributed to this campaign")
+            raise HTTPException(**http_error(400, "lead_already_attributed_to_this_campaign", request))
 
         db.execute(text("""
             INSERT INTO campaign_lead_attributions (campaign_id, lead_id, attributed_at)
@@ -426,13 +426,13 @@ def attribute_lead_to_campaign(campaign_id: int, lead_id: int, request: Request,
 
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_attribute_lead_to_campaign", resource_type="campaign_lead_attribution", resource_id=str(campaign_id), details={"lead_id": lead_id}, request=request)
-        return {"message": "Lead attributed to campaign", "campaign_id": campaign_id, "lead_id": lead_id}
+        return {"message": i18n_message("lead_attributed_to_campaign", request), "campaign_id": campaign_id, "lead_id": lead_id}
     except HTTPException:
         raise
     except Exception as e:
         db.rollback()
         logger.error(f"Lead attribution error: {e}")
-        raise HTTPException(status_code=500, detail="Failed to attribute lead")
+        raise HTTPException(**http_error(500, "failed_to_attribute_lead", request))
     finally:
         db.close()
 
@@ -448,7 +448,7 @@ def get_campaign_metrics(campaign_id: int, current_user=Depends(get_current_user
             FROM marketing_campaigns c WHERE c.id = :id
         """), {"id": campaign_id}).fetchone()
         if not campaign:
-            raise HTTPException(status_code=404, detail="Campaign not found")
+            raise HTTPException(**http_error(404, "campaign_not_found", request))
 
         c = dict(campaign._mapping)
         sent = c["total_sent"] or 0

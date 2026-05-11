@@ -53,7 +53,7 @@ def create_scoring_rule(data: LeadScoringRuleCreate, request: Request, current_u
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_scoring_rule", resource_type="lead_scoring_rule", resource_id=str(rid), details={"rule_name": data.rule_name, "score": data.score}, request=request)
-        return {"id": rid, "message": "تم إنشاء قاعدة التسجيل"}
+        return {"id": rid, "message": i18n_message("segment_rule_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating scoring rule: {e}")
@@ -76,7 +76,7 @@ def update_scoring_rule(rule_id: int, data: LeadScoringRuleUpdate, request: Requ
         db.execute(text(f"UPDATE crm_lead_scoring_rules SET {set_clause} WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_scoring_rule", resource_type="lead_scoring_rule", resource_id=str(rule_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
     finally:
         db.close()
 
@@ -89,7 +89,7 @@ def delete_scoring_rule(rule_id: int, request: Request, current_user=Depends(get
         db.execute(text("DELETE FROM crm_lead_scoring_rules WHERE id = :id"), {"id": rule_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_scoring_rule", resource_type="lead_scoring_rule", resource_id=str(rule_id), details={}, request=request)
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
     finally:
         db.close()
 
@@ -155,7 +155,7 @@ def calculate_lead_scores(request: Request, current_user=Depends(get_current_use
 
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_calculate_lead_scores", resource_type="lead_scoring", details={"scored_count": scored}, request=request)
-        return {"scored": scored, "message": f"تم تسجيل نقاط {scored} فرصة"}
+        return {"scored": scored, "message": i18n_message("leads_scored_count", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error calculating lead scores: {e}")
@@ -224,7 +224,7 @@ def create_segment(data: SegmentCreate, request: Request, current_user=Depends(g
         }).scalar()
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_segment", resource_type="customer_segment", resource_id=str(sid), details={"name": data.name}, request=request)
-        return {"id": sid, "message": "تم إنشاء شريحة العملاء"}
+        return {"id": sid, "message": i18n_message("segment_created", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error creating segment: {e}")
@@ -250,7 +250,7 @@ def update_segment(seg_id: int, data: SegmentUpdate, request: Request, current_u
         db.execute(text(f"UPDATE crm_customer_segments SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": "تم التحديث"}
+        return {"message": i18n_message("webhook_updated_success", request)}
     finally:
         db.close()
 
@@ -264,7 +264,7 @@ def delete_segment(seg_id: int, request: Request, current_user=Depends(get_curre
         db.execute(text("DELETE FROM crm_customer_segments WHERE id = :id"), {"id": seg_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_segment", resource_type="customer_segment", resource_id=str(seg_id), details={}, request=request)
-        return {"message": "تم الحذف"}
+        return {"message": i18n_message("webhook_deleted_success", request)}
     finally:
         db.close()
 
@@ -281,7 +281,7 @@ def add_customer_to_segment(seg_id: int, customer_id: int, request: Request, cur
         """), {"sid": seg_id, "cid": customer_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_add_customer_to_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"customer_id": customer_id}, request=request)
-        return {"message": "تمت الإضافة"}
+        return {"message": i18n_message(("segment_member_added", request))}
     except Exception as e:
         db.rollback()
         logger.error(f"Error adding customer to segment: {e}")
@@ -301,7 +301,7 @@ def remove_customer_from_segment(seg_id: int, customer_id: int, request: Request
         """), {"sid": seg_id, "cid": customer_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_remove_customer_from_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"customer_id": customer_id}, request=request)
-        return {"message": "تمت الإزالة"}
+        return {"message": i18n_message(("segment_member_removed", request))}
     finally:
         db.close()
 

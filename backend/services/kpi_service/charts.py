@@ -144,7 +144,7 @@ def _build_executive_alerts(db, branch_id: Optional[int] = None) -> list:
         """)).scalar()
         if ov and int(ov) > 0:
             alerts.append({"severity": "high", "code": "OVERDUE_AR",
-                            "message": f"{ov} overdue customer invoices",
+                            "message": i18n_message("kpi_overdue_invoices", request),
                             "message_ar": f"{ov} فاتورة عميل متأخرة",
                             "count": int(ov), "link": "/sales/invoices?status=overdue"})
     except Exception:
@@ -159,7 +159,7 @@ def _build_executive_alerts(db, branch_id: Optional[int] = None) -> list:
         """)).scalar()
         if ls and int(ls) > 0:
             alerts.append({"severity": "medium", "code": "LOW_STOCK",
-                            "message": f"{ls} products below reorder level",
+                            "message": i18n_message("kpi_low_stock_products", request),
                             "message_ar": f"{ls} منتج تحت حد إعادة الطلب",
                             "count": int(ls), "link": "/stock/products?filter=low_stock"})
     except Exception:
@@ -172,7 +172,7 @@ def _build_executive_alerts(db, branch_id: Optional[int] = None) -> list:
         """)).scalar()
         if pa and int(pa) > 0:
             alerts.append({"severity": "medium", "code": "PENDING_APPROVALS",
-                            "message": f"{pa} pending approval requests",
+                            "message": i18n_message("kpi_pending_approvals", request),
                             "message_ar": f"{pa} طلب اعتماد معلق",
                             "count": int(pa), "link": "/approvals"})
     except Exception:
@@ -187,12 +187,12 @@ def _build_financial_alerts(db, current_ratio: float, quick_ratio: float,
     alerts = []
     if current_ratio > 0 and current_ratio < 1.0:
         alerts.append({"severity": "high", "code": "LOW_LIQUIDITY",
-                        "message": f"Current ratio at {current_ratio:.2f} — below 1.0 (liquidity risk)",
+                        "message": i18n_message("kpi_current_ratio_low", request),
                         "message_ar": f"نسبة التداول {current_ratio:.2f} — تحت 1.0 (خطر سيولة)",
                         "link": "/reports/balance-sheet"})
     if abs(budget_variance) > 15:
         alerts.append({"severity": "high", "code": "BUDGET_OVERRUN",
-                        "message": f"Budget variance at {budget_variance:+.1f}% — exceeds 15% threshold",
+                        "message": i18n_message("kpi_budget_variance_high", request),
                         "message_ar": f"انحراف الميزانية {budget_variance:+.1f}% — يتجاوز حد 15%",
                         "link": "/reports/budget-vs-actual"})
     return alerts

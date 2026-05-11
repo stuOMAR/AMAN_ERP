@@ -6,8 +6,9 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from datetime import datetime
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import logging
+import uuid
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -34,10 +35,12 @@ def create_stock_transfer(
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
         user_id = current_user.id
+        transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+        transfer_doc_id = uuid.uuid4().int % 2147483647
 
         # 1. Validate source and destination are different
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
-            raise HTTPException(status_code=400, detail="لا يمكن التحويل لنفس المستودع")
+            raise HTTPException(**http_error(400, ("same_warehouse_transfer", request)))
 
         # 2. Check warehouses exist
         src_wh = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"),
@@ -46,9 +49,9 @@ def create_stock_transfer(
                            {"id": transfer.destination_warehouse_id}).fetchone()
 
         if not src_wh:
-            raise HTTPException(status_code=404, detail="المستودع المصدر غير موجود")
+            raise HTTPException(**http_error(404, ("source_warehouse_not_found", request)))
         if not dst_wh:
-            raise HTTPException(status_code=404, detail="المستودع الوجهة غير موجود")
+            raise HTTPException(**http_error(404, ("dest_warehouse_not_found", request)))
 
         # INV-006: Check branch access on both warehouses
         allowed = getattr(current_user, 'allowed_branches', []) or []
@@ -56,7 +59,7 @@ def create_stock_transfer(
             src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
             dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
             if (src_branch and src_branch not in allowed) or (dst_branch and dst_branch not in allowed):
-                raise HTTPException(status_code=403, detail="لا يمكنك التحويل بين مستودعات خارج فروعك")
+                raise HTTPException(**http_error(403, "cross_branch_transfer_denied", request))
 
         # 3. Check product exists
         product = db.execute(text("SELECT product_name FROM products WHERE id = :id"),
@@ -66,20 +69,45 @@ def create_stock_transfer(
 
         # 4. Check available stock in source — lock row to prevent phantom stock
         source_inv = db.execute(text("""
-            SELECT quantity, average_cost FROM inventory 
+            SELECT quantity, reserved_quantity, average_cost FROM inventory
             WHERE product_id = :pid AND warehouse_id = :wh
             FOR UPDATE
         """), {"pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
 
         transfer_qty = Decimal(str(transfer.quantity))
         source_qty = Decimal(str(source_inv.quantity)) if source_inv else Decimal("0")
+        source_reserved = Decimal(str(source_inv.reserved_quantity or 0)) if source_inv else Decimal("0")
         source_cost = Decimal(str(source_inv.average_cost or 0)) if source_inv else Decimal("0")
+        available_qty = source_qty - source_reserved
 
-        if source_qty < transfer_qty:
+        if available_qty < transfer_qty:
             raise HTTPException(
                 status_code=400,
-                detail=f"الكمية المتوفرة ({source_qty}) أقل من المطلوب ({transfer.quantity})"
+                detail=f"الكمية المتوفرة ({available_qty}) أقل من المطلوب ({transfer.quantity})"
             )
+
+        from services.costing_service import CostingService
+        method = CostingService._get_product_costing_method(db, transfer.product_id, transfer.source_warehouse_id)
+        consumption_details = []
+        if method in ("fifo", "lifo"):
+            try:
+                consumption_result = CostingService.consume_layers(
+                    db,
+                    product_id=transfer.product_id,
+                    warehouse_id=transfer.source_warehouse_id,
+                    quantity=transfer_qty,
+                    sale_document_type="transfer",
+                    sale_document_id=transfer_doc_id,
+                    costing_method=method,
+                    return_consumptions=True,
+                )
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc))
+            transfer_value = Decimal(str(consumption_result["total_cogs"]))
+            consumption_details = consumption_result["consumptions"]
+            source_cost = (transfer_value / transfer_qty).quantize(Decimal("0.0001"), ROUND_HALF_UP) if transfer_qty else Decimal("0")
+        else:
+            transfer_value = (transfer_qty * source_cost).quantize(Decimal("0.0001"), ROUND_HALF_UP)
 
         # 5. Get destination current state — lock row to ensure consistent WAC
         dest_inv = db.execute(text("""
@@ -92,10 +120,40 @@ def create_stock_transfer(
         dest_cost_before = Decimal(str(dest_inv.average_cost or 0)) if dest_inv else Decimal("0")
 
         # 6. Update source inventory (decrease)
-        db.execute(text("""
+        source_update = db.execute(text("""
             UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW()
             WHERE product_id = :pid AND warehouse_id = :wh
-        """), {"qty": transfer.quantity, "pid": transfer.product_id, "wh": transfer.source_warehouse_id})
+              AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+            RETURNING id
+        """), {"qty": transfer.quantity, "pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
+        if not source_update:
+            raise HTTPException(**http_error(400, ("qty_changed_before_save", request)))
+
+        dest_method = CostingService._get_product_costing_method(db, transfer.product_id, transfer.destination_warehouse_id)
+        if dest_method in ("fifo", "lifo"):
+            if consumption_details:
+                for consumed in consumption_details:
+                    CostingService.create_cost_layer(
+                        db,
+                        product_id=transfer.product_id,
+                        warehouse_id=transfer.destination_warehouse_id,
+                        quantity=float(consumed["quantity"]),
+                        unit_cost=float(consumed["unit_cost"]),
+                        source_document_type="transfer",
+                        source_document_id=transfer_doc_id,
+                        costing_method=dest_method,
+                    )
+            else:
+                CostingService.create_cost_layer(
+                    db,
+                    product_id=transfer.product_id,
+                    warehouse_id=transfer.destination_warehouse_id,
+                    quantity=float(transfer_qty),
+                    unit_cost=float(source_cost),
+                    source_document_type="transfer",
+                    source_document_id=transfer_doc_id,
+                    costing_method=dest_method,
+                )
 
         # 7. Update destination inventory (increase with WAC calculation)
         if dest_inv:
@@ -121,6 +179,16 @@ def create_stock_transfer(
             db.execute(text("""
                 INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
                 VALUES (:pid, :wh, :qty, :cost, NOW())
+                ON CONFLICT (product_id, warehouse_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                              average_cost = CASE
+                                  WHEN inventory.quantity + EXCLUDED.quantity > 0 THEN
+                                      ((inventory.quantity * COALESCE(inventory.average_cost, 0))
+                                       + (EXCLUDED.quantity * EXCLUDED.average_cost))
+                                      / (inventory.quantity + EXCLUDED.quantity)
+                                  ELSE EXCLUDED.average_cost
+                              END,
+                              updated_at = NOW()
             """), {
                 "pid": transfer.product_id,
                 "wh": transfer.destination_warehouse_id,
@@ -132,26 +200,38 @@ def create_stock_transfer(
         # 8. Log transactions
         db.execute(text("""
             INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type, 
-                                               reference_type, quantity, notes, created_by)
-            VALUES (:pid, :wh, 'transfer_out', 'transfer', :qty, :notes, :user)
+                                               reference_type, reference_id, reference_document,
+                                               quantity, notes, created_by, unit_cost, total_cost)
+            VALUES (:pid, :wh, 'transfer_out', 'transfer', :ref_id, :ref_doc,
+                    :qty, :notes, :user, :unit_cost, :total_cost)
         """), {
             "pid": transfer.product_id,
             "wh": transfer.source_warehouse_id,
+            "ref_id": transfer_doc_id,
+            "ref_doc": transfer_ref,
             "qty": -transfer.quantity,
             "notes": transfer.notes or f"تحويل إلى {dst_wh.warehouse_name}",
-            "user": user_id
+            "user": user_id,
+            "unit_cost": float(source_cost),
+            "total_cost": float(transfer_value),
         })
 
         db.execute(text("""
             INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type, 
-                                               reference_type, quantity, notes, created_by)
-            VALUES (:pid, :wh, 'transfer_in', 'transfer', :qty, :notes, :user)
+                                               reference_type, reference_id, reference_document,
+                                               quantity, notes, created_by, unit_cost, total_cost)
+            VALUES (:pid, :wh, 'transfer_in', 'transfer', :ref_id, :ref_doc,
+                    :qty, :notes, :user, :unit_cost, :total_cost)
         """), {
             "pid": transfer.product_id,
             "wh": transfer.destination_warehouse_id,
+            "ref_id": transfer_doc_id,
+            "ref_doc": transfer_ref,
             "qty": transfer.quantity,
             "notes": transfer.notes or f"تحويل من {src_wh.warehouse_name}",
-            "user": user_id
+            "user": user_id,
+            "unit_cost": float(source_cost),
+            "total_cost": float(transfer_value),
         })
 
         # 9. Log in stock_transfer_log for V2 tracking
@@ -175,8 +255,8 @@ def create_stock_transfer(
         src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
         dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
 
-        transfer_value = float(transfer_qty * source_cost)
-        if transfer_value > 0.01:
+        gl_transfer_value = float(transfer_value)
+        if gl_transfer_value > 0.01:
             from utils.accounting import get_mapped_account_id
 
             acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
@@ -186,8 +266,8 @@ def create_stock_transfer(
                 # Fiscal-period lock: block posting into a closed period.
                 check_fiscal_period_open(db, transfer_date)
                 lines = [
-                    {"account_id": acc_inventory, "debit": transfer_value, "credit": 0, "description": f"Transfer In - {dst_wh.warehouse_name}"},
-                    {"account_id": acc_inventory, "debit": 0, "credit": transfer_value, "description": f"Transfer Out - {src_wh.warehouse_name}"},
+                    {"account_id": acc_inventory, "debit": gl_transfer_value, "credit": 0, "description": f"Transfer In - {dst_wh.warehouse_name}"},
+                    {"account_id": acc_inventory, "debit": 0, "credit": gl_transfer_value, "description": f"Transfer Out - {src_wh.warehouse_name}"},
                 ]
                 gl_create_journal_entry(
                     db,
@@ -197,7 +277,7 @@ def create_stock_transfer(
                     lines=lines,
                     user_id=user_id,
                     branch_id=src_branch or dst_branch,
-                    reference=f"TRF-{transfer.product_id}",
+                    reference=transfer_ref,
                     currency=base_currency,
                 )
 
@@ -217,7 +297,7 @@ def create_stock_transfer(
         db.commit()
 
         return {
-            "message": "تم التحويل بنجاح",
+            "message": i18n_message("transfer_successful", request),
             "transfer_details": {
                 "product_name": product.product_name,
                 "quantity": transfer.quantity,
@@ -249,7 +329,7 @@ def transfer_stock(
     db = get_db_connection(current_user.company_id)
     try:
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
-            raise HTTPException(status_code=400, detail="لا يمكن النقل لنفس المستودع")
+            raise HTTPException(**http_error(400, ("cannot_transfer_same_warehouse", request)))
 
         # Validate warehouses exist
         src = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).fetchone()
@@ -264,106 +344,209 @@ def transfer_stock(
             src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
             dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
             if (src_branch and src_branch not in allowed) or (dst_branch and dst_branch not in allowed):
-                raise HTTPException(status_code=403, detail="لا يمكنك النقل بين مستودعات خارج فروعك")
+                raise HTTPException(**http_error(403, ("cross_branch_transfer_denied", request)))
 
-        transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{__import__('uuid').uuid4().hex[:8].upper()}"
+        transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
+        transfer_doc_id = uuid.uuid4().int % 2147483647
 
         # INV-L04: Validate fiscal period is open before any inventory/GL movement.
         from utils.fiscal_lock import check_fiscal_period_open
         transfer_date = datetime.now().strftime("%Y-%m-%d")
         check_fiscal_period_open(db, transfer_date)
 
+        # T051: Aggregate duplicate products before stock checks
+        aggregated: dict[int, Decimal] = {}
+        for item in transfer.items:
+            pid = item.product_id
+            aggregated[pid] = aggregated.get(pid, Decimal("0")) + Decimal(str(item.quantity))
+
+        # Validate each aggregated product has sufficient stock
+        for pid, total_qty in aggregated.items():
+            src_inv = db.execute(text("""
+                SELECT quantity, reserved_quantity FROM inventory
+                WHERE product_id = :pid AND warehouse_id = :wh
+                FOR UPDATE
+            """), {"pid": pid, "wh": transfer.source_warehouse_id}).fetchone()
+            current_qty = Decimal(str(src_inv.quantity)) if src_inv else Decimal("0")
+            reserved_qty = Decimal(str(src_inv.reserved_quantity or 0)) if src_inv else Decimal("0")
+            available_qty = current_qty - reserved_qty
+            if available_qty < total_qty:
+                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": pid}).scalar()
+                raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
+
         # Aggregate total transfer value for GL posting after the loop.
-        total_transfer_value = 0.0
+        total_transfer_value = Decimal("0")
         item_descriptions: list[str] = []
 
+        from services.costing_service import CostingService
+
         for item in transfer.items:
-            # INV-009: Check source stock with FOR UPDATE to prevent race conditions
+            # T051: Stock already validated via aggregation above; re-lock for update
             src_inv = db.execute(text("""
-                SELECT quantity, average_cost FROM inventory 
+                SELECT quantity, reserved_quantity, average_cost FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": item.product_id, "wh": transfer.source_warehouse_id}).fetchone()
 
-            current_qty = float(src_inv.quantity) if src_inv else 0
-
-            if current_qty < item.quantity:
-                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
-                raise HTTPException(status_code=400, detail=f"الكمية غير متوفرة للمنتج: {prod_name}")
-
-            # 1. Get source cost for WAC calculation
-            source_cost = float(src_inv.average_cost or 0) if src_inv else 0
+            item_qty = Decimal(str(item.quantity))
+            method = CostingService._get_product_costing_method(db, item.product_id, transfer.source_warehouse_id)
+            consumption_details = []
+            if method in ("fifo", "lifo"):
+                try:
+                    consumption_result = CostingService.consume_layers(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=transfer.source_warehouse_id,
+                        quantity=item_qty,
+                        sale_document_type="transfer",
+                        sale_document_id=transfer_doc_id,
+                        costing_method=method,
+                        return_consumptions=True,
+                    )
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc))
+                item_value = Decimal(str(consumption_result["total_cogs"]))
+                consumption_details = consumption_result["consumptions"]
+                source_cost = (item_value / item_qty).quantize(Decimal("0.0001"), ROUND_HALF_UP) if item_qty else Decimal("0")
+            else:
+                source_cost = Decimal(str(src_inv.average_cost or 0)) if src_inv else Decimal("0")
+                item_value = (item_qty * source_cost).quantize(Decimal("0.0001"), ROUND_HALF_UP)
 
             # Track aggregate GL value (INV-L04)
-            total_transfer_value += float(item.quantity) * source_cost
+            total_transfer_value += item_value
 
             # 2. Deduct from Source
-            db.execute(text("""
-                UPDATE inventory SET quantity = quantity - :qty 
+            deducted = db.execute(text("""
+                UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
-            """), {"qty": item.quantity, "pid": item.product_id, "wh": transfer.source_warehouse_id})
+                  AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                RETURNING id
+            """), {"qty": item.quantity, "pid": item.product_id, "wh": transfer.source_warehouse_id}).fetchone()
+            if not deducted:
+                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
+                raise HTTPException(status_code=400, detail=i18n_message("qty_changed_during_transfer", request))
 
             # 3. Add to Destination with WAC recalculation
             exists_dest = db.execute(text("""
-                SELECT quantity, average_cost FROM inventory WHERE product_id = :pid AND warehouse_id = :wh
+                SELECT quantity, average_cost FROM inventory
+                WHERE product_id = :pid AND warehouse_id = :wh
+                FOR UPDATE
             """), {"pid": item.product_id, "wh": transfer.destination_warehouse_id}).fetchone()
 
+            dest_method = CostingService._get_product_costing_method(db, item.product_id, transfer.destination_warehouse_id)
+            if dest_method in ("fifo", "lifo"):
+                if consumption_details:
+                    for consumed in consumption_details:
+                        CostingService.create_cost_layer(
+                            db,
+                            product_id=item.product_id,
+                            warehouse_id=transfer.destination_warehouse_id,
+                            quantity=float(consumed["quantity"]),
+                            unit_cost=float(consumed["unit_cost"]),
+                            source_document_type="transfer",
+                            source_document_id=transfer_doc_id,
+                            costing_method=dest_method,
+                        )
+                else:
+                    CostingService.create_cost_layer(
+                        db,
+                        product_id=item.product_id,
+                        warehouse_id=transfer.destination_warehouse_id,
+                        quantity=float(item_qty),
+                        unit_cost=float(source_cost),
+                        source_document_type="transfer",
+                        source_document_id=transfer_doc_id,
+                        costing_method=dest_method,
+                    )
+
             if exists_dest:
-                dest_qty = float(exists_dest.quantity or 0)
-                dest_cost = float(exists_dest.average_cost or 0)
-                new_total_qty = dest_qty + item.quantity
+                dest_qty = Decimal(str(exists_dest.quantity or 0))
+                dest_cost = Decimal(str(exists_dest.average_cost or 0))
+                new_total_qty = dest_qty + item_qty
                 if new_total_qty > 0:
-                    new_avg_cost = ((dest_qty * dest_cost) + (item.quantity * source_cost)) / new_total_qty
+                    new_avg_cost = ((dest_qty * dest_cost) + (item_qty * source_cost)) / new_total_qty
                 else:
                     new_avg_cost = source_cost
                 db.execute(text("""
-                    UPDATE inventory SET quantity = :qty, average_cost = :cost
+                    UPDATE inventory SET quantity = :qty, average_cost = :cost, updated_at = NOW()
                     WHERE product_id = :pid AND warehouse_id = :wh
-                """), {"qty": new_total_qty, "cost": new_avg_cost, "pid": item.product_id, "wh": transfer.destination_warehouse_id})
+                """), {
+                    "qty": float(new_total_qty),
+                    "cost": float(new_avg_cost),
+                    "pid": item.product_id,
+                    "wh": transfer.destination_warehouse_id,
+                })
             else:
                 db.execute(text("""
-                    INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost)
-                    VALUES (:pid, :wh, :qty, :cost)
-                """), {"pid": item.product_id, "wh": transfer.destination_warehouse_id, "qty": item.quantity, "cost": source_cost})
+                    INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                    VALUES (:pid, :wh, :qty, :cost, NOW())
+                    ON CONFLICT (product_id, warehouse_id)
+                    DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                                  average_cost = CASE
+                                      WHEN inventory.quantity + EXCLUDED.quantity > 0 THEN
+                                          ((inventory.quantity * COALESCE(inventory.average_cost, 0))
+                                           + (EXCLUDED.quantity * EXCLUDED.average_cost))
+                                          / (inventory.quantity + EXCLUDED.quantity)
+                                      ELSE EXCLUDED.average_cost
+                                  END,
+                                  updated_at = NOW()
+                """), {
+                    "pid": item.product_id,
+                    "wh": transfer.destination_warehouse_id,
+                    "qty": item.quantity,
+                    "cost": float(source_cost),
+                })
 
             # 3. Log Transactions
             db.execute(text("""
                 INSERT INTO inventory_transactions (
                     product_id, warehouse_id, transaction_type, reference_type, 
-                    quantity, notes, created_by
+                    reference_id, reference_document, quantity, notes, created_by,
+                    unit_cost, total_cost
                 ) VALUES (
                     :pid, :wh, 'transfer_out', 'transfer', 
-                    :qty, :notes, :user
+                    :ref_id, :ref_doc, :qty, :notes, :user,
+                    :unit_cost, :total_cost
                 )
             """), {
                 "pid": item.product_id,
                 "wh": transfer.source_warehouse_id,
+                "ref_id": transfer_doc_id,
+                "ref_doc": transfer_ref,
                 "qty": -item.quantity,
                 "notes": f"Transfer to {dst.warehouse_name} ({transfer_ref})",
-                "user": current_user.id
+                "user": current_user.id,
+                "unit_cost": float(source_cost),
+                "total_cost": float(item_value),
             })
 
             db.execute(text("""
                 INSERT INTO inventory_transactions (
                     product_id, warehouse_id, transaction_type, reference_type, 
-                    quantity, notes, created_by
+                    reference_id, reference_document, quantity, notes, created_by,
+                    unit_cost, total_cost
                 ) VALUES (
                     :pid, :wh, 'transfer_in', 'transfer', 
-                    :qty, :notes, :user
+                    :ref_id, :ref_doc, :qty, :notes, :user,
+                    :unit_cost, :total_cost
                 )
             """), {
                 "pid": item.product_id,
                 "wh": transfer.destination_warehouse_id,
+                "ref_id": transfer_doc_id,
+                "ref_doc": transfer_ref,
                 "qty": item.quantity,
                 "notes": f"Transfer from {src.warehouse_name} ({transfer_ref})",
-                "user": current_user.id
+                "user": current_user.id,
+                "unit_cost": float(source_cost),
+                "total_cost": float(item_value),
             })
 
         # INV-L04: Emit one aggregate GL journal entry covering all items in this
         # multi-item transfer (debit destination-side inventory, credit source-side
         # inventory, both using the same acc_map_inventory account — the goods are
         # just moving between locations, not changing book value).
-        if total_transfer_value > 0.01:
+        if total_transfer_value > Decimal("0.01"):
             from utils.accounting import get_mapped_account_id
             acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
             if acc_inventory:
@@ -382,14 +565,14 @@ def transfer_stock(
                 lines = [
                     {
                         "account_id": acc_inventory,
-                        "debit": total_transfer_value,
+                        "debit": float(total_transfer_value),
                         "credit": 0,
                         "description": f"Transfer In - {dst.warehouse_name}",
                     },
                     {
                         "account_id": acc_inventory,
                         "debit": 0,
-                        "credit": total_transfer_value,
+                        "credit": float(total_transfer_value),
                         "description": f"Transfer Out - {src.warehouse_name}",
                     },
                 ]
@@ -420,7 +603,7 @@ def transfer_stock(
             branch_id=db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
         )
 
-        return {"message": "تم نقل المخزون بنجاح", "reference": transfer_ref}
+        return {"message": i18n_message("stock_transfer_success", request), "reference": transfer_ref}
 
     except HTTPException:
         raise

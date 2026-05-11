@@ -921,7 +921,7 @@ def activate_due_cheques():
                                 WHERE u.is_active = TRUE
                                   AND u.role IN ('admin', 'manager', 'superuser')
                             """), {
-                                "title": "شيك مستحق",
+                                "title": i18n_message("notif_check_due", request),
                                 "msg": f"شيك رقم {row.check_number} بمبلغ {row.amount} أصبح مستحقاً ({tbl})",
                             })
                         except Exception:
@@ -1201,7 +1201,7 @@ def check_low_stock_alerts():
                               AND u.role IN ('admin', 'manager', 'inventory_manager')
                             ON CONFLICT DO NOTHING
                         """), {
-                            "title": "تحذير: مخزون منخفض",
+                            "title": i18n_message("notif_low_stock", request),
                             "msg": (
                                 f"المنتج '{item.product_name or item.product_id}': "
                                 f"الكمية المتاحة {effective:.2f} "

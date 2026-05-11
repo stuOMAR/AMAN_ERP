@@ -54,7 +54,7 @@ def create_tax_settlement(
             )
     
             if not start or not end:
-                raise HTTPException(status_code=400, detail="يجب تحديد فترة التسوية")
+                raise HTTPException(**http_error(400, "settlement_period_required", request))
     
             display_meta = resolve_display_currency(db, branch_scope)
             params = {"start": start, "end": end}
@@ -91,7 +91,7 @@ def create_tax_settlement(
             vat_in_id = get_mapped_account_id(db, "acc_map_vat_in")
     
             if not vat_out_id or not vat_in_id:
-                raise HTTPException(status_code=400, detail="حسابات ضريبة المدخلات/المخرجات غير معينة في الإعدادات")
+                raise HTTPException(**http_error(400, "input_output_tax_accounts_not_configured", request))
     
             base_currency = get_base_currency(db)
             settle_amount = min(output_dec, input_dec)
@@ -137,7 +137,7 @@ def create_tax_settlement(
     
             return {
                 **display_currency_fields(display_meta),
-                "success": True, "message": "تم إنشاء التسوية الضريبية بنجاح",
+                "success": True, "message": i18n_message("tax_settlement_created_success", request),
                 "journal_entry": entry_number,
                 "output_vat": money_str(output_dec), "input_vat": money_str(input_dec),
                 "net_amount": money_str(net),

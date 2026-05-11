@@ -98,7 +98,7 @@ def calculate_zakat(request: Request, body: ZakatCalculateRequest, current_user:
                     "SELECT setting_value FROM company_settings WHERE setting_key = 'tax.zakat.gregorian_rate'"
                 )).fetchone()
                 if not rate_row:
-                    raise HTTPException(status_code=400, detail="نسبة الزكاة للسنة الميلادية غير مهيأة في company_settings")
+                    raise HTTPException(**http_error(400, "zakat_rate_not_configured_company_settings", request))
                 rate = Decimal(str(rate_row.setting_value))
             else:
                 rate_row = db.execute(text("""
@@ -108,7 +108,7 @@ def calculate_zakat(request: Request, body: ZakatCalculateRequest, current_user:
                     LIMIT 1
                 """), {"cc": country_code}).fetchone()
                 if not rate_row:
-                    raise HTTPException(status_code=400, detail=f"نسبة الزكاة غير مهيأة في tax_regimes للدولة {country_code}")
+                    raise HTTPException(status_code=400, detail=i18n_message("zakat_not_configured_country", request))
                 rate = Decimal(str(rate_row.default_rate))
             branch_id = branch_scope
     
@@ -601,7 +601,7 @@ def calculate_zakat(request: Request, body: ZakatCalculateRequest, current_user:
                 "zakat_amount": money_str(zakat_amount),
                 "branch_id": selected_branch_id,
                 "calculation_version": CALCULATION_VERSION,
-                "message": f"الزكاة المستحقة: {zakat_amount:,.2f}"
+                "message": i18n_message("zakat_due_amount", request)
             }
         except HTTPException:
             raise
@@ -644,13 +644,13 @@ def post_zakat_entry(
             ), {"fy": fiscal_year, "scope_key": scope_key}).fetchone()
     
             if not zakat:
-                raise HTTPException(404, "لم يتم حساب الزكاة لهذا العام")
+                raise HTTPException(**http_error(404, "zakat_not_calculated", request))
             if zakat.status == 'posted':
-                raise HTTPException(400, "تم ترحيل الزكاة بالفعل لهذا العام المالي")
+                raise HTTPException(**http_error(400, "zakat_already_posted", request))
     
             amount = Decimal(str(zakat.zakat_amount))
             if amount <= 0:
-                raise HTTPException(400, "مبلغ الزكاة صفر")
+                raise HTTPException(**http_error(400, "zakat_amount_zero", request))
     
             # Phase 5 / ZAK-F01: enforce fiscal lock on zakat posting date
             check_fiscal_period_open(db, f"{fiscal_year}-12-31")
@@ -661,7 +661,7 @@ def post_zakat_entry(
             exp_acc = get_mapped_account_id(db, "acc_map_zakat_expense")
             pay_acc = get_mapped_account_id(db, "acc_map_zakat_payable")
             if not exp_acc or not pay_acc:
-                raise HTTPException(400, "حسابات الزكاة غير معرّفة في خريطة الحسابات")
+                raise HTTPException(**http_error(400, "zakat_accounts_not_mapped", request))
     
             lines = [
                 {"account_id": exp_acc, "debit": amount, "credit": 0, "description": "مصروف زكاة"},
@@ -700,7 +700,7 @@ def post_zakat_entry(
                 "entry_number": je_number,
                 "amount": money_str(amount),
                 "branch_id": selected_branch_id,
-                "message": f"تم ترحيل قيد الزكاة بمبلغ {amount:,.2f}"
+                "message": i18n_message("zakat_entry_posted", request)
             }
         except HTTPException:
             raise
@@ -750,21 +750,21 @@ def create_fiscal_period(body: FiscalPeriodLockRequest, current_user: dict = Dep
         })
         period_id = result.fetchone()[0]
 
-        return {"id": period_id, "message": "تم إنشاء الفترة المحاسبية"}
+        return {"id": period_id, "message": i18n_message("accounting_period_created", request)}
 
 
 @router.post("/accounting/fiscal-periods/{period_id}/lock",
              dependencies=[Depends(require_permission("accounting.manage"))], tags=["Fiscal Periods"], response_model=Dict[str, Any])
-def lock_fiscal_period(period_id: int, current_user: dict = Depends(get_current_user)):
+def lock_fiscal_period(period_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """قفل الفترة المحاسبية — منع إدخال أي قيود فيها"""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
     with transactional(company_id) as db:
         period = db.execute(text("SELECT * FROM fiscal_period_locks WHERE id = :id"), {"id": period_id}).fetchone()
         if not period:
-            raise HTTPException(404, "الفترة غير موجودة")
+            raise HTTPException(**http_error(404, "fiscal_period_not_found", request))
         if period.is_locked:
-            raise HTTPException(400, "الفترة مقفلة بالفعل")
+            raise HTTPException(**http_error(400, "period_already_locked", request))
 
         db.execute(text("""
             UPDATE fiscal_period_locks SET
@@ -776,12 +776,12 @@ def lock_fiscal_period(period_id: int, current_user: dict = Depends(get_current_
                      "fiscal_period.lock", "fiscal_period", str(period_id),
                      {"period_name": period.period_name})
 
-        return {"message": f"تم قفل الفترة {period.period_name}"}
+        return {"message": i18n_message("period_locked", request)}
 
 
 @router.post("/accounting/fiscal-periods/{period_id}/unlock",
              dependencies=[Depends(require_permission("accounting.manage"))], tags=["Fiscal Periods"], response_model=Dict[str, Any])
-def unlock_fiscal_period(period_id: int, current_user: dict = Depends(get_current_user)):
+def unlock_fiscal_period(period_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """فتح الفترة المحاسبية"""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
@@ -792,7 +792,7 @@ def unlock_fiscal_period(period_id: int, current_user: dict = Depends(get_curren
             WHERE id = :id
         """), {"uid": user_id, "id": period_id})
 
-        return {"message": "تم فتح الفترة المحاسبية"}
+        return {"message": i18n_message("fiscal_period_opened", request)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

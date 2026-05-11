@@ -69,7 +69,7 @@ def get_employee_pii(
         ).fetchone()
 
         if row is None:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise HTTPException(**http_error(404, ("employee_not_found", request)))
 
         emp = {
             "id": row[0], "employee_code": row[1],
@@ -93,7 +93,7 @@ def update_employee_pii(
 ):
     """Update a single PII field (encrypts at rest)."""
     if body.field not in PII_FIELDS:
-        raise HTTPException(status_code=422, detail=f"Unknown PII field: {body.field}")
+        raise HTTPException(status_code=422, detail=i18n_message("unknown_pii_field", request))
 
     tenant_id = _get_tenant_id(current_user)
     encrypted = encrypt_pii(body.field, body.value, tenant_id=tenant_id)
@@ -110,7 +110,7 @@ def update_employee_pii(
             {"val": encrypted, "eid": employee_id, "tid": int(tenant_id)},
         )
         if result.rowcount == 0:
-            raise HTTPException(status_code=404, detail="Employee not found")
+            raise HTTPException(**http_error(404, ("employee_not_found", request)))
         conn.commit()
 
         # Audit the write

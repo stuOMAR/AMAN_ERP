@@ -83,10 +83,15 @@ def get_vat_report(
 
         input_vat_returns = db.execute(text(_invoice_vat_subquery("purchase_return")), params).fetchone()
 
+        # T037: Include credit/debit notes in VAT calculation
+        input_credit_notes = db.execute(text(_invoice_vat_subquery("purchase_credit_note")), params).fetchone()
+        input_debit_notes = db.execute(text(_invoice_vat_subquery("purchase_debit_note")), params).fetchone()
+
         net_output_taxable = (_dec(output_vat.taxable_amount) - _dec(output_vat_returns.taxable_amount)).quantize(_D2, ROUND_HALF_UP)
         net_output_vat = (_dec(output_vat.vat_amount) - _dec(output_vat_returns.vat_amount)).quantize(_D2, ROUND_HALF_UP)
-        net_input_taxable = (_dec(input_vat.taxable_amount) - _dec(input_vat_returns.taxable_amount)).quantize(_D2, ROUND_HALF_UP)
-        net_input_vat = (_dec(input_vat.vat_amount) - _dec(input_vat_returns.vat_amount)).quantize(_D2, ROUND_HALF_UP)
+        # T037: Net input VAT includes credit notes (reduce) and debit notes (increase)
+        net_input_taxable = (_dec(input_vat.taxable_amount) - _dec(input_vat_returns.taxable_amount) - _dec(input_credit_notes.taxable_amount) + _dec(input_debit_notes.taxable_amount)).quantize(_D2, ROUND_HALF_UP)
+        net_input_vat = (_dec(input_vat.vat_amount) - _dec(input_vat_returns.vat_amount) - _dec(input_credit_notes.vat_amount) + _dec(input_debit_notes.vat_amount)).quantize(_D2, ROUND_HALF_UP)
         net_vat_payable = (net_output_vat - net_input_vat).quantize(_D2, ROUND_HALF_UP)
 
         return {

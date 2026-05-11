@@ -21,6 +21,8 @@ Usage:
 from fastapi import HTTPException
 from sqlalchemy import text
 
+from utils.i18n import http_error
+
 
 def optimistic_update(
     conn,
@@ -32,6 +34,7 @@ def optimistic_update(
     params: dict,
     extra_where: str = "",
     id_column: str = "id",
+    request=None,
 ) -> int:
     """Execute a version-checked UPDATE and return the new version.
 
@@ -55,9 +58,6 @@ def optimistic_update(
             {"_id": record_id},
         ).fetchone()
         if exists is None:
-            raise HTTPException(status_code=404, detail="السجل غير موجود")
-        raise HTTPException(
-            status_code=409,
-            detail=f"تم تعديل السجل من مستخدم آخر (الإصدار الحالي: {exists.version}، المتوقع: {expected_version}). يرجى تحديث الصفحة وإعادة المحاولة."
-        )
+            raise HTTPException(**http_error(404, "record_not_found", request))
+        raise HTTPException(**http_error(409, "record_changed_reload", request))
     return row.version

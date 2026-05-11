@@ -70,15 +70,13 @@ async def login(
                 # SECURITY: No hash configured — reject login entirely
                 logger.critical("⚠️ ADMIN_PASSWORD_HASH not configured! Admin login DISABLED.")
                 raise HTTPException(
-                    status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
-                    detail="خطأ في تسجيل الدخول. يرجى التواصل مع مسؤول النظام"
+                    **http_error(status.HTTP_503_SERVICE_UNAVAILABLE, "login_server_error", request)
                 )
             
             if not verify_pwd(form_data.password, admin_hash):
                 record_failed_attempt(request, form_data.username)
                 raise HTTPException(
-                    status_code=status.HTTP_401_UNAUTHORIZED,
-                    detail="كلمة المرور غير صحيحة",
+                    **http_error(status.HTTP_401_UNAUTHORIZED, "invalid_password", request),
                     headers={"WWW-Authenticate": "Bearer"},
                 )
             
@@ -127,7 +125,7 @@ async def login(
                     return {
                         "requires_2fa": True,
                         "temp_token": temp_token,
-                        "message": "يرجى إدخال رمز المصادقة الثنائية للمسؤول"
+                        "message": i18n_message("admin_2fa_required", request)
                     }
                 else:
                     import pyotp
@@ -135,8 +133,7 @@ async def login(
                     if not totp.verify(totp_code, valid_window=1):
                         record_failed_attempt(request, form_data.username)
                         raise HTTPException(
-                            status_code=status.HTTP_401_UNAUTHORIZED,
-                            detail="رمز المصادقة الثنائية غير صحيح",
+                            **http_error(status.HTTP_401_UNAUTHORIZED, "2fa_invalid_code", request)
                         )
                     # Record successful 2FA use for audit rotation
                     if admin_2fa_row_id:
@@ -186,8 +183,7 @@ async def login(
         if not company_code:
             record_failed_attempt(request, form_data.username)
             raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="رمز الشركة مطلوب. يمكنك الحصول عليه من مسؤول الشركة.",
+                **http_error(status.HTTP_400_BAD_REQUEST, "company_code_required", request)
             )
 
         # التحقق من أن الشركة موجودة ونشطة
@@ -199,15 +195,14 @@ async def login(
         if not company:
             record_failed_attempt(request, form_data.username)
             raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail="رمز الشركة غير صحيح أو الشركة غير نشطة",
+                **http_error(status.HTTP_401_UNAUTHORIZED, "company_code_invalid_or_inactive", request),
                 headers={"WWW-Authenticate": "Bearer"}
             )
 
         company_id, db_name, company_status = company
         conn_url = settings.get_company_database_url(company_id)
         if not conn_url:
-            raise HTTPException(status_code=500, detail="خطأ في الاتصال بقاعدة البيانات")
+            raise HTTPException(**http_error(500, "db_connection_error", request))
 
         try:
             company_engine = create_engine(conn_url, pool_pre_ping=True)
@@ -224,8 +219,7 @@ async def login(
                     company_engine.dispose()
                     record_failed_attempt(request, form_data.username)
                     raise HTTPException(
-                        status_code=status.HTTP_401_UNAUTHORIZED,
-                        detail="اسم المستخدم أو كلمة المرور غير صحيحة",
+                        **http_error(status.HTTP_401_UNAUTHORIZED, "invalid_username_or_password", request),
                         headers={"WWW-Authenticate": "Bearer"}
                     )
 
@@ -255,7 +249,7 @@ async def login(
                         return {
                             "requires_2fa": True,
                             "temp_token": temp_token,
-                            "message": "يرجى إدخال رمز المصادقة الثنائية"
+                            "message": i18n_message("2fa_required", request)
                         }
                 except Exception as tfa_err:
                     logger.warning(f"2FA check failed, proceeding without 2FA: {tfa_err}")
@@ -488,7 +482,7 @@ async def login(
         except Exception as e:
             logger.error(f"Login error for company {company_id}: {e}")
             logger.exception("Unexpected error")
-            raise HTTPException(status_code=500, detail="خطأ في الخادم أثناء تسجيل الدخول")
+            raise HTTPException(**http_error(500, "server_error_during_login", request))
 
     finally:
         db.close()
@@ -535,7 +529,7 @@ async def logout(
     # TASK-030: clear HttpOnly refresh + CSRF cookies.
     clear_auth_cookies(response)
 
-    return {"message": "تم تسجيل الخروج بنجاح"}
+    return {"message": i18n_message(("logout_success", request))}
 
 
 @router.get("/csrf", response_model=Dict[str, Any])
@@ -561,8 +555,7 @@ async def refresh_token(
 ):
     """تجديد الجلسة باستخدام refresh token (دوار)"""
     credentials_exception = HTTPException(
-        status_code=status.HTTP_401_UNAUTHORIZED,
-        detail="رمز التحديث منتهي أو غير صالح",
+        **http_error(status.HTTP_401_UNAUTHORIZED, "refresh_token_invalid", request),
         headers={"WWW-Authenticate": "Bearer"},
     )
 
@@ -578,8 +571,7 @@ async def refresh_token(
 
     if not provided_refresh_token:
         raise HTTPException(
-            status_code=status.HTTP_400_BAD_REQUEST,
-            detail="رمز التحديث مطلوب"
+            **http_error(status.HTTP_400_BAD_REQUEST, "refresh_token_required", request)
         )
     
     if is_token_blacklisted(provided_refresh_token):

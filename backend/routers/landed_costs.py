@@ -8,7 +8,7 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
@@ -48,7 +48,7 @@ def _u(current_user, key, default=None):
 class LandedCostItemCreate(BaseModel):
     cost_type: str  # freight, customs, insurance, handling, other
     description: Optional[str] = None
-    amount: float = 0
+    amount: Decimal = Field(..., gt=0)
     vendor_id: Optional[int] = None
     invoice_ref: Optional[str] = None
 
@@ -57,9 +57,11 @@ class LandedCostCreate(BaseModel):
     grn_id: Optional[int] = None
     reference: Optional[str] = None
     lc_date: Optional[str] = None
+    currency: Optional[str] = None
+    exchange_rate: Optional[Decimal] = None
     allocation_method: str = "by_value"  # by_value, by_quantity, by_weight, equal
     notes: Optional[str] = None
-    cost_items: List[LandedCostItemCreate] = []
+    cost_items: List[LandedCostItemCreate] = Field(default_factory=list)
 
 
 # ─── LIST ──────────────────────────────────────────────────────────────────────
@@ -96,7 +98,7 @@ def list_landed_costs(
 # ─── GET ONE ───────────────────────────────────────────────────────────────────
 
 @router.get("/{lc_id}", dependencies=[Depends(require_permission("purchases.view"))], response_model=Dict[str, Any])
-def get_landed_cost(lc_id: int, current_user: dict = Depends(get_current_user)):
+def get_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Get Landed Cost."""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:
@@ -107,7 +109,7 @@ def get_landed_cost(lc_id: int, current_user: dict = Depends(get_current_user)):
             WHERE lc.id = :id
         """), {"id": lc_id}).fetchone()
         if not lc:
-            raise HTTPException(404, "التكلفة المُضافة غير موجودة")
+            raise HTTPException(**http_error(404, "landed_cost_not_found", request))
 
         validate_branch_access(current_user, lc._mapping.get("branch_id"))
 
@@ -139,31 +141,58 @@ def get_landed_cost(lc_id: int, current_user: dict = Depends(get_current_user)):
 def create_landed_cost(body: LandedCostCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """Create Landed Cost."""
     company_id = _u(current_user, "company_id")
-    user_id = _u(current_user, "user_id")
+    user_id = _u(current_user, "user_id") or _u(current_user, "id")
     with transactional(company_id) as db:
         try:
             if not body.cost_items:
-                raise HTTPException(400, "يجب إضافة عنصر تكلفة واحد على الأقل")
+                raise HTTPException(**http_error(400, "at_least_one_cost_required", request))
     
             year = datetime.now().year
             lc_number = generate_sequential_number(db, f"LC-{year}", "landed_costs", "lc_number")
             total = sum((_dec(item.amount) for item in body.cost_items), Decimal('0'))
+            base_currency = get_base_currency(db)
+            branch_id = None
+            currency = body.currency or base_currency
+            exchange_rate = _dec(1 if body.exchange_rate is None else body.exchange_rate)
+            if body.purchase_order_id:
+                po = db.execute(text("""
+                    SELECT id, branch_id, currency, exchange_rate
+                    FROM purchase_orders
+                    WHERE id = :id
+                    FOR UPDATE
+                """), {"id": body.purchase_order_id}).fetchone()
+                if not po:
+                    raise HTTPException(**http_error(404, "linked_po_not_found", request))
+                branch_id = validate_branch_access(current_user, po.branch_id)
+                currency = body.currency or po.currency or base_currency
+                _body_rate = body.exchange_rate
+                _po_rate = getattr(po, "exchange_rate", None)
+                if _body_rate is not None:
+                    exchange_rate = _dec(_body_rate)
+                elif _po_rate is not None:
+                    exchange_rate = _dec(_po_rate)
+                else:
+                    exchange_rate = Decimal("1")
+            if exchange_rate <= 0:
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
     
             result = db.execute(text("""
                 INSERT INTO landed_costs (
                     lc_number, purchase_order_id, grn_id, reference,
                     lc_date, total_amount, allocation_method, notes,
-                    status, created_by
+                    status, created_by, branch_id, currency, exchange_rate
                 ) VALUES (
                     :num, :poid, :grnid, :ref, :dt, :total, :method,
-                    :notes, 'draft', :uid
+                    :notes, 'draft', :uid, :branch_id, :currency, :exchange_rate
                 ) RETURNING id
             """), {
                 "num": lc_number, "poid": body.purchase_order_id,
                 "grnid": body.grn_id, "ref": body.reference,
                 "dt": body.lc_date or datetime.now().date().isoformat(),
                 "total": total, "method": body.allocation_method,
-                "notes": body.notes, "uid": user_id
+                "notes": body.notes, "uid": user_id,
+                "branch_id": branch_id, "currency": currency,
+                "exchange_rate": exchange_rate,
             })
             lc_id = result.fetchone()[0]
     
@@ -192,7 +221,6 @@ def create_landed_cost(body: LandedCostCreate, request: Request, current_user: d
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 
@@ -210,16 +238,19 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
     - equal: بالتساوي
     """
     company_id = _u(current_user, "company_id")
-    user_id = _u(current_user, "user_id")
+    user_id = _u(current_user, "user_id") or _u(current_user, "id")
     with transactional(company_id) as db:
         try:
             lc = db.execute(text("SELECT * FROM landed_costs WHERE id = :id"), {"id": lc_id}).fetchone()
             if not lc:
-                raise HTTPException(404, "التكلفة المُضافة غير موجودة")
+                raise HTTPException(**http_error(404, "landed_cost_not_found", request))
             if lc.status == 'posted':
-                raise HTTPException(400, "تم ترحيل هذه التكلفة بالفعل")
+                raise HTTPException(**http_error(400, "landed_cost_already_posted", request))
     
             total_cost = _dec(lc.total_amount)
+            exchange_rate = _dec(getattr(lc, "exchange_rate", None) or 1)
+            if exchange_rate <= 0:
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
             method = lc.allocation_method
     
             # Get purchase order lines
@@ -228,28 +259,34 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
     
             if po_id:
                 po_lines = db.execute(text("""
-                    SELECT pol.id as line_id, pol.product_id, pol.quantity,
-                           pol.unit_price, pol.line_total,
-                           p.product_name, p.weight_kg, p.cost_price
-                    FROM purchase_order_lines pol
-                    JOIN products p ON p.id = pol.product_id
-                    WHERE pol.po_id = :poid
+	                    SELECT pol.id as line_id, pol.product_id,
+	                           COALESCE(SUM(prl.quantity), 0) as quantity,
+	                           COALESCE(SUM(prl.total_cost) / NULLIF(SUM(prl.quantity), 0), p.cost_price, 0) AS unit_price,
+	                           COALESCE(SUM(prl.total_cost), 0) as line_total,
+	                           p.product_name, 0 as weight_kg,
+	                           COALESCE(SUM(prl.total_cost) / NULLIF(SUM(prl.quantity), 0), p.cost_price, 0) AS cost_price
+	                    FROM purchase_order_lines pol
+	                    JOIN products p ON p.id = pol.product_id
+	                    JOIN po_receipt_lines prl ON prl.po_line_id = pol.id
+	                    WHERE pol.po_id = :poid
+	                    GROUP BY pol.id, pol.product_id, p.product_name, p.cost_price
+	                    HAVING COALESCE(SUM(prl.quantity), 0) > 0
                 """), {"poid": po_id}).fetchall()
             elif grn_id:
                 po_lines = db.execute(text("""
                     SELECT gl.id as line_id, gl.product_id, gl.received_quantity as quantity,
                            p.cost_price as unit_price,
                            (gl.received_quantity * p.cost_price) as line_total,
-                           p.product_name, p.weight_kg, p.cost_price
+                           p.product_name, 0 as weight_kg, p.cost_price
                     FROM grn_lines gl
                     JOIN products p ON p.id = gl.product_id
                     WHERE gl.grn_id = :grnid
                 """), {"grnid": grn_id}).fetchall()
             else:
-                raise HTTPException(400, "يجب ربط التكلفة بأمر شراء أو وثيقة استلام")
+                raise HTTPException(**http_error(400, "must_link_to_po_or_receipt", request))
     
             if not po_lines:
-                raise HTTPException(400, "لا توجد أصناف لتوزيع التكاليف عليها")
+                raise HTTPException(**http_error(400, "no_items_to_allocate", request))
     
             # Calculate allocation basis
             if method == 'by_value':
@@ -262,7 +299,7 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
                 total_basis = _dec(len(po_lines))
     
             if total_basis <= 0:
-                raise HTTPException(400, "لا يمكن التوزيع: الأساس صفر")
+                raise HTTPException(**http_error(400, "allocation_basis_zero", request))
     
             # Delete old allocations
             db.execute(text("DELETE FROM landed_cost_allocations WHERE landed_cost_id = :lcid"), {"lcid": lc_id})
@@ -338,13 +375,12 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
                          request=request)
     
             return {
-                "message": f"تم توزيع {total_cost.quantize(_D2, ROUND_HALF_UP)} {method}",
+                "message": i18n_message("landed_cost_distributed_method", request, total=str(total_cost.quantize(_D2, ROUND_HALF_UP)), method=method),
                 "allocations": allocations_data
             }
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 
@@ -359,11 +395,14 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
     user_id = _u(current_user, "user_id") or _u(current_user, "id")
     with transactional(company_id) as db:
         try:
-            lc = db.execute(text("SELECT * FROM landed_costs WHERE id = :id"), {"id": lc_id}).fetchone()
+            lc = db.execute(text("SELECT * FROM landed_costs WHERE id = :id FOR UPDATE"), {"id": lc_id}).fetchone()
             if not lc:
-                raise HTTPException(404, "التكلفة المُضافة غير موجودة")
+                raise HTTPException(**http_error(404, "landed_cost_not_found", request))
             if lc.status == 'posted':
-                raise HTTPException(400, "تم ترحيل هذه التكلفة بالفعل")
+                raise HTTPException(**http_error(400, "landed_cost_already_posted", request))
+            branch_id = validate_branch_access(current_user, lc.branch_id)
+            if not branch_id:
+                raise HTTPException(**http_error(400, "landed_cost_branch_required", request))
     
             # Fiscal period check
             post_date = str(lc.lc_date or datetime.now().date())
@@ -374,23 +413,43 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
             ), {"lcid": lc_id}).fetchall()
     
             if not allocations:
-                raise HTTPException(400, "يجب توزيع التكاليف أولاً")
+                raise HTTPException(**http_error(400, "landed_costs_not_allocated", request))
+            _lc_rate = getattr(lc, "exchange_rate", None)
+            exchange_rate = _dec(1 if _lc_rate is None else _lc_rate)
+            if exchange_rate <= 0:
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
     
-            # Update product cost_price and inventory average_cost
+            # T032: Update costs through CostingService instead of direct column updates
+            from services.costing_service import CostingService
             for alloc in allocations:
-                db.execute(text("""
-                    UPDATE products SET cost_price = :new_cost, updated_at = CURRENT_TIMESTAMP
-                    WHERE id = :pid
-                """), {"new_cost": _dec(alloc.new_cost), "pid": alloc.product_id})
-    
-                db.execute(text("""
-                    UPDATE inventory SET average_cost = :new_cost
-                    WHERE product_id = :pid
-                """), {"new_cost": _dec(alloc.new_cost), "pid": alloc.product_id})
+                wh_rows = db.execute(text("""
+                    SELECT warehouse_id, COALESCE(SUM(quantity), 0) AS received_qty
+                    FROM po_receipt_lines
+                    WHERE po_line_id = :po_line_id
+                      AND product_id = :pid
+                    GROUP BY warehouse_id
+                    ORDER BY warehouse_id
+                """), {"po_line_id": alloc.po_line_id, "pid": alloc.product_id}).fetchall()
+                received_total = sum((_dec(row.received_qty) for row in wh_rows), Decimal("0"))
+                allocated_remaining = _dec(alloc.allocated_amount)
+                for idx, wh_row in enumerate(wh_rows):
+                    wh_qty = _dec(wh_row.received_qty)
+                    if wh_qty <= 0 or received_total <= 0:
+                        continue
+                    wh_amount = allocated_remaining if idx == len(wh_rows) - 1 else (_dec(alloc.allocated_amount) * wh_qty / received_total).quantize(_D2, ROUND_HALF_UP)
+                    allocated_remaining -= wh_amount
+                    CostingService.apply_landed_cost_adjustment(
+                        db,
+                        product_id=alloc.product_id,
+                        warehouse_id=wh_row.warehouse_id,
+                        quantity=wh_qty,
+                        allocated_amount=(wh_amount * exchange_rate).quantize(_D2, ROUND_HALF_UP),
+                        po_line_id=alloc.po_line_id,
+                    )
     
             # Build GL journal entry lines via GL service
             total_cost = _dec(lc.total_amount)
-            base_currency = get_base_currency(db)
+            lc_currency = lc.currency or get_base_currency(db)
     
             je_lines = []
     
@@ -401,7 +460,9 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                     "account_id": inv_account,
                     "debit": total_cost,
                     "credit": 0,
-                    "description": "تكاليف مُضافة - مخزون"
+                    "description": "تكاليف مُضافة - مخزون",
+                    "amount_currency": total_cost,
+                    "currency": lc_currency,
                 })
     
             # Cr: Per cost type (group by vendor or expense type)
@@ -417,20 +478,20 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                             "account_id": ap_account,
                             "debit": 0,
                             "credit": _dec(item.amount),
-                            "description": f"{item.cost_type}: {item.description or ''}"
+                            "description": f"{item.cost_type}: {item.description or ''}",
+                            "amount_currency": _dec(item.amount),
+                            "currency": lc_currency,
                         })
     
-                    # Party transaction
-                    db.execute(text("""
-                        INSERT INTO party_transactions (
-                            party_id, transaction_type, debit, credit, balance,
-                            reference_type, reference_id, description, created_by
-                        ) VALUES (:pid, 'landed_cost', 0, :amt, -:amt, 'landed_cost', :lcid, :desc, :uid)
-                    """), {
-                        "pid": item.vendor_id, "amt": _dec(item.amount),
-                        "lcid": lc_id, "desc": f"تكلفة مُضافة: {item.cost_type}",
-                        "uid": user_id
-                    })
+                    # T034: Update party_site_balances for vendor-issued landed costs
+                    from utils.party_balance import update_party_site_balance
+                    update_party_site_balance(
+                        db, party_id=item.vendor_id,
+                        branch_id=branch_id,
+                        currency=lc_currency,
+                        amount=-_dec(item.amount),
+                        document_type="landed_cost"
+                    )
                 else:
                     acc_key = {
                         "freight": "acc_map_freight",
@@ -444,7 +505,9 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                             "account_id": exp_account,
                             "debit": 0,
                             "credit": _dec(item.amount),
-                            "description": f"{item.cost_type}: {item.description or ''}"
+                            "description": f"{item.cost_type}: {item.description or ''}",
+                            "amount_currency": _dec(item.amount),
+                            "currency": lc_currency,
                         })
     
             # Create JE via GL service (validates balance, sequential numbering, closed period)
@@ -456,7 +519,8 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                 reference=lc.lc_number,
                 lines=je_lines,
                 user_id=user_id,
-                currency=base_currency,
+                currency=lc_currency,
+                exchange_rate=exchange_rate,
                 source="landed_cost",
                 source_id=lc_id
             )
@@ -477,13 +541,12 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                          request=request)
     
             return {
-                "message": "تم ترحيل التكاليف المُضافة وتحديث تكلفة المنتجات",
+                "message": i18n_message("landed_costs_posted_success", request),
                 "journal_entry_id": je_id,
                 "total_allocated": str(total_cost.quantize(_D2, ROUND_HALF_UP))
             }
         except HTTPException:
             raise
         except Exception:
-            pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))

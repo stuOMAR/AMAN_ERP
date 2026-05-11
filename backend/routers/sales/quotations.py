@@ -73,7 +73,7 @@ def get_quotation(id: int, current_user: dict = Depends(get_current_user)):
         """), {"id": id}).fetchone()
 
         if not quotation:
-            raise HTTPException(status_code=404, detail="Quotation not found")
+            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
 
         # Enforce branch access for single resource
         from utils.permissions import validate_branch_access
@@ -116,7 +116,7 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             WHERE id = :id AND (party_type = 'customer' OR is_customer = TRUE)
         """), {"id": quotation.customer_id}).fetchone()
         if not customer:
-            raise HTTPException(status_code=404, detail="العميل المحدد غير موجود أو ليس عميلاً")
+            raise HTTPException(**http_error(404, ("customer_not_valid", request)))
 
         # Generate SQ Number (SQ-YYYY-XXXX)
         year = datetime.now().year
@@ -146,16 +146,16 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
                 WHERE id = :id
             """), {"id": item.product_id}).fetchone()
             if not product:
-                raise HTTPException(status_code=400, detail="لا يمكن حفظ عرض السعر: أحد الأصناف غير موجود في المخزون")
+                raise HTTPException(**http_error(400, ("product_not_in_inventory", request)))
             if product.is_active is False:
-                raise HTTPException(status_code=400, detail=f"الصنف {product.product_code or product.product_name} غير نشط ولا يمكن إضافته لعرض السعر")
+                raise HTTPException(status_code=400, detail=i18n_message("product_inactive_cannot_add_quotation", request))
 
             tax_info = resolve_line_tax(_branch_id, item.product_id, db, quotation.quotation_date, customer_id=quotation.customer_id)
 
             line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
             taxable = line_subtotal - _dec(item.discount)
             if taxable < 0:
-                raise HTTPException(status_code=400, detail="لا يمكن أن يكون الخصم أكبر من قيمة السطر")
+                raise HTTPException(**http_error(400, ("discount_exceeds_line_value", request)))
             line_tax = taxable * (tax_info["tax_rate"] / Decimal('100'))
             line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
 
@@ -249,11 +249,11 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             WHERE q.id = :id
         """), {"id": id}).fetchone()
         if not quotation:
-            raise HTTPException(status_code=404, detail="عرض السعر غير موجود")
+            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
         if quotation.status in ('converted', 'cancelled', 'expired'):
-            raise HTTPException(status_code=400, detail=f"لا يمكن إرسال عرض السعر بالحالة الحالية: {quotation.status}")
+            raise HTTPException(status_code=400, detail=i18n_message("cannot_send_quotation_status", request))
         if not quotation.customer_email:
-            raise HTTPException(status_code=400, detail="لا يوجد بريد إلكتروني مسجل للعميل")
+            raise HTTPException(**http_error(400, ("no_customer_email", request)))
 
         items = db.execute(text("""
             SELECT l.*, p.product_name, p.product_code
@@ -263,7 +263,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             ORDER BY l.id
         """), {"id": id}).fetchall()
         if not items:
-            raise HTTPException(status_code=400, detail="لا يمكن إرسال عرض سعر بدون أصناف")
+            raise HTTPException(**http_error(400, ("cannot_send_empty_quotation", request)))
 
         rows_html = "".join(
             "<tr>"
@@ -295,7 +295,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
         from services.email_service import get_base_template, get_email_service_from_settings
         service = get_email_service_from_settings(db, tenant_id=str(current_user.company_id))
         if not service:
-            raise HTTPException(status_code=400, detail="إعدادات البريد الإلكتروني غير مكتملة. الرجاء ضبط SMTP قبل إرسال عروض الأسعار.")
+            raise HTTPException(**http_error(400, "email_settings_incomplete", request))
 
         sent = service.send(
             quotation.customer_email,
@@ -303,7 +303,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             get_base_template(content),
         )
         if not sent:
-            raise HTTPException(status_code=500, detail="تعذر إرسال البريد الإلكتروني. تحقق من إعدادات SMTP وحاول مرة أخرى.")
+            raise HTTPException(**http_error(500, "email_send_failed_smtp", request))
 
         db.execute(text("""
             UPDATE sales_quotations
@@ -323,7 +323,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             branch_id=quotation.branch_id,
         )
         db.commit()
-        return {"success": True, "message": "تم إرسال عرض السعر بالبريد بنجاح", "status": "sent", "recipient": quotation.customer_email}
+        return {"success": True, "message": i18n_message("quotation_sent_email", request), "status": "sent", "recipient": quotation.customer_email}
     except HTTPException:
         db.rollback()
         raise

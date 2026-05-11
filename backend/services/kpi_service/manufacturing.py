@@ -104,7 +104,7 @@ def get_manufacturing_kpis(db, start_date: date, end_date: date,
     alerts = []
     if oee > 0 and oee < 60:
         alerts.append({"severity": "high", "code": "LOW_OEE",
-                        "message": f"OEE at {oee:.1f}% — below acceptable threshold",
+                        "message": i18n_message("kpi_oee_below_threshold", request),
                         "message_ar": f"الفعالية الكلية {oee:.1f}% — تحت المستوى المقبول",
                         "link": "/manufacturing/work-centers"})
 
