@@ -116,7 +116,7 @@ const HRHome = () => {
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.title}</div>
                         <div className="metric-value" style={{ color: metric.color }}>
-                            {hasPermission('hr.reports') ? metric.value : '***'}
+                            {metric.value}
                         </div>
                     </div>
                 ))}

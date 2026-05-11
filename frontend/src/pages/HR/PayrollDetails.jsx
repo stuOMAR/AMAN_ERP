@@ -177,7 +177,7 @@ const PayrollDetails = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('hr.payroll.total_net', 'Total Net Salary')}</div>
                     <div className="metric-value text-primary">
-                        {hasPermission('hr.reports') ? formatNumber(totalNetBase) : '***'}
+                        {formatNumber(totalNetBase)}
                         {hasPermission('hr.reports') && <small> {companyCurrency}</small>}
                     </div>
                     {hasPermission('hr.reports') && hasMultiCurrency && (
@@ -191,7 +191,7 @@ const PayrollDetails = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('hr.payroll.employees_count', 'Employees')}</div>
                     <div className="metric-value text-dark">
-                        {hasPermission('hr.reports') ? entries.length : '***'}
+                        {entries.length}
                     </div>
                 </div>
                 <div className="metric-card">
@@ -241,12 +241,12 @@ const PayrollDetails = () => {
                                         <tr key={entry.id}>
                                             <td className="fw-medium text-dark">{entry.employee_name}</td>
                                             <td className="text-muted small">{entry.position || '-'}</td>
-                                            <td className="text-muted">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.basic_salary)}</td>
-                                            <td className="text-muted">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.housing_allowance)}</td>
-                                            <td className="text-muted">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.transport_allowance)}</td>
-                                            <td className="text-muted">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.other_allowances)}</td>
-                                            <td className="text-danger">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.deductions)}</td>
-                                            <td className="fw-bold text-primary">{!hasPermission('hr.reports') ? '***' : formatNumber(entry.net_salary)}</td>
+                                            <td className="text-muted">{formatNumber(entry.basic_salary)}</td>
+                                            <td className="text-muted">{formatNumber(entry.housing_allowance)}</td>
+                                            <td className="text-muted">{formatNumber(entry.transport_allowance)}</td>
+                                            <td className="text-muted">{formatNumber(entry.other_allowances)}</td>
+                                            <td className="text-danger">{formatNumber(entry.deductions)}</td>
+                                            <td className="fw-bold text-primary">{formatNumber(entry.net_salary)}</td>
                                             <td className="text-muted small">{entryCurrency}</td>
                                         </tr>
                                         );
@@ -255,24 +255,24 @@ const PayrollDetails = () => {
                                     {hasMultiCurrency && Object.entries(totalsByCurrency).map(([cur, totals]) => (
                                         <tr key={`subtotal-${cur}`} style={{ fontWeight: 600, backgroundColor: 'var(--bg-hover)', opacity: 0.85 }}>
                                             <td colSpan="2">{t('common.subtotal', 'Subtotal')} ({cur})</td>
-                                            <td>{!hasPermission('hr.reports') ? '***' : formatNumber(totals.basic)}</td>
-                                            <td>{!hasPermission('hr.reports') ? '***' : formatNumber(totals.housing)}</td>
-                                            <td>{!hasPermission('hr.reports') ? '***' : formatNumber(totals.transport)}</td>
-                                            <td>{!hasPermission('hr.reports') ? '***' : formatNumber(totals.other)}</td>
-                                            <td className="text-danger">{!hasPermission('hr.reports') ? '***' : formatNumber(totals.deductions)}</td>
-                                            <td className="text-primary">{!hasPermission('hr.reports') ? '***' : formatNumber(totals.net)} {cur}</td>
+                                            <td>{formatNumber(totals.basic)}</td>
+                                            <td>{formatNumber(totals.housing)}</td>
+                                            <td>{formatNumber(totals.transport)}</td>
+                                            <td>{formatNumber(totals.other)}</td>
+                                            <td className="text-danger">{formatNumber(totals.deductions)}</td>
+                                            <td className="text-primary">{formatNumber(totals.net)} {cur}</td>
                                             <td></td>
                                         </tr>
                                     ))}
                                     {/* Grand total in base currency */}
                                     <tr style={{ fontWeight: 700, backgroundColor: 'var(--bg-hover)' }}>
                                         <td colSpan="2">{t('common.total', 'Total')} {hasMultiCurrency ? `(${companyCurrency})` : ''}</td>
-                                        <td>{!hasPermission('hr.reports') ? '***' : formatNumber(entries.reduce((sum, e) => sum + ((e.basic_salary || 0) * (e.exchange_rate || 1)), 0))}</td>
-                                        <td>{!hasPermission('hr.reports') ? '***' : formatNumber(entries.reduce((sum, e) => sum + ((e.housing_allowance || 0) * (e.exchange_rate || 1)), 0))}</td>
-                                        <td>{!hasPermission('hr.reports') ? '***' : formatNumber(entries.reduce((sum, e) => sum + ((e.transport_allowance || 0) * (e.exchange_rate || 1)), 0))}</td>
-                                        <td>{!hasPermission('hr.reports') ? '***' : formatNumber(entries.reduce((sum, e) => sum + ((e.other_allowances || 0) * (e.exchange_rate || 1)), 0))}</td>
-                                        <td className="text-danger">{!hasPermission('hr.reports') ? '***' : formatNumber(entries.reduce((sum, e) => sum + ((e.deductions || 0) * (e.exchange_rate || 1)), 0))}</td>
-                                        <td className="text-primary">{!hasPermission('hr.reports') ? '***' : formatNumber(totalNetBase)} {companyCurrency}</td>
+                                        <td>{formatNumber(entries.reduce((sum, e) => sum + ((e.basic_salary || 0) * (e.exchange_rate || 1)), 0))}</td>
+                                        <td>{formatNumber(entries.reduce((sum, e) => sum + ((e.housing_allowance || 0) * (e.exchange_rate || 1)), 0))}</td>
+                                        <td>{formatNumber(entries.reduce((sum, e) => sum + ((e.transport_allowance || 0) * (e.exchange_rate || 1)), 0))}</td>
+                                        <td>{formatNumber(entries.reduce((sum, e) => sum + ((e.other_allowances || 0) * (e.exchange_rate || 1)), 0))}</td>
+                                        <td className="text-danger">{formatNumber(entries.reduce((sum, e) => sum + ((e.deductions || 0) * (e.exchange_rate || 1)), 0))}</td>
+                                        <td className="text-primary">{formatNumber(totalNetBase)} {companyCurrency}</td>
                                         <td></td>
                                     </tr>
                                 </>

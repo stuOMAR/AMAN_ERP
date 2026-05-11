@@ -20,10 +20,6 @@ function StockHome() {
 
     useEffect(() => {
         const fetchStats = async () => {
-            if (!hasPermission('stock.reports')) {
-                setLoading(false);
-                return;
-            }
             try {
                 setLoading(true)
                 const params = {}
@@ -57,19 +53,19 @@ function StockHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.total_products')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('stock.reports') ? '***' : (loading ? '...' : stats.product_count)}
+                        {loading ? '...' : stats.product_count}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.inventory_value')}</div>
                     <div className="metric-value text-success">
-                        {!hasPermission('stock.reports') ? '***' : (loading ? '...' : formatNumber(stats.inventory_value))} {hasPermission('stock.reports') && <small>{currency}</small>}
+                        {loading ? '...' : formatNumber(stats.inventory_value)} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.low_stock')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('stock.reports') ? '***' : (loading ? '...' : stats.low_stock_count)}
+                        {loading ? '...' : stats.low_stock_count}
                     </div>
                 </div>
             </div>

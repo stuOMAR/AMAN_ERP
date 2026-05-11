@@ -120,13 +120,13 @@ const CustomerStatement = () => {
                         <div className="metric-card">
                             <div className="metric-label">{t('sales.reports.statement.summary.opening_balance')}</div>
                             <div className="metric-value text-secondary">
-                                {hasPermission('reports.view') ? formatNumber(statement.opening_balance || 0) : '***'} {hasPermission('reports.view') && <small>{currency}</small>}
+                                {formatNumber(statement.opening_balance || 0)} {hasPermission('reports.view') && <small>{currency}</small>}
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('sales.reports.statement.summary.closing_balance')}</div>
                             <div className="metric-value" style={{ color: statement.closing_balance > 0 ? 'var(--error)' : 'var(--success)' }}>
-                                {hasPermission('reports.view') ? formatNumber(statement.closing_balance || 0) : '***'} {hasPermission('reports.view') && <small>{currency}</small>}
+                                {formatNumber(statement.closing_balance || 0)} {hasPermission('reports.view') && <small>{currency}</small>}
                             </div>
                         </div>
                     </div>
@@ -169,12 +169,12 @@ const CustomerStatement = () => {
                                                 </span>
                                             </td>
                                             <td style={{ color: 'var(--error)', fontWeight: t_item.debit > 0 ? '600' : '400' }}>
-                                                {hasPermission('reports.view') ? (t_item.debit > 0 ? formatNumber(t_item.debit) : '-') : '***'}
+                                                {(t_item.debit > 0 ? formatNumber(t_item.debit) : '-')}
                                             </td>
                                             <td style={{ color: 'var(--success)', fontWeight: t_item.credit > 0 ? '600' : '400' }}>
-                                                {hasPermission('reports.view') ? (t_item.credit > 0 ? formatNumber(t_item.credit) : '-') : '***'}
+                                                {(t_item.credit > 0 ? formatNumber(t_item.credit) : '-')}
                                             </td>
-                                            <td className="font-medium">{hasPermission('reports.view') ? formatNumber(t_item.balance) : '***'}</td>
+                                            <td className="font-medium">{formatNumber(t_item.balance)}</td>
                                         </tr>
                                     ))}
                                 </tbody>

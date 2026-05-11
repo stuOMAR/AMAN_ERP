@@ -272,19 +272,19 @@ const LeaveList = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('common.count', 'Total Requests')}</div>
                     <div className="metric-value text-primary">
-                        {hasPermission('hr.reports') ? totalRequests : '***'}
+                        {totalRequests}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('status.pending', 'Pending')}</div>
                     <div className="metric-value text-warning">
-                        {hasPermission('hr.reports') ? pendingRequests : '***'}
+                        {pendingRequests}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('status.approved', 'Approved')}</div>
                     <div className="metric-value text-success">
-                        {hasPermission('hr.reports') ? approvedRequests : '***'}
+                        {approvedRequests}
                     </div>
                 </div>
             </div>

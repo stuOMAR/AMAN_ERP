@@ -12,7 +12,7 @@ export const authAPI = {
             headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
         })
     },
-    me: () => api.get('/auth/me'),
+    me: (config) => api.get('/auth/me', config),
     updateMe: (data) => api.put('/auth/me', data),
     // SEC-C4b: refresh token travels in the HttpOnly cookie. The backend
     // picks it from the cookie; we no longer read it from localStorage.

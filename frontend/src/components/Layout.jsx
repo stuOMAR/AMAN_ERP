@@ -16,10 +16,14 @@ function Layout({ children }) {
         const user = getUser();
         const syncUser = async () => {
             try {
-                const response = await authAPI.me()
+                // skipAbort: this request must survive route changes so user
+                // permissions stay populated (prevents '***' placeholders).
+                const response = await authAPI.me({ skipAbort: true })
                 localStorage.setItem('user', JSON.stringify(response.data))
             } catch (err) {
-                console.error("Session sync failed", err)
+                if (err?.code !== 'ERR_CANCELED') {
+                    console.error("Session sync failed", err)
+                }
             }
         }
         if (user) syncUser();

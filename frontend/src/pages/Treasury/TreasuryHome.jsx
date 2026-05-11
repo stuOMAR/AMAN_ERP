@@ -18,10 +18,6 @@ function TreasuryHome() {
 
     useEffect(() => {
         const fetchStats = async () => {
-            if (!hasPermission('reports.view')) {
-                setLoading(false);
-                return;
-            }
             try {
                 setLoading(true)
                 const branchId = currentBranch?.id || null
@@ -64,30 +60,26 @@ function TreasuryHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('common.total_balance')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_balance))} {hasPermission('reports.view') && <small>{currency}</small>}
+                        {initialLoad ? '...' : formatNumber(stats.total_balance)} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.cash_accounts')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.cash_count)}
+                        {initialLoad ? '...' : stats.cash_count}
                     </div>
-                    {hasPermission('reports.view') && (
-                        <div className="metric-change">
-                            {initialLoad ? '' : t('common.active')}
-                        </div>
-                    )}
+                    <div className="metric-change">
+                        {initialLoad ? '' : t('common.active')}
+                    </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.bank_accounts')}</div>
                     <div className="metric-value text-secondary">
-                        {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.bank_count)}
+                        {initialLoad ? '...' : stats.bank_count}
                     </div>
-                    {hasPermission('reports.view') && (
-                        <div className="metric-change">
-                            {initialLoad ? '' : t('common.active')}
-                        </div>
-                    )}
+                    <div className="metric-change">
+                        {initialLoad ? '' : t('common.active')}
+                    </div>
                 </div>
             </div>
 

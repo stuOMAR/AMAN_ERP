@@ -179,14 +179,14 @@ const AgingReport = () => {
                     <div key={b.name} className="metric-card" style={{ borderRight: `4px solid ${['#10B981', '#FBBF24', '#F97316', '#EF4444'][i]}` }}>
                         <div className="metric-label">{b.name} {t('sales.reports.aging.buckets.days')}</div>
                         <div className="metric-value" style={{ color: ['#10B981', '#FBBF24', '#F97316', '#EF4444'][i] }}>
-                            {hasPermission('reports.view') ? formatNumber(b.amount) : '***'} {hasPermission('reports.view') && <small>{currency}</small>}
+                            {formatNumber(b.amount)} {hasPermission('reports.view') && <small>{currency}</small>}
                         </div>
                     </div>
                 ))}
                 <div className="metric-card" style={{ background: 'var(--bg-secondary)', borderRight: '4px solid var(--error)' }}>
                     <div className="metric-label">{t('sales.reports.aging.total')}</div>
                     <div className="metric-value" style={{ color: 'var(--error)' }}>
-                        {hasPermission('reports.view') ? formatNumber(totalDue) : '***'} {hasPermission('reports.view') && <small>{currency}</small>}
+                        {formatNumber(totalDue)} {hasPermission('reports.view') && <small>{currency}</small>}
                     </div>
                 </div>
             </div>
@@ -218,15 +218,15 @@ const AgingReport = () => {
                                     <td className="text-muted">{row.invoice}</td>
                                     <td>{row.date}</td>
                                     <td className="font-medium" style={{ color: 'var(--error)' }}>
-                                        {hasPermission('reports.view') ? formatNumber(row.amount) : '***'}
+                                        {formatNumber(row.amount)}
                                     </td>
-                                    <td>{hasPermission('reports.view') ? row.days : '***'}</td>
+                                    <td>{row.days}</td>
                                     <td>
                                         <span className={`badge ${row.days > 90 ? 'badge-danger' :
                                             row.days > 60 ? 'badge-warning' :
                                                 'badge-success'
                                             }`}>
-                                            {hasPermission('reports.view') ? row.bucket : '***'}
+                                            {row.bucket}
                                         </span>
                                     </td>
                                 </tr>

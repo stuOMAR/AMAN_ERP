@@ -23,11 +23,6 @@ function SalesHome() {
     useEffect(() => {
         const timer = setTimeout(() => {
             const fetchStats = async () => {
-                if (!hasPermission('sales.reports')) {
-                    setLoading(false);
-                    setInitialLoad(false);
-                    return;
-                }
                 try {
                     setLoading(true)
                     const params = {}
@@ -60,24 +55,22 @@ function SalesHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.monthly_sales')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.monthly_sales))} {hasPermission('sales.reports') && <small>{currency}</small>}
+                        {initialLoad ? '...' : formatNumber(stats.monthly_sales)} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.receivables')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_receivables))} {hasPermission('sales.reports') && <small>{currency}</small>}
+                        {initialLoad ? '...' : formatNumber(stats.total_receivables)} <small>{currency}</small>
                     </div>
-                    {hasPermission('sales.reports') && (
-                        <div className="metric-change">
-                            {initialLoad ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
-                        </div>
-                    )}
+                    <div className="metric-change">
+                        {initialLoad ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
+                    </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.total_customers')}</div>
                     <div className="metric-value text-secondary">
-                        {!hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : stats.customer_count)}
+                        {initialLoad ? '...' : stats.customer_count}
                     </div>
                 </div>
             </div>

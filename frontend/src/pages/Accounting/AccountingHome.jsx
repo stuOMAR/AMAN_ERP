@@ -18,10 +18,6 @@ function AccountingHome() {
     useEffect(() => {
         const timer = setTimeout(() => {
         const fetchStats = async () => {
-            if (!hasPermission('reports.view')) {
-                setLoading(false);
-                return;
-            }
             try {
                 setLoading(true)
                 const response = await accountingAPI.getSummary({ branch_id: currentBranch?.id })
@@ -146,7 +142,7 @@ function AccountingHome() {
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.label}</div>
                         <div className="metric-value">
-                            {!hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(metric.value))} {hasPermission('reports.view') && <small>{currency}</small>}
+                            {initialLoad ? '...' : formatNumber(metric.value)} <small>{currency}</small>
                         </div>
                     </div>
                 ))}

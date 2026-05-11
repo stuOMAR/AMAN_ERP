@@ -178,13 +178,13 @@ const Branches = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('branches.total_branches')}</div>
                     <div className="metric-value text-primary">
-                        {hasPermission('reports.view') ? branches.length : '***'}
+                        {branches.length}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('branches.active_branches')}</div>
                     <div className="metric-value text-success">
-                        {hasPermission('reports.view') ? branches.filter(b => b.is_active).length : '***'}
+                        {branches.filter(b => b.is_active).length}
                     </div>
                 </div>
             </div>

@@ -24,11 +24,6 @@ function BuyingHome() {
     const showSupplierRatings = getIndustryFeature('buying.supplier_ratings')
     useEffect(() => {
         const fetchStats = async () => {
-            if (!hasPermission('buying.reports')) {
-                setLoading(false);
-                setInitialLoad(false);
-                return;
-            }
             try {
                 setLoading(true)
                 const params = {}
@@ -62,19 +57,19 @@ function BuyingHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.monthly_purchases')}</div>
                     <div className="metric-value text-primary">
-                        {!hasPermission('buying.reports') ? '***' : (loading ? '...' : formatNumber(stats.monthly_purchases))} {hasPermission('buying.reports') && <small>{currency}</small>}
+                        {loading ? '...' : formatNumber(stats.monthly_purchases)} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.total_payables')}</div>
                     <div className="metric-value text-warning">
-                        {!hasPermission('buying.reports') ? '***' : (loading ? '...' : formatNumber(stats.total_payables))} {hasPermission('buying.reports') && <small>{currency}</small>}
+                        {loading ? '...' : formatNumber(stats.total_payables)} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.supplier_count')}</div>
                     <div className="metric-value text-secondary">
-                        {!hasPermission('buying.reports') ? '***' : (loading ? '...' : stats.supplier_count)}
+                        {loading ? '...' : stats.supplier_count}
                     </div>
                 </div>
             </div>

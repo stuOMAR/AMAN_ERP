@@ -117,13 +117,13 @@ const SupplierStatement = () => {
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.opening_balance')}</div>
                             <div className="metric-value text-secondary">
-                                {hasPermission('reports.view') ? statement.opening_balance?.toLocaleString() : '***'} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                                {statement.opening_balance?.toLocaleString()} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.closing_balance')}</div>
                             <div className="metric-value" style={{ color: statement.closing_balance > 0 ? 'var(--error)' : 'var(--success)' }}>
-                                {hasPermission('reports.view') ? statement.closing_balance?.toLocaleString() : '***'} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                                {statement.closing_balance?.toLocaleString()} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                     </div>
@@ -166,12 +166,12 @@ const SupplierStatement = () => {
                                                 </span>
                                             </td>
                                             <td style={{ color: 'var(--success)', fontWeight: t.debit > 0 ? '600' : '400' }}>
-                                                {hasPermission('reports.view') ? (t.debit > 0 ? t.debit?.toLocaleString() : '-') : '***'}
+                                                {(t.debit > 0 ? t.debit?.toLocaleString() : '-')}
                                             </td>
                                             <td style={{ color: 'var(--error)', fontWeight: t.credit > 0 ? '600' : '400' }}>
-                                                {hasPermission('reports.view') ? (t.credit > 0 ? t.credit?.toLocaleString() : '-') : '***'}
+                                                {(t.credit > 0 ? t.credit?.toLocaleString() : '-')}
                                             </td>
-                                            <td className="font-medium">{hasPermission('reports.view') ? t.balance?.toLocaleString() : '***'}</td>
+                                            <td className="font-medium">{t.balance?.toLocaleString()}</td>
                                         </tr>
                                     ))}
                                 </tbody>
