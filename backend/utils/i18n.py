@@ -68,11 +68,17 @@ def _load_messages() -> dict[str, dict[str, str]]:
         return {"en": BUILTIN_MESSAGES, "ar": {}}
 
 
-def _normalize_lang(lang: str | None) -> str:
-    """Normalize language values like 'ar-SA' to 'ar'."""
+def _normalize_lang(lang: Any) -> str:
+    """Normalize language values like 'ar-SA' to 'ar'. Can handle Request objects."""
+    if lang is not None and not isinstance(lang, str):
+        try:
+            lang = getattr(getattr(lang, "state", None), "lang", None)
+        except Exception:
+            lang = None
+
     if not lang:
         return "en"
-    return lang.split("-")[0].lower()
+    return str(lang).split("-")[0].lower()
 
 
 def _humanize_error_key(error_key: str) -> str:
@@ -83,7 +89,7 @@ def _humanize_error_key(error_key: str) -> str:
     return cleaned[0].upper() + cleaned[1:]
 
 
-def i18n_message(message_key: str, lang: str | None = None, **fmt: Any) -> str:
+def i18n_message(message_key: str, lang: Any = None, **fmt: Any) -> str:
     """Resolve a message key to display text with safe fallback formatting."""
     messages = _load_messages()
     norm_lang = _normalize_lang(lang)
