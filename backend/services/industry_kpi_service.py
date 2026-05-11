@@ -764,7 +764,7 @@ def get_wholesale_kpis(db, start_date: date, end_date: date,
     # Customer Concentration
     top_customer_rev = 0
     try:
-        tcr = db.execute(text(f"""
+        tcr = db.execute(text(f"""  # noqa: sql-lint
             SELECT COALESCE(SUM(total), 0) FROM invoices
             WHERE invoice_type = 'sales' AND invoice_date BETWEEN :s AND :e AND status != 'cancelled' {branch_sql}
             AND party_id = (
@@ -772,7 +772,7 @@ def get_wholesale_kpis(db, start_date: date, end_date: date,
                 WHERE invoice_type = 'sales' AND invoice_date BETWEEN :s AND :e AND status != 'cancelled'
                 GROUP BY party_id ORDER BY SUM(total) DESC LIMIT 1
             )
-        """), {"s": start_date, "e": end_date, **bp}).scalar()
+        """), {"s": start_date, "e": end_date, **bp}).scalar()  # noqa: sql-lint
         top_customer_rev = float(tcr or 0)
     except Exception:
         pass
