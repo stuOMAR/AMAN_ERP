@@ -13,11 +13,11 @@ const KPI_COMPARISON_OPS = [
 ];
 
 const CHANNEL_OPTIONS = [
-    { value: 'email', label: '📧 Email', icon: '📧' },
-    { value: 'sms', label: '📱 SMS', icon: '📱' },
-    { value: 'push', label: '🔔 Push', icon: '🔔' },
-    { value: 'in_app', label: '📲 In-App', icon: '📲' },
-    { value: 'webhook', label: '🔗 Webhook', icon: '🔗' },
+    { value: 'email', icon: '📧' },
+    { value: 'sms', icon: '📱' },
+    { value: 'push', icon: '🔔' },
+    { value: 'in_app', icon: '📲' },
+    { value: 'webhook', icon: '🔗' },
 ];
 
 export default function KpiAdmin() {
@@ -203,7 +203,7 @@ export default function KpiAdmin() {
                                                 setForm({ ...form, channels });
                                             }}
                                         />
-                                        {ch.label}
+                                        {ch.icon} {t(`kpi_admin.channels.${ch.value}`)}
                                     </label>
                                 ))}
                             </div>

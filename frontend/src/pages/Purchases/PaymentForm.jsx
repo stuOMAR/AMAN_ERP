@@ -92,7 +92,11 @@ function PaymentForm() {
         const newAllocations = [];
 
         // Filter invoices by type
-        const filteredInvoices = invoices.filter(inv => (inv.invoice_type === (formData.voucher_type === 'payment' ? 'purchase' : 'purchase_return')));
+        const filteredInvoices = invoices.filter(inv => (
+            formData.voucher_type === 'payment'
+                ? ['purchase', 'purchase_debit_note'].includes(inv.invoice_type)
+                : ['purchase_return', 'purchase_credit_note'].includes(inv.invoice_type)
+        ));
 
         // Sort invoices by date (FIFO)
         const sortedInvoices = [...filteredInvoices].sort((a, b) =>
@@ -448,7 +452,7 @@ function PaymentForm() {
                             </div>
                         </div>
 
-                        {outstandingInvoices.filter(inv => formData.voucher_type === 'payment' ? inv.invoice_type === 'purchase' : inv.invoice_type === 'purchase_return').length === 0 ? (
+                        {outstandingInvoices.filter(inv => formData.voucher_type === 'payment' ? ['purchase', 'purchase_debit_note'].includes(inv.invoice_type) : ['purchase_return', 'purchase_credit_note'].includes(inv.invoice_type)).length === 0 ? (
                             <div className="p-8 text-center text-gray-400 bg-gray-50 rounded-lg border-2 border-dashed">
                                 {formData.supplier_id ? (formData.voucher_type === 'payment' ? t('buying.payments.form.empty_invoices') : t('buying.payments.form.empty_returns')) : t('buying.payments.form.select_supplier_first')}
                             </div>
@@ -466,7 +470,7 @@ function PaymentForm() {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {outstandingInvoices.filter(inv => formData.voucher_type === 'payment' ? inv.invoice_type === 'purchase' : inv.invoice_type === 'purchase_return').map(inv => (
+                                        {outstandingInvoices.filter(inv => formData.voucher_type === 'payment' ? ['purchase', 'purchase_debit_note'].includes(inv.invoice_type) : ['purchase_return', 'purchase_credit_note'].includes(inv.invoice_type)).map(inv => (
                                             <tr key={inv.id} style={{ opacity: (inv.currency || baseCurrency) !== recordCurrency ? 0.6 : 1 }}>
                                                 <td className="font-medium text-purple-700">{inv.invoice_number}</td>
                                                 <td>{formatShortDate(inv.invoice_date)}</td>

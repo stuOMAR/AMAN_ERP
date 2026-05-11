@@ -81,6 +81,8 @@ function PurchaseOrderDetails() {
         return <div className="workspace fade-in p-8 text-center">{t('buying.orders.not_found')}</div>;
     }
 
+    const hasRemainingToInvoice = order.items?.some(item => Number(item.remaining_to_invoice || 0) > 0);
+
     return (
         <div className="workspace fade-in">
             <div className="workspace-header">
@@ -108,7 +110,7 @@ function PurchaseOrderDetails() {
                             📥 {t('buying.orders.receive')}
                         </button>
                     )}
-                    {(order.status === 'approved' || order.status === 'partial' || order.status === 'received') && hasPermission('buying.create') && (
+                    {(order.status === 'approved' || order.status === 'partial' || order.status === 'received') && hasPermission('buying.create') && hasRemainingToInvoice && (
                         <button
                             className="btn btn-success"
                             onClick={() => navigate('/buying/invoices/new', { state: { fromOrder: order } })}
@@ -167,6 +169,7 @@ function PurchaseOrderDetails() {
                             <th style={{ textAlign: 'center' }}>{t('buying.orders.item.qty_ordered')}</th>
                             <th style={{ textAlign: 'center' }}>{t('buying.orders.item.qty_received')}</th>
                             <th style={{ textAlign: 'center' }}>{t('buying.orders.item.qty_remaining')}</th>
+                            <th style={{ textAlign: 'center' }}>{t('buying.orders.item.qty_to_invoice', 'Remaining to invoice')}</th>
                             <th style={{ textAlign: 'left' }}>{t('buying.orders.item.unit_price')}</th>
                             <th style={{ textAlign: 'left' }}>{t('buying.orders.item.total')}</th>
                         </tr>
@@ -175,6 +178,7 @@ function PurchaseOrderDetails() {
                         {order.items?.map((item, idx) => {
                             const received = item.received_quantity || 0;
                             const remaining = item.quantity - received;
+                            const remainingToInvoice = Number(item.remaining_to_invoice || 0);
                             return (
                                 <tr key={idx}>
                                     <td>
@@ -187,6 +191,9 @@ function PurchaseOrderDetails() {
                                     <td style={{ textAlign: 'center', color: remaining > 0 ? 'var(--warning)' : 'var(--success)' }}>
                                         {remaining}
                                     </td>
+                                    <td style={{ textAlign: 'center', color: remainingToInvoice > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                                        {remainingToInvoice}
+                                    </td>
                                     <td>{formatNumber(item.unit_price)} <small>{currency}</small></td>
                                     <td style={{ fontWeight: '500' }}>{formatNumber(item.total)} <small>{currency}</small></td>
                                 </tr>
@@ -195,7 +202,7 @@ function PurchaseOrderDetails() {
                     </tbody>
                     <tfoot>
                         <tr>
-                            <td colSpan="5" style={{ textAlign: 'left', fontWeight: '600' }}>{t('common.total')}</td>
+                            <td colSpan="6" style={{ textAlign: 'left', fontWeight: '600' }}>{t('common.total')}</td>
                             <td style={{ fontWeight: '600', fontSize: '16px' }}>
                                 {formatNumber(order.total)} {currency}
                             </td>

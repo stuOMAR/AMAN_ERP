@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * TechnicianProfileAdmin — CRUD + match preview for technician profiles.
  */
 export default function TechnicianProfileAdmin() {
+  const { t } = useTranslation();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     employee_id: '',
@@ -57,11 +59,11 @@ export default function TechnicianProfileAdmin() {
 
   return (
     <div className="technician-admin">
-      <h2>Technician Profiles</h2>
+      <h2>{t('fsm.technician_profiles.title')}</h2>
 
       <div className="toolbar">
         <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-          {showForm ? 'Cancel' : 'Add Technician'}
+          {showForm ? t('fsm.technician_profiles.buttons.cancel') : t('fsm.technician_profiles.buttons.add_technician')}
         </button>
       </div>
 
@@ -80,47 +82,47 @@ export default function TechnicianProfileAdmin() {
         >
           <div className="row">
             <div className="col-md-3">
-              <label>Employee ID</label>
+              <label>{t('fsm.technician_profiles.form.employee_id')}</label>
               <input type="number" className="form-control" value={form.employee_id}
                 onChange={(e) => setForm({ ...form, employee_id: e.target.value })} required />
             </div>
             <div className="col-md-3">
-              <label>Skills (comma-separated)</label>
+              <label>{t('fsm.technician_profiles.form.skills')}</label>
               <input type="text" className="form-control" value={form.skills}
                 onChange={(e) => setForm({ ...form, skills: e.target.value })} required />
             </div>
             <div className="col-md-3">
-              <label>Zones</label>
+              <label>{t('fsm.technician_profiles.form.zones')}</label>
               <input type="text" className="form-control" value={form.zones}
                 onChange={(e) => setForm({ ...form, zones: e.target.value })} />
             </div>
             <div className="col-md-3">
-              <label>Certifications</label>
+              <label>{t('fsm.technician_profiles.form.certifications')}</label>
               <input type="text" className="form-control" value={form.certifications}
                 onChange={(e) => setForm({ ...form, certifications: e.target.value })} />
             </div>
           </div>
           <button type="submit" className="btn btn-success mt-2" disabled={createMutation.isLoading}>
-            {createMutation.isLoading ? 'Saving...' : 'Save'}
+            {createMutation.isLoading ? t('fsm.technician_profiles.buttons.saving') : t('fsm.technician_profiles.buttons.save')}
           </button>
         </form>
       )}
 
       <div className="match-section my-3">
-        <h3>Match Technicians</h3>
+        <h3>{t('fsm.technician_profiles.match_section.title')}</h3>
         <div className="d-flex gap-2">
-          <input type="text" className="form-control" placeholder="Required skills (comma-separated)"
+          <input type="text" className="form-control" placeholder={t('fsm.technician_profiles.match_section.required_skills')}
             value={matchSkills} onChange={(e) => setMatchSkills(e.target.value)} />
           <button className="btn btn-secondary" onClick={() => matchMutation.mutate(matchSkills)}
             disabled={matchMutation.isLoading || !matchSkills}>
-            {matchMutation.isLoading ? 'Matching...' : 'Find Match'}
+            {matchMutation.isLoading ? t('fsm.technician_profiles.buttons.matching') : t('fsm.technician_profiles.buttons.find_match')}
           </button>
         </div>
 
         {matchResults && (
           <table className="table table-sm mt-2">
             <thead>
-              <tr><th>Technician</th><th>Score</th><th>Matched</th><th>Missing</th></tr>
+              <tr><th>{t('fsm.technician_profiles.match_table.technician')}</th><th>{t('fsm.technician_profiles.match_table.score')}</th><th>{t('fsm.technician_profiles.match_table.matched')}</th><th>{t('fsm.technician_profiles.match_table.missing')}</th></tr>
             </thead>
             <tbody>
               {matchResults.map((c, i) => (
@@ -131,16 +133,16 @@ export default function TechnicianProfileAdmin() {
                   <td>{c.missing_skills.join(', ') || '—'}</td>
                 </tr>
               ))}
-              {matchResults.length === 0 && <tr><td colSpan={4} className="text-muted">No matches</td></tr>}
+              {matchResults.length === 0 && <tr><td colSpan={4} className="text-muted">{t('fsm.technician_profiles.no_matches')}</td></tr>}
             </tbody>
           </table>
         )}
       </div>
 
-      <h3>All Technicians</h3>
-      {isLoading ? <p>Loading...</p> : (
+      <h3>{t('fsm.technician_profiles.all_technicians')}</h3>
+      {isLoading ? <p>{t('fsm.technician_profiles.loading')}</p> : (
         <table className="table table-sm">
-          <thead><tr><th>ID</th><th>Employee</th><th>Skills</th><th>Zones</th></tr></thead>
+          <thead><tr><th>{t('fsm.technician_profiles.table.id')}</th><th>{t('fsm.technician_profiles.table.employee')}</th><th>{t('fsm.technician_profiles.table.skills')}</th><th>{t('fsm.technician_profiles.table.zones')}</th></tr></thead>
           <tbody>
             {technicians?.map(t => (
               <tr key={t.id}>

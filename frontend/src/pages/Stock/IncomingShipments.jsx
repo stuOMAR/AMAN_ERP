@@ -15,6 +15,7 @@ const IncomingShipments = () => {
     const [shipments, setShipments] = useState([]);
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
+    const [actionLoadingId, setActionLoadingId] = useState(null);
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -30,6 +31,7 @@ const IncomingShipments = () => {
             setShipments(res.data);
         } catch (err) {
             console.error("Failed to load incoming shipments", err);
+            toastEmitter.emit(err.response?.data?.detail || t('stock.shipments.validation.error_load'), 'error');
         } finally {
             setLoading(false);
             setInitialLoad(false);
@@ -40,23 +42,14 @@ const IncomingShipments = () => {
         if (!window.confirm(t('stock.shipments.incoming_page.validation.confirm_dialog'))) return;
 
         try {
+            setActionLoadingId(id);
             await inventoryAPI.confirmShipment(id);
             toastEmitter.emit(t('stock.shipments.incoming_page.validation.success_confirm'), 'success');
             fetchIncoming();
         } catch (err) {
             toastEmitter.emit(err.response?.data?.detail || t('stock.shipments.incoming_page.validation.error_confirm'), 'error');
-        }
-    };
-
-    const handleCancel = async (id) => {
-        if (!window.confirm(t('stock.shipments.incoming_page.validation.cancel_dialog'))) return;
-
-        try {
-            await inventoryAPI.cancelShipment(id);
-            toastEmitter.emit(t('stock.shipments.incoming_page.validation.success_cancel'), 'success');
-            fetchIncoming();
-        } catch (err) {
-            toastEmitter.emit(err.response?.data?.detail || t('stock.shipments.incoming_page.validation.error_cancel'), 'error');
+        } finally {
+            setActionLoadingId(null);
         }
     };
 
@@ -107,14 +100,16 @@ const IncomingShipments = () => {
                                     </p>
                                 </div>
                                 <span style={{
-                                    background: '#FEF3C7',
-                                    color: '#D97706',
+                                    background: s.status === 'dispatched' ? '#DBEAFE' : '#FEF3C7',
+                                    color: s.status === 'dispatched' ? '#2563EB' : '#D97706',
                                     padding: '6px 14px',
                                     borderRadius: '16px',
                                     fontSize: '13px',
                                     fontWeight: '600'
                                 }}>
-                                    {t('stock.shipments.incoming_page.waiting_confirmation')}
+                                    {s.status === 'dispatched'
+                                        ? t('stock.shipments.status.dispatched', 'تم الشحن')
+                                        : t('stock.shipments.incoming_page.waiting_confirmation')}
                                 </span>
                             </div>
 
@@ -141,15 +136,10 @@ const IncomingShipments = () => {
                             {/* Actions */}
                             <div style={{ display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
                                 <button
-                                    className="btn btn-secondary"
-                                    onClick={() => handleCancel(s.id)}
-                                >
-                                    {t('stock.shipments.incoming_page.actions.reject')}
-                                </button>
-                                <button
                                     className="btn btn-primary"
                                     style={{ background: '#059669' }}
                                     onClick={() => handleConfirm(s.id)}
+                                    disabled={actionLoadingId === s.id}
                                 >
                                     {t('stock.shipments.incoming_page.actions.confirm')}
                                 </button>

@@ -44,6 +44,7 @@ const ShipmentList = () => {
     const getStatusBadge = (status) => {
         const styles = {
             pending: { bg: '#FEF3C7', color: '#D97706', label: t('stock.shipments.status.pending') },
+            dispatched: { bg: '#DBEAFE', color: '#2563EB', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
             received: { bg: '#D1FAE5', color: '#059669', label: t('stock.shipments.status.received') },
             cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') }
         };
@@ -144,6 +145,7 @@ const ShipmentList = () => {
                     label: t('stock.shipments.filter_status'),
                     options: [
                         { value: 'pending', label: t('stock.shipments.status.pending') },
+                        { value: 'dispatched', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
                         { value: 'received', label: t('stock.shipments.status.received') },
                         { value: 'cancelled', label: t('stock.shipments.status.cancelled') },
                     ],

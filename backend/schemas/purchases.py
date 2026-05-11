@@ -1,17 +1,19 @@
 """Purchases module Pydantic schemas."""
 from decimal import Decimal
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from typing import List, Optional
 from datetime import date
 
 
 class PurchaseLineItem(BaseModel):
     product_id: Optional[int] = None
+    po_line_id: Optional[int] = None  # T020: Link to PO line for invoicing validation
     description: str
-    quantity: Decimal
-    unit_price: Decimal
+    quantity: Decimal = Field(..., gt=0)
+    unit_price: Decimal = Field(..., gt=0)
     tax_rate: Decimal
-    discount: Decimal = Decimal("0")
+    tax_rate_id: Optional[int] = None
+    discount: Decimal = Field(default=Decimal("0"), ge=0)
     markup: Decimal = Decimal("0")
 
 
@@ -20,7 +22,7 @@ class PurchaseCreate(BaseModel):
     party_site_id: Optional[int] = None  # موقع المورد (اختياري)
     invoice_date: date
     due_date: Optional[date] = None
-    items: List[PurchaseLineItem]
+    items: List[PurchaseLineItem] = Field(..., min_length=1)
     notes: Optional[str] = None
     payment_method: str = "cash"
     down_payment_method: Optional[str] = None
@@ -56,7 +58,7 @@ class POCreate(BaseModel):
     party_site_id: Optional[int] = None
     order_date: date
     expected_date: Optional[date] = None
-    items: List[PurchaseLineItem]
+    items: List[PurchaseLineItem] = Field(..., min_length=1)
     notes: Optional[str] = None
     branch_id: Optional[int] = None
     currency: Optional[str] = None
@@ -70,11 +72,11 @@ class POCreate(BaseModel):
 
 class ReceiveItem(BaseModel):
     line_id: int
-    received_quantity: Decimal
+    received_quantity: Decimal = Field(..., gt=0)
 
 
 class POReceiveRequest(BaseModel):
-    items: List[ReceiveItem]
+    items: List[ReceiveItem] = Field(..., min_length=1)
     warehouse_id: int
     notes: Optional[str] = None
 

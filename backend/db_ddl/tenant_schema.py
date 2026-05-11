@@ -686,6 +686,27 @@ def get_additional_base_tables_sql() -> str:
         updated_by INTEGER REFERENCES company_users(id)
     );
 
+    CREATE TABLE IF NOT EXISTS rfq_response_lines (
+        id SERIAL PRIMARY KEY,
+        response_id INTEGER NOT NULL REFERENCES rfq_responses(id) ON DELETE CASCADE,
+        rfq_line_id INTEGER NOT NULL REFERENCES rfq_lines(id) ON DELETE CASCADE,
+        unit_price NUMERIC(15, 4) NOT NULL DEFAULT 0,
+        total_price NUMERIC(15, 4) NOT NULL DEFAULT 0,
+        notes TEXT,
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        UNIQUE(response_id, rfq_line_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS rfq_suppliers (
+        id SERIAL PRIMARY KEY,
+        rfq_id INTEGER NOT NULL REFERENCES request_for_quotations(id) ON DELETE CASCADE,
+        party_id INTEGER NOT NULL REFERENCES parties(id),
+        status VARCHAR(20) DEFAULT 'invited',
+        invited_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        responded_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
     -- ===== SUPPLIER RATINGS =====
     CREATE TABLE IF NOT EXISTS supplier_ratings (
         id SERIAL PRIMARY KEY,
@@ -954,6 +975,7 @@ def get_core_dependent_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         invoice_id INTEGER NOT NULL REFERENCES invoices(id) ON DELETE CASCADE,
         product_id INTEGER REFERENCES products(id) ON DELETE SET NULL,
+        po_line_id INTEGER REFERENCES purchase_order_lines(id) ON DELETE SET NULL,
         description VARCHAR(500),
         quantity DECIMAL(18, 4) DEFAULT 1,
         unit_price DECIMAL(18, 4) DEFAULT 0,
@@ -968,6 +990,7 @@ def get_core_dependent_tables_sql() -> str:
         created_by VARCHAR(100),
         updated_by VARCHAR(100)
     );
+    CREATE INDEX IF NOT EXISTS idx_invoice_lines_po_line_id ON invoice_lines(po_line_id);
     CREATE INDEX IF NOT EXISTS idx_invoice_lines_tax_rate ON invoice_lines(tax_rate_id);
 
     CREATE TABLE IF NOT EXISTS supplier_transactions (
@@ -1044,12 +1067,36 @@ def get_additional_dependent_tables_sql() -> str:
         discount DECIMAL(18, 4) DEFAULT 0,
         total DECIMAL(18, 4) DEFAULT 0,
         received_quantity DECIMAL(18, 4) DEFAULT 0,
+        invoiced_quantity DECIMAL(18, 4) DEFAULT 0,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         created_by INTEGER REFERENCES company_users(id),
         updated_by INTEGER REFERENCES company_users(id)
     );
     CREATE INDEX IF NOT EXISTS idx_purchase_order_lines_tax_rate ON purchase_order_lines(tax_rate_id);
+
+    CREATE TABLE IF NOT EXISTS po_receipts (
+        id SERIAL PRIMARY KEY,
+        po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+        receipt_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        created_by INTEGER REFERENCES company_users(id),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS po_receipt_lines (
+        id SERIAL PRIMARY KEY,
+        receipt_id INTEGER NOT NULL REFERENCES po_receipts(id) ON DELETE CASCADE,
+        po_line_id INTEGER NOT NULL REFERENCES purchase_order_lines(id) ON DELETE RESTRICT,
+        product_id INTEGER REFERENCES products(id),
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
+        quantity DECIMAL(18, 4) NOT NULL,
+        unit_cost DECIMAL(18, 4) NOT NULL DEFAULT 0,
+        total_cost DECIMAL(18, 4) NOT NULL DEFAULT 0,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_po_line_id ON po_receipt_lines(po_line_id);
+    CREATE INDEX IF NOT EXISTS idx_po_receipt_lines_receipt_id ON po_receipt_lines(receipt_id);
 
     CREATE TABLE IF NOT EXISTS sales_quotations (
         id SERIAL PRIMARY KEY,
@@ -4556,6 +4603,7 @@ def get_system_completion_tables_sql() -> str:
         allocation_method VARCHAR(30) DEFAULT 'by_value',
         status VARCHAR(20) DEFAULT 'draft',
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         notes TEXT,
         branch_id INTEGER REFERENCES branches(id),
         created_by INTEGER REFERENCES company_users(id),
@@ -4594,6 +4642,51 @@ def get_system_completion_tables_sql() -> str:
         created_by INTEGER REFERENCES company_users(id),
         updated_by INTEGER REFERENCES company_users(id)
     );
+
+    CREATE OR REPLACE VIEW supplier_subledger AS
+    SELECT i.party_id, i.branch_id, i.currency,
+           'purchase_invoice' AS document_type, i.id AS document_id,
+           i.invoice_number AS document_number, i.invoice_date AS document_date,
+           0::numeric AS debit, i.total AS credit,
+           0::numeric AS base_debit, (i.total * COALESCE(i.exchange_rate, 1)) AS base_credit,
+           COALESCE(i.exchange_rate, 1) AS exchange_rate
+    FROM invoices i
+    WHERE i.invoice_type = 'purchase' AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT i.party_id, i.branch_id, i.currency,
+           'purchase_return' AS document_type, i.id, i.invoice_number, i.invoice_date,
+           i.total, 0::numeric, (i.total * COALESCE(i.exchange_rate, 1)), 0::numeric,
+           COALESCE(i.exchange_rate, 1)
+    FROM invoices i
+    WHERE i.invoice_type = 'purchase_return' AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT pv.party_id, pv.branch_id, pv.currency,
+           pv.voucher_type AS document_type, pv.id, pv.voucher_number, pv.voucher_date,
+           CASE WHEN pv.voucher_type = 'payment' THEN pv.amount ELSE 0 END AS debit,
+           CASE WHEN pv.voucher_type = 'refund' THEN pv.amount ELSE 0 END AS credit,
+           CASE WHEN pv.voucher_type = 'payment' THEN (pv.amount * COALESCE(pv.exchange_rate, 1)) ELSE 0 END AS base_debit,
+           CASE WHEN pv.voucher_type = 'refund' THEN (pv.amount * COALESCE(pv.exchange_rate, 1)) ELSE 0 END AS base_credit,
+           COALESCE(pv.exchange_rate, 1)
+    FROM payment_vouchers pv
+    WHERE pv.voucher_type IN ('payment', 'refund') AND pv.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT i.party_id, i.branch_id, i.currency,
+           i.invoice_type AS document_type, i.id, i.invoice_number, i.invoice_date,
+           CASE WHEN i.invoice_type = 'purchase_credit_note' THEN i.total ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_debit_note' THEN i.total ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_credit_note' THEN (i.total * COALESCE(i.exchange_rate, 1)) ELSE 0 END,
+           CASE WHEN i.invoice_type = 'purchase_debit_note' THEN (i.total * COALESCE(i.exchange_rate, 1)) ELSE 0 END,
+           COALESCE(i.exchange_rate, 1)
+    FROM invoices i
+    WHERE i.invoice_type IN ('purchase_credit_note', 'purchase_debit_note') AND i.status NOT IN ('draft', 'cancelled')
+    UNION ALL
+    SELECT lci.vendor_id, lc.branch_id, COALESCE(lc.currency, 'SAR'),
+           'landed_cost', lc.id, lc.lc_number, lc.lc_date,
+           0::numeric, lci.amount, 0::numeric, (lci.amount * COALESCE(lc.exchange_rate, 1)),
+           COALESCE(lc.exchange_rate, 1)
+    FROM landed_cost_items lci
+    JOIN landed_costs lc ON lc.id = lci.landed_cost_id
+    WHERE lci.vendor_id IS NOT NULL AND lc.status = 'posted';
 
     -- ===== PRINT TEMPLATES =====
     CREATE TABLE IF NOT EXISTS print_templates (
@@ -6053,7 +6146,7 @@ def get_performance_indexes_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_warehouse_id ON inventory_transactions(warehouse_id);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_id ON inventory_transactions(product_id);
-    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date ON inventory_transactions(product_id, transaction_date);
+    CREATE INDEX IF NOT EXISTS idx_inventory_transactions_product_date ON inventory_transactions(product_id, created_at);
     CREATE INDEX IF NOT EXISTS idx_inventory_transactions_reference_id ON inventory_transactions(reference_id);
 
     -- T10.1 P1 #110d \u2014 hot path on the shop floor: filter open production
@@ -7333,10 +7426,10 @@ def get_feature023_tables_sql() -> str:
         LIKE inventory_transactions INCLUDING DEFAULTS INCLUDING CONSTRAINTS
     );
 
-    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_item_wh
-        ON inventory_transactions_archive (tenant_id, item_id, warehouse_id, occurred_at);
-    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_tenant_date
-        ON inventory_transactions_archive (tenant_id, occurred_at);
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_product_wh_created
+        ON inventory_transactions_archive (product_id, warehouse_id, created_at);
+    CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_created
+        ON inventory_transactions_archive (created_at);
 
     -- ═══════════════════════════════════════════════════════════════════
     -- Feature 023: Settings keys

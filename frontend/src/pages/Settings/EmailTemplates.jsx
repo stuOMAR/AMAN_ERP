@@ -23,11 +23,11 @@ function EmailTemplates() {
             const res = await emailTemplatesAPI.list()
             setTemplates(Array.isArray(res.data) ? res.data : [])
         } catch (err) {
-            toastEmitter.show('فشل تحميل القوالب', 'error')
+            toastEmitter.show(t('settings.email_templates.toast.load_failed'), 'error')
         } finally {
             setLoading(false)
         }
-    }, [])
+    }, [t])
 
     useEffect(() => {
         load()
@@ -57,42 +57,42 @@ function EmailTemplates() {
             })
             setEditor({ mode: 'edit', data: d })
         } catch (err) {
-            toastEmitter.show('فشل تحميل القالب', 'error')
+            toastEmitter.show(t('settings.email_templates.toast.load_single_failed'), 'error')
         }
     }
 
     const handleSubmit = async (e) => {
         e?.preventDefault?.()
         if (!form.template_name.trim() || !form.subject.trim() || !form.body.trim()) {
-            toastEmitter.show('الاسم والموضوع والمحتوى مطلوبة', 'error')
+            toastEmitter.show(t('settings.email_templates.toast.fields_required'), 'error')
             return
         }
         try {
             if (editor?.mode === 'create') {
                 await emailTemplatesAPI.create(form)
-                toastEmitter.show('تم إنشاء القالب', 'success')
+                toastEmitter.show(t('settings.email_templates.toast.created_success'), 'success')
             } else {
                 // backend update doesn't include template_name
                 const { template_name, ...updateData } = form
                 await emailTemplatesAPI.update(editor.data.id, updateData)
-                toastEmitter.show('تم تحديث القالب', 'success')
+                toastEmitter.show(t('settings.email_templates.toast.updated_success'), 'success')
             }
             setEditor(null)
             load()
         } catch (err) {
-            const msg = err?.response?.data?.detail || 'فشلت العملية'
-            toastEmitter.show(typeof msg === 'string' ? msg : 'فشلت العملية', 'error')
+            const msg = err?.response?.data?.detail || t('settings.email_templates.toast.operation_failed')
+            toastEmitter.show(typeof msg === 'string' ? msg : t('settings.email_templates.toast.operation_failed'), 'error')
         }
     }
 
     const handleDelete = async (tpl) => {
-        if (!window.confirm(`تعطيل القالب "${tpl.template_name}"؟`)) return
+        if (!window.confirm(`${t('settings.email_templates.toast.confirm_disable')} "${tpl.template_name}"؟`)) return
         try {
             await emailTemplatesAPI.delete(tpl.id)
-            toastEmitter.show('تم تعطيل القالب', 'success')
+            toastEmitter.show(t('settings.email_templates.toast.disabled_success'), 'success')
             load()
         } catch (err) {
-            toastEmitter.show('فشل التعطيل', 'error')
+            toastEmitter.show(t('settings.email_templates.toast.disable_failed'), 'error')
         }
     }
 
@@ -105,13 +105,13 @@ function EmailTemplates() {
                     <div>
                         <h1 className="workspace-title">
                             <Mail size={24} className="me-2" />
-                            قوالب البريد الإلكتروني
+                            {t('settings.email_templates.title')}
                         </h1>
-                        <p className="text-muted small mb-0">إدارة قوالب الرسائل المرسلة من النظام</p>
+                        <p className="text-muted small mb-0">{t('settings.email_templates.subtitle')}</p>
                     </div>
                     <button className="btn btn-primary d-flex align-items-center gap-2" onClick={openCreate}>
                         <Plus size={18} />
-                        قالب جديد
+                        {t('settings.email_templates.new_template')}
                     </button>
                 </div>
             </div>
@@ -119,18 +119,18 @@ function EmailTemplates() {
             <div className="card">
                 <div className="card-body">
                     {loading ? (
-                        <p className="text-muted">جاري التحميل…</p>
+                        <p className="text-muted">{t('settings.email_templates.loading')}</p>
                     ) : templates.length === 0 ? (
-                        <p className="text-muted">لا توجد قوالب بعد</p>
+                        <p className="text-muted">{t('settings.email_templates.no_templates')}</p>
                     ) : (
                         <div className="table-responsive">
                             <table className="table table-hover">
                                 <thead>
                                     <tr>
-                                        <th>الاسم</th>
-                                        <th>الموضوع</th>
-                                        <th>الحالة</th>
-                                        <th>إجراءات</th>
+                                        <th>{t('settings.email_templates.table.name')}</th>
+                                        <th>{t('settings.email_templates.table.subject')}</th>
+                                        <th>{t('settings.email_templates.table.status')}</th>
+                                        <th>{t('settings.email_templates.table.actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -140,7 +140,7 @@ function EmailTemplates() {
                                             <td>{t.subject}</td>
                                             <td>
                                                 <span className={`badge ${t.is_active ? 'bg-success' : 'bg-secondary'}`}>
-                                                    {t.is_active ? 'مفعّل' : 'معطّل'}
+                                                    {t.is_active ? t('settings.email_templates.status.enabled') : t('settings.email_templates.status.disabled')}
                                                 </span>
                                             </td>
                                             <td>
@@ -174,14 +174,14 @@ function EmailTemplates() {
                         <div className="modal-content">
                             <div className="modal-header">
                                 <h5 className="modal-title">
-                                    {editor.mode === 'create' ? 'قالب جديد' : `تعديل: ${editor.data?.template_name}`}
+                                    {editor.mode === 'create' ? t('settings.email_templates.modal.new_template') : `${t('settings.email_templates.modal.edit_prefix')}${editor.data?.template_name}`}
                                 </h5>
                                 <button type="button" className="btn-close" onClick={() => setEditor(null)}><X size={20} /></button>
                             </div>
                             <form onSubmit={handleSubmit}>
                                 <div className="modal-body">
                                     <div className="mb-3">
-                                        <label className="form-label">اسم القالب (مفتاح فريد) *</label>
+                                        <label className="form-label">{t('settings.email_templates.modal.name_label')}</label>
                                         <input
                                             type="text"
                                             className="form-control"
@@ -193,7 +193,7 @@ function EmailTemplates() {
                                         />
                                     </div>
                                     <div className="mb-3">
-                                        <label className="form-label">الموضوع *</label>
+                                        <label className="form-label">{t('settings.email_templates.modal.subject_label')}</label>
                                         <input
                                             type="text"
                                             className="form-control"
@@ -204,7 +204,7 @@ function EmailTemplates() {
                                         />
                                     </div>
                                     <div className="mb-3">
-                                        <label className="form-label">المحتوى (HTML) *</label>
+                                        <label className="form-label">{t('settings.email_templates.modal.body_html_label')}</label>
                                         <textarea
                                             className="form-control font-monospace"
                                             rows="12"
@@ -214,11 +214,11 @@ function EmailTemplates() {
                                             required
                                         />
                                         <small className="text-muted">
-                                            استخدم متغيرات مثل <code>&#123;&#123;name&#125;&#125;</code> أو <code>&#123;&#123;invoice_number&#125;&#125;</code>
+                                            {t('settings.email_templates.modal.body_html_help')}
                                         </small>
                                     </div>
                                     <div className="mb-3">
-                                        <label className="form-label">المتغيرات المتاحة (JSON)</label>
+                                        <label className="form-label">{t('settings.email_templates.modal.variables_label')}</label>
                                         <textarea
                                             className="form-control font-monospace"
                                             rows="4"
@@ -241,16 +241,16 @@ function EmailTemplates() {
                                             onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
                                         />
                                         <label className="form-check-label" htmlFor="active">
-                                            مفعّل
+                                            {t('settings.email_templates.modal.enabled_label')}
                                         </label>
                                     </div>
                                 </div>
                                 <div className="modal-footer">
                                     <button type="button" className="btn btn-secondary" onClick={() => setEditor(null)}>
-                                        إلغاء
+                                        {t('settings.email_templates.modal.cancel')}
                                     </button>
                                     <button type="submit" className="btn btn-primary">
-                                        {editor.mode === 'create' ? 'إنشاء' : 'حفظ'}
+                                        {editor.mode === 'create' ? t('settings.email_templates.modal.create') : t('settings.email_templates.modal.save')}
                                     </button>
                                 </div>
                             </form>

@@ -50,6 +50,7 @@ export const inventoryAPI = {
     listShipments: (params) => api.get('/inventory/shipments', { params }),
     getIncomingShipments: (params) => api.get('/inventory/shipments/incoming', { params }),
     getShipmentDetails: (id) => api.get(`/inventory/shipments/${id}`),
+    dispatchShipment: (id) => api.post(`/inventory/shipments/${id}/dispatch`),
     confirmShipment: (id) => api.post(`/inventory/shipments/${id}/confirm`),
     cancelShipment: (id) => api.post(`/inventory/shipments/${id}/cancel`),
 

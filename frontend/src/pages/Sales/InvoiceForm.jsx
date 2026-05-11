@@ -287,9 +287,9 @@ function InvoiceForm() {
     useEffect(() => {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             const lines = items.map(i => ({
+                product_id: i.product_id ? Number(i.product_id) : null,
                 quantity: Number(i.quantity) || 0,
                 unit_price: Number(i.unit_price) || 0,
-                tax_rate: Number(i.tax_rate) || 0,
                 discount: Number(i.discount) || 0,
             }))
 
@@ -309,11 +309,14 @@ function InvoiceForm() {
             // Debounced backend calc for accurate totals
             previewDebounced({
                 lines,
+                branch_id: currentBranch?.id || null,
+                customer_id: formData.customer_id ? Number(formData.customer_id) : null,
+                document_date: formData.invoice_date,
                 currency: formData.currency || currency,
                 paid_amount: Number(formData.paid_amount) || 0,
             })
         }
-    }, [items, formData.currency])
+    }, [items, formData.currency, formData.customer_id, formData.invoice_date, formData.paid_amount, currentBranch])
 
     const handleSubmit = async (e) => {
         e.preventDefault()

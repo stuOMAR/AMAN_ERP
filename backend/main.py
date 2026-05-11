@@ -608,7 +608,7 @@ async def _serve_signed_upload(file_path: str, request: Request):
     # Path-traversal hardening: resolve and ensure it stays inside uploads_dir.
     target = os.path.abspath(os.path.join(uploads_dir, file_path))
     if not target.startswith(os.path.abspath(uploads_dir) + os.sep):
-        raise HTTPException(status_code=400, detail="invalid path")
+        raise HTTPException(**http_error(400, "invalid_path", request))
     if not os.path.isfile(target):
         raise HTTPException(status_code=404)
     return FileResponse(target)

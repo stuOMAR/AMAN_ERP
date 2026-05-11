@@ -1,5 +1,5 @@
 <!-- SPECKIT START -->
 For additional context about technologies to be used, project structure,
 shell commands, and other important information, read the current plan:
-specs/026-stable-component-identity/plan.md
+specs/028-purchase-lifecycle-integrity/plan.md
 <!-- SPECKIT END -->

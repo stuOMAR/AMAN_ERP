@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * EmailTemplateEditor — CRUD for email templates with Jinja preview + locale tabs.
  */
 export default function EmailTemplateEditor() {
+  const { t } = useTranslation();
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({
     code: '', locale: 'en', subject: '', body_html: '', body_text: '',
@@ -51,68 +53,68 @@ export default function EmailTemplateEditor() {
 
   return (
     <div className="email-template-editor">
-      <h2>Email Templates</h2>
+      <h2>{t('notifications.email_template_editor.title')}</h2>
 
       <button className="btn btn-primary mb-3" onClick={() => setShowForm(!showForm)}>
-        {showForm ? 'Cancel' : 'New Template'}
+        {showForm ? t('notifications.email_template_editor.buttons.cancel') : t('notifications.email_template_editor.buttons.new_template')}
       </button>
 
       {showForm && (
         <form className="card p-3 mb-3" onSubmit={(e) => { e.preventDefault(); createMutation.mutate(form); }}>
           <div className="row">
             <div className="col-md-4">
-              <label>Code</label>
+              <label>{t('notifications.email_template_editor.form.code')}</label>
               <input className="form-control" value={form.code} required
                 onChange={(e) => setForm({ ...form, code: e.target.value })} />
             </div>
             <div className="col-md-2">
-              <label>Locale</label>
+              <label>{t('notifications.email_template_editor.form.locale')}</label>
               <select className="form-control" value={form.locale}
                 onChange={(e) => setForm({ ...form, locale: e.target.value })}>
-                <option value="en">English</option>
-                <option value="ar">Arabic</option>
+                <option value="en">{t('notifications.email_template_editor.form.locale_en')}</option>
+                <option value="ar">{t('notifications.email_template_editor.form.locale_ar')}</option>
               </select>
             </div>
             <div className="col-md-6">
-              <label>Subject</label>
+              <label>{t('notifications.email_template_editor.form.subject')}</label>
               <input className="form-control" value={form.subject}
                 onChange={(e) => setForm({ ...form, subject: e.target.value })} />
             </div>
           </div>
           <div className="mt-2">
-            <label>Body HTML (Jinja2)</label>
+            <label>{t('notifications.email_template_editor.form.body_html')}</label>
             <textarea className="form-control font-monospace" rows={8} value={form.body_html}
               onChange={(e) => setForm({ ...form, body_html: e.target.value })} />
           </div>
           <div className="mt-2">
-            <label>Body Text (Jinja2)</label>
+            <label>{t('notifications.email_template_editor.form.body_text')}</label>
             <textarea className="form-control font-monospace" rows={4} value={form.body_text}
               onChange={(e) => setForm({ ...form, body_text: e.target.value })} />
           </div>
           {createMutation.isError && <div className="alert alert-danger mt-2">{createMutation.error.message}</div>}
           <button type="submit" className="btn btn-success mt-2" disabled={createMutation.isLoading}>
-            {createMutation.isLoading ? 'Saving...' : 'Save Template'}
+            {createMutation.isLoading ? t('notifications.email_template_editor.buttons.saving') : t('notifications.email_template_editor.buttons.save')}
           </button>
         </form>
       )}
 
-      {isLoading ? <p>Loading...</p> : (
+      {isLoading ? <p>{t('notifications.email_template_editor.loading')}</p> : (
         <table className="table table-sm">
-          <thead><tr><th>Code</th><th>Locale</th><th>Subject</th><th>Version</th><th>Actions</th></tr></thead>
+          <thead><tr><th>{t('notifications.email_template_editor.table.key')}</th><th>{t('notifications.email_template_editor.table.locale')}</th><th>{t('notifications.email_template_editor.table.subject')}</th><th>{t('notifications.email_template_editor.table.version')}</th><th>{t('notifications.email_template_editor.table.actions')}</th></tr></thead>
           <tbody>
-            {templates?.map((t) => (
-              <tr key={t.id}>
-                <td>{t.code}</td>
-                <td>{t.locale}</td>
-                <td>{t.subject}</td>
-                <td>{t.version}</td>
+            {templates?.map((tpl) => (
+              <tr key={tpl.id}>
+                <td>{tpl.code}</td>
+                <td>{tpl.locale}</td>
+                <td>{tpl.subject}</td>
+                <td>{tpl.version}</td>
                 <td>
                   <button className="btn btn-sm btn-outline-danger"
-                    onClick={() => deleteMutation.mutate(t.id)}>Delete</button>
+                    onClick={() => deleteMutation.mutate(tpl.id)}>{t('notifications.email_template_editor.buttons.delete')}</button>
                 </td>
               </tr>
             ))}
-            {templates?.length === 0 && <tr><td colSpan={5} className="text-muted text-center">No templates</td></tr>}
+            {templates?.length === 0 && <tr><td colSpan={5} className="text-muted text-center">{t('notifications.email_template_editor.no_templates')}</td></tr>}
           </tbody>
         </table>
       )}

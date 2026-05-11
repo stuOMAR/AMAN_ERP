@@ -1,10 +1,12 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useTranslation } from 'react-i18next';
 
 /**
  * NotificationQueueMonitor — paginated queue with state/channel filter + reprocess.
  */
 export default function NotificationQueueMonitor() {
+  const { t } = useTranslation();
   const [state, setState] = useState('');
   const [channel, setChannel] = useState('');
   const queryClient = useQueryClient();
@@ -32,33 +34,33 @@ export default function NotificationQueueMonitor() {
 
   return (
     <div className="notif-queue-monitor">
-      <h2>Notification Queue</h2>
+      <h2>{t('notifications.queue_monitor.title')}</h2>
 
       <div className="filters d-flex gap-2 mb-3">
         <select className="form-control" style={{ width: 150 }} value={state} onChange={(e) => setState(e.target.value)}>
-          <option value="">All States</option>
-          <option value="pending">Pending</option>
-          <option value="sending">Sending</option>
-          <option value="sent">Sent</option>
-          <option value="failed">Failed</option>
-          <option value="dlq">DLQ</option>
+          <option value="">{t('notifications.queue_monitor.filters.all_states')}</option>
+          <option value="pending">{t('notifications.queue_monitor.filters.pending')}</option>
+          <option value="sending">{t('notifications.queue_monitor.filters.sending')}</option>
+          <option value="sent">{t('notifications.queue_monitor.filters.sent')}</option>
+          <option value="failed">{t('notifications.queue_monitor.filters.failed')}</option>
+          <option value="dlq">{t('notifications.queue_monitor.filters.dlq')}</option>
         </select>
         <select className="form-control" style={{ width: 150 }} value={channel} onChange={(e) => setChannel(e.target.value)}>
-          <option value="">All Channels</option>
-          <option value="email">Email</option>
-          <option value="sms">SMS</option>
-          <option value="push">Push</option>
-          <option value="in_app">In-App</option>
-          <option value="webhook">Webhook</option>
+          <option value="">{t('notifications.queue_monitor.filters.all_channels')}</option>
+          <option value="email">{t('notifications.queue_monitor.filters.email')}</option>
+          <option value="sms">{t('notifications.queue_monitor.filters.sms')}</option>
+          <option value="push">{t('notifications.queue_monitor.filters.push')}</option>
+          <option value="in_app">{t('notifications.queue_monitor.filters.in_app')}</option>
+          <option value="webhook">{t('notifications.queue_monitor.filters.webhook')}</option>
         </select>
       </div>
 
-      {isLoading ? <p>Loading...</p> : (
+      {isLoading ? <p>{t('notifications.queue_monitor.loading')}</p> : (
         <table className="table table-sm">
           <thead>
             <tr>
-              <th>ID</th><th>Event</th><th>Channel</th><th>Recipient</th>
-              <th>State</th><th>Attempts</th><th>Created</th><th>Actions</th>
+              <th>{t('notifications.queue_monitor.table.id')}</th><th>{t('notifications.queue_monitor.table.event')}</th><th>{t('notifications.queue_monitor.table.channel')}</th><th>{t('notifications.queue_monitor.table.recipient')}</th>
+              <th>{t('notifications.queue_monitor.table.state')}</th><th>{t('notifications.queue_monitor.table.attempts')}</th><th>{t('notifications.queue_monitor.table.created')}</th><th>{t('notifications.queue_monitor.table.actions')}</th>
             </tr>
           </thead>
           <tbody>
@@ -74,13 +76,13 @@ export default function NotificationQueueMonitor() {
                 <td>
                   {(n.state === 'failed' || n.state === 'dlq') && (
                     <button className="btn btn-sm btn-outline-primary" onClick={() => retryMutation.mutate(n.id)}>
-                      Retry
+                      {t('notifications.queue_monitor.buttons.retry')}
                     </button>
                   )}
                 </td>
               </tr>
             ))}
-            {queue?.length === 0 && <tr><td colSpan={8} className="text-center text-muted">No entries</td></tr>}
+            {queue?.length === 0 && <tr><td colSpan={8} className="text-center text-muted">{t('notifications.queue_monitor.no_entries')}</td></tr>}
           </tbody>
         </table>
       )}

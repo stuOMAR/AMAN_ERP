@@ -14,6 +14,7 @@ const ShipmentDetails = () => {
     const { showToast } = useToast();
     const [shipment, setShipment] = useState(null);
     const [loading, setLoading] = useState(true);
+    const [actionLoading, setActionLoading] = useState(false);
 
     useEffect(() => {
         fetchDetails();
@@ -30,9 +31,52 @@ const ShipmentDetails = () => {
         }
     };
 
+    const handleDispatch = async () => {
+        if (!window.confirm(t('stock.shipments.details.dispatch_confirm', 'هل تريد شحن هذه الشحنة؟'))) return;
+        setActionLoading(true);
+        try {
+            await inventoryAPI.dispatchShipment(id);
+            showToast(t('stock.shipments.details.dispatch_success', 'تم شحن الشحنة بنجاح'), 'success');
+            fetchDetails();
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('stock.shipments.validation.error_dispatch', 'فشل شحن الشحنة'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleConfirm = async () => {
+        if (!window.confirm(t('stock.shipments.incoming_page.validation.confirm_dialog'))) return;
+        setActionLoading(true);
+        try {
+            await inventoryAPI.confirmShipment(id);
+            showToast(t('stock.shipments.incoming_page.validation.success_confirm'), 'success');
+            fetchDetails();
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('stock.shipments.incoming_page.validation.error_confirm'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
+    const handleCancel = async () => {
+        if (!window.confirm(t('stock.shipments.incoming_page.validation.cancel_dialog'))) return;
+        setActionLoading(true);
+        try {
+            await inventoryAPI.cancelShipment(id);
+            showToast(t('stock.shipments.incoming_page.validation.success_cancel'), 'success');
+            fetchDetails();
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('stock.shipments.incoming_page.validation.error_cancel'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const getStatusBadge = (status) => {
         const styles = {
             pending: { bg: '#FEF3C7', color: '#D97706', label: t('stock.shipments.status.pending') },
+            dispatched: { bg: '#DBEAFE', color: '#2563EB', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
             received: { bg: '#D1FAE5', color: '#059669', label: t('stock.shipments.status.received') },
             cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') }
         };
@@ -70,6 +114,40 @@ const ShipmentDetails = () => {
                 </div>
             </div>
 
+            {/* Action Buttons */}
+            {shipment.status === 'pending' && (
+                <div className="section-card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                        className="btn btn-secondary"
+                        onClick={handleCancel}
+                        disabled={actionLoading}
+                    >
+                        {t('stock.shipments.incoming_page.actions.reject')}
+                    </button>
+                    <button
+                        className="btn btn-primary"
+                        style={{ background: '#2563EB' }}
+                        onClick={handleDispatch}
+                        disabled={actionLoading}
+                    >
+                        🚚 {t('stock.shipments.details.dispatch', 'شحن')}
+                    </button>
+                </div>
+            )}
+
+            {shipment.status === 'dispatched' && (
+                <div className="section-card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                        className="btn btn-primary"
+                        style={{ background: '#059669' }}
+                        onClick={handleConfirm}
+                        disabled={actionLoading}
+                    >
+                        ✅ {t('stock.shipments.incoming_page.actions.confirm')}
+                    </button>
+                </div>
+            )}
+
             {/* Info Cards */}
             <div className="metrics-grid" style={{ marginBottom: '24px' }}>
                 <div className="metric-card">
@@ -86,6 +164,14 @@ const ShipmentDetails = () => {
                         {formatShortDate(shipment.created_at)}
                     </div>
                 </div>
+                {shipment.shipped_at && (
+                    <div className="metric-card" style={{ borderRight: '4px solid #2563EB' }}>
+                        <div className="metric-label">{t('stock.shipments.status.dispatched', 'تم الشحن')}</div>
+                        <div className="metric-value" style={{ fontSize: '16px', color: '#2563EB' }}>
+                            {formatShortDate(shipment.shipped_at)}
+                        </div>
+                    </div>
+                )}
                 {shipment.received_at && (
                     <div className="metric-card" style={{ borderRight: '4px solid #059669' }}>
                         <div className="metric-label">{t('stock.shipments.status.received')}</div>

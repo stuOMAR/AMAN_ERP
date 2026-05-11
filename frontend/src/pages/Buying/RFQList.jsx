@@ -17,7 +17,8 @@ const RFQList = () => {
     const [suppliers, setSuppliers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const [form, setForm] = useState({ title: '', supplier_ids: [], deadline: '', notes: '' });
+    const emptyLine = { product_name: '', quantity: 1, unit: '' };
+    const [form, setForm] = useState({ title: '', supplier_ids: [], deadline: '', notes: '', lines: [{ ...emptyLine }] });
     const [supplierDropOpen, setSupplierDropOpen] = useState(false);
     const [supplierSearch, setSupplierSearch] = useState('');
     const supplierDropRef = useRef(null);
@@ -49,10 +50,12 @@ const RFQList = () => {
     const handleCreate = async (e) => {
         e.preventDefault();
         if (form.supplier_ids.length === 0) { showToast(t('buying.rfq.select_supplier_required'), 'error'); return; }
+        const lines = form.lines.filter(line => (line.product_name || '').trim() && Number(line.quantity) > 0);
+        if (lines.length === 0) { showToast(t('buying.rfq.line_required', 'يجب إضافة بند واحد على الأقل'), 'error'); return; }
         try {
-            await purchasesAPI.createRFQ({ title: form.title, supplier_ids: form.supplier_ids, deadline: form.deadline || null, notes: form.notes || null });
+            await purchasesAPI.createRFQ({ title: form.title, supplier_ids: form.supplier_ids, deadline: form.deadline || null, notes: form.notes || null, lines });
             showToast(t('buying.rfq_created'), 'success');
-            setShowModal(false); setForm({ title: '', supplier_ids: [], deadline: '', notes: '' }); fetchRFQs();
+            setShowModal(false); setForm({ title: '', supplier_ids: [], deadline: '', notes: '', lines: [{ ...emptyLine }] }); fetchRFQs();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }
     };
 
@@ -64,7 +67,9 @@ const RFQList = () => {
     const handleCompare = async (id) => {
         try {
             const res = await purchasesAPI.compareRFQ(id);
-            showToast(t('buying.rfq_compared_best') + (res.data?.best_supplier || '—'), 'success');
+            const recommended = res.data?.recommended;
+            showToast(t('buying.rfq_compared_best') + (recommended?.supplier_name || recommended?.supplier_id || '—'), 'success');
+            fetchRFQs();
         } catch (err) { showToast(t('common.error'), 'error'); }
     };
 
@@ -264,6 +269,37 @@ const RFQList = () => {
                             </div>
                             <div className="form-group"><label className="form-label">{t('buying.rfq_col_deadline')}</label>
                                 <DateInput className="form-input" value={form.deadline} onChange={e => setForm({ ...form, deadline: e.target.value })} /></div>
+                            <div className="form-group">
+                                <label className="form-label">{t('buying.orders.items')}</label>
+                                {form.lines.map((line, idx) => (
+                                    <div key={idx} className="form-grid-3" style={{ gap: 8, marginBottom: 8 }}>
+                                        <input
+                                            className="form-input"
+                                            placeholder={t('buying.orders.item.product')}
+                                            value={line.product_name}
+                                            onChange={e => setForm(prev => ({ ...prev, lines: prev.lines.map((l, i) => i === idx ? { ...l, product_name: e.target.value } : l) }))}
+                                        />
+                                        <input
+                                            className="form-input"
+                                            type="number"
+                                            min="0.0001"
+                                            step="0.0001"
+                                            placeholder={t('buying.orders.item.qty_ordered')}
+                                            value={line.quantity}
+                                            onChange={e => setForm(prev => ({ ...prev, lines: prev.lines.map((l, i) => i === idx ? { ...l, quantity: Number(e.target.value) } : l) }))}
+                                        />
+                                        <input
+                                            className="form-input"
+                                            placeholder={t('common.unit', 'Unit')}
+                                            value={line.unit}
+                                            onChange={e => setForm(prev => ({ ...prev, lines: prev.lines.map((l, i) => i === idx ? { ...l, unit: e.target.value } : l) }))}
+                                        />
+                                    </div>
+                                ))}
+                                <button type="button" className="btn btn-sm btn-secondary" onClick={() => setForm(prev => ({ ...prev, lines: [...prev.lines, { ...emptyLine }] }))}>
+                                    <Plus size={14} /> {t('common.add')}
+                                </button>
+                            </div>
                             <div className="form-group"><label className="form-label">{t('buying.rfq_notes')}</label>
                                 <textarea className="form-input" rows="2" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
                             <div className="d-flex gap-3 pt-3">

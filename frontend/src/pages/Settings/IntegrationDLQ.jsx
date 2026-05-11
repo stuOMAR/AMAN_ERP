@@ -38,7 +38,7 @@ function IntegrationDLQ() {
             }
             setItems(Array.isArray(res.data) ? res.data : [])
         } catch (err) {
-            toastEmitter.show('فشل تحميل البيانات', 'error')
+            toastEmitter.show(t('settings.integration_dlq.toast.load_failed'), 'error')
         } finally {
             setLoading(false)
         }
@@ -53,32 +53,32 @@ function IntegrationDLQ() {
             const res = await integrationQueuesAPI.getDLQItem(id)
             setDetail(res.data)
         } catch (err) {
-            toastEmitter.show('فشل جلب التفاصيل', 'error')
+            toastEmitter.show(t('settings.integration_dlq.toast.details_failed'), 'error')
         }
     }
 
     const replay = async (id) => {
-        if (!window.confirm('إعادة إرسال هذا العنصر إلى قائمة الانتظار؟')) return
+        if (!window.confirm(t('settings.integration_dlq.confirm_resend'))) return
         try {
             await integrationQueuesAPI.replayDLQ(id)
-            toastEmitter.show('تم إعادة الإرسال', 'success')
+            toastEmitter.show(t('settings.integration_dlq.toast.resent_success'), 'success')
             setDetail(null)
             load()
         } catch (err) {
-            const msg = err?.response?.data?.detail || 'فشل إعادة الإرسال'
-            toastEmitter.show(typeof msg === 'string' ? msg : 'فشل إعادة الإرسال', 'error')
+            const msg = err?.response?.data?.detail || t('settings.integration_dlq.toast.resend_failed')
+            toastEmitter.show(typeof msg === 'string' ? msg : t('settings.integration_dlq.toast.resend_failed'), 'error')
         }
     }
 
     const archive = async (id) => {
-        if (!window.confirm('أرشفة هذا العنصر بدون إعادة إرسال؟')) return
+        if (!window.confirm(t('settings.integration_dlq.confirm_archive'))) return
         try {
             await integrationQueuesAPI.archiveDLQ(id)
-            toastEmitter.show('تم الأرشفة', 'success')
+            toastEmitter.show(t('settings.integration_dlq.toast.archived_success'), 'success')
             setDetail(null)
             load()
         } catch (err) {
-            toastEmitter.show('فشل الأرشفة', 'error')
+            toastEmitter.show(t('settings.integration_dlq.toast.archive_failed'), 'error')
         }
     }
 
@@ -89,13 +89,13 @@ function IntegrationDLQ() {
                     <div>
                         <h1 className="workspace-title">
                             <Inbox size={24} className="me-2" />
-                            قوائم انتظار التكاملات و DLQ
+                            {t('settings.integration_dlq.title')}
                         </h1>
-                        <p className="text-muted small mb-0">مراجعة وإدارة المحاولات الفاشلة للمدفوعات والرسائل النصية</p>
+                        <p className="text-muted small mb-0">{t('settings.integration_dlq.subtitle')}</p>
                     </div>
                     <button className="btn btn-outline-primary d-flex align-items-center gap-2" onClick={load}>
                         <RefreshCcw size={16} />
-                        تحديث
+                        {t('settings.integration_dlq.refresh')}
                     </button>
                 </div>
             </div>
@@ -107,7 +107,7 @@ function IntegrationDLQ() {
                         onClick={() => { setTab('dlq'); setStatusFilter(''); }}
                     >
                         <AlertTriangle size={16} className="me-1" />
-                        DLQ (الفشل النهائي)
+                        {t('settings.integration_dlq.dlq_title')}
                     </button>
                 </li>
                 <li className="nav-item">
@@ -115,7 +115,7 @@ function IntegrationDLQ() {
                         className={`nav-link ${tab === 'payment' ? 'active' : ''}`}
                         onClick={() => { setTab('payment'); setShowArchived(false); }}
                     >
-                        قائمة المدفوعات
+                        {t('settings.integration_dlq.payment_queue')}
                     </button>
                 </li>
                 <li className="nav-item">
@@ -123,7 +123,7 @@ function IntegrationDLQ() {
                         className={`nav-link ${tab === 'sms' ? 'active' : ''}`}
                         onClick={() => { setTab('sms'); setShowArchived(false); }}
                     >
-                        قائمة الرسائل
+                        {t('settings.integration_dlq.message_queue')}
                     </button>
                 </li>
             </ul>
@@ -132,7 +132,7 @@ function IntegrationDLQ() {
                 <div className="card-body">
                     {tab === 'dlq' ? (
                         <div className="d-flex justify-content-between align-items-center mb-3">
-                            <h5 className="mb-0">عناصر DLQ</h5>
+                            <h5 className="mb-0">{t('settings.integration_dlq.dlq_items')}</h5>
                             <div className="form-check">
                                 <input
                                     type="checkbox"
@@ -142,46 +142,46 @@ function IntegrationDLQ() {
                                     onChange={(e) => setShowArchived(e.target.checked)}
                                 />
                                 <label className="form-check-label" htmlFor="showArchived">
-                                    عرض المؤرشفة
+                                    {t('settings.integration_dlq.show_archived')}
                                 </label>
                             </div>
                         </div>
                     ) : (
                         <div className="d-flex justify-content-between align-items-center mb-3">
-                            <h5 className="mb-0">{tab === 'payment' ? 'محاولات المدفوعات' : 'محاولات الرسائل'}</h5>
+                            <h5 className="mb-0">{tab === 'payment' ? t('settings.integration_dlq.payment_attempts') : t('settings.integration_dlq.message_attempts')}</h5>
                             <select
                                 className="form-select"
                                 style={{ width: 200 }}
                                 value={statusFilter}
                                 onChange={(e) => setStatusFilter(e.target.value)}
                             >
-                                <option value="">جميع الحالات</option>
-                                <option value="pending">قيد الانتظار</option>
-                                <option value="processing">قيد المعالجة</option>
+                                <option value="">{t('settings.integration_dlq.filters.all_states')}</option>
+                                <option value="pending">{t('settings.integration_dlq.filters.pending')}</option>
+                                <option value="processing">{t('settings.integration_dlq.filters.processing')}</option>
                                 <option value={tab === 'payment' ? 'succeeded' : 'sent'}>
-                                    {tab === 'payment' ? 'ناجحة' : 'مُرسلة'}
+                                    {tab === 'payment' ? t('settings.integration_dlq.filters.successful') : t('settings.integration_dlq.filters.successful')}
                                 </option>
-                                <option value="permanently_failed">فشل نهائي</option>
+                                <option value="permanently_failed">{t('settings.integration_dlq.filters.permanent_failure')}</option>
                             </select>
                         </div>
                     )}
 
                     {loading ? (
-                        <p className="text-muted">جاري التحميل…</p>
+                        <p className="text-muted">{t('settings.integration_dlq.loading')}</p>
                     ) : items.length === 0 ? (
-                        <p className="text-muted">لا توجد عناصر</p>
+                        <p className="text-muted">{t('settings.integration_dlq.no_items')}</p>
                     ) : tab === 'dlq' ? (
                         <div className="table-responsive">
                             <table className="table table-hover">
                                 <thead>
                                     <tr>
                                         <th>#</th>
-                                        <th>النوع</th>
-                                        <th>المزوّد</th>
-                                        <th>السبب</th>
-                                        <th>تاريخ الفشل</th>
-                                        <th>الحالة</th>
-                                        <th>إجراءات</th>
+                                        <th>{t('settings.integration_dlq.table.type')}</th>
+                                        <th>{t('settings.integration_dlq.table.provider')}</th>
+                                        <th>{t('settings.integration_dlq.table.reason')}</th>
+                                        <th>{t('settings.integration_dlq.table.failure_date')}</th>
+                                        <th>{t('settings.integration_dlq.table.status')}</th>
+                                        <th>{t('settings.integration_dlq.table.actions')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -190,7 +190,7 @@ function IntegrationDLQ() {
                                             <td>{it.id}</td>
                                             <td>
                                                 <span className="badge bg-info">
-                                                    {it.queue_type === 'payment' ? 'مدفوعات' : 'رسائل'}
+                                                    {it.queue_type === 'payment' ? t('settings.integration_dlq.payment_queue') : t('settings.integration_dlq.message_queue')}
                                                 </span>
                                             </td>
                                             <td>{it.provider || '-'}</td>
@@ -202,9 +202,9 @@ function IntegrationDLQ() {
                                             <td>{it.created_at ? new Date(it.created_at).toLocaleString('ar') : '-'}</td>
                                             <td>
                                                 {it.archived_at ? (
-                                                    <span className="badge bg-secondary">مؤرشف</span>
+                                                    <span className="badge bg-secondary">{t('settings.integration_dlq.badges.archived')}</span>
                                                 ) : (
-                                                    <span className="badge bg-danger">نشط</span>
+                                                    <span className="badge bg-danger">{t('settings.integration_dlq.badges.active')}</span>
                                                 )}
                                             </td>
                                             <td>
@@ -212,7 +212,7 @@ function IntegrationDLQ() {
                                                     <button
                                                         className="btn btn-sm btn-outline-primary"
                                                         onClick={() => openDetail(it.id)}
-                                                        title="تفاصيل"
+                                                        title={t('settings.integration_dlq.buttons.details')}
                                                     >
                                                         <Eye size={14} />
                                                     </button>
@@ -221,14 +221,14 @@ function IntegrationDLQ() {
                                                             <button
                                                                 className="btn btn-sm btn-outline-success"
                                                                 onClick={() => replay(it.id)}
-                                                                title="إعادة إرسال"
+                                                                title={t('settings.integration_dlq.buttons.resend')}
                                                             >
                                                                 <RotateCcw size={14} />
                                                             </button>
                                                             <button
                                                                 className="btn btn-sm btn-outline-secondary"
                                                                 onClick={() => archive(it.id)}
-                                                                title="أرشفة"
+                                                                title={t('settings.integration_dlq.buttons.archive')}
                                                             >
                                                                 <Archive size={14} />
                                                             </button>
@@ -247,19 +247,19 @@ function IntegrationDLQ() {
                                 <thead>
                                     <tr>
                                         <th>#</th>
-                                        <th>المزوّد</th>
+                                        <th>{t('settings.integration_dlq.table.provider')}</th>
                                         {tab === 'payment' ? (
                                             <>
-                                                <th>المبلغ</th>
-                                                <th>العملة</th>
+                                                <th>{t('settings.integration_dlq.table.amount')}</th>
+                                                <th>{t('settings.integration_dlq.table.currency')}</th>
                                             </>
                                         ) : (
-                                            <th>المستلم</th>
+                                            <th>{t('settings.integration_dlq.table.recipient')}</th>
                                         )}
-                                        <th>المحاولات</th>
-                                        <th>الحالة</th>
-                                        <th>المحاولة التالية</th>
-                                        <th>آخر خطأ</th>
+                                        <th>{t('settings.integration_dlq.table.attempts')}</th>
+                                        <th>{t('settings.integration_dlq.table.status')}</th>
+                                        <th>{t('settings.integration_dlq.table.next_attempt')}</th>
+                                        <th>{t('settings.integration_dlq.table.last_error')}</th>
                                     </tr>
                                 </thead>
                                 <tbody>
@@ -298,31 +298,31 @@ function IntegrationDLQ() {
                     <div className="modal-dialog modal-lg">
                         <div className="modal-content">
                             <div className="modal-header">
-                                <h5 className="modal-title">تفاصيل DLQ #{detail.id}</h5>
+                                <h5 className="modal-title">{t('settings.integration_dlq.modal.title')}{detail.id}</h5>
                                 <button type="button" className="btn-close" onClick={() => setDetail(null)}><X size={20} /></button>
                             </div>
                             <div className="modal-body">
                                 <dl className="row">
-                                    <dt className="col-sm-4">النوع</dt>
+                                    <dt className="col-sm-4">{t('settings.integration_dlq.modal.type')}</dt>
                                     <dd className="col-sm-8">{detail.queue_type}</dd>
-                                    <dt className="col-sm-4">المزوّد</dt>
+                                    <dt className="col-sm-4">{t('settings.integration_dlq.modal.provider')}</dt>
                                     <dd className="col-sm-8">{detail.provider || '-'}</dd>
-                                    <dt className="col-sm-4">معرّف العنصر الأصلي</dt>
+                                    <dt className="col-sm-4">{t('settings.integration_dlq.modal.original_item_id')}</dt>
                                     <dd className="col-sm-8">{detail.queue_item_id}</dd>
-                                    <dt className="col-sm-4">السبب</dt>
+                                    <dt className="col-sm-4">{t('settings.integration_dlq.modal.reason')}</dt>
                                     <dd className="col-sm-8 text-danger">{detail.reason || '-'}</dd>
-                                    <dt className="col-sm-4">تاريخ الفشل</dt>
+                                    <dt className="col-sm-4">{t('settings.integration_dlq.modal.failure_date')}</dt>
                                     <dd className="col-sm-8">{detail.created_at ? new Date(detail.created_at).toLocaleString('ar') : '-'}</dd>
                                 </dl>
 
-                                <h6 className="mt-3">البيانات (Payload)</h6>
+                                <h6 className="mt-3">{t('settings.integration_dlq.modal.payload')}</h6>
                                 <pre className="bg-light p-2 rounded" style={{ maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
                                     {JSON.stringify(detail.payload || {}, null, 2)}
                                 </pre>
 
                                 {detail.gateway_response && (
                                     <>
-                                        <h6 className="mt-3">رد البوّابة (Gateway Response)</h6>
+                                        <h6 className="mt-3">{t('settings.integration_dlq.modal.gateway_response')}</h6>
                                         <pre className="bg-light p-2 rounded" style={{ maxHeight: 200, overflow: 'auto', fontSize: 12 }}>
                                             {JSON.stringify(detail.gateway_response, null, 2)}
                                         </pre>
@@ -331,17 +331,17 @@ function IntegrationDLQ() {
                             </div>
                             <div className="modal-footer">
                                 <button type="button" className="btn btn-secondary" onClick={() => setDetail(null)}>
-                                    إغلاق
+                                    {t('settings.integration_dlq.modal.close')}
                                 </button>
                                 {!detail.archived_at && (
                                     <>
                                         <button type="button" className="btn btn-outline-secondary" onClick={() => archive(detail.id)}>
                                             <Archive size={14} className="me-1" />
-                                            أرشفة
+                                            {t('settings.integration_dlq.modal.archive')}
                                         </button>
                                         <button type="button" className="btn btn-success" onClick={() => replay(detail.id)}>
                                             <RotateCcw size={14} className="me-1" />
-                                            إعادة إرسال
+                                            {t('settings.integration_dlq.modal.resend')}
                                         </button>
                                     </>
                                 )}

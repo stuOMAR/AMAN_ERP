@@ -219,15 +219,17 @@ function BuyingOrderForm() {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
             previewDebounced({
                 lines: items.map(i => ({
+                    product_id: i.product_id ? Number(i.product_id) : null,
                     quantity: Number(i.quantity) || 0,
                     unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
                     discount: Number(i.discount) || 0,
                 })),
+                branch_id: currentBranch?.id || null,
+                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
                 currency,
             })
         }
-    }, [items])
+    }, [items, formData.supplier_id, currentBranch])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
