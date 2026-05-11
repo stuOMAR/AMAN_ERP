@@ -142,7 +142,7 @@ function AccountingHome() {
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.label}</div>
                         <div className="metric-value">
-                            {initialLoad ? '...' : formatNumber(metric.value)} <small>{currency}</small>
+                            {!isAuthReady() ? '...' : !hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(metric.value))} {isAuthReady() && hasPermission('reports.view') && <small>{currency}</small>}
                         </div>
                     </div>
                 ))}

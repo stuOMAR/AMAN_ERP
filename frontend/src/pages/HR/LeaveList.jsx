@@ -6,7 +6,7 @@ import {
 } from 'lucide-react';
 import { hrAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
-import { hasPermission } from '../../utils/auth';
+import { hasPermission, isAuthReady } from '../../utils/auth';
 import { useBranch } from '../../context/BranchContext';
 import SimpleModal from '../../components/common/SimpleModal';
 import { formatShortDate } from '../../utils/dateUtils';
@@ -272,19 +272,19 @@ const LeaveList = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('common.count', 'Total Requests')}</div>
                     <div className="metric-value text-primary">
-                        {totalRequests}
+                        {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : (loading ? '...' : totalRequests)}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('status.pending', 'Pending')}</div>
                     <div className="metric-value text-warning">
-                        {pendingRequests}
+                        {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : (loading ? '...' : pendingRequests)}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('status.approved', 'Approved')}</div>
                     <div className="metric-value text-success">
-                        {approvedRequests}
+                        {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : (loading ? '...' : approvedRequests)}
                     </div>
                 </div>
             </div>

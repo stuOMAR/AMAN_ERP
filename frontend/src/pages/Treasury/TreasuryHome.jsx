@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { treasuryAPI } from '../../utils/api'
-import { getCurrency, hasPermission } from '../../utils/auth'
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
 import '../../components/ModuleStyles.css'
@@ -60,13 +60,13 @@ function TreasuryHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('common.total_balance')}</div>
                     <div className="metric-value text-primary">
-                        {initialLoad ? '...' : formatNumber(stats.total_balance)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('reports.view') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_balance))} {isAuthReady() && hasPermission('reports.view') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.cash_accounts')}</div>
                     <div className="metric-value text-warning">
-                        {initialLoad ? '...' : stats.cash_count}
+                        {!isAuthReady() ? '...' : !hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.cash_count)}
                     </div>
                     <div className="metric-change">
                         {initialLoad ? '' : t('common.active')}
@@ -75,7 +75,7 @@ function TreasuryHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('treasury.bank_accounts')}</div>
                     <div className="metric-value text-secondary">
-                        {initialLoad ? '...' : stats.bank_count}
+                        {!isAuthReady() ? '...' : !hasPermission('reports.view') ? '***' : (initialLoad ? '...' : stats.bank_count)}
                     </div>
                     <div className="metric-change">
                         {initialLoad ? '' : t('common.active')}

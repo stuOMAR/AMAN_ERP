@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
-import { hasPermission } from '../../utils/auth';
+import { hasPermission, isAuthReady } from '../../utils/auth';
 import { hrAPI, hrAdvancedAPI, attendanceAPI } from '../../utils/api';
 import { formatNumber } from '../../utils/format';
 import { toastEmitter } from '../../utils/toastEmitter';
@@ -116,7 +116,7 @@ const HRHome = () => {
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.title}</div>
                         <div className="metric-value" style={{ color: metric.color }}>
-                            {metric.value}
+                            {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : (loading ? '...' : metric.value)}
                         </div>
                     </div>
                 ))}

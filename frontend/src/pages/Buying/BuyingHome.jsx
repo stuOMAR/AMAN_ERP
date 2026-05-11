@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { purchasesAPI } from '../../utils/api'
-import { getCurrency, hasPermission } from '../../utils/auth'
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '../../context/ToastContext'
@@ -57,19 +57,19 @@ function BuyingHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.monthly_purchases')}</div>
                     <div className="metric-value text-primary">
-                        {loading ? '...' : formatNumber(stats.monthly_purchases)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('buying.reports') ? '***' : (loading ? '...' : formatNumber(stats.monthly_purchases))} {isAuthReady() && hasPermission('buying.reports') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.total_payables')}</div>
                     <div className="metric-value text-warning">
-                        {loading ? '...' : formatNumber(stats.total_payables)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('buying.reports') ? '***' : (loading ? '...' : formatNumber(stats.total_payables))} {isAuthReady() && hasPermission('buying.reports') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('buying.home.metrics.supplier_count')}</div>
                     <div className="metric-value text-secondary">
-                        {loading ? '...' : stats.supplier_count}
+                        {!isAuthReady() ? '...' : !hasPermission('buying.reports') ? '***' : (loading ? '...' : stats.supplier_count)}
                     </div>
                 </div>
             </div>

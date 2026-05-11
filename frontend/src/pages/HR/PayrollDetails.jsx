@@ -6,7 +6,7 @@ import {
     DollarSign, Users
 } from 'lucide-react';
 import { hrAPI } from '../../utils/api';
-import { getCurrency, hasPermission } from '../../utils/auth';
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
 import { useBranch } from '../../context/BranchContext';
 import { toastEmitter } from '../../utils/toastEmitter';
@@ -177,7 +177,7 @@ const PayrollDetails = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('hr.payroll.total_net', 'Total Net Salary')}</div>
                     <div className="metric-value text-primary">
-                        {formatNumber(totalNetBase)}
+                        {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : formatNumber(totalNetBase)}
                         {hasPermission('hr.reports') && <small> {companyCurrency}</small>}
                     </div>
                     {hasPermission('hr.reports') && hasMultiCurrency && (

@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { reportsAPI, salesAPI } from '../../utils/api';
-import { getCurrency, hasPermission } from '../../utils/auth';
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
 import { useBranch } from '../../context/BranchContext';
@@ -33,7 +33,7 @@ const CustomerStatement = () => {
 
     const fetchStatement = async () => {
         if (!selectedCustomer) return;
-        if (!hasPermission('reports.view') && !hasPermission('sales.reports')) {
+        if (isAuthReady() && !hasPermission('reports.view') && !hasPermission('sales.reports')) {
             return;
         }
         setLoading(true);
@@ -120,13 +120,13 @@ const CustomerStatement = () => {
                         <div className="metric-card">
                             <div className="metric-label">{t('sales.reports.statement.summary.opening_balance')}</div>
                             <div className="metric-value text-secondary">
-                                {formatNumber(statement.opening_balance || 0)} {hasPermission('reports.view') && <small>{currency}</small>}
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(statement.opening_balance || 0)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('sales.reports')) && <small>{currency}</small>}
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('sales.reports.statement.summary.closing_balance')}</div>
                             <div className="metric-value" style={{ color: statement.closing_balance > 0 ? 'var(--error)' : 'var(--success)' }}>
-                                {formatNumber(statement.closing_balance || 0)} {hasPermission('reports.view') && <small>{currency}</small>}
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(statement.closing_balance || 0)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('sales.reports')) && <small>{currency}</small>}
                             </div>
                         </div>
                     </div>
@@ -169,12 +169,12 @@ const CustomerStatement = () => {
                                                 </span>
                                             </td>
                                             <td style={{ color: 'var(--error)', fontWeight: t_item.debit > 0 ? '600' : '400' }}>
-                                                {(t_item.debit > 0 ? formatNumber(t_item.debit) : '-')}
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : (t_item.debit > 0 ? formatNumber(t_item.debit) : '-')}
                                             </td>
                                             <td style={{ color: 'var(--success)', fontWeight: t_item.credit > 0 ? '600' : '400' }}>
-                                                {(t_item.credit > 0 ? formatNumber(t_item.credit) : '-')}
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : (t_item.credit > 0 ? formatNumber(t_item.credit) : '-')}
                                             </td>
-                                            <td className="font-medium">{formatNumber(t_item.balance)}</td>
+                                            <td className="font-medium">{!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(t_item.balance)}</td>
                                         </tr>
                                     ))}
                                 </tbody>

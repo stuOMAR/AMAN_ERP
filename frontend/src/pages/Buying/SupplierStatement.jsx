@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { reportsAPI, inventoryAPI } from '../../utils/api';
-import { getCurrency, hasPermission } from '../../utils/auth';
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
 import { useBranch } from '../../context/BranchContext';
@@ -29,7 +29,7 @@ const SupplierStatement = () => {
 
     const fetchStatement = async () => {
         if (!selectedSupplier) return;
-        if (!hasPermission('reports.view') && !hasPermission('buying.reports')) {
+        if (isAuthReady() && !hasPermission('reports.view') && !hasPermission('buying.reports')) {
             return;
         }
         setLoading(true);
@@ -117,13 +117,13 @@ const SupplierStatement = () => {
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.opening_balance')}</div>
                             <div className="metric-value text-secondary">
-                                {statement.opening_balance?.toLocaleString()} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : statement.opening_balance?.toLocaleString()} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.closing_balance')}</div>
                             <div className="metric-value" style={{ color: statement.closing_balance > 0 ? 'var(--error)' : 'var(--success)' }}>
-                                {statement.closing_balance?.toLocaleString()} {hasPermission('reports.view') && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : statement.closing_balance?.toLocaleString()} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                     </div>
@@ -166,12 +166,12 @@ const SupplierStatement = () => {
                                                 </span>
                                             </td>
                                             <td style={{ color: 'var(--success)', fontWeight: t.debit > 0 ? '600' : '400' }}>
-                                                {(t.debit > 0 ? t.debit?.toLocaleString() : '-')}
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (t.debit > 0 ? t.debit?.toLocaleString() : '-')}
                                             </td>
                                             <td style={{ color: 'var(--error)', fontWeight: t.credit > 0 ? '600' : '400' }}>
-                                                {(t.credit > 0 ? t.credit?.toLocaleString() : '-')}
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (t.credit > 0 ? t.credit?.toLocaleString() : '-')}
                                             </td>
-                                            <td className="font-medium">{t.balance?.toLocaleString()}</td>
+                                            <td className="font-medium">{!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : t.balance?.toLocaleString()}</td>
                                         </tr>
                                     ))}
                                 </tbody>

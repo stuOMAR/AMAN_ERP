@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { inventoryAPI } from '../../utils/api'
-import { getCurrency, hasPermission } from '../../utils/auth'
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth'
 import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
 import { useTranslation } from 'react-i18next'
@@ -53,19 +53,19 @@ function StockHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.total_products')}</div>
                     <div className="metric-value text-primary">
-                        {loading ? '...' : stats.product_count}
+                        {!isAuthReady() ? '...' : !hasPermission('stock.reports') ? '***' : (loading ? '...' : stats.product_count)}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.inventory_value')}</div>
                     <div className="metric-value text-success">
-                        {loading ? '...' : formatNumber(stats.inventory_value)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('stock.reports') ? '***' : (loading ? '...' : formatNumber(stats.inventory_value))} {isAuthReady() && hasPermission('stock.reports') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('stock.home.metrics.low_stock')}</div>
                     <div className="metric-value text-warning">
-                        {loading ? '...' : stats.low_stock_count}
+                        {!isAuthReady() ? '...' : !hasPermission('stock.reports') ? '***' : (loading ? '...' : stats.low_stock_count)}
                     </div>
                 </div>
             </div>

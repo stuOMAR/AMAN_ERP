@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { reportsAPI } from '../../utils/api';
-import { getCurrency, hasPermission } from '../../utils/auth';
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth';
 import ReactECharts from 'echarts-for-react';
 import { useTranslation } from 'react-i18next';
 import { useBranch } from '../../context/BranchContext';
@@ -22,7 +22,7 @@ const AgingReport = () => {
     useEffect(() => {
         const timer = setTimeout(() => {
             const loadData = async () => {
-                if (!hasPermission('reports.view') && !hasPermission('sales.reports')) {
+                if (isAuthReady() && !hasPermission('reports.view') && !hasPermission('sales.reports')) {
                     setLoading(false);
                     setInitialLoad(false);
                     return;
@@ -179,14 +179,14 @@ const AgingReport = () => {
                     <div key={b.name} className="metric-card" style={{ borderRight: `4px solid ${['#10B981', '#FBBF24', '#F97316', '#EF4444'][i]}` }}>
                         <div className="metric-label">{b.name} {t('sales.reports.aging.buckets.days')}</div>
                         <div className="metric-value" style={{ color: ['#10B981', '#FBBF24', '#F97316', '#EF4444'][i] }}>
-                            {formatNumber(b.amount)} {hasPermission('reports.view') && <small>{currency}</small>}
+                            {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(b.amount)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('sales.reports')) && <small>{currency}</small>}
                         </div>
                     </div>
                 ))}
                 <div className="metric-card" style={{ background: 'var(--bg-secondary)', borderRight: '4px solid var(--error)' }}>
                     <div className="metric-label">{t('sales.reports.aging.total')}</div>
                     <div className="metric-value" style={{ color: 'var(--error)' }}>
-                        {formatNumber(totalDue)} {hasPermission('reports.view') && <small>{currency}</small>}
+                        {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(totalDue)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('sales.reports')) && <small>{currency}</small>}
                     </div>
                 </div>
             </div>
@@ -218,16 +218,18 @@ const AgingReport = () => {
                                     <td className="text-muted">{row.invoice}</td>
                                     <td>{row.date}</td>
                                     <td className="font-medium" style={{ color: 'var(--error)' }}>
-                                        {formatNumber(row.amount)}
+                                        {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : formatNumber(row.amount)}
                                     </td>
-                                    <td>{row.days}</td>
+                                    <td>{!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : row.days}</td>
                                     <td>
-                                        <span className={`badge ${row.days > 90 ? 'badge-danger' :
-                                            row.days > 60 ? 'badge-warning' :
-                                                'badge-success'
-                                            }`}>
-                                            {row.bucket}
-                                        </span>
+                                        {!isAuthReady() ? '' : !hasPermission('reports.view') && !hasPermission('sales.reports') ? '***' : (
+                                            <span className={`badge ${row.days > 90 ? 'badge-danger' :
+                                                row.days > 60 ? 'badge-warning' :
+                                                    'badge-success'
+                                                }`}>
+                                                {row.bucket}
+                                            </span>
+                                        )}
                                     </td>
                                 </tr>
                             ))}

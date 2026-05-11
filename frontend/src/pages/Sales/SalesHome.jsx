@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { salesAPI } from '../../utils/api'
-import { getCurrency, hasPermission } from '../../utils/auth'
+import { getCurrency, hasPermission, isAuthReady } from '../../utils/auth'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
 import '../../components/ModuleStyles.css'
@@ -55,22 +55,24 @@ function SalesHome() {
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.monthly_sales')}</div>
                     <div className="metric-value text-primary">
-                        {initialLoad ? '...' : formatNumber(stats.monthly_sales)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.monthly_sales))} {isAuthReady() && hasPermission('sales.reports') && <small>{currency}</small>}
                     </div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.receivables')}</div>
                     <div className="metric-value text-warning">
-                        {initialLoad ? '...' : formatNumber(stats.total_receivables)} <small>{currency}</small>
+                        {!isAuthReady() ? '...' : !hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : formatNumber(stats.total_receivables))} {isAuthReady() && hasPermission('sales.reports') && <small>{currency}</small>}
                     </div>
-                    <div className="metric-change">
-                        {initialLoad ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
-                    </div>
+                    {isAuthReady() && hasPermission('sales.reports') && (
+                        <div className="metric-change">
+                            {initialLoad ? '' : `${stats.unpaid_count} ${t('sales.metrics.invoices_count')}`}
+                        </div>
+                    )}
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('sales.metrics.total_customers')}</div>
                     <div className="metric-value text-secondary">
-                        {initialLoad ? '...' : stats.customer_count}
+                        {!isAuthReady() ? '...' : !hasPermission('sales.reports') ? '***' : (initialLoad ? '...' : stats.customer_count)}
                     </div>
                 </div>
             </div>

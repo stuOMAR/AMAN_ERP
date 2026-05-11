@@ -171,6 +171,28 @@ export function hasPermission(permission) {
     })
 }
 
+/**
+ * Returns true when the user object is fully loaded with a valid permissions
+ * array. Use this to distinguish between two cases:
+ *   - isAuthReady() === false → auth still loading  → show "..."
+ *   - isAuthReady() === true  → auth resolved        → check hasPermission()
+ *                                                       false → show "***"
+ *                                                       true  → show real value
+ *
+ * This prevents the race condition where hasPermission() briefly returns false
+ * for admin users during page navigation (before /auth/me completes).
+ */
+export function isAuthReady() {
+    const user = getUser()
+    return (
+        user !== null &&
+        typeof user === 'object' &&
+        Array.isArray(user.permissions) &&
+        user.permissions.length > 0
+    )
+}
+
+
 export function updateUser(userData) {
     const currentUser = getUser();
     const updatedUser = { ...currentUser, ...userData };
