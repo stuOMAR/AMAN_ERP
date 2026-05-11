@@ -337,7 +337,7 @@ def delete_currency(
                      action="delete_currency", resource_type="currency",
                      resource_id=str(currency_id),
                      details={"code": code}, request=request)
-        return {"message": i18n_message(("currency_deleted", request))}
+        return {"message": i18n_message("currency_deleted", request)}
     finally:
         db.close()
 

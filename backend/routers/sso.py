@@ -37,7 +37,7 @@ router = APIRouter(prefix="/auth/sso", tags=["SSO/LDAP"])
 def _get_company_id_from_user(current_user) -> str:
     cid = getattr(current_user, "company_id", None)
     if not cid:
-        raise HTTPException(**http_error(400, ("company_id_not_available", request)))
+        raise HTTPException(**http_error(400, "company_id_not_available"))
     return cid
 
 
@@ -52,9 +52,9 @@ def _resolve_company_id_public(company_id: Optional[str], company_code: Optional
             {"code": company_code.strip()},
         ).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("sso_company_not_found", request)))
+            raise HTTPException(**http_error(404, "sso_company_not_found"))
         return row[0]
-    raise HTTPException(**http_error(400, ("sso_company_id_required", request)))
+    raise HTTPException(**http_error(400, "sso_company_id_required"))
 
 
 # ---------------------------------------------------------------------------
@@ -101,7 +101,7 @@ async def update_sso_config(config_id: int, body: SsoConfigUpdate, request: Requ
         logger.exception("SSO config fetch/update precheck failed for company %s", company_id)
         raise HTTPException(**http_error(500, "sso_database_not_ready", request))
     if not existing:
-        raise HTTPException(**http_error(404, ("sso_config_not_found", request)))
+        raise HTTPException(**http_error(404, "sso_config_not_found", request))
     try:
         result = sso_service.update_sso_config(config_id, body.model_dump(exclude_unset=True), company_id)
         return result
@@ -121,7 +121,7 @@ async def deactivate_sso_config(config_id: int, request: Request, current_user=D
         logger.exception("SSO config deactivation failed for company %s", company_id)
         raise HTTPException(**http_error(500, "sso_database_not_ready", request))
     if not success:
-        raise HTTPException(**http_error(404, ("sso_config_not_found", request)))
+        raise HTTPException(**http_error(404, "sso_config_not_found", request))
     return {"detail": "SSO configuration deactivated"}
 
 
@@ -211,7 +211,7 @@ async def saml_metadata(
     configs = sso_service.get_sso_configs(cid)
     saml_cfg = next((c for c in configs if c["provider_type"] == "saml" and c.get("is_active")), None)
     if not saml_cfg:
-        raise HTTPException(**http_error(404, ("sso_no_saml_config", request)))
+        raise HTTPException(**http_error(404, "sso_no_saml_config", request))
     metadata_xml = sso_service.get_saml_sp_metadata(cid, saml_cfg)
     base_url = settings.FRONTEND_URL.rstrip("/")
     sp_entity_id = f"{base_url}/api/auth/sso/saml/metadata?company_id={cid}"
@@ -237,14 +237,14 @@ async def saml_acs(request: Request, response: Response):
     saml_response = form.get("SAMLResponse")
     relay_state = form.get("RelayState", "")
     if not saml_response:
-        raise HTTPException(**http_error(400, ("sso_missing_saml_response", request)))
+        raise HTTPException(**http_error(400, "sso_missing_saml_response", request))
 
     # SEC-FIX: Look up server-side state by relay token instead of parsing URI
     if not relay_state:
-        raise HTTPException(**http_error(400, ("sso_missing_relay_state", request)))
+        raise HTTPException(**http_error(400, "sso_missing_relay_state", request))
     state_data = cache.get(f"saml_state:{relay_state}")
     if not state_data:
-        raise HTTPException(**http_error(400, ("sso_invalid_relay_state", request)))
+        raise HTTPException(**http_error(400, "sso_invalid_relay_state", request))
     company_id = state_data["company_id"]
     sso_config_id_str = str(state_data["sso_config_id"])
     # Delete used state token to prevent replay
@@ -252,7 +252,7 @@ async def saml_acs(request: Request, response: Response):
 
     sso_config = sso_service.get_sso_config_by_id(int(sso_config_id_str), company_id)
     if not sso_config or sso_config["provider_type"] != "saml":
-        raise HTTPException(**http_error(400, ("sso_invalid_config", request)))
+        raise HTTPException(**http_error(400, "sso_invalid_config", request))
 
     try:
         assertion = sso_service.saml_process_acs(
@@ -321,10 +321,10 @@ async def sso_exchange(payload: dict):
     """
     ticket = (payload or {}).get("ticket")
     if not ticket:
-        raise HTTPException(**http_error(400, ("sso_missing_ticket", request)))
+        raise HTTPException(**http_error(400, "sso_missing_ticket", request))
     data = cache.get(f"sso_ticket:{ticket}")
     if not data:
-        raise HTTPException(**http_error(400, ("sso_invalid_ticket", request)))
+        raise HTTPException(**http_error(400, "sso_invalid_ticket", request))
     cache.delete(f"sso_ticket:{ticket}")
     return {
         "access_token": data["access_token"],
@@ -351,11 +351,11 @@ async def sso_login(body: SsoLoginRequest, response: Response):
         # Try to find which company has this SSO config
         company_id = _find_company_for_sso_config(body.sso_configuration_id)
     if not company_id:
-        raise HTTPException(**http_error(400, ("sso_cannot_determine_company", request)))
+        raise HTTPException(**http_error(400, "sso_cannot_determine_company", request))
 
     sso_config = sso_service.get_sso_config_by_id(body.sso_configuration_id, company_id)
     if not sso_config or not sso_config.get("is_active"):
-        raise HTTPException(**http_error(404, ("sso_config_inactive", request)))
+        raise HTTPException(**http_error(404, "sso_config_inactive", request))
 
     if sso_config["provider_type"] == "saml":
         # Return redirect URL for SAML
@@ -372,7 +372,7 @@ async def sso_login(body: SsoLoginRequest, response: Response):
 
     elif sso_config["provider_type"] == "ldap":
         if not body.username or not body.password:
-            raise HTTPException(**http_error(400, ("sso_ldap_credentials_required", request)))
+            raise HTTPException(**http_error(400, "sso_ldap_credentials_required", request))
         try:
             ldap_result = sso_service.ldap_authenticate(sso_config, body.username, body.password)
         except ValueError as exc:

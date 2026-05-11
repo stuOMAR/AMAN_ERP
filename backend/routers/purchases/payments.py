@@ -111,7 +111,7 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
             total_allocated = Decimal('0')
             for alloc in data.allocations:
                 if alloc.allocated_amount is None or alloc.allocated_amount <= 0:
-                    raise HTTPException(**http_error(400, ("allocation_must_be_positive", request)))
+                    raise HTTPException(**http_error(400, "allocation_must_be_positive", request))
     
                 inv_row = db.execute(text("""
                     SELECT id, party_id, invoice_type, total, COALESCE(paid_amount, 0) AS paid_amount,
@@ -350,7 +350,7 @@ def list_supplier_payments(branch_id: Optional[int] = None, current_user: dict =
             raise HTTPException(**http_error(500, "internal_error"))
 
 @router.get("/payments/{voucher_id}", response_model=dict, dependencies=[Depends(require_permission("buying.view"))])
-def get_payment_details(voucher_id: int, current_user: dict = Depends(get_current_user)):
+def get_payment_details(request: Request, voucher_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل سند صرف"""
     with transactional(current_user.company_id) as db:
         try:
@@ -554,7 +554,7 @@ def create_purchase_credit_note(
             if not lines:
                 raise HTTPException(**http_error(400, "min_one_item_required"))
             if not party_id:
-                raise HTTPException(**http_error(400, ("supplier_required", request)))
+                raise HTTPException(**http_error(400, "supplier_required", request))
     
             if related_invoice_id:
                 orig = db.execute(text(
@@ -820,7 +820,7 @@ def create_purchase_debit_note(
             if not lines:
                 raise HTTPException(**http_error(400, "min_one_item_required"))
             if not party_id:
-                raise HTTPException(**http_error(400, ("supplier_required", request)))
+                raise HTTPException(**http_error(400, "supplier_required", request))
     
             inv_date = data.get("invoice_date", str(date.today()))
             base_currency = get_base_currency(db)

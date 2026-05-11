@@ -74,7 +74,7 @@ def create_category(
         # Check duplicate code
         exists = db.execute(text("SELECT 1 FROM product_categories WHERE category_code = :code"), {"code": category.code}).scalar()
         if exists:
-            raise HTTPException(**http_error(400, ("category_code_duplicate", request)))
+            raise HTTPException(**http_error(400, "category_code_duplicate", request))
 
         result = db.execute(text("""
             INSERT INTO product_categories (category_name, category_code, branch_id) 
@@ -183,7 +183,7 @@ def delete_category(
             request=request
         )
 
-        return {"message": i18n_message(("category_deleted", request))}
+        return {"message": i18n_message("category_deleted", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")

@@ -14,7 +14,7 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -80,7 +80,7 @@ def list_settlements(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_sensitive_permission("finance.expenses", critical=True))],
 )
-def submit_settlement(
+def submit_settlement(request: Request, 
     payload: SettlementCreate,
     current_user: dict = Depends(get_current_user),
 ):
@@ -111,7 +111,7 @@ def submit_settlement(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("finance.expenses", critical=True))],
 )
-def approve_settlement(
+def approve_settlement(request: Request, 
     settlement_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -140,7 +140,7 @@ def approve_settlement(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("finance.expenses", critical=True))],
 )
-def reject_settlement(
+def reject_settlement(request: Request, 
     settlement_id: int,
     body: RejectBody,
     current_user: dict = Depends(get_current_user),
@@ -170,7 +170,7 @@ def reject_settlement(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("finance.expenses", critical=True))],
 )
-def post_settlement(
+def post_settlement(request: Request, 
     settlement_id: int,
     current_user: dict = Depends(get_current_user),
 ):

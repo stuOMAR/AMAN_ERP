@@ -3,7 +3,7 @@ AMAN ERP - Roles Management Router
 API endpoints for managing roles and permissions.
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -741,7 +741,7 @@ def list_permission_sections(current_user: UserResponse = Depends(get_current_us
 
 
 @router.post("/init-defaults", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
-def init_default_roles(
+def init_default_roles(request: Request, 
     company_id: Optional[str] = None,
     current_user: Any = Depends(get_current_user)
 ):
@@ -751,7 +751,7 @@ def init_default_roles(
     """
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     db = get_db_connection(target_company_id)
     try:
@@ -846,7 +846,7 @@ def list_roles(
 
 
 @router.get("/{role_id}", response_model=dict, dependencies=[Depends(require_permission("admin.roles"))])
-def get_role(
+def get_role(request: Request, 
     role_id: int, 
     company_id: Optional[str] = None,
     current_user: Any = Depends(get_current_user)
@@ -854,7 +854,7 @@ def get_role(
     """جلب تفاصيل دور محدد"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     with transactional(target_company_id) as db:
         row = db.execute(text("""
@@ -878,7 +878,7 @@ def get_role(
 
 
 @router.post("/", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
-def create_role(
+def create_role(request: Request, 
     role: RoleCreate, 
     company_id: Optional[str] = None,
     current_user: Any = Depends(get_current_user)
@@ -886,14 +886,14 @@ def create_role(
     """إنشاء دور جديد"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     db = get_db_connection(target_company_id)
     try:
         # Check name uniqueness
         exists = db.execute(text("SELECT 1 FROM roles WHERE role_name = :name"), {"name": role.role_name}).fetchone()
         if exists:
-            raise HTTPException(**http_error(400, ("role_name_duplicate", request)))
+            raise HTTPException(**http_error(400, "role_name_duplicate", request))
 
         import json
         result = db.execute(text("""
@@ -928,7 +928,7 @@ def create_role(
 
 
 @router.put("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
-def update_role(
+def update_role(request: Request, 
     role_id: int, 
     role: RoleUpdate, 
     company_id: Optional[str] = None,
@@ -937,7 +937,7 @@ def update_role(
     """تحديث دور"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     db = get_db_connection(target_company_id)
     try:
@@ -993,7 +993,7 @@ def update_role(
 
 
 @router.delete("/{role_id}", dependencies=[Depends(require_permission("admin.roles"))], response_model=Dict[str, Any])
-def delete_role(
+def delete_role(request: Request, 
     role_id: int, 
     company_id: Optional[str] = None,
     current_user: Any = Depends(get_current_user)
@@ -1001,7 +1001,7 @@ def delete_role(
     """حذف دور"""
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     db = get_db_connection(target_company_id)
     try:
@@ -1012,7 +1012,7 @@ def delete_role(
             raise HTTPException(**http_error(404, "role_not_found"))
         
         if existing.is_system_role:
-            raise HTTPException(**http_error(400, ("cannot_delete_system_roles", request)))
+            raise HTTPException(**http_error(400, "cannot_delete_system_roles", request))
         
         # Check if any users are using this role
         usage = db.execute(text("SELECT COUNT(*) FROM company_users WHERE role = (SELECT role_name FROM roles WHERE id = :id)"), {"id": role_id}).scalar()

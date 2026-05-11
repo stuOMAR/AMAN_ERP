@@ -50,7 +50,7 @@ def record_qc_result(
     conn = get_db_connection(current_user.company_id)
     try:
         if res.result not in ("pass", "fail", "warning"):
-            raise HTTPException(**http_error(400, ("qc_result_invalid", request)))
+            raise HTTPException(**http_error(400, "qc_result_invalid", request))
 
         qc = conn.execute(text("SELECT * FROM mfg_qc_checks WHERE id=:id AND is_deleted = false"), {"id": qc_id}).fetchone()
         if not qc:
@@ -104,7 +104,7 @@ def record_qc_result(
     except Exception as e:
         conn.rollback()
         logger.error(f"Error recording QC result: {e}")
-        raise HTTPException(**http_error(500, ("qc_record_failed", request)))
+        raise HTTPException(**http_error(500, "qc_record_failed", request))
     finally:
         conn.close()
 

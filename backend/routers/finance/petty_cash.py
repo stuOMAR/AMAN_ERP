@@ -358,7 +358,7 @@ def disburse_fund(fund_id: int, payload: PettyCashOp, request: Request,
 @router.get("/funds/{fund_id}/transactions",
             dependencies=[Depends(require_permission("treasury.view"))],
             response_model=List[Dict[str, Any]])
-def list_transactions(fund_id: int, limit: int = 200,
+def list_transactions(request: Request, fund_id: int, limit: int = 200,
                       current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:

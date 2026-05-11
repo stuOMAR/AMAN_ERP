@@ -180,7 +180,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+            raise HTTPException(**http_error(400, "pos_no_fields", request))
         
         db.execute(text(f"UPDATE product_variants SET {', '.join(fields)} WHERE id = :vid"), params)
         db.commit()
@@ -188,7 +188,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="variant.update", resource_type="product_variant",
                      resource_id=str(variant_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": i18n_message(("variant_updated", request))}
+        return {"message": i18n_message("variant_updated", request)}
     except HTTPException:
         raise
     except Exception:
@@ -276,7 +276,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+            raise HTTPException(**http_error(400, "pos_no_fields", request))
         
         db.execute(text(f"UPDATE bin_locations SET {', '.join(fields)} WHERE id = :bid"), params)
         db.commit()
@@ -284,7 +284,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="bin.update", resource_type="bin_location",
                      resource_id=str(bin_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": i18n_message(("bin_location_updated", request))}
+        return {"message": i18n_message("bin_location_updated", request)}
     except HTTPException:
         raise
     except Exception:
@@ -337,7 +337,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
         """), {"kit_id": kit_id})
         row = result.fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("kit_not_found", request)))
+            raise HTTPException(**http_error(404, "kit_not_found", request))
         
         kit = dict(row._mapping)
         items = db.execute(text("""
@@ -352,7 +352,7 @@ async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
         raise
     except Exception as e:
         if "does not exist" in str(e):
-            raise HTTPException(**http_error(404, ("table_not_migrated", request)))
+            raise HTTPException(**http_error(404, "table_not_migrated", request))
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
@@ -402,7 +402,7 @@ async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, curr
             fields.append(f"{field} = :{field}")
             params[field] = value
         if not fields:
-            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+            raise HTTPException(**http_error(400, "pos_no_fields", request))
         
         db.execute(text(f"UPDATE product_kits SET {', '.join(fields)} WHERE id = :kid"), params)
         db.commit()
@@ -410,7 +410,7 @@ async def update_kit(kit_id: int, data: ProductKitUpdate, request: Request, curr
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="kit.update", resource_type="product_kit",
                      resource_id=str(kit_id), details=data.dict(exclude_unset=True), request=request)
-        return {"message": i18n_message(("kit_updated", request))}
+        return {"message": i18n_message("kit_updated", request)}
     except HTTPException:
         raise
     except Exception:

@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
+from fastapi import Request, APIRouter, Depends, HTTPException, status, UploadFile, File
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -62,7 +62,7 @@ def list_reconciliations(
         return [dict(row._mapping) for row in result]
 
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depends(get_current_user)):
+def create_reconciliation(request: Request, data: ReconciliationCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء مسودة تسوية جديدة"""
     with transactional(current_user.company_id) as db:
         branch_id = validate_branch_access(current_user, data.branch_id)
@@ -80,7 +80,7 @@ def create_reconciliation(data: ReconciliationCreate, current_user: dict = Depen
         """), {"tid": data.treasury_account_id}).fetchone()
         
         if existing:
-            raise HTTPException(**http_error(400, ("reconciliation_draft_exists", request)))
+            raise HTTPException(**http_error(400, "reconciliation_draft_exists", request))
 
         tolerance_amount = data.tolerance_amount
         if tolerance_amount is None:
@@ -176,14 +176,14 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
         }
 
 @router.post("/{id}/lines", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def add_statement_lines(id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
+def add_statement_lines(request: Request, id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """إضافة أسطر كشف الحساب يدوياً"""
     with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec.status != 'draft':
-            raise HTTPException(**http_error(400, ("cannot_add_to_approved", request)))
+            raise HTTPException(**http_error(400, "cannot_add_to_approved", request))
 
         last_balance = db.execute(text("""
             SELECT balance FROM bank_statement_lines 
@@ -303,7 +303,7 @@ async def preview_import(
             if not rec:
                 raise HTTPException(**http_error(404, "reconciliation_not_found"))
             if rec.status != 'draft':
-                raise HTTPException(**http_error(400, ("cannot_import_to_approved", request)))
+                raise HTTPException(**http_error(400, "cannot_import_to_approved", request))
     
             content = await file.read()
             filename = file.filename.lower() if file.filename else ""
@@ -318,7 +318,7 @@ async def preview_import(
                 try:
                     import openpyxl
                 except ImportError:
-                    raise HTTPException(**http_error(400, ("openpyxl_required", request)))
+                    raise HTTPException(**http_error(400, "openpyxl_required", request))
                 wb = openpyxl.load_workbook(io.BytesIO(content), read_only=True, data_only=True)
                 ws = wb.active
                 all_rows = list(ws.iter_rows(values_only=True))
@@ -432,14 +432,14 @@ async def preview_import(
 
 
 @router.post("/{id}/import-confirm", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
+def confirm_import(request: Request, id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """تأكيد استيراد أسطر كشف الحساب بعد المعاينة"""
     with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec.status != 'draft':
-            raise HTTPException(**http_error(400, ("cannot_import_to_approved", request)))
+            raise HTTPException(**http_error(400, "cannot_import_to_approved", request))
 
         if not lines:
             raise HTTPException(**http_error(400, "reconciliation_no_lines_to_import", request))
@@ -473,7 +473,7 @@ def confirm_import(id: int, lines: List[StatementLineCreate], current_user: dict
 # ──────── AUTO RECONCILIATION ────────
 
 @router.post("/{id}/auto-match", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(get_current_user)):
+def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user: dict = Depends(get_current_user)):
     """مطابقة تلقائية بناءً على المبلغ والتاريخ"""
     with transactional(current_user.company_id) as db:
         rec_info = db.execute(text("""
@@ -614,7 +614,7 @@ def auto_match(id: int, tolerance_days: int = 3, current_user: dict = Depends(ge
         }
 
 @router.delete("/{id}/lines/{line_id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def delete_statement_line(id: int, line_id: int, current_user: dict = Depends(get_current_user)):
+def delete_statement_line(request: Request, id: int, line_id: int, current_user: dict = Depends(get_current_user)):
     """حذف سطر من كشف الحساب البنكي"""
     with transactional(current_user.company_id) as db:
         rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
@@ -673,7 +673,7 @@ def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
         return [dict(r._mapping) for r in ledger]
 
 @router.post("/{id}/match", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends(get_current_user)):
+def match_transaction(request: Request, id: int, match: MatchRequest, current_user: dict = Depends(get_current_user)):
     """مطابقة سطر بنكي مع قيد محاسبي"""
     with transactional(current_user.company_id) as db:
         rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
@@ -737,7 +737,7 @@ def match_transaction(id: int, match: MatchRequest, current_user: dict = Depends
         return {"success": True, "message": i18n_message("reconciliation_matched", request)}
 
 @router.post("/{id}/unmatch", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depends(get_current_user)):
+def unmatch_transaction(request: Request, id: int, data: UnmatchRequest, current_user: dict = Depends(get_current_user)):
     """إلغاء مطابقة سطر بنكي"""
     with transactional(current_user.company_id) as db:
         rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
@@ -771,7 +771,7 @@ def unmatch_transaction(id: int, data: UnmatchRequest, current_user: dict = Depe
         return {"success": True, "message": i18n_message("reconciliation_unmatched", request)}
 
 @router.delete("/{id}", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
-def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
+def delete_reconciliation(request: Request, id: int, current_user: dict = Depends(get_current_user)):
     """حذف تسوية بنكية (مسودة فقط)"""
     with transactional(current_user.company_id) as db:
         try:
@@ -799,7 +799,7 @@ def delete_reconciliation(id: int, current_user: dict = Depends(get_current_user
 
 
 @router.post("/{id}/finalize", dependencies=[Depends(require_sensitive_permission("finance.reconciliation.finalize", critical=True))], response_model=Dict[str, Any])
-def finalize_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
+def finalize_reconciliation(request: Request, id: int, current_user: dict = Depends(get_current_user)):
     """اعتماد التسوية وإغلاقها"""
     with transactional(current_user.company_id) as db:
         rec = db.execute(text("""

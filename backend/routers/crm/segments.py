@@ -281,7 +281,7 @@ def add_customer_to_segment(seg_id: int, customer_id: int, request: Request, cur
         """), {"sid": seg_id, "cid": customer_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_add_customer_to_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"customer_id": customer_id}, request=request)
-        return {"message": i18n_message(("segment_member_added", request))}
+        return {"message": i18n_message("segment_member_added", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error adding customer to segment: {e}")
@@ -301,7 +301,7 @@ def remove_customer_from_segment(seg_id: int, customer_id: int, request: Request
         """), {"sid": seg_id, "cid": customer_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_remove_customer_from_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"customer_id": customer_id}, request=request)
-        return {"message": i18n_message(("segment_member_removed", request))}
+        return {"message": i18n_message("segment_member_removed", request)}
     finally:
         db.close()
 

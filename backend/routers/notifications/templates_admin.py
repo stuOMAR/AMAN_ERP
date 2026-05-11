@@ -7,7 +7,7 @@ DELETE /notifications/templates/{id}  — delete template
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from typing import Optional
 
@@ -100,7 +100,7 @@ def create_template(
 
 
 @router.put("/{template_id}")
-def update_template(
+def update_template(request: Request, 
     template_id: int,
     body: TemplateCreate,
     current_user=Depends(require_sensitive_permission("email_templates.admin")),
@@ -138,7 +138,7 @@ def update_template(
 
 
 @router.delete("/{template_id}")
-def delete_template(
+def delete_template(request: Request, 
     template_id: int,
     current_user=Depends(require_sensitive_permission("email_templates.admin")),
 ):

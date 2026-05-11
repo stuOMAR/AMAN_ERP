@@ -77,14 +77,14 @@ def list_conflicts(resolution: Optional[str] = None,
 
 @router.get("/sync/conflicts/{conflict_id}", response_model=Dict[str, Any],
             dependencies=[Depends(require_permission("pos.manage"))])
-def get_conflict(conflict_id: int, current_user=Depends(get_current_user)):
+def get_conflict(request: Request, conflict_id: int, current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
         row = db.execute(text(
             "SELECT * FROM pos_sync_conflicts WHERE id = :id"
         ), {"id": conflict_id}).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("pos_conflict_not_found", request)))
+            raise HTTPException(**http_error(404, "pos_conflict_not_found", request))
         return dict(row._mapping)
     finally:
         db.close()
@@ -107,7 +107,7 @@ def resolve_conflict(conflict_id: int, payload: ConflictResolve,
             "SELECT id, resolution FROM pos_sync_conflicts WHERE id = :id FOR UPDATE"
         ), {"id": conflict_id}).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("pos_conflict_not_found", request)))
+            raise HTTPException(**http_error(404, "pos_conflict_not_found", request))
         if row.resolution and row.resolution != "pending":
             raise HTTPException(**http_error(400, "pos_conflict_already_resolved", request, status=row.resolution))
 

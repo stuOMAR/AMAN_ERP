@@ -95,7 +95,7 @@ def _sif_num(value, width: int, decimals: int = 0) -> str:
 def _validate_mol_establishment_id(value: str) -> str:
     mol_id = "".join(ch for ch in str(value or "") if ch.isdigit())
     if len(mol_id) != 10 or mol_id == "0" * 10:
-        raise HTTPException(**http_error(400, "mol_establishment_id_must_be_a_real_10_digit_value", request))
+        raise HTTPException(**http_error(400, "mol_establishment_id_must_be_a_real_10_digit_value"))
     return mol_id
 
 

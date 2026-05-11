@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -57,7 +57,7 @@ def list_revaluations(asset_id: Optional[int] = None, branch_id: Optional[int] =
 
 
 @router.post("/revaluations", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def create_revaluation(data: AssetRevaluationCreate, current_user: dict = Depends(get_current_user)):
+def create_revaluation(request: Request, data: AssetRevaluationCreate, current_user: dict = Depends(get_current_user)):
     """Create Revaluation."""
     with transactional(current_user.company_id) as conn:
         try:
@@ -92,7 +92,7 @@ def create_revaluation(data: AssetRevaluationCreate, current_user: dict = Depend
 # ---------- Maintenance complete (STATIC - must be before /{asset_id}) ----------
 
 @router.post("/{asset_id}/revalue", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def revalue_asset(asset_id: int, reval: AssetRevaluation, current_user: dict = Depends(get_current_user)):
+def revalue_asset(request: Request, asset_id: int, reval: AssetRevaluation, current_user: dict = Depends(get_current_user)):
     """إعادة تقييم أصل ثابت — IAS 16.35-40: الزيادة تسجل في احتياطي إعادة التقييم"""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()

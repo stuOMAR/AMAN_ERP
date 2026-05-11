@@ -2,7 +2,7 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -550,7 +550,7 @@ def get_fx_gain_loss_report(
 
 
 @router.get("/accounting/horizontal-analysis", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def horizontal_analysis(
+def horizontal_analysis(request: Request, 
     periods: str = "2026-01-01:2026-12-31,2025-01-01:2025-12-31",
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
@@ -569,7 +569,7 @@ def horizontal_analysis(
     try:
         parsed = _parse_periods(periods)
         if len(parsed) < 2:
-            raise HTTPException(**http_error(400, ("must_be_two_lines", request)))
+            raise HTTPException(**http_error(400, "must_be_two_lines", request))
 
         all_accounts = db.execute(text("SELECT id, account_number, name, name_en, account_type FROM accounts ORDER BY account_number")).fetchall()
 
@@ -820,7 +820,7 @@ def cost_center_report(
 # ═══════════════════════════════════════════════════════════
 
 @router.get("/accounting/profit-loss/detailed", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def detailed_profit_loss(
+def detailed_profit_loss(request: Request, 
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     group_by: str = "customer",  # customer, product, category
@@ -963,7 +963,7 @@ def detailed_profit_loss(
 
         return result
     except ValueError:
-        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
+        raise HTTPException(**http_error(400, "invalid_date_format", request))
     finally:
         db.close()
 

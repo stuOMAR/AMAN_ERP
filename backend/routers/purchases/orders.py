@@ -198,7 +198,7 @@ def create_purchase_order(
 
             validated_branch_id = validate_branch_access(current_user, po.branch_id)
             if validated_branch_id is None:
-                raise HTTPException(**http_error(400, ("branch_required", request)))
+                raise HTTPException(**http_error(400, "branch_required", request))
 
             lines_data = []
             for item in po.items:
@@ -371,7 +371,7 @@ def approve_purchase_order(
                 raise HTTPException(**http_error(404, "purchase_order_not_found"))
             
             if po.status != 'draft':
-                raise HTTPException(**http_error(400, ("po_approve_only_draft", request)))
+                raise HTTPException(**http_error(400, "po_approve_only_draft", request))
     
             # PUR-F1: Budget guard on PO approval.
             # When an active budget exists for the PO's branch/fiscal period,
@@ -484,14 +484,14 @@ def receive_purchase_order(
                 raise HTTPException(**http_error(404, "purchase_order_not_found"))
             
             if po.status not in ('approved', 'partial'):
-                raise HTTPException(**http_error(400, ("po_must_be_approved", request)))
+                raise HTTPException(**http_error(400, "po_must_be_approved", request))
 
             validate_branch_access(current_user, po.branch_id)
             if not receive_data.items:
-                raise HTTPException(**http_error(400, ("at_least_one_line_required", request)))
+                raise HTTPException(**http_error(400, "at_least_one_line_required", request))
             exchange_rate = _dec(1 if po.exchange_rate is None else po.exchange_rate)
             if exchange_rate <= 0:
-                raise HTTPException(**http_error(400, ("po_exchange_rate_invalid", request)))
+                raise HTTPException(**http_error(400, "po_exchange_rate_invalid", request))
 
             wh_row = db.execute(text("""
                 SELECT id, branch_id
@@ -500,9 +500,9 @@ def receive_purchase_order(
                 FOR UPDATE
             """), {"id": receive_data.warehouse_id}).fetchone()
             if not wh_row:
-                raise HTTPException(**http_error(400, ("warehouse_not_found", request)))
+                raise HTTPException(**http_error(400, "warehouse_not_found", request))
             if po.branch_id and wh_row.branch_id and int(wh_row.branch_id) != int(po.branch_id):
-                raise HTTPException(**http_error(400, ("warehouse_not_in_po_branch", request)))
+                raise HTTPException(**http_error(400, "warehouse_not_in_po_branch", request))
     
             # QA-F1: block receiving when any quality inspection tied to this PO is FAILED.
             try:
@@ -838,7 +838,7 @@ def list_rfqs(status: Optional[str] = None, current_user=Depends(get_current_use
         rows = db.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]
 @router.get("/rfq/{rfq_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
-def get_rfq(rfq_id: int, current_user=Depends(get_current_user)):
+def get_rfq(request: Request, rfq_id: int, current_user=Depends(get_current_user)):
     """Get RFQ."""
     with transactional(current_user.company_id) as db:
         rfq = db.execute(text("SELECT * FROM request_for_quotations WHERE id = :id"), {"id": rfq_id}).fetchone()
@@ -1062,7 +1062,7 @@ def list_agreements(status: Optional[str] = None, current_user=Depends(get_curre
         rows = db.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]
 @router.get("/agreements/{agr_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
-def get_agreement(agr_id: int, current_user=Depends(get_current_user)):
+def get_agreement(request: Request, agr_id: int, current_user=Depends(get_current_user)):
     """Get Agreement."""
     with transactional(current_user.company_id) as db:
         agr = db.execute(text("SELECT * FROM purchase_agreements WHERE id = :id"), {"id": agr_id}).fetchone()

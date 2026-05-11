@@ -57,11 +57,11 @@ def post_inventory_adjustment(
     # T047: Validate GL account mappings
     inv_acc = inventory_account_id or get_mapped_account_id(db, "acc_map_inventory")
     if not inv_acc:
-        raise HTTPException(**http_error(400, ("inventory_account_not_configured", request)))
+        raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
 
     adj_acc = adjustment_account_id or get_mapped_account_id(db, "acc_map_inventory_adjustment")
     if not adj_acc:
-        raise HTTPException(**http_error(400, ("adjustment_account_not_configured", request)))
+        raise HTTPException(**http_error(400, "adjustment_account_not_configured", request))
 
     if not reference:
         from uuid import uuid4
@@ -303,7 +303,7 @@ def create_adjustment(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if wh_branch and wh_branch not in allowed:
-                raise HTTPException(**http_error(403, ("adjustment_warehouse_outside_branch", request)))
+                raise HTTPException(**http_error(403, "adjustment_warehouse_outside_branch", request))
 
         # Get current quantity to compute difference
         stock_row = db.execute(text("SELECT quantity FROM inventory WHERE product_id = :pid AND warehouse_id = :wh"),
@@ -312,9 +312,9 @@ def create_adjustment(
         difference = data.new_quantity - current_qty
 
         if difference == 0:
-            raise HTTPException(**http_error(400, ("adjustment_quantity_no_change", request)))
+            raise HTTPException(**http_error(400, "adjustment_quantity_no_change", request))
         if data.new_quantity < 0:
-            raise HTTPException(**http_error(400, ("adjustment_negative_quantity", request)))
+            raise HTTPException(**http_error(400, "adjustment_negative_quantity", request))
 
         adjustment_type = 'increase' if difference > 0 else 'decrease'
 
@@ -394,6 +394,6 @@ def create_adjustment(
     except Exception:
         db.rollback()
         logger.exception("Stock adjustment failed")
-        raise HTTPException(**http_error(500, ("adjustment_save_error", request)))
+        raise HTTPException(**http_error(500, "adjustment_save_error", request))
     finally:
         db.close()

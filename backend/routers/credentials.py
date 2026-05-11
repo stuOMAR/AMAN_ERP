@@ -91,7 +91,7 @@ def list_credentials(
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_sensitive_permission("admin.credentials", critical=True))],
 )
-def create_credential(
+def create_credential(request: Request, 
     payload: CredentialCreate,
     current_user: dict = Depends(get_current_user),
 ):
@@ -181,7 +181,7 @@ def create_credential(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("admin.credentials", critical=True))],
 )
-def get_credential(
+def get_credential(request: Request, 
     credential_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -210,7 +210,7 @@ def get_credential(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("admin.credentials", critical=True))],
 )
-def rotate_credential(
+def rotate_credential(request: Request, 
     credential_id: int,
     payload: CredentialRotate,
     current_user: dict = Depends(get_current_user),
@@ -271,7 +271,7 @@ def rotate_credential(
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_sensitive_permission("admin.credentials", critical=True))],
 )
-def soft_delete_credential(
+def soft_delete_credential(request: Request, 
     credential_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -314,7 +314,7 @@ def soft_delete_credential(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("admin.credentials", critical=True))],
 )
-def restore_credential(
+def restore_credential(request: Request, 
     credential_id: int,
     current_user: dict = Depends(get_current_user),
 ):

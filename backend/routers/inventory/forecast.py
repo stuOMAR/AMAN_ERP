@@ -2,7 +2,7 @@
 
 import logging
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 
@@ -82,7 +82,7 @@ def list_forecasts(
     "/{forecast_id}",
     dependencies=[Depends(require_permission("inventory.forecast_view"))],
 )
-def get_forecast(
+def get_forecast(request: Request, 
     forecast_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -101,7 +101,7 @@ def get_forecast(
             {"fid": forecast_id},
         ).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
+            raise HTTPException(**http_error(404, "forecast_not_found", request))
 
         forecast = dict(row._mapping)
 
@@ -127,7 +127,7 @@ def get_forecast(
     "/{forecast_id}/adjust",
     dependencies=[Depends(require_permission("inventory.forecast_manage"))],
 )
-def adjust_forecast(
+def adjust_forecast(request: Request, 
     forecast_id: int,
     body: ForecastAdjustRequest,
     current_user: dict = Depends(get_current_user),
@@ -141,7 +141,7 @@ def adjust_forecast(
             {"fid": forecast_id},
         ).fetchone()
         if not exists:
-            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
+            raise HTTPException(**http_error(404, "forecast_not_found", request))
 
         result = manual_adjust(
             db,

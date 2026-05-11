@@ -98,7 +98,7 @@ class DashboardResponse(BaseModel):
 def _get_company_id(current_user) -> str:
     cid = getattr(current_user, "company_id", None)
     if not cid:
-        raise HTTPException(**http_error(400, ("company_id_not_available", request)))
+        raise HTTPException(**http_error(400, "company_id_not_available"))
     return cid
 
 

@@ -357,7 +357,7 @@ def list_expense_policies(current_user=Depends(get_current_user)):
 
 
 @router.post("/policies", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
-def create_expense_policy(policy: ExpensePolicyCreate, current_user=Depends(get_current_user)):
+def create_expense_policy(request: Request, policy: ExpensePolicyCreate, current_user=Depends(get_current_user)):
     """إنشاء سياسة مصروفات"""
     with transactional(current_user.company_id) as db:
         try:
@@ -384,7 +384,7 @@ def create_expense_policy(policy: ExpensePolicyCreate, current_user=Depends(get_
 
 
 @router.put("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
-def update_expense_policy(policy_id: int, policy: ExpensePolicyUpdate, current_user=Depends(get_current_user)):
+def update_expense_policy(request: Request, policy_id: int, policy: ExpensePolicyUpdate, current_user=Depends(get_current_user)):
     """تحديث سياسة مصروفات"""
     with transactional(current_user.company_id) as db:
         try:
@@ -403,7 +403,7 @@ def update_expense_policy(policy_id: int, policy: ExpensePolicyUpdate, current_u
             fields.append("updated_by = :uid")
             params["uid"] = current_user.id
             db.execute(text(f"UPDATE expense_policies SET {', '.join(fields)} WHERE id = :id AND is_deleted = false"), params)
-            return {"message": i18n_message(("expense_policy_updated", request))}
+            return {"message": i18n_message("expense_policy_updated", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -411,14 +411,14 @@ def update_expense_policy(policy_id: int, policy: ExpensePolicyUpdate, current_u
 
 
 @router.delete("/policies/{policy_id}", dependencies=[Depends(require_permission("expenses.manage"))], response_model=Dict[str, Any])
-def delete_expense_policy(policy_id: int, current_user=Depends(get_current_user)):
+def delete_expense_policy(request: Request, policy_id: int, current_user=Depends(get_current_user)):
     """حذف سياسة مصروفات"""
     with transactional(current_user.company_id) as db:
         try:
             db.execute(text(
                 "UPDATE expense_policies SET is_deleted = true, updated_at = NOW(), updated_by = :uid WHERE id = :id"
             ), {"id": policy_id, "uid": current_user.id})
-            return {"message": i18n_message(("expense_policy_deleted", request))}
+            return {"message": i18n_message("expense_policy_deleted", request)}
         except Exception:
             pass
             logger.exception("Internal error")

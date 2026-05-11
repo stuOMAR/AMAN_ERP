@@ -469,7 +469,7 @@ def list_customer_payments(branch_id: Optional[int] = None, current_user: dict =
     finally:
         db.close()
 @vouchers_router.get("/payments/{voucher_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
-def get_payment_details(voucher_id: int, current_user: dict = Depends(get_current_user)):
+def get_payment_details(request: Request, voucher_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل سند صرف"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -497,7 +497,7 @@ def get_payment_details(voucher_id: int, current_user: dict = Depends(get_curren
     finally:
         db.close()
 @vouchers_router.get("/receipts/{voucher_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
-def get_receipt_details(voucher_id: int, current_user: dict = Depends(get_current_user)):
+def get_receipt_details(request: Request, voucher_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل سند قبض"""
     db = get_db_connection(current_user.company_id)
     try:

@@ -74,7 +74,7 @@ def list_pending_reviews(
     response_model=Dict[str, Any],
     dependencies=[Depends(require_sensitive_permission("admin.recurring", critical=True))],
 )
-def approve_pending_review(
+def approve_pending_review(request: Request, 
     pending_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -109,7 +109,7 @@ def approve_pending_review(
     status_code=status.HTTP_200_OK,
     dependencies=[Depends(require_sensitive_permission("admin.recurring", critical=True))],
 )
-def reject_pending_review(
+def reject_pending_review(request: Request, 
     pending_id: int,
     body: RejectBody,
     current_user: dict = Depends(get_current_user),

@@ -320,7 +320,7 @@ def submit_self_assessment(
             action="hr.performance.self_assessment", resource_type="performance_review",
             resource_id=str(review_id), details={}, request=request
         )
-        return {"message": i18n_message(("self_assessment_submitted", request))}
+        return {"message": i18n_message("self_assessment_submitted", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -446,7 +446,7 @@ def submit_manager_assessment(
             action="hr.performance.manager_assessment", resource_type="performance_review",
             resource_id=str(review_id), details={}, request=request
         )
-        return {"message": i18n_message(("manager_assessment_submitted", request))}
+        return {"message": i18n_message("manager_assessment_submitted", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -632,7 +632,7 @@ def delete_goal(
             action="hr.performance.goal_delete", resource_type="performance_goal",
             resource_id=str(goal_id), details={}, request=request
         )
-        return {"message": i18n_message(("goal_deleted", request))}
+        return {"message": i18n_message("goal_deleted", request)}
     except HTTPException:
         raise
     except Exception:
@@ -647,7 +647,7 @@ def delete_goal(
 # =============================================
 
 @router.get("/reviews/{review_id}", dependencies=[Depends(require_permission("hr.performance_view"))], response_model=Dict[str, Any])
-def get_review_detail(
+def get_review_detail(request: Request, 
     review_id: int,
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),

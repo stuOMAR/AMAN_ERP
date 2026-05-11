@@ -94,7 +94,7 @@ class DocPermissionCreate(BaseModel):
 
 
 @router.post("/documents/{doc_id}/permissions", dependencies=[Depends(require_permission("dms.manage"))], response_model=Dict[str, Any])
-def grant_document_permission(
+def grant_document_permission(request: Request, 
     doc_id: int,
     body: DocPermissionCreate,
     current_user=Depends(get_current_user),
@@ -498,7 +498,7 @@ class BounceRequest(BaseModel):
 
 @router.post("/treasury/checks-receivable/{check_id}/bounce",
              dependencies=[Depends(require_permission(["treasury.manage", "accounting.manage"]))], response_model=Dict[str, Any])
-def bounce_check_receivable(
+def bounce_check_receivable(request: Request, 
     check_id: int,
     body: BounceRequest,
     current_user=Depends(get_current_user),
@@ -581,7 +581,7 @@ class AssetRevaluationRequest(BaseModel):
 
 @router.post("/assets/{asset_id}/revalue",
              dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
-def revalue_asset(
+def revalue_asset(request: Request, 
     asset_id: int,
     body: AssetRevaluationRequest,
     current_user=Depends(get_current_user),
@@ -680,7 +680,7 @@ class UoPDepreciationRequest(BaseModel):
 
 @router.post("/assets/{asset_id}/depreciate-uop",
              dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
-def depreciate_asset_uop(
+def depreciate_asset_uop(request: Request, 
     asset_id: int,
     body: UoPDepreciationRequest,
     current_user=Depends(get_current_user),
@@ -783,7 +783,7 @@ class LeaseModificationRequest(BaseModel):
 
 @router.post("/leases/{lease_id}/modify",
              dependencies=[Depends(require_permission(["accounting.manage"]))], response_model=Dict[str, Any])
-def modify_lease(
+def modify_lease(request: Request, 
     lease_id: int,
     body: LeaseModificationRequest,
     current_user=Depends(get_current_user),
@@ -1078,7 +1078,7 @@ class BulkImpairmentRequest(BaseModel):
 
 @router.post("/assets/cgu/impairment-bulk",
              dependencies=[Depends(require_permission(["assets.manage", "accounting.manage"]))], response_model=Dict[str, Any])
-def run_bulk_cgu_impairment(
+def run_bulk_cgu_impairment(request: Request, 
     body: BulkImpairmentRequest,
     current_user=Depends(get_current_user),
 ):

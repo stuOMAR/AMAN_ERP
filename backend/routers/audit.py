@@ -3,7 +3,7 @@ AMAN ERP - Audit Logs Router
 API endpoints for viewing audit logs.
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from typing import Optional, List, Any
 from datetime import datetime, date
@@ -33,7 +33,7 @@ class AuditLogResponse(BaseModel):
 
 
 @router.get("/logs", response_model=List[dict], dependencies=[Depends(require_permission("audit.view"))])
-def list_audit_logs(
+def list_audit_logs(request: Request, 
     skip: int = 0,
     limit: int = 50,
     action: Optional[str] = None,

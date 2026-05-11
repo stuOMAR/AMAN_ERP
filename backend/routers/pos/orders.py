@@ -595,7 +595,7 @@ def get_held_orders(
 
 
 @router.post("/orders/{order_id}/resume", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
-def resume_held_order(
+def resume_held_order(request: Request, 
     order_id: int,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -742,7 +742,7 @@ def create_return(
         """), {"item_id": item.item_id, "order_id": order_id}).scalar() or 0
 
         if _dec(item.quantity) + _dec(already_returned) > _dec(orig_item.quantity):
-            raise HTTPException(**http_error(400, ("return_qty_exceeds_original", request)))
+            raise HTTPException(**http_error(400, "return_qty_exceeds_original", request))
 
         refund_amount = (_dec(item.quantity) * _dec(orig_item.unit_price)).quantize(_D2, ROUND_HALF_UP)
         # Re-resolve tax via engine (handles exemptions, rate changes since order)
@@ -971,7 +971,7 @@ def create_return(
 
 
 @router.get("/orders/{order_id}/details", dependencies=[Depends(require_permission("pos.view"))], response_model=Dict[str, Any])
-def get_order_details(
+def get_order_details(request: Request, 
     order_id: int,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -986,7 +986,7 @@ def get_order_details(
     """), {"id": order_id}).fetchone()
 
     if not order:
-        raise HTTPException(**http_error(404, ("order_not_found", request)))
+        raise HTTPException(**http_error(404, "order_not_found", request))
 
     if hasattr(order, 'branch_id') and order.branch_id:
         validate_branch_access(current_user, order.branch_id)

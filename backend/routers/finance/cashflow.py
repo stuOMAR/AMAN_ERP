@@ -6,7 +6,7 @@ AMAN ERP – Cash Flow Forecasting
 import logging
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import Request, APIRouter, Depends, HTTPException, Query, status
 from utils.i18n import http_error
 from sqlalchemy import text
 
@@ -108,7 +108,7 @@ def list_forecasts(
     response_model=ForecastDetailRead,
     dependencies=[Depends(require_permission("finance.cashflow_view"))],
 )
-def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
+def get_forecast(request: Request, forecast_id: int, current_user=Depends(get_current_user)):
     """Get Forecast."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -117,7 +117,7 @@ def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
             {"fid": forecast_id},
         ).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
+            raise HTTPException(**http_error(404, "forecast_not_found", request))
 
         lines = db.execute(
             text(
@@ -141,7 +141,7 @@ def get_forecast(forecast_id: int, current_user=Depends(get_current_user)):
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("finance.cashflow_manage"))],
 )
-def delete_forecast(forecast_id: int, current_user=Depends(get_current_user)):
+def delete_forecast(request: Request, forecast_id: int, current_user=Depends(get_current_user)):
     """Delete Forecast."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -153,7 +153,7 @@ def delete_forecast(forecast_id: int, current_user=Depends(get_current_user)):
             {"fid": forecast_id},
         )
         if result.rowcount == 0:
-            raise HTTPException(**http_error(404, ("forecast_not_found", request)))
+            raise HTTPException(**http_error(404, "forecast_not_found", request))
         db.commit()
     except HTTPException:
         raise

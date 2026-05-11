@@ -89,7 +89,7 @@ def create_table(data: dict, request: Request, current_user: UserResponse = Depe
 
 
 @router.put("/tables/{table_id}", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
-def update_table(table_id: int, data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+def update_table(request: Request, table_id: int, data: dict, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
     """Update Table."""
     sets, params = [], {"id": table_id}
     for f in ["table_number", "table_name", "floor", "capacity", "shape", "pos_x", "pos_y", "status", "is_active"]:
@@ -97,16 +97,16 @@ def update_table(table_id: int, data: dict, current_user: UserResponse = Depends
             sets.append(f"{f} = :{f}")
             params[f] = data[f]
     if not sets:
-        raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+        raise HTTPException(**http_error(400, "pos_no_fields", request))
     row = db.execute(text(f"UPDATE pos_tables SET {', '.join(sets)} WHERE id = :id RETURNING *"), params).fetchone()
     if not row:
-        raise HTTPException(**http_error(404, ("pos_table_not_found", request)))
+        raise HTTPException(**http_error(404, "pos_table_not_found", request))
     db.commit()
     return dict(row._mapping)
 
 
 @router.delete("/tables/{table_id}", dependencies=[Depends(require_permission("pos.manage"))], response_model=Dict[str, Any])
-def delete_table(table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+def delete_table(request: Request, table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
     """Delete Table."""
     db.execute(text("UPDATE pos_tables SET is_active = false WHERE id = :id"), {"id": table_id})
     db.commit()
@@ -127,7 +127,7 @@ def seat_table(table_id: int, data: dict, current_user: UserResponse = Depends(g
 
 
 @router.post("/tables/{table_id}/clear", dependencies=[Depends(require_permission("pos.create"))], response_model=Dict[str, Any])
-def clear_table(table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
+def clear_table(request: Request, table_id: int, current_user: UserResponse = Depends(get_current_user), db: Session = Depends(get_db)):
     """Clear Table."""
     db.execute(text("UPDATE pos_tables SET status = 'available' WHERE id = :id"), {"id": table_id})
     db.execute(text("""

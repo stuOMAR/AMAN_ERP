@@ -70,7 +70,7 @@ async def accept_recommendation(
     )
     row = result.fetchone()
     if not row:
-        raise HTTPException(**http_error(404, ("mrp_recommendation_not_found", request)))
+        raise HTTPException(**http_error(404, "mrp_recommendation_not_found", request))
 
     db.commit()
     return dict(row._mapping)

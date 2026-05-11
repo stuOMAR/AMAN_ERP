@@ -226,7 +226,7 @@ def get_bank_import_lines(batch_id: int, status_filter: Optional[str] = None,
 
 @router.post("/treasury/bank-import/{batch_id}/auto-match",
              dependencies=[Depends(require_permission("accounting.manage"))], tags=["Treasury"], response_model=Dict[str, Any])
-def auto_match_bank_lines(batch_id: int, current_user: dict = Depends(get_current_user)):
+def auto_match_bank_lines(request: Request, batch_id: int, current_user: dict = Depends(get_current_user)):
     """مطابقة تلقائية للحركات البنكية مع المعاملات الموجودة"""
     company_id = _u(current_user, "company_id")
     with transactional(company_id) as db:

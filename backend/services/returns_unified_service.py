@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import text
 from fastapi import HTTPException
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,12 @@ def create_return(
 ) -> dict:
     """Create a draft return."""
     if source not in ("sales", "pos"):
-        raise HTTPException(**http_error(422, "source_must_be_sales_or_pos", request))
+        raise HTTPException(**http_error(422, "source_must_be_sales_or_pos"))
 
     if source == "sales" and not original_invoice_id:
-        raise HTTPException(**http_error(422, "original_invoice_id_required", request))
+        raise HTTPException(**http_error(422, "original_invoice_id_required"))
     if source == "pos" and not original_pos_sale_id:
-        raise HTTPException(**http_error(422, "original_pos_sale_id_required", request))
+        raise HTTPException(**http_error(422, "original_pos_sale_id_required"))
 
     # Calculate total
     total = sum(Decimal(str(l.get("qty", 0))) * Decimal(str(l.get("unit_price", 0))) for l in lines)
@@ -99,13 +100,13 @@ def post_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None =
     ).fetchone()
 
     if not ret:
-        raise HTTPException(**http_error(404, ("return_not_found_service", request)))
+        raise HTTPException(**http_error(404, "return_not_found_service"))
     ret = dict(ret._mapping)
 
     if ret["state"] != "draft":
         raise HTTPException(status_code=409, detail={
             "code": "returns.already_posted",
-            "message": i18n_message("return_not_draft", request),
+            "message": i18n_message("return_not_draft"),
         })
 
     # Get lines
@@ -175,11 +176,11 @@ def cancel_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None
     ).fetchone()
 
     if not ret:
-        raise HTTPException(**http_error(404, ("return_not_found_service", request)))
+        raise HTTPException(**http_error(404, "return_not_found_service"))
     ret = dict(ret._mapping)
 
     if ret["state"] != "posted":
-        raise HTTPException(**http_error(409, ("only_posted_returns_cancellable", request)))
+        raise HTTPException(**http_error(409, "only_posted_returns_cancellable"))
 
     db.execute(
         text("UPDATE returns_unified SET state = 'cancelled', updated_at = clock_timestamp() WHERE id = :rid"),

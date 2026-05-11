@@ -171,7 +171,7 @@ def update_workflow(workflow_id: int, data: WorkflowCreateSchema, request: Reque
                 "active": data.is_active
             })
     
-            return {"message": i18n_message(("approval_chain_updated", request))}
+            return {"message": i18n_message("approval_chain_updated", request)}
         except HTTPException:
             raise
         except Exception as e:
@@ -195,7 +195,7 @@ def delete_workflow(workflow_id: int, request: Request, current_user=Depends(get
             db.execute(text("DELETE FROM approval_actions WHERE request_id IN (SELECT id FROM approval_requests WHERE workflow_id = :id)"), {"id": workflow_id})
             db.execute(text("DELETE FROM approval_requests WHERE workflow_id = :id"), {"id": workflow_id})
             db.execute(text("DELETE FROM approval_workflows WHERE id = :id"), {"id": workflow_id})
-            return {"message": i18n_message(("approval_chain_deleted", request))}
+            return {"message": i18n_message("approval_chain_deleted", request)}
         except HTTPException:
             raise
         except Exception as e:

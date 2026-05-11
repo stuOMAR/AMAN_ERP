@@ -101,7 +101,7 @@ def get_procurement_kpis(db, start_date: date, end_date: date,
     alerts = []
     if pending_rfqs > 5:
         alerts.append({"severity": "medium", "code": "PENDING_RFQS",
-                        "message": i18n_message("kpi_pending_rfqs", request),
+                        "message": i18n_message("kpi_pending_rfqs"),
                         "message_ar": f"{pending_rfqs} طلب عرض سعر بانتظار المراجعة",
                         "count": pending_rfqs, "link": "/buying/rfq"})
 

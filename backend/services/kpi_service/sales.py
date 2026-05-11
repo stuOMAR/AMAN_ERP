@@ -127,7 +127,7 @@ def get_sales_kpis(db, start_date: date, end_date: date,
     alerts = []
     if overdue_count > 0:
         alerts.append({"severity": "high", "code": "OVERDUE_INVOICES",
-                        "message": i18n_message("kpi_overdue_invoices_value", request),
+                        "message": i18n_message("kpi_overdue_invoices_value"),
                         "message_ar": f"{overdue_count} فاتورة متأخرة بإجمالي {overdue_value:,.0f} {base_currency}",
                         "count": overdue_count, "link": "/sales/invoices?status=overdue"})
 

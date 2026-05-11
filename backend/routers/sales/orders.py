@@ -100,7 +100,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
                 WHERE id = :qid
             """), {"qid": data.quotation_id}).fetchone()
             if not quot:
-                raise HTTPException(**http_error(404, ("quotation_not_found", request)))
+                raise HTTPException(**http_error(404, "quotation_not_found", request))
             if quot.status in ('expired', 'converted', 'cancelled'):
                 raise HTTPException(status_code=400, detail=i18n_message("quotation_cannot_convert_status", request))
             if quot.party_id and quot.party_id != data.customer_id:
@@ -113,7 +113,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         # 2. Calculate Totals (tax resolved via engine)
         validated_branch_id = validate_branch_access(current_user, data.branch_id)
         if validated_branch_id is None:
-            raise HTTPException(**http_error(400, ("branch_required", request)))
+            raise HTTPException(**http_error(400, "branch_required", request))
         from utils.accounting import compute_invoice_totals, compute_line_amounts
         items_to_save = []
 

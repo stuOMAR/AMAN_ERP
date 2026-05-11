@@ -83,7 +83,7 @@ def create_equipment(equip: EquipmentCreate, request: Request, current_user: Use
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating equipment: {e}")
-        raise HTTPException(**http_error(400, ("equipment_create_failed", request)))
+        raise HTTPException(**http_error(400, "equipment_create_failed", request))
     finally:
         conn.close()
 
@@ -103,7 +103,7 @@ def update_equipment(equip_id: int, equip: EquipmentCreate, request: Request, cu
             "notes": equip.notes, "id": equip_id
         }).fetchone()
         if not updated:
-            raise HTTPException(**http_error(404, ("equipment_not_found", request)))
+            raise HTTPException(**http_error(404, "equipment_not_found", request))
         conn.commit()
         result = dict(updated._mapping)
         wc = conn.execute(text("SELECT name FROM work_centers WHERE id = :wid"), {"wid": equip.work_center_id}).fetchone() if equip.work_center_id else None
@@ -118,7 +118,7 @@ def update_equipment(equip_id: int, equip: EquipmentCreate, request: Request, cu
     except Exception as e:
         conn.rollback()
         logger.error(f"Error updating equipment {equip_id}: {e}")
-        raise HTTPException(**http_error(400, ("equipment_update_failed", request)))
+        raise HTTPException(**http_error(400, "equipment_update_failed", request))
     finally:
         conn.close()
 
@@ -131,10 +131,10 @@ def delete_equipment(equip_id: int, request: Request, current_user: UserResponse
         logs = conn.execute(text("SELECT COUNT(*) FROM maintenance_logs WHERE equipment_id = :id"), {"id": equip_id}).scalar()
         if logs > 0:
             logger.warning(f"Cannot delete equipment {equip_id}: has {logs} maintenance log(s)")
-            raise HTTPException(**http_error(400, ("equipment_has_maintenance_records", request)))
+            raise HTTPException(**http_error(400, "equipment_has_maintenance_records", request))
         deleted = conn.execute(text("UPDATE manufacturing_equipment SET is_deleted = true, deleted_at = NOW() WHERE id = :id AND is_deleted = false RETURNING id"), {"id": equip_id}).fetchone()
         if not deleted:
-            raise HTTPException(**http_error(404, ("equipment_not_found", request)))
+            raise HTTPException(**http_error(404, "equipment_not_found", request))
         conn.commit()
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_equipment", resource_type="manufacturing_equipment",
@@ -145,7 +145,7 @@ def delete_equipment(equip_id: int, request: Request, current_user: UserResponse
     except Exception as e:
         conn.rollback()
         logger.error(f"Error deleting equipment {equip_id}: {e}")
-        raise HTTPException(**http_error(400, ("equipment_delete_failed", request)))
+        raise HTTPException(**http_error(400, "equipment_delete_failed", request))
     finally:
         conn.close()
 
@@ -227,7 +227,7 @@ def create_maintenance_log(log: MaintenanceLogCreate, request: Request, current_
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating maintenance log: {e}")
-        raise HTTPException(**http_error(400, ("maintenance_record_create_failed", request)))
+        raise HTTPException(**http_error(400, "maintenance_record_create_failed", request))
     finally:
         conn.close()
 

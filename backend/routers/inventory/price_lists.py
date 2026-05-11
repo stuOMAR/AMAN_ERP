@@ -47,7 +47,7 @@ def list_price_lists(branch_id: Optional[int] = None, current_user: dict = Depen
 
 
 @price_lists_router.post("/price-lists", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("products.create"))], response_model=Dict[str, Any])
-def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_current_user)):
+def create_price_list(request: Request, data: PriceListCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء قائمة أسعار جديدة"""
 
     # Fetch Company Currency
@@ -93,7 +93,7 @@ def create_price_list(data: PriceListCreate, current_user: dict = Depends(get_cu
 
 
 @price_lists_router.put("/price-lists/{id}", dependencies=[Depends(require_permission("products.edit"))], response_model=Dict[str, Any])
-def update_price_list(
+def update_price_list(request: Request, 
     id: int,
     data: PriceListCreate,
     current_user: dict = Depends(get_current_user)
@@ -154,7 +154,7 @@ def delete_price_list(
         # Check if it's used by any customers
         usage = db.execute(text("SELECT COUNT(*) FROM parties WHERE price_list_id = :id"), {"id": id}).scalar()
         if usage and usage > 0:
-            raise HTTPException(**http_error(400, ("cannot_delete_price_list_in_use", request)))
+            raise HTTPException(**http_error(400, "cannot_delete_price_list_in_use", request))
 
         # Delete price list items first
         db.execute(text("DELETE FROM customer_price_list_items WHERE price_list_id = :id"), {"id": id})
@@ -207,7 +207,7 @@ def get_price_list_items(id: int, current_user: dict = Depends(get_current_user)
 
 
 @price_lists_router.post("/price-lists/{id}/items", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def update_price_list_items(
+def update_price_list_items(request: Request, 
     id: int,
     items: List[PriceListItemUpdate],
     current_user: dict = Depends(get_current_user)
@@ -233,7 +233,7 @@ def update_price_list_items(
                 """), {"lid": id, "pid": item.product_id, "price": item.price})
 
         db.commit()
-        return {"message": i18n_message(("prices_updated_success", request))}
+        return {"message": i18n_message("prices_updated_success", request)}
     except Exception:
         db.rollback()
         logger.exception("Internal error")

@@ -359,7 +359,7 @@ def collect_check_receivable(check_id: int, data: dict, request: Request, curren
             """), {"id": check_id, "cdate": collection_date, "je_id": coll_je_id, "treasury_id": treasury_id})
             log_activity(db, current_user.id, current_user.username, "collect", "checks_receivable", str(check_id),
                          {"collection_date": collection_date})
-            return {"message": i18n_message(("check_collected_success", request))}
+            return {"message": i18n_message("check_collected_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -454,7 +454,7 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
             """), {"id": check_id, "bdate": bounce_date, "reason": bounce_reason, "je_id": bounce_je_id})
             log_activity(db, current_user.id, current_user.username, "bounce", "checks_receivable", str(check_id),
                          {"bounce_reason": bounce_reason})
-            return {"message": i18n_message(("check_bounced_success", request))}
+            return {"message": i18n_message("check_bounced_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -845,7 +845,7 @@ def clear_check_payable(check_id: int, data: dict, request: Request, current_use
             """), {"id": check_id, "cdate": clearance_date, "je_id": clear_je_id, "treasury_id": treasury_id})
             log_activity(db, current_user.id, current_user.username, "clear", "checks_payable", str(check_id),
                          {"clearance_date": clearance_date})
-            return {"message": i18n_message(("check_dispensed_success", request))}
+            return {"message": i18n_message("check_dispensed_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -962,7 +962,7 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
             """), {"id": check_id, "bdate": bounce_date, "reason": bounce_reason, "je_id": bounce_je_id})
             log_activity(db, current_user.id, current_user.username, "bounce", "checks_payable", str(check_id),
                          {"bounce_reason": bounce_reason})
-            return {"message": i18n_message(("check_bounced_success", request))}
+            return {"message": i18n_message("check_bounced_success", request)}
         except HTTPException:
             raise
         except Exception:

@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -53,7 +53,7 @@ def list_asset_transfers(status: Optional[str] = None, branch_id: Optional[int] 
 
 
 @router.post("/transfers", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def create_asset_transfer(data: AssetTransferCreate, current_user: dict = Depends(get_current_user)):
+def create_asset_transfer(request: Request, data: AssetTransferCreate, current_user: dict = Depends(get_current_user)):
     """Create Asset Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
@@ -85,7 +85,7 @@ def create_asset_transfer(data: AssetTransferCreate, current_user: dict = Depend
 
 
 @router.put("/transfers/{transfer_id}/approve", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def approve_transfer(transfer_id: int, current_user: dict = Depends(get_current_user)):
+def approve_transfer(request: Request, transfer_id: int, current_user: dict = Depends(get_current_user)):
     """Approve Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
@@ -96,7 +96,7 @@ def approve_transfer(transfer_id: int, current_user: dict = Depends(get_current_
                          {"uid": current_user.id, "id": transfer_id})
             conn.execute(text("UPDATE assets SET branch_id = :bid WHERE id = :aid"),
                          {"bid": t.to_branch_id, "aid": t.asset_id})
-            return {"message": i18n_message(("asset_transfer_approved", request))}
+            return {"message": i18n_message("asset_transfer_approved", request)}
         except HTTPException:
             raise
         except Exception:
@@ -108,7 +108,7 @@ def approve_transfer(transfer_id: int, current_user: dict = Depends(get_current_
 # ---------- ASSET-003: Asset Revaluations (STATIC - must be before /{asset_id}) ----------
 
 @router.post("/{asset_id}/transfer", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def transfer_asset(asset_id: int, transfer: AssetTransfer, current_user: dict = Depends(get_current_user)):
+def transfer_asset(request: Request, asset_id: int, transfer: AssetTransfer, current_user: dict = Depends(get_current_user)):
     """نقل أصل بين فروع مع قيد محاسبي تلقائي عبر الحساب البيني"""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()

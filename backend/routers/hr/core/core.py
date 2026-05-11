@@ -58,11 +58,11 @@ def get_current_employee(
         ).fetchone()
         
         if not emp:
-            raise HTTPException(**http_error(404, "employee_records_not_linked", request))
+            raise HTTPException(**http_error(404, "employee_records_not_linked"))
         
         # Access by index since it's a Row object/tuple
         if emp[3] != 'active': # status
-             raise HTTPException(**http_error(400, "employee_not_active", request))
+             raise HTTPException(**http_error(400, "employee_not_active"))
              
         return emp
 

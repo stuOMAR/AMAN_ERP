@@ -71,7 +71,7 @@ def update_workflow_conditions(
             UPDATE approval_workflows SET conditions = :conds WHERE id = :id
         """), {"conds": json.dumps(conditions), "id": workflow_id})
         db.commit()
-        return {"message": i18n_message(("conditions_updated", request))}
+        return {"message": i18n_message("conditions_updated", request)}
     finally:
         db.close()
 
@@ -99,7 +99,7 @@ def update_workflow_sla(
             "id": workflow_id
         })
         db.commit()
-        return {"message": i18n_message(("sla_settings_updated", request))}
+        return {"message": i18n_message("sla_settings_updated", request)}
     finally:
         db.close()
 

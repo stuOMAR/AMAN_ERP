@@ -106,7 +106,7 @@ def list_api_keys(current_user=Depends(get_current_user)):
 
 
 @router.post("/api-keys", status_code=201, dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
-def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
+def create_api_key(request: Request, data: APIKeyCreate, current_user=Depends(get_current_user)):
     """Create a new API key. The raw key is returned ONLY ONCE."""
     with transactional(current_user.company_id) as db:
         raw_key = f"aman_{secrets.token_hex(32)}"
@@ -149,7 +149,7 @@ def create_api_key(data: APIKeyCreate, current_user=Depends(get_current_user)):
 
 
 @router.delete("/api-keys/{key_id}", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
-def revoke_api_key(key_id: int, current_user=Depends(get_current_user)):
+def revoke_api_key(request: Request, key_id: int, current_user=Depends(get_current_user)):
     """Revoke API Key."""
     with transactional(current_user.company_id) as db:
         db.execute(text("UPDATE api_keys SET is_active = FALSE WHERE id = :id"), {"id": key_id})
@@ -215,7 +215,7 @@ def create_webhook(data: WebhookCreate, request: Request, current_user=Depends(g
 
 
 @router.put("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
-def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(get_current_user)):
+def update_webhook(request: Request, webhook_id: int, data: WebhookUpdate, current_user=Depends(get_current_user)):
     """Update Webhook."""
     if data.url is not None:
         try:
@@ -247,7 +247,7 @@ def update_webhook(webhook_id: int, data: WebhookUpdate, current_user=Depends(ge
 
 
 @router.delete("/webhooks/{webhook_id}", dependencies=[Depends(require_permission(["settings.manage", "admin"]))], response_model=Dict[str, Any])
-def delete_webhook(webhook_id: int, current_user=Depends(get_current_user)):
+def delete_webhook(request: Request, webhook_id: int, current_user=Depends(get_current_user)):
     """Delete Webhook."""
     with transactional(current_user.company_id) as db:
         db.execute(text("DELETE FROM webhooks WHERE id = :id"), {"id": webhook_id})
@@ -341,7 +341,7 @@ def generate_qr_code(
 
 
 @router.post("/zatca/generate-keypair", dependencies=[Depends(require_permission("admin"))], response_model=Dict[str, Any])
-def generate_keypair(current_user=Depends(get_current_user)):
+def generate_keypair(request: Request, current_user=Depends(get_current_user)):
     """Generate RSA keypair for ZATCA signing and store in company settings."""
     with transactional(current_user.company_id) as db:
         private_pem, public_pem = generate_rsa_keypair()
@@ -460,12 +460,12 @@ def create_wht_rate(request: Request, data: WHTRateCreate, current_user=Depends(
 
 
 @router.post("/wht/calculate", dependencies=[Depends(require_permission(["accounting.view", "buying.view"]))], response_model=Dict[str, Any])
-def calculate_wht(data: WHTCalculateRequest, current_user=Depends(get_current_user)):
+def calculate_wht(request: Request, data: WHTCalculateRequest, current_user=Depends(get_current_user)):
     """Calculate WHT amount without creating a transaction."""
     with transactional(current_user.company_id) as db:
         branch_id = validate_branch_access(current_user, data.branch_id)
         if branch_id is None:
-            raise HTTPException(**http_error(400, ("branch_required", request)))
+            raise HTTPException(**http_error(400, "branch_required", request))
         rate_row = db.execute(text("SELECT rate, country_code FROM wht_rates WHERE id = :id AND is_active = TRUE"),
                               {"id": data.wht_rate_id}).fetchone()
         if not rate_row:
@@ -499,7 +499,7 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
         try:
             branch_id = validate_branch_access(current_user, data.branch_id)
             if branch_id is None:
-                raise HTTPException(**http_error(400, ("branch_required", request)))
+                raise HTTPException(**http_error(400, "branch_required", request))
             idempotency_key = require_idempotency_key(
                 request,
                 operation="WHT transaction",
@@ -744,7 +744,7 @@ def list_wht_transactions(
 # ==========================================================================
 
 @router.get("/wht/transactions/{tid}/certificate", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))])
-def download_wht_certificate(tid: int, current_user=Depends(get_current_user)):
+def download_wht_certificate(request: Request, tid: int, current_user=Depends(get_current_user)):
     """Download an official PDF withholding-tax certificate."""
     from io import BytesIO
     try:

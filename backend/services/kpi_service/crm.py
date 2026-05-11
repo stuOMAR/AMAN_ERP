@@ -107,7 +107,7 @@ def get_crm_kpis(db, start_date: date, end_date: date,
     alerts = []
     if overdue_tickets > 0:
         alerts.append({"severity": "high", "code": "OVERDUE_TICKETS",
-                        "message": i18n_message("kpi_overdue_tickets", request),
+                        "message": i18n_message("kpi_overdue_tickets"),
                         "message_ar": f"{overdue_tickets} تذكرة دعم متأخرة",
                         "count": overdue_tickets, "link": "/crm/tickets?status=overdue"})
 

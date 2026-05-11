@@ -41,7 +41,7 @@ def list_departments(company_id: str = Depends(get_current_user_company)):
         return [{"id": r.id, "department_name": r.department_name} for r in rows]
 
 @router.post("/departments", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def create_department(dept: DepartmentCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def create_department(request: Request, dept: DepartmentCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Department."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -52,7 +52,7 @@ def create_department(dept: DepartmentCreate, current_user: UserResponse = Depen
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="department.create",
                      resource_type="department", resource_id=0, details={"name": dept.department_name})
-        return {"message": i18n_message(("department_created", request))}
+        return {"message": i18n_message("department_created", request)}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -61,7 +61,7 @@ def create_department(dept: DepartmentCreate, current_user: UserResponse = Depen
         conn.close()
 
 @router.delete("/departments/{dept_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def delete_department(dept_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def delete_department(request: Request, dept_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Delete Department."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -77,7 +77,7 @@ def delete_department(dept_id: int, current_user: UserResponse = Depends(get_cur
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="department.delete",
                      resource_type="department", resource_id=dept_id, details={})
-        return {"message": i18n_message(("department_deleted", request))}
+        return {"message": i18n_message("department_deleted", request)}
     except HTTPException:
         raise
     except Exception:
@@ -110,7 +110,7 @@ def list_positions(company_id: str = Depends(get_current_user_company)):
         ]
 
 @router.post("/positions", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def create_position(pos: PositionCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def create_position(request: Request, pos: PositionCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Position."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -122,7 +122,7 @@ def create_position(pos: PositionCreate, current_user: UserResponse = Depends(ge
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="position.create",
                      resource_type="position", resource_id=0, details={"name": pos.position_name})
-        return {"message": i18n_message(("position_created", request))}
+        return {"message": i18n_message("position_created", request)}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -131,7 +131,7 @@ def create_position(pos: PositionCreate, current_user: UserResponse = Depends(ge
         conn.close()
 
 @router.delete("/positions/{pos_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def delete_position(pos_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def delete_position(request: Request, pos_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Delete Position."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -147,7 +147,7 @@ def delete_position(pos_id: int, current_user: UserResponse = Depends(get_curren
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="position.delete",
                      resource_type="position", resource_id=pos_id, details={})
-        return {"message": i18n_message(("position_deleted", request))}
+        return {"message": i18n_message("position_deleted", request)}
     except HTTPException:
         raise
     except Exception:

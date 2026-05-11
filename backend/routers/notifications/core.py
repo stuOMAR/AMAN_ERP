@@ -279,7 +279,7 @@ async def update_notification_settings(
             details={"updated_keys": [k for k in data if k in allowed_keys and data[k] != "********"]},
             request=request,
         )
-        return {"message": i18n_message(("notification_settings_updated", request))}
+        return {"message": i18n_message("notification_settings_updated", request)}
     except Exception as e:
         db.rollback()
         logger.error(f"Error updating notification settings: {e}")

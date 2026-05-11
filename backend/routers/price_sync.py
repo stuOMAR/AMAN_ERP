@@ -3,7 +3,7 @@ Price Sync API
 ==============
 Automatically updates branch prices when exchange rates change.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import text
 from typing import Optional
 
@@ -15,7 +15,7 @@ router = APIRouter(prefix="/price-sync", tags=["Price Sync"])
 
 
 @router.post("/sync-from-base", dependencies=[Depends(require_permission(["products.edit", "sales.edit"]))])
-def sync_prices_from_base(
+def sync_prices_from_base(request: Request, 
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث أسعار جميع الفروع من السعر الأساسي بالريال"""
@@ -100,7 +100,7 @@ def sync_prices_from_base(
 
 
 @router.post("/sync-single/{list_id}", dependencies=[Depends(require_permission(["products.edit", "sales.edit"]))])
-def sync_single_price_list(
+def sync_single_price_list(request: Request, 
     list_id: int,
     current_user: dict = Depends(get_current_user)
 ):

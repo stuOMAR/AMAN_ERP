@@ -604,7 +604,7 @@ async def delete_project_document(project_id: int, doc_id: int, current_user: di
             safe_base = os.path.abspath("uploads")
             abs_path = os.path.abspath(rel_path)
             if not abs_path.startswith(safe_base):
-                raise HTTPException(**http_error(400, ("invalid_file_path", request)))
+                raise HTTPException(**http_error(400, "invalid_file_path", request))
             if os.path.exists(abs_path):
                 os.remove(abs_path)
                 

@@ -141,7 +141,7 @@ def list_blanket_pos(
 
         return {"blanket_pos": result}
 @router.get("/blanket/{bpo_id}", dependencies=[Depends(require_permission("buying.blanket_view"))], response_model=Dict[str, Any])
-def get_blanket_po(bpo_id: int, current_user: dict = Depends(get_current_user)):
+def get_blanket_po(request: Request, bpo_id: int, current_user: dict = Depends(get_current_user)):
     """Get blanket PO details with release orders."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:

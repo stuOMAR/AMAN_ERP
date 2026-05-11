@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -36,7 +36,7 @@ router = APIRouter()
 from .core import DepreciationRunInput, _D2, _D4, _dec
 
 @router.post("/run-depreciation", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def run_depreciation(
+def run_depreciation(request: Request, 
     body: Optional[DepreciationRunInput] = None,
     current_user: dict = Depends(get_current_user),
 ):
@@ -147,7 +147,7 @@ def run_depreciation(
 
 
 @router.post("/{asset_id}/depreciate/{schedule_id}", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depends(get_current_user)):
+def post_depreciation(request: Request, asset_id: int, schedule_id: int, current_user: dict = Depends(get_current_user)):
     """Post Depreciation."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
@@ -227,7 +227,7 @@ def post_depreciation(asset_id: int, schedule_id: int, current_user: dict = Depe
     finally:
         conn.close()
 @router.post("/{asset_id}/depreciation/declining-balance", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def calc_declining_balance(asset_id: int, data: DecliningBalanceInput = DecliningBalanceInput(), current_user: dict = Depends(get_current_user)):
+def calc_declining_balance(request: Request, asset_id: int, data: DecliningBalanceInput = DecliningBalanceInput(), current_user: dict = Depends(get_current_user)):
     """Calculate Declining Balance depreciation schedule."""
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
@@ -251,7 +251,7 @@ def calc_declining_balance(asset_id: int, data: DecliningBalanceInput = Declinin
 
 
 @router.post("/{asset_id}/depreciation/units-of-production", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def calc_units_of_production(asset_id: int, data: UnitsOfProductionInput, current_user: dict = Depends(get_current_user)):
+def calc_units_of_production(request: Request, asset_id: int, data: UnitsOfProductionInput, current_user: dict = Depends(get_current_user)):
     """Depreciation based on units produced."""
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
@@ -274,7 +274,7 @@ def calc_units_of_production(asset_id: int, data: UnitsOfProductionInput, curren
 
 
 @router.post("/{asset_id}/depreciation/sum-of-years", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def calc_sum_of_years_digits(asset_id: int, current_user: dict = Depends(get_current_user)):
+def calc_sum_of_years_digits(request: Request, asset_id: int, current_user: dict = Depends(get_current_user)):
     """Sum of Years' Digits depreciation schedule."""
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()

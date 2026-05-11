@@ -2,7 +2,7 @@
 Party Sites API endpoints.
 Manage sites/locations of parties (customers/suppliers).
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from typing import Optional
 from pydantic import BaseModel
@@ -80,7 +80,7 @@ def list_party_sites(
 
 
 @router.get("/{site_id}", dependencies=[Depends(require_permission(["parties.view", "buying.view", "sales.view"]))])
-def get_party_site(
+def get_party_site(request: Request, 
     site_id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -138,7 +138,7 @@ def get_party_site(
 
 
 @router.post("", dependencies=[Depends(require_permission(["parties.manage", "buying.edit", "sales.edit"]))])
-def create_party_site(
+def create_party_site(request: Request, 
     data: PartySiteCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -174,7 +174,7 @@ def create_party_site(
 
 
 @router.put("/{site_id}", dependencies=[Depends(require_permission(["parties.manage", "buying.edit", "sales.edit"]))])
-def update_party_site(
+def update_party_site(request: Request, 
     site_id: int,
     data: PartySiteCreate,
     current_user: dict = Depends(get_current_user)
@@ -197,4 +197,4 @@ def update_party_site(
             "bank": data.bank_account, "terms": data.payment_terms, "def": data.is_default
         })
         db.commit()
-        return {"message": i18n_message(("site_updated_success", request))}
+        return {"message": i18n_message("site_updated_success", request)}

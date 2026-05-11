@@ -1,6 +1,6 @@
 """أوراق القبض والدفع - Notes Receivable & Payable"""
 from decimal import Decimal, ROUND_HALF_UP
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -161,7 +161,7 @@ def get_note_receivable(note_id: int, current_user: dict = Depends(get_current_u
 
 
 @router.post("/receivable", status_code=201, dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depends(get_current_user)):
+def create_note_receivable(request: Request, data: NoteReceivableCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء ورقة قبض + قيد: مدين 1210 / دائن حساب العميل"""
     with transactional(current_user.company_id) as db:
         try:
@@ -236,7 +236,7 @@ def create_note_receivable(data: NoteReceivableCreate, current_user: dict = Depe
 
 
 @router.post("/receivable/{note_id}/collect", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def collect_note_receivable(note_id: int, data: dict = None,
+def collect_note_receivable(request: Request, note_id: int, data: dict = None,
                             current_user: dict = Depends(get_current_user)):
     """تحصيل ورقة قبض: مدين البنك / دائن 1210"""
     if data is None:
@@ -312,7 +312,7 @@ def collect_note_receivable(note_id: int, data: dict = None,
 
 
 @router.post("/receivable/{note_id}/protest", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def protest_note_receivable(note_id: int, data: dict = None,
+def protest_note_receivable(request: Request, note_id: int, data: dict = None,
                             current_user: dict = Depends(get_current_user)):
     """رفض / بروتستو ورقة قبض: عكس القيد"""
     if data is None:
@@ -453,7 +453,7 @@ def get_note_payable(note_id: int, current_user: dict = Depends(get_current_user
 
 
 @router.post("/payable", status_code=201, dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(get_current_user)):
+def create_note_payable(request: Request, data: NotePayableCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء ورقة دفع + قيد: مدين حساب المورد / دائن 2110"""
     with transactional(current_user.company_id) as db:
         try:
@@ -527,7 +527,7 @@ def create_note_payable(data: NotePayableCreate, current_user: dict = Depends(ge
 
 
 @router.post("/payable/{note_id}/pay", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def pay_note_payable(note_id: int, data: dict = None,
+def pay_note_payable(request: Request, note_id: int, data: dict = None,
                      current_user: dict = Depends(get_current_user)):
     """سداد ورقة دفع: مدين 2110 / دائن البنك"""
     if data is None:
@@ -603,7 +603,7 @@ def pay_note_payable(note_id: int, data: dict = None,
 
 
 @router.post("/payable/{note_id}/protest", dependencies=[Depends(require_permission("treasury.create"))], response_model=Dict[str, Any])
-def protest_note_payable(note_id: int, data: dict = None,
+def protest_note_payable(request: Request, note_id: int, data: dict = None,
                          current_user: dict = Depends(get_current_user)):
     """رفض / بروتستو ورقة دفع: عكس القيد"""
     if data is None:

@@ -386,7 +386,7 @@ def delete_service_request(request_id: int, request: Request, current_user: User
                          resource_id=request_id, details={},
                          request=request, branch_id=existing.branch_id)
     
-            return {"message": i18n_message(("service_request_deleted", request))}
+            return {"message": i18n_message("service_request_deleted", request)}
         except HTTPException:
             raise
         except Exception:
@@ -561,7 +561,7 @@ def delete_service_cost(request_id: int, cost_id: int, request: Request, current
                          resource_id=request_id, details={"cost_id": cost_id},
                          request=request, branch_id=None)
     
-            return {"message": i18n_message(("cost_deleted", request))}
+            return {"message": i18n_message("cost_deleted", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -886,7 +886,7 @@ def download_document(doc_id: int, request: Request, current_user: UserResponse 
 
 
 @router.delete("/documents/{doc_id}", dependencies=[Depends(require_permission("services.delete"))], response_model=Dict[str, Any])
-def delete_document(doc_id: int, current_user: UserResponse = Depends(get_current_user)):
+def delete_document(request: Request, doc_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Delete Document."""
     with transactional(current_user.company_id) as db:
         try:
@@ -906,7 +906,7 @@ def delete_document(doc_id: int, current_user: UserResponse = Depends(get_curren
                 "DELETE FROM document_versions WHERE document_id = :id"
             ), {"id": doc_id})
     
-            return {"message": i18n_message(("document_deleted", request))}
+            return {"message": i18n_message("document_deleted", request)}
         except HTTPException:
             raise
         except Exception:

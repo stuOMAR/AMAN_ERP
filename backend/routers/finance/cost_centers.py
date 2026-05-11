@@ -112,7 +112,7 @@ def update_cost_center(request: Request, cc_id: int, cc: CostCenterUpdate, curre
             params["active"] = cc.is_active
 
         if not update_fields:
-            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+            raise HTTPException(**http_error(400, "pos_no_fields", request))
 
         sql = f"UPDATE cost_centers SET {', '.join(update_fields)} WHERE id = :id RETURNING id, center_code, center_name, center_name_en, department_id, manager_id, is_active"
         
@@ -152,7 +152,7 @@ def delete_cost_center(request: Request, cc_id: int, current_user: dict = Depend
                      action="delete_cost_center", resource_type="cost_center",
                      resource_id=str(cc_id),
                      details={}, request=request)
-        return {"message": i18n_message(("cost_center_deleted", request))}
+        return {"message": i18n_message("cost_center_deleted", request)}
     except HTTPException:
         raise
     except Exception:

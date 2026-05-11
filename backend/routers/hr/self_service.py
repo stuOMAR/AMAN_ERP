@@ -52,7 +52,7 @@ def _resolve_employee(conn, user, raise_on_missing: bool = True) -> dict | None:
     """), {"uid": uid}).mappings().fetchone()
     if not row:
         if raise_on_missing:
-            raise HTTPException(**http_error(400, "user_not_linked_employee", request))
+            raise HTTPException(**http_error(400, "user_not_linked_employee"))
         return None
     return dict(row)
 
@@ -72,7 +72,7 @@ def _notify_leave(conn, recipients_sql: str, params: dict) -> None:
 # --------------- Profile ------------------------------------------------
 
 @router.get("/profile", dependencies=[Depends(require_permission("hr.self_service"))], response_model=Dict[str, Any])
-def get_own_profile(
+def get_own_profile(request: Request, 
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
 ):
@@ -124,7 +124,7 @@ def update_own_profile(
             params["email"] = body.email
 
         if not sets:
-            raise HTTPException(**http_error(400, ("no_updatable_fields", request)))
+            raise HTTPException(**http_error(400, "no_updatable_fields", request))
 
         conn.execute(text(f"UPDATE employees SET {', '.join(sets)} WHERE id = :eid"), params)
 
@@ -233,7 +233,7 @@ def get_payslip_detail(
         """), {"pid": payslip_id, "eid": emp["id"]}).mappings().fetchone()
 
         if not row:
-            raise HTTPException(**http_error(404, ("payslip_not_found", request)))
+            raise HTTPException(**http_error(404, "payslip_not_found", request))
 
         uid = current_user.get("id") if isinstance(current_user, dict) else current_user.id
         log_activity(
@@ -325,7 +325,7 @@ def submit_leave_request(
         uid = current_user.get("id") if isinstance(current_user, dict) else current_user.id
 
         if body.start_date > body.end_date:
-            raise HTTPException(**http_error(400, ("start_date_after_end", request)))
+            raise HTTPException(**http_error(400, "start_date_after_end", request))
 
         leave_days = (body.end_date - body.start_date).days + 1
 
@@ -336,7 +336,7 @@ def submit_leave_request(
               AND start_date <= :end AND end_date >= :start
         """), {"eid": eid, "start": body.start_date, "end": body.end_date}).fetchone()
         if overlap:
-            raise HTTPException(**http_error(400, ("overlapping_leave_request", request)))
+            raise HTTPException(**http_error(400, "overlapping_leave_request", request))
 
         # Balance check for annual leave
         if body.leave_type in ("annual", "سنوية"):
@@ -547,7 +547,7 @@ def approve_leave_request(
         """), {"rid": request_id}).mappings().fetchone()
 
         if not lr:
-            raise HTTPException(**http_error(404, ("leave_request_not_found", request)))
+            raise HTTPException(**http_error(404, "leave_request_not_found", request))
         if lr["status"] != "pending":
             raise HTTPException(status_code=400, detail=i18n_message("cannot_approve_status", request))
 
@@ -619,7 +619,7 @@ def reject_leave_request(
         """), {"rid": request_id}).mappings().fetchone()
 
         if not lr:
-            raise HTTPException(**http_error(404, ("leave_request_not_found", request)))
+            raise HTTPException(**http_error(404, "leave_request_not_found", request))
         if lr["status"] != "pending":
             raise HTTPException(status_code=400, detail=i18n_message("cannot_reject_status", request))
 

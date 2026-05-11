@@ -142,7 +142,7 @@ def create_route(route: RouteCreate, request: Request, current_user: UserRespons
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating route: {e}")
-        raise HTTPException(**http_error(400, ("route_create_failed", request)))
+        raise HTTPException(**http_error(400, "route_create_failed", request))
     finally:
         conn.close()
 
@@ -154,7 +154,7 @@ def update_route(route_id: int, route: RouteCreate, request: Request, current_us
     try:
         existing = conn.execute(text("SELECT * FROM manufacturing_routes WHERE id = :id AND is_deleted = false"), {"id": route_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("route_not_found", request)))
+            raise HTTPException(**http_error(404, "route_not_found", request))
 
         conn.execute(text("""
             UPDATE manufacturing_routes SET name=:name, product_id=:pid, bom_id=:bid, is_default=:default, is_active=:active, description=:desc, updated_at=NOW()
@@ -190,7 +190,7 @@ def update_route(route_id: int, route: RouteCreate, request: Request, current_us
     except Exception as e:
         trans.rollback()
         logger.error(f"Error updating route {route_id}: {e}")
-        raise HTTPException(**http_error(400, ("route_update_failed", request)))
+        raise HTTPException(**http_error(400, "route_update_failed", request))
     finally:
         conn.close()
 
@@ -216,13 +216,13 @@ def delete_route(route_id: int, request: Request, current_user: UserResponse = D
         result = conn.execute(text("UPDATE manufacturing_routes SET is_deleted = true, deleted_at = NOW(), updated_at = NOW() WHERE id = :id AND is_deleted = false"), {"id": route_id})
         
         if result.rowcount == 0:
-            raise HTTPException(**http_error(404, ("route_not_found", request)))
+            raise HTTPException(**http_error(404, "route_not_found", request))
         
         trans.commit()
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_route", resource_type="manufacturing_routes",
                      resource_id=str(route_id), request=request)
-        return {"message": i18n_message(("route_deleted_success", request))}
+        return {"message": i18n_message("route_deleted_success", request)}
     except HTTPException:
         raise
     except Exception as e:

@@ -50,7 +50,7 @@ def qc_fail(
     if disposition not in ("scrap", "rework"):
         raise HTTPException(status_code=422, detail={
             "code": "mfg.qc.invalid_disposition",
-            "message": i18n_message("disposition_scrap_or_rework", request),
+            "message": i18n_message("disposition_scrap_or_rework"),
         })
 
     for cid in completion_ids:

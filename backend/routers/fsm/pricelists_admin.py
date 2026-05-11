@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal
-from fastapi import APIRouter, HTTPException
+from fastapi import Request, APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 from typing import Optional
@@ -111,7 +111,7 @@ def create_pricelist_entry(
 
 
 @router.get("/resolve")
-def resolve_item_price(
+def resolve_item_price(request: Request, 
     item_id: int,
     currency: str,
     customer_id: Optional[int] = None,

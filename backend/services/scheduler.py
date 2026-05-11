@@ -12,6 +12,7 @@ from database import engine as system_engine, _get_engine
 from utils.email import send_email
 from utils.exports import generate_pdf, generate_excel
 from routers.reports import _get_profit_loss_data, _get_balance_sheet_data
+from utils.i18n import i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -921,7 +922,7 @@ def activate_due_cheques():
                                 WHERE u.is_active = TRUE
                                   AND u.role IN ('admin', 'manager', 'superuser')
                             """), {
-                                "title": i18n_message("notif_check_due", request),
+                                "title": i18n_message("notif_check_due"),
                                 "msg": f"شيك رقم {row.check_number} بمبلغ {row.amount} أصبح مستحقاً ({tbl})",
                             })
                         except Exception:
@@ -1201,7 +1202,7 @@ def check_low_stock_alerts():
                               AND u.role IN ('admin', 'manager', 'inventory_manager')
                             ON CONFLICT DO NOTHING
                         """), {
-                            "title": i18n_message("notif_low_stock", request),
+                            "title": i18n_message("notif_low_stock"),
                             "msg": (
                                 f"المنتج '{item.product_name or item.product_id}': "
                                 f"الكمية المتاحة {effective:.2f} "

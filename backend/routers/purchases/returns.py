@@ -63,7 +63,7 @@ def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
 def _reversal_taxable_amount(original_line, quantity) -> Decimal:
     original_qty = _dec(original_line.quantity)
     if original_qty <= 0:
-        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+        raise HTTPException(**http_error(400, "original_line_qty_invalid"))
     gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
     taxable = gross - _dec(getattr(original_line, "discount", 0))
     ratio = _dec(quantity) / original_qty
@@ -86,11 +86,11 @@ def _load_original_purchase_invoice_for_return(db, invoice_id: int, supplier_id:
         FOR UPDATE
     """), {"id": invoice_id}).fetchone()
     if not invoice:
-        raise HTTPException(**http_error(404, ("purchase_invoice_not_found", request)))
+        raise HTTPException(**http_error(404, "purchase_invoice_not_found"))
     if invoice.invoice_type != "purchase":
-        raise HTTPException(**http_error(400, ("return_must_link_invoice", request)))
+        raise HTTPException(**http_error(400, "return_must_link_invoice"))
     if int(invoice.party_id) != int(supplier_id):
-        raise HTTPException(**http_error(400, ("return_invoice_supplier_mismatch", request)))
+        raise HTTPException(**http_error(400, "return_invoice_supplier_mismatch"))
 
     rows = db.execute(text("""
         SELECT id, product_id, po_line_id, quantity, unit_price, tax_rate, tax_rate_id, discount
@@ -123,14 +123,14 @@ def _load_original_purchase_invoice_for_return(db, invoice_id: int, supplier_id:
 def _original_purchase_line_for_return(original_lines: dict[int, list], product_id: int, unit_price):
     candidates = original_lines.get(int(product_id), [])
     if not candidates:
-        raise HTTPException(**http_error(400, ("item_not_in_invoice", request)))
+        raise HTTPException(**http_error(400, "item_not_in_invoice"))
     if len(candidates) == 1:
         return candidates[0]
     price = _dec(unit_price)
     matched = [row for row in candidates if _dec(row.unit_price) == price]
     if len(matched) == 1:
         return matched[0]
-    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity_purchase", request))
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity_purchase"))
 
 
 router = APIRouter()
@@ -177,7 +177,7 @@ def list_purchase_returns(
         return returns
 
 @router.get("/returns/{id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
-def get_purchase_return(
+def get_purchase_return(request: Request, 
     id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -194,7 +194,7 @@ def get_purchase_return(
         invoice = db.execute(text(query), {"id": id}).fetchone()
         
         if not invoice:
-            raise HTTPException(**http_error(404, ("return_not_found_msg", request)))
+            raise HTTPException(**http_error(404, "return_not_found_msg", request))
 
         from utils.permissions import validate_branch_access
         validate_branch_access(current_user, invoice.branch_id)
@@ -251,11 +251,11 @@ def create_purchase_return(
             branch_id = invoice.branch_id
             if original_invoice:
                 if branch_id and original_invoice.branch_id is not None and int(branch_id) != int(original_invoice.branch_id):
-                    raise HTTPException(**http_error(400, ("return_branch_mismatch", request)))
+                    raise HTTPException(**http_error(400, "return_branch_mismatch", request))
                 branch_id = original_invoice.branch_id
             branch_id = validate_branch_access(current_user, branch_id)
             if branch_id is None:
-                raise HTTPException(**http_error(400, ("branch_required", request)))
+                raise HTTPException(**http_error(400, "branch_required", request))
     
             # 2. Generate Return Number (PR-YYYY-XXXX)
             year = date.today().year
@@ -278,7 +278,7 @@ def create_purchase_return(
                     already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
                     available_qty = _dec(original_line.quantity) - already_qty
                     if _dec(item.quantity) > available_qty:
-                        raise HTTPException(**http_error(400, ("return_qty_exceeds_invoice", request)))
+                        raise HTTPException(**http_error(400, "return_qty_exceeds_invoice", request))
                     tax_info = {
                         "tax_rate": _dec(original_line.tax_rate),
                         "tax_rate_id": original_line.tax_rate_id,
@@ -365,13 +365,13 @@ def create_purchase_return(
                     wh_id = db.execute(text("SELECT id FROM warehouses LIMIT 1")).scalar()
             
             if not wh_id:
-                 raise HTTPException(**http_error(400, ("at_least_one_warehouse_required", request)))
+                 raise HTTPException(**http_error(400, "at_least_one_warehouse_required", request))
     
             # 3.5 Validate Warehouse-Branch Association (for Return)
             if wh_id and branch_id:
                 wh_check = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": wh_id}).fetchone()
                 if wh_check and wh_check[0] and wh_check[0] != branch_id:
-                    raise HTTPException(**http_error(400, ("warehouse_not_in_current_branch", request)))
+                    raise HTTPException(**http_error(400, "warehouse_not_in_current_branch", request))
     
             for item in invoice.items:
                 current_stock = db.execute(text(
@@ -521,7 +521,7 @@ def create_purchase_return(
                     RETURNING id
                 """), {"qty": float(return_qty), "pid": item.product_id, "wh": wh_id}).fetchone()
                 if not inv_update:
-                    raise HTTPException(**http_error(400, ("insufficient_stock_for_return", request)))
+                    raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
 
                 return_total_cost = (return_unit_cost * return_qty).quantize(_D2, ROUND_HALF_UP)
                 return_lines_data.append({"return_total_cost": return_total_cost})
@@ -716,4 +716,4 @@ def create_purchase_return(
             raise HTTPException(status_code=400, detail=str(ve))
         except Exception as e:
             logger.exception("Error creating return")
-            raise HTTPException(**http_error(500, ("return_creation_error", request)))
+            raise HTTPException(**http_error(500, "return_creation_error", request))

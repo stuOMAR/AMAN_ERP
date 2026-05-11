@@ -529,7 +529,7 @@ async def logout(
     # TASK-030: clear HttpOnly refresh + CSRF cookies.
     clear_auth_cookies(response)
 
-    return {"message": i18n_message(("logout_success", request))}
+    return {"message": i18n_message("logout_success", request)}
 
 
 @router.get("/csrf", response_model=Dict[str, Any])

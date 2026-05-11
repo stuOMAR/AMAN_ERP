@@ -708,4 +708,4 @@ def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, request: Reques
 
         db.execute(text(f"UPDATE delivery_orders SET {', '.join(set_parts)} WHERE id = :id"), updates) # noqa: sql-lint
 
-        return {"message": i18n_message(("delivery_order_updated", request))}
+        return {"message": i18n_message("delivery_order_updated", request)}

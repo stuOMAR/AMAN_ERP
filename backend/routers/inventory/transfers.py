@@ -40,7 +40,7 @@ def create_stock_transfer(
 
         # 1. Validate source and destination are different
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
-            raise HTTPException(**http_error(400, ("same_warehouse_transfer", request)))
+            raise HTTPException(**http_error(400, "same_warehouse_transfer", request))
 
         # 2. Check warehouses exist
         src_wh = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"),
@@ -49,9 +49,9 @@ def create_stock_transfer(
                            {"id": transfer.destination_warehouse_id}).fetchone()
 
         if not src_wh:
-            raise HTTPException(**http_error(404, ("source_warehouse_not_found", request)))
+            raise HTTPException(**http_error(404, "source_warehouse_not_found", request))
         if not dst_wh:
-            raise HTTPException(**http_error(404, ("dest_warehouse_not_found", request)))
+            raise HTTPException(**http_error(404, "dest_warehouse_not_found", request))
 
         # INV-006: Check branch access on both warehouses
         allowed = getattr(current_user, 'allowed_branches', []) or []
@@ -127,7 +127,7 @@ def create_stock_transfer(
             RETURNING id
         """), {"qty": transfer.quantity, "pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
         if not source_update:
-            raise HTTPException(**http_error(400, ("qty_changed_before_save", request)))
+            raise HTTPException(**http_error(400, "qty_changed_before_save", request))
 
         dest_method = CostingService._get_product_costing_method(db, transfer.product_id, transfer.destination_warehouse_id)
         if dest_method in ("fifo", "lifo"):
@@ -329,7 +329,7 @@ def transfer_stock(
     db = get_db_connection(current_user.company_id)
     try:
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
-            raise HTTPException(**http_error(400, ("cannot_transfer_same_warehouse", request)))
+            raise HTTPException(**http_error(400, "cannot_transfer_same_warehouse", request))
 
         # Validate warehouses exist
         src = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).fetchone()
@@ -344,7 +344,7 @@ def transfer_stock(
             src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
             dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
             if (src_branch and src_branch not in allowed) or (dst_branch and dst_branch not in allowed):
-                raise HTTPException(**http_error(403, ("cross_branch_transfer_denied", request)))
+                raise HTTPException(**http_error(403, "cross_branch_transfer_denied", request))
 
         transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
         transfer_doc_id = uuid.uuid4().int % 2147483647

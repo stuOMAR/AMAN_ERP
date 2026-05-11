@@ -2,7 +2,7 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
+from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Response
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -59,7 +59,7 @@ def list_print_templates(template_type: Optional[str] = None,
 
 @router.post("/settings/print-templates", dependencies=[Depends(require_permission("settings.manage"))],
              tags=["Print Templates"], response_model=Dict[str, Any])
-def create_print_template(body: PrintTemplateCreate, current_user: dict = Depends(get_current_user)):
+def create_print_template(request: Request, body: PrintTemplateCreate, current_user: dict = Depends(get_current_user)):
     """Create Print Template."""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")
@@ -110,7 +110,7 @@ def get_print_template(template_id: int, current_user: dict = Depends(get_curren
 
 @router.put("/settings/print-templates/{template_id}",
             dependencies=[Depends(require_permission("settings.manage"))], tags=["Print Templates"], response_model=Dict[str, Any])
-def update_print_template(template_id: int, body: PrintTemplateCreate,
+def update_print_template(request: Request, template_id: int, body: PrintTemplateCreate,
                           current_user: dict = Depends(get_current_user)):
     """Update Print Template."""
     company_id = _u(current_user, "company_id")

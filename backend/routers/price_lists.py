@@ -3,7 +3,7 @@ Excel Price Import API
 =====================
 Allows branch managers to import prices from Excel files.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File
+from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import text
 from typing import Optional
 import pandas as pd
@@ -51,7 +51,7 @@ def list_price_lists(
 
 
 @router.get("/{list_id}", dependencies=[Depends(require_permission(["products.view", "sales.view"]))])
-def get_price_list(
+def get_price_list(request: Request, 
     list_id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -97,7 +97,7 @@ def get_price_list(
 
 
 @router.post("/{list_id}/items", dependencies=[Depends(require_permission(["products.edit", "sales.edit"]))])
-def update_price_list_item(
+def update_price_list_item(request: Request, 
     list_id: int,
     data: dict,
     current_user: dict = Depends(get_current_user)
@@ -119,7 +119,7 @@ def update_price_list_item(
         """), {"lid": list_id, "pid": product_id, "price": price})
         
         db.commit()
-        return {"message": i18n_message(("price_updated_success", request))}
+        return {"message": i18n_message("price_updated_success", request)}
     finally:
         db.close()
 

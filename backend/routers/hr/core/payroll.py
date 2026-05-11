@@ -92,7 +92,7 @@ def list_payroll_periods(branch_id: Optional[int] = None, current_user: UserResp
         return periods
 
 @router.get("/payroll-periods/{period_id}", response_model=PayrollPeriodResponse, dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
-def get_payroll_period(period_id: int, company_id: str = Depends(get_current_user_company)):
+def get_payroll_period(request: Request, period_id: int, company_id: str = Depends(get_current_user_company)):
     """Get Payroll Period."""
     with transactional(company_id) as conn:
         query = """
@@ -106,7 +106,7 @@ def get_payroll_period(period_id: int, company_id: str = Depends(get_current_use
         row = conn.execute(text(query), {"id": period_id}).fetchone()
         
         if not row:
-            raise HTTPException(**http_error(404, ("payroll_period_not_found", request)))
+            raise HTTPException(**http_error(404, "payroll_period_not_found", request))
             
         return {
             "id": row.id,
@@ -119,7 +119,7 @@ def get_payroll_period(period_id: int, company_id: str = Depends(get_current_use
         }
 
 @router.post("/payroll-periods", dependencies=[Depends(require_permission(["hr.manage", "hr.payroll.manage"]))], response_model=Dict[str, Any])
-def create_payroll_period(period: PayrollPeriodCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def create_payroll_period(request: Request, period: PayrollPeriodCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Payroll Period."""
     with transactional(company_id) as conn:
         # Check overlap? For now skip complex validation
@@ -137,7 +137,7 @@ def create_payroll_period(period: PayrollPeriodCreate, current_user: UserRespons
         username = current_user.get("username", "") if isinstance(current_user, dict) else getattr(current_user, "username", "")
         log_activity(conn, user_id=user_id, username=username, action="payroll_period.create",
                      resource_type="payroll_period", resource_id=0, details={"name": period.name})
-        return {"message": i18n_message(("payroll_created_success", request))}
+        return {"message": i18n_message("payroll_created_success", request)}
 
 @router.get("/payroll-periods/{period_id}/entries", response_model=List[PayrollEntryResponse], dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
 def get_payroll_entries(period_id: int, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
@@ -193,7 +193,7 @@ def get_payroll_entries(period_id: int, branch_id: Optional[int] = None, current
 # --- LOAN ENDPOINTS ---
 
 @router.post("/loans", response_model=LoanResponse, dependencies=[Depends(require_permission("hr.loans.manage"))])
-def create_loan_request(loan: LoanCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def create_loan_request(request: Request, loan: LoanCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Loan Request."""
     with transactional(company_id) as conn:
         try:
@@ -202,7 +202,7 @@ def create_loan_request(loan: LoanCreate, current_user: UserResponse = Depends(g
             # Check if employee exists
             emp = conn.execute(text("SELECT id FROM employees WHERE id=:id"), {"id": loan.employee_id}).fetchone()
             if not emp:
-                 raise HTTPException(**http_error(404, ("employee_not_found", request)))
+                 raise HTTPException(**http_error(404, "employee_not_found", request))
     
             result = conn.execute(text("""
                 INSERT INTO employee_loans (employee_id, amount, total_installments, monthly_installment, start_date, reason, status, branch_id)
@@ -250,14 +250,14 @@ def list_loans(branch_id: Optional[int] = None, current_user: UserResponse = Dep
             raise HTTPException(**http_error(500, "internal_error"))
 
 @router.put("/loans/{loan_id}/approve", dependencies=[Depends(require_permission("hr.loans.manage"))], response_model=Dict[str, Any])
-def approve_loan(loan_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def approve_loan(request: Request, loan_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Approve Loan."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
         loan = conn.execute(text("SELECT * FROM employee_loans WHERE id=:id FOR UPDATE"), {"id": loan_id}).fetchone()
         if not loan or loan.status != 'pending':
-            raise HTTPException(**http_error(400, ("invalid_loan_status", request)))
+            raise HTTPException(**http_error(400, "invalid_loan_status", request))
 
         # Enforce fiscal period lock before any GL posting on approval
         check_fiscal_period_open(conn, datetime.now().date())
@@ -313,7 +313,7 @@ def approve_loan(loan_id: int, current_user: UserResponse = Depends(get_current_
         conn.close()
 
 @router.post("/payroll-periods/{period_id}/generate", dependencies=[Depends(require_sensitive_permission(["hr.manage", "hr.payroll.manage"], critical=True))], response_model=Dict[str, Any])
-def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def generate_payroll(request: Request, period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Generate Payroll."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -321,9 +321,9 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
         # Check status
         period = conn.execute(text("SELECT * FROM payroll_periods WHERE id = :id"), {"id": period_id}).fetchone()
         if not period:
-            raise HTTPException(**http_error(404, ("period_not_found", request)))
+            raise HTTPException(**http_error(404, "period_not_found", request))
         if period.status != 'draft':
-             raise HTTPException(**http_error(400, ("cannot_generate_non_draft", request)))
+             raise HTTPException(**http_error(400, "cannot_generate_non_draft", request))
 
         # Clear existing
         conn.execute(text("DELETE FROM payroll_entries WHERE period_id = :id"), {"id": period_id})
@@ -635,7 +635,7 @@ def generate_payroll(period_id: int, current_user: UserResponse = Depends(get_cu
         conn.close()
 
 @router.post("/payroll-periods/{period_id}/post", dependencies=[Depends(require_sensitive_permission(["hr.manage", "hr.payroll.manage"], critical=True))], response_model=Dict[str, Any])
-def post_payroll(period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def post_payroll(request: Request, period_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Post Payroll."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -643,7 +643,7 @@ def post_payroll(period_id: int, current_user: UserResponse = Depends(get_curren
         # 1. Check Status
         period = conn.execute(text("SELECT * FROM payroll_periods WHERE id = :id"), {"id": period_id}).fetchone()
         if not period or period.status != 'draft':
-            raise HTTPException(**http_error(400, ("invalid_period_status", request)))
+            raise HTTPException(**http_error(400, "invalid_period_status", request))
 
         # FISCAL-LOCK: Prevent posting payroll into a closed accounting period
         check_fiscal_period_open(conn, period.end_date)
@@ -683,7 +683,7 @@ def post_payroll(period_id: int, current_user: UserResponse = Depends(get_curren
         """), {"id": period_id, "base": base_currency}).fetchall()
         
         if total_net == Decimal('0'):
-            raise HTTPException(**http_error(400, ("no_payroll_to_post", request)))
+            raise HTTPException(**http_error(400, "no_payroll_to_post", request))
 
         # 3. Handle Loan Deductions & Balances
         if total_loans > 0:
@@ -995,7 +995,7 @@ def list_all_payslips(branch_id: Optional[int] = None, current_user: UserRespons
 
 
 @router.get("/payslips/{entry_id}", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
-def get_payslip_detail(
+def get_payslip_detail(request: Request, 
     entry_id: int,
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company),
@@ -1014,7 +1014,7 @@ def get_payslip_detail(
             WHERE pe.id = :id
         """), {"id": entry_id}).fetchone()
         if not row:
-            raise HTTPException(**http_error(404, ("payslip_not_found", request)))
+            raise HTTPException(**http_error(404, "payslip_not_found", request))
         data = dict(row._mapping)
         owner_user_id = data.pop("_employee_user_id", None)
         # T2.4: mask unless caller has hr.pii or is the employee themselves
@@ -1026,7 +1026,7 @@ def get_payslip_detail(
 
 
 @router.post("/payslips/generate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def generate_single_payslip(data: PayslipGenerateRequest, company_id: str = Depends(get_current_user_company)):
+def generate_single_payslip(request: Request, data: PayslipGenerateRequest, company_id: str = Depends(get_current_user_company)):
     """Generate Single Payslip."""
     with transactional(company_id) as conn:
         last_day = cal_module.monthrange(data.year, data.month)[1]
@@ -1060,14 +1060,14 @@ def generate_single_payslip(data: PayslipGenerateRequest, company_id: str = Depe
         """), {"id": data.employee_id}).fetchone()
 
         if not emp:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
 
         existing = conn.execute(text(
             "SELECT id FROM payroll_entries WHERE period_id=:pid AND employee_id=:eid"
         ), {"pid": period_id, "eid": data.employee_id}).fetchone()
 
         if existing:
-            raise HTTPException(**http_error(400, ("payslip_already_exists", request)))
+            raise HTTPException(**http_error(400, "payslip_already_exists", request))
 
         basic = _dec(emp.basic_salary)
         housing = _dec(emp.housing_allowance)
@@ -1140,7 +1140,7 @@ def generate_single_payslip(data: PayslipGenerateRequest, company_id: str = Depe
                "gosi_emp": str(gosi_emp), "gosi_empr": str(gosi_empr),
                "violation": str(violation_deduction), "loan": str(loan_deduction),
                "deductions": str(total_deductions), "net": str(net)})
-        return {"message": i18n_message(("payslip_generated_success", request))}
+        return {"message": i18n_message("payslip_generated_success", request)}
 
 
 # --- Recruitment ---

@@ -252,7 +252,7 @@ def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_c
         if not existing:
             raise HTTPException(**http_error(404, "opportunity_not_found"))
         if existing.is_deleted:
-            return {"message": i18n_message(("opportunity_already_deleted", request))}
+            return {"message": i18n_message("opportunity_already_deleted", request)}
         db.execute(
             text(
                 "UPDATE sales_opportunities "
@@ -263,7 +263,7 @@ def delete_opportunity(opp_id: int, request: Request, current_user=Depends(get_c
         )
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_opportunity", resource_type="opportunity", resource_id=str(opp_id), details={"soft_delete": True}, request=request)
-        return {"message": i18n_message(("opportunity_deleted", request))}
+        return {"message": i18n_message("opportunity_deleted", request)}
     finally:
         db.close()
 

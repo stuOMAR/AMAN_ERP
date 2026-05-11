@@ -37,7 +37,7 @@ def list_configurable_products(
 
 # ─── GET /products/{id}/configure — get full configuration ───
 @cpq_router.get("/products/{config_id}/configure", dependencies=[Depends(require_permission("sales.cpq_view"))])
-def get_configuration(
+def get_configuration(request: Request, 
     config_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -208,7 +208,7 @@ def create_quote(
 
 # ─── GET /quotes/{id} — get quote detail ───
 @cpq_router.get("/quotes/{quote_id}", dependencies=[Depends(require_permission("sales.cpq_view"))])
-def get_quote(
+def get_quote(request: Request, 
     quote_id: int,
     current_user: dict = Depends(get_current_user),
 ):

@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 
 
 @products_router.get("/products/{product_id}/cost-breakdown", dependencies=[Depends(require_permission("stock.view_cost"))], response_model=Dict[str, Any])
-def get_product_cost_breakdown(
+def get_product_cost_breakdown(request: Request, 
     product_id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -35,7 +35,7 @@ def get_product_cost_breakdown(
         # Determine global cost
         product = db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": product_id}).fetchone()
         if not product:
-            raise HTTPException(**http_error(404, ("product_not_found", request)))
+            raise HTTPException(**http_error(404, "product_not_found", request))
 
         global_cost = product.cost_price or 0
 
@@ -177,7 +177,7 @@ def create_product(
         ).fetchone()
 
         if exists:
-            raise HTTPException(**http_error(400, ("product_code_duplicate", request)))
+            raise HTTPException(**http_error(400, "product_code_duplicate", request))
 
         # Resolve unit_id
         unit_id = db.execute(
@@ -392,7 +392,7 @@ def update_product(id: int, product: ProductCreate, request: Request, current_us
         dup = db.execute(text("SELECT id FROM products WHERE product_code = :code AND id != :id"),
                          {"code": product.item_code, "id": id}).fetchone()
         if dup:
-            raise HTTPException(**http_error(400, ("product_code_in_use", request)))
+            raise HTTPException(**http_error(400, "product_code_in_use", request))
 
         # Resolve unit_id
         unit_id = db.execute(
@@ -512,7 +512,7 @@ def delete_product(
         """), {"id": id}).scalar()
 
         if stock and stock > 0:
-            raise HTTPException(**http_error(400, ("cannot_delete_product_with_stock", request)))
+            raise HTTPException(**http_error(400, "cannot_delete_product_with_stock", request))
 
         # Check if product is used in any transactions
         usage = db.execute(text("""
@@ -524,7 +524,7 @@ def delete_product(
         """), {"id": id}).scalar()
 
         if usage and usage > 0:
-            raise HTTPException(**http_error(400, ("cannot_delete_product_in_transactions", request)))
+            raise HTTPException(**http_error(400, "cannot_delete_product_in_transactions", request))
 
         # Delete inventory records
         db.execute(text("DELETE FROM inventory WHERE product_id = :id"), {"id": id})
@@ -546,7 +546,7 @@ def delete_product(
             branch_id=None
         )
 
-        return {"message": i18n_message(("product_deleted_success", request))}
+        return {"message": i18n_message("product_deleted_success", request)}
     except HTTPException:
         raise
     except Exception:

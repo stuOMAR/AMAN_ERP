@@ -65,7 +65,7 @@ def open_session(
     ).fetchone()
 
     if existing_session:
-        raise HTTPException(**http_error(400, ("pos_session_already_open", request)))
+        raise HTTPException(**http_error(400, "pos_session_already_open", request))
 
     # Create new session
     # Generate session code
@@ -91,7 +91,7 @@ def open_session(
     db.commit()
     
     if not result:
-        raise HTTPException(**http_error(500, ("pos_session_create_failed", request)))
+        raise HTTPException(**http_error(500, "pos_session_create_failed", request))
     
     session_id = result._mapping["id"]
 
@@ -123,13 +123,13 @@ def close_session(
     base_currency = get_base_currency(db)
     sess = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
     if not sess:
-        raise HTTPException(**http_error(404, ("pos_session_not_found", request)))
+        raise HTTPException(**http_error(404, "pos_session_not_found", request))
         
     # Validate branch access
     validate_branch_access(current_user, sess.branch_id)
     
     if sess.status != 'opened':
-        raise HTTPException(**http_error(400, ("pos_session_not_open", request)))
+        raise HTTPException(**http_error(400, "pos_session_not_open", request))
         
     # Recalculate difference using actual data with safety for None values
     opening_bal = _dec(sess.opening_balance)
@@ -252,7 +252,7 @@ def get_active_session(
 
 
 @router.get("/sessions/{session_id}/detailed-report", dependencies=[Depends(require_permission("pos.sessions"))], response_model=Dict[str, Any])
-def session_detailed_report(
+def session_detailed_report(request: Request, 
     session_id: int,
     current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db)
@@ -260,7 +260,7 @@ def session_detailed_report(
     """Session Detailed Report."""
     session = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
     if not session:
-        raise HTTPException(**http_error(404, ("pos_session_not_found", request)))
+        raise HTTPException(**http_error(404, "pos_session_not_found", request))
 
     # Sales by product
     by_product = db.execute(text("""

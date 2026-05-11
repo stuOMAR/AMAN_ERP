@@ -34,7 +34,7 @@ router = APIRouter()
 from .core import _D2, _dec
 
 @router.get("/employees", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
-def get_employees(
+def get_employees(request: Request, 
     branch_id: Optional[int] = None, 
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
@@ -98,7 +98,7 @@ def get_employees(
             if branch_id is not None:
                 # If requesting specific branch, verify access
                 if int(branch_id) not in normalized_allowed_branches:
-                    raise HTTPException(**http_error(403, ("unauthorized_branch_access", request)))
+                    raise HTTPException(**http_error(403, "unauthorized_branch_access", request))
                 query += " AND (e.branch_id = :bid OR ub.branch_id = :bid)"
                 params["bid"] = branch_id
             else:
@@ -185,7 +185,7 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
             # Check if username exists
             exists = conn.execute(text("SELECT 1 FROM company_users WHERE username = :u"), {"u": employee.username}).fetchone()
             if exists:
-                raise HTTPException(**http_error(400, ("username_already_exists", request)))
+                raise HTTPException(**http_error(400, "username_already_exists", request))
             
             hashed = hash_password(employee.password)
             role_key = (employee.role or 'employee').strip().lower()
@@ -364,7 +364,7 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
         except Exception:
             pass
 
-        return {"message": i18n_message(("record_created_success", request))}
+        return {"message": i18n_message("record_created_success", request)}
         
     except Exception as e:
         trans.rollback()
@@ -388,7 +388,7 @@ def update_employee(
         # Check existence
         existing = conn.execute(text("SELECT user_id FROM employees WHERE id = :id"), {"id": employee_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         
         user_id = existing[0]
 
@@ -510,7 +510,7 @@ def update_employee(
             branch_id=employee.branch_id
         )
 
-        return {"message": i18n_message(("updated_success", request))}
+        return {"message": i18n_message("updated_success", request)}
     except Exception:
         trans.rollback()
         logger.exception("Internal error")
@@ -521,7 +521,7 @@ def update_employee(
 # --- Payroll Endpoints ---
 
 @router.post("/end-of-service/calculate", dependencies=[Depends(require_sensitive_permission("hr.manage", critical=True))], response_model=Dict[str, Any])
-def calculate_end_of_service(
+def calculate_end_of_service(request: Request, 
     data: EndOfServiceRequest,
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
@@ -545,7 +545,7 @@ def calculate_end_of_service(
             join_date = emp.hire_date
             
             if not join_date:
-                raise HTTPException(**http_error(400, ("hire_date_not_set", request)))
+                raise HTTPException(**http_error(400, "hire_date_not_set", request))
             
             # Calculate service years
             from dateutil.relativedelta import relativedelta
@@ -553,7 +553,7 @@ def calculate_end_of_service(
             total_years = _dec(delta.years) + (_dec(delta.months) / Decimal('12')) + (_dec(delta.days) / Decimal('365.25'))
             
             if total_years < Decimal('0'):
-                raise HTTPException(**http_error(400, ("termination_before_hire", request)))
+                raise HTTPException(**http_error(400, "termination_before_hire", request))
             
             # Total salary (basic + housing + transport) used as base
             base_salary = _dec(emp.basic_salary)

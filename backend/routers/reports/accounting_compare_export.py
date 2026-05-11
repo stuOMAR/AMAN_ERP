@@ -2,7 +2,7 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/accounting/profit-loss/compare", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def compare_profit_loss(
+def compare_profit_loss(request: Request, 
     periods: str = "2025-01-01:2025-12-31,2024-01-01:2024-12-31",
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
@@ -106,7 +106,7 @@ def compare_profit_loss(
 
 
 @router.get("/accounting/balance-sheet/compare", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def compare_balance_sheet(
+def compare_balance_sheet(request: Request, 
     periods: str = "2025-12-31,2024-12-31",
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
@@ -192,7 +192,7 @@ def compare_balance_sheet(
 from utils.exports import generate_pdf, generate_excel, generate_excel_with_chart, generate_chart_image, create_export_response
 
 @router.get("/accounting/profit-loss/export", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def export_profit_loss(
+def export_profit_loss(request: Request, 
     format: str = "pdf",
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
@@ -205,7 +205,7 @@ def export_profit_loss(
         s_date = datetime.strptime(start_date, "%Y-%m-%d").date() if start_date else date.today().replace(day=1, month=1)
         e_date = datetime.strptime(end_date, "%Y-%m-%d").date() if end_date else date.today()
     except ValueError:
-        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
+        raise HTTPException(**http_error(400, "invalid_date_format", request))
 
     # Reuse get_profit_loss logic (call it directly or refactor)
     # For simplicity, calling the function logic essentially
@@ -248,7 +248,7 @@ def export_profit_loss(
         return create_export_response(buffer, f"profit_loss_{s_date}_{e_date}.pdf", "application/pdf")
 
 @router.get("/accounting/balance-sheet/export", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def export_balance_sheet(
+def export_balance_sheet(request: Request, 
     format: str = "pdf",
     as_of_date: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -258,7 +258,7 @@ def export_balance_sheet(
     try:
         target_date = datetime.strptime(as_of_date, "%Y-%m-%d").date() if as_of_date else date.today()
     except ValueError:
-        raise HTTPException(**http_error(400, ("invalid_date_format", request)))
+        raise HTTPException(**http_error(400, "invalid_date_format", request))
         
     data = get_balance_sheet(as_of_date=target_date, branch_id=branch_id, current_user=current_user)
     
@@ -293,7 +293,7 @@ def export_balance_sheet(
 
 
 @router.get("/accounting/trial-balance/compare", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def compare_trial_balance(
+def compare_trial_balance(request: Request, 
     periods: str = "2025-01-01:2025-12-31,2024-01-01:2024-12-31",
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)

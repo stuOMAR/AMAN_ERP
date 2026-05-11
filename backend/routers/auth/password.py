@@ -282,7 +282,7 @@ async def reset_password(request: Request, body: ResetPasswordRequest):
             request=request
         )
 
-        return {"message": i18n_message(("password_changed_success", request))}
+        return {"message": i18n_message("password_changed_success", request)}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

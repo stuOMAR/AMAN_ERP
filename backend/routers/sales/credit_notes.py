@@ -71,7 +71,7 @@ def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
 def _reversal_taxable_amount(original_line, quantity) -> Decimal:
     original_qty = _dec(original_line.quantity)
     if original_qty <= 0:
-        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+        raise HTTPException(**http_error(400, "original_line_qty_invalid"))
     gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
     taxable = gross - _dec(getattr(original_line, "discount", 0))
     ratio = _dec(quantity) / original_qty
@@ -97,7 +97,7 @@ def _load_sales_invoice_reverse_context(db, invoice_id: int, party_id: int):
     if int(orig.party_id) != int(party_id):
         raise HTTPException(**http_error(400, "invoice_not_for_customer"))
     if orig.invoice_type not in ("sales",):
-        raise HTTPException(**http_error(400, "credit_note_must_link_sales_invoice", request))
+        raise HTTPException(**http_error(400, "credit_note_must_link_sales_invoice"))
 
     rows = db.execute(text("""
         SELECT product_id, quantity, unit_price, tax_rate, tax_rate_id, applied_taxes, discount
@@ -144,14 +144,14 @@ def _load_sales_invoice_reverse_context(db, invoice_id: int, party_id: int):
 def _original_line_for_reversal(original_lines: dict[int, list], product_id: int, unit_price) -> Any:
     candidates = original_lines.get(int(product_id), [])
     if not candidates:
-        raise HTTPException(**http_error(400, "item_not_in_invoice", request))
+        raise HTTPException(**http_error(400, "item_not_in_invoice"))
     if len(candidates) == 1:
         return candidates[0]
     price = _dec(unit_price)
     matched = [row for row in candidates if _dec(row.unit_price) == price]
     if len(matched) == 1:
         return matched[0]
-    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity", request))
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity"))
 
 
 # ==================== CREDIT NOTES (إشعار دائن) ====================

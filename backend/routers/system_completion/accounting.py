@@ -733,7 +733,7 @@ def list_fiscal_periods(current_user: dict = Depends(get_current_user)):
 
 @router.post("/accounting/fiscal-periods", dependencies=[Depends(require_permission("accounting.manage"))],
              tags=["Fiscal Periods"], response_model=Dict[str, Any])
-def create_fiscal_period(body: FiscalPeriodLockRequest, current_user: dict = Depends(get_current_user)):
+def create_fiscal_period(request: Request, body: FiscalPeriodLockRequest, current_user: dict = Depends(get_current_user)):
     """Create Fiscal Period."""
     company_id = _u(current_user, "company_id")
     user_id = _u(current_user, "user_id")

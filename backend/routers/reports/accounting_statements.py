@@ -2,7 +2,7 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -572,7 +572,7 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
     }
 
 @router.get("/accounting/general-ledger", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
-def get_general_ledger(
+def get_general_ledger(request: Request, 
     account_id: int = None,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -581,7 +581,7 @@ def get_general_ledger(
 ):
     """جلب دفتر الأستاذ العام - حركات حساب محدد مع كل حساباته الفرعية"""
     if not account_id:
-        raise HTTPException(**http_error(400, ("account_required", request)))
+        raise HTTPException(**http_error(400, "account_required", request))
     
     branch_scope = resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)

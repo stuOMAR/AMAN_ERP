@@ -113,7 +113,7 @@ def create_supplier_group(
                 details={"group_name": group.group_name},
                 request=request
             )
-            return {"message": i18n_message(("group_created_success", request))}
+            return {"message": i18n_message("group_created_success", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -168,7 +168,7 @@ def update_supplier_group(
                 details={"group_name": group.group_name},
                 request=request
             )
-            return {"message": i18n_message(("group_updated_success", request))}
+            return {"message": i18n_message("group_updated_success", request)}
         except HTTPException:
             raise
         except Exception:
@@ -208,7 +208,7 @@ def delete_supplier_group(
                 details=None,
                 request=request
             )
-            return {"message": i18n_message(("group_deleted_success", request))}
+            return {"message": i18n_message("group_deleted_success", request)}
         except HTTPException:
             raise
         except Exception:

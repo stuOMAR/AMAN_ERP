@@ -358,7 +358,7 @@ def get_enabled_modules(current_user=Depends(get_current_user)):
 
 
 @router.put("/modules", dependencies=[Depends(require_permission("settings.manage"))], response_model=Dict[str, Any])
-def update_enabled_modules(modules: Any = Body(...), current_user=Depends(get_current_user)):
+def update_enabled_modules(request: Request, modules: Any = Body(...), current_user=Depends(get_current_user)):
     """تحديث الوحدات المفعّلة — يقبل list أو dict"""
     import json
 

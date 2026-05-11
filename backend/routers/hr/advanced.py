@@ -87,7 +87,7 @@ def update_salary_structure(structure_id: int, data: SalaryStructureUpdate, requ
             action="hr.salary_structure.update", resource_type="salary_structure",
             resource_id=str(structure_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": i18n_message(("hr_update_success", request))}
+        return {"message": i18n_message("hr_update_success", request)}
 
 
 @router.delete("/salary-structures/{structure_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -100,7 +100,7 @@ def delete_salary_structure(structure_id: int, request: Request, current_user: U
             action="hr.salary_structure.delete", resource_type="salary_structure",
             resource_id=str(structure_id), details={}, request=request
         )
-        return {"message": i18n_message(("hr_delete_success", request))}
+        return {"message": i18n_message("hr_delete_success", request)}
 
 
 # =============================================
@@ -162,7 +162,7 @@ def update_salary_component(component_id: int, data: SalaryComponentUpdate, requ
             action="hr.salary_component.update", resource_type="salary_component",
             resource_id=str(component_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": i18n_message(("hr_update_success", request))}
+        return {"message": i18n_message("hr_update_success", request)}
 
 
 # =============================================
@@ -197,7 +197,7 @@ def assign_salary_component(data: EmployeeSalaryComponentCreate, request: Reques
             action="hr.employee_salary_component.assign", resource_type="employee_salary_component",
             resource_id=str(data.employee_id), details={"component_id": data.component_id, "amount": str(data.amount) if data.amount else "0"}, request=request
         )
-        return {"message": i18n_message(("salary_component_set", request))}
+        return {"message": i18n_message("salary_component_set", request)}
 
 
 # =============================================
@@ -311,7 +311,7 @@ def approve_overtime(overtime_id: int, data: OvertimeRequestUpdate, request: Req
             action="hr.overtime.approve", resource_type="overtime_request",
             resource_id=str(overtime_id), details={"status": data.status}, request=request
         )
-        return {"message": i18n_message(("request_status_updated", request))}
+        return {"message": i18n_message("request_status_updated", request)}
 
 
 # =============================================
@@ -677,7 +677,7 @@ def update_performance_review(review_id: int, data: PerformanceReviewUpdate, req
             action="hr.performance_review.update", resource_type="performance_review",
             resource_id=str(review_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": i18n_message(("evaluation_updated", request))}
+        return {"message": i18n_message("evaluation_updated", request)}
 
 
 # =============================================
@@ -755,7 +755,7 @@ def add_training_participant(training_id: int, data: TrainingParticipantCreate, 
             resource_id=str(training_id), details={"employee_id": data.employee_id}, request=request
         )
         conn.commit()
-        return {"message": i18n_message(("participant_registered", request))}
+        return {"message": i18n_message("participant_registered", request)}
     except Exception as e:
         if "unique" in str(e).lower() or "duplicate" in str(e).lower():
             raise HTTPException(**http_error(400, "participant_already_registered", request))
@@ -866,7 +866,7 @@ def update_violation(violation_id: int, data: ViolationUpdate, request: Request,
             action="hr.violation.update", resource_type="employee_violation",
             resource_id=str(violation_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": i18n_message(("violation_updated", request))}
+        return {"message": i18n_message("violation_updated", request)}
 
 
 # =============================================
@@ -936,7 +936,7 @@ def update_custody(custody_id: int, data: CustodyUpdate, request: Request, curre
             action="hr.custody.update", resource_type="employee_custody",
             resource_id=str(custody_id), details={"fields": list(params.keys())}, request=request
         )
-        return {"message": i18n_message(("custody_updated", request))}
+        return {"message": i18n_message("custody_updated", request)}
 
 
 @router.put("/custody/{custody_id}/return", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
@@ -953,4 +953,4 @@ def return_custody(custody_id: int, data: CustodyUpdate, request: Request, curre
             action="hr.custody.return", resource_type="employee_custody",
             resource_id=str(custody_id), details={}, request=request
         )
-        return {"message": i18n_message(("custody_received", request))}
+        return {"message": i18n_message("custody_received", request)}

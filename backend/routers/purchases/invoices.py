@@ -57,7 +57,7 @@ def _parties_has_balance_currency(db) -> bool:
 
 
 @router.post("/invoices/preview", dependencies=[Depends(require_permission("buying.create"))])
-def preview_purchase_invoice_totals(invoice: PurchaseCreate, current_user: dict = Depends(get_current_user)):
+def preview_purchase_invoice_totals(request: Request, invoice: PurchaseCreate, current_user: dict = Depends(get_current_user)):
     """حساب إجماليات فاتورة المشتريات بدون حفظ"""
     from utils.accounting import compute_invoice_totals, compute_line_amounts
 
@@ -65,7 +65,7 @@ def preview_purchase_invoice_totals(invoice: PurchaseCreate, current_user: dict 
     with transactional(company_id) as db:
         # Validate branch
         if not invoice.branch_id:
-            raise HTTPException(**http_error(400, ("branch_required", request)))
+            raise HTTPException(**http_error(400, "branch_required", request))
         validate_branch_access(current_user, invoice.branch_id)
 
         from utils.tax_precision import money_str, rate_str
@@ -269,19 +269,19 @@ async def create_purchase_invoice(
                     FOR UPDATE
                 """), {"po_id": invoice.original_invoice_id}).fetchone()
                 if not po_header:
-                    raise HTTPException(**http_error(404, ("po_not_found", request)))
+                    raise HTTPException(**http_error(404, "po_not_found", request))
                 if int(po_header.party_id) != int(invoice.supplier_id):
-                    raise HTTPException(**http_error(400, ("po_supplier_mismatch", request)))
+                    raise HTTPException(**http_error(400, "po_supplier_mismatch", request))
                 if po_header.status not in ("approved", "partial", "received"):
-                    raise HTTPException(**http_error(400, ("po_status_invalid", request)))
+                    raise HTTPException(**http_error(400, "po_status_invalid", request))
 
                 po_branch_id = po_header.branch_id
                 requested_branch_id = invoice.branch_id
                 if requested_branch_id and po_branch_id and int(requested_branch_id) != int(po_branch_id):
-                    raise HTTPException(**http_error(400, ("invoice_branch_mismatch_po", request)))
+                    raise HTTPException(**http_error(400, "invoice_branch_mismatch_po", request))
                 validated_branch_id = validate_branch_access(current_user, po_branch_id or requested_branch_id)
                 if po_header.currency and invoice.currency and po_header.currency != invoice.currency:
-                    raise HTTPException(**http_error(400, ("invoice_currency_mismatch_po", request)))
+                    raise HTTPException(**http_error(400, "invoice_currency_mismatch_po", request))
 
             inv_currency = invoice.currency or (po_header.currency if po_header else None) or base_currency
             exchange_rate = _dec(invoice.exchange_rate or (po_header.exchange_rate if po_header else 1) or 1)
@@ -304,7 +304,7 @@ async def create_purchase_invoice(
                  exchange_rate = _dec(rate_row.rate)
 
             if inv_currency != base_currency and exchange_rate <= 0:
-                raise HTTPException(**http_error(400, ("exchange_rate_must_be_positive", request)))
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
 
             def to_base(amount):
                 return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
@@ -325,7 +325,7 @@ async def create_purchase_invoice(
             if wh_id and effective_branch_id:
                 wh_check = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": wh_id}).fetchone()
                 if wh_check and wh_check[0] and wh_check[0] != effective_branch_id:
-                    raise HTTPException(**http_error(400, ("warehouse_not_in_current_branch", request)))
+                    raise HTTPException(**http_error(400, "warehouse_not_in_current_branch", request))
 
             # 2.6 Check for linked PO and fetch received/invoiced quantities
             po_line_map = {}  # po_line_id -> {received_qty, invoiced_qty, product_id}
@@ -740,7 +740,7 @@ async def create_purchase_invoice(
 
             if invoice.original_invoice_id and abs(gl_inventory_debit) > _D2:
                 if not acc_purchase_variance:
-                    raise HTTPException(**http_error(400, ("purchase_price_variance_not_configured", request)))
+                    raise HTTPException(**http_error(400, "purchase_price_variance_not_configured", request))
                 if gl_inventory_debit > 0:
                     je_lines.append({
                         "account_id": acc_purchase_variance,
@@ -770,7 +770,7 @@ async def create_purchase_invoice(
                 })
             elif gl_inventory_debit < -_D2:
                 if not acc_purchase_variance:
-                    raise HTTPException(**http_error(400, ("purchase_price_variance_not_configured", request)))
+                    raise HTTPException(**http_error(400, "purchase_price_variance_not_configured", request))
                 variance_credit = abs(gl_inventory_debit)
                 fc_variance_credit = abs(fc_inventory_debit)
                 je_lines.append({

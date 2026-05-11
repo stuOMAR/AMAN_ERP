@@ -36,7 +36,7 @@ def convert_quotation_to_order(sq_id: int, request: Request, current_user=Depend
     try:
         sq = db.execute(text("SELECT * FROM sales_quotations WHERE id = :id"), {"id": sq_id}).fetchone()
         if not sq:
-            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
+            raise HTTPException(**http_error(404, "quotation_not_found", request))
         if sq.status in ('converted', 'cancelled', 'expired'):
             existing = db.execute(text("""
                 SELECT id, so_number FROM sales_orders WHERE quotation_id = :id LIMIT 1
@@ -224,7 +224,7 @@ def list_commissions(
 
 
 @sales_improvements_router.post("/commissions/calculate", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def calculate_commission(data: dict, current_user=Depends(get_current_user)):
+def calculate_commission(request: Request, data: dict, current_user=Depends(get_current_user)):
     """Calculate commission entry. If invoice_id provided, for that invoice only. Otherwise bulk-calculate all unprocessed invoices."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -288,7 +288,7 @@ def calculate_commission(data: dict, current_user=Depends(get_current_user)):
         # Single invoice mode
         inv = db.execute(text("SELECT * FROM invoices WHERE id = :id"), {"id": invoice_id}).fetchone()
         if not inv:
-            raise HTTPException(**http_error(404, ("invoice_not_found", request)))
+            raise HTTPException(**http_error(404, "invoice_not_found", request))
 
         salesperson_id = data.get("salesperson_id") or getattr(inv, "salesperson_id", None)
         if not salesperson_id:
@@ -353,7 +353,7 @@ def commission_summary(current_user=Depends(get_current_user)):
 
 
 @sales_improvements_router.post("/commissions/pay", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def pay_commission(data: dict, current_user=Depends(get_current_user)):
+def pay_commission(request: Request, data: dict, current_user=Depends(get_current_user)):
     """
     صرف العمولات وإنشاء قيد محاسبي.
     Pay commissions and create GL entry:
@@ -446,13 +446,13 @@ def pay_commission(data: dict, current_user=Depends(get_current_user)):
 # =====================================================
 
 @sales_improvements_router.post("/orders/{order_id}/partial-invoice", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_current_user)):
+def create_partial_invoice(request: Request, order_id: int, data: dict, current_user=Depends(get_current_user)):
     """Create a partial invoice from a sales order."""
     db = get_db_connection(current_user.company_id)
     try:
         order = db.execute(text("SELECT * FROM sales_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
 
         lines = data.get("lines", [])  # [{order_line_id, quantity}]
         if not lines:
@@ -521,14 +521,14 @@ def create_partial_invoice(order_id: int, data: dict, current_user=Depends(get_c
 # =====================================================
 
 @sales_improvements_router.get("/customers/{party_id}/credit-status", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
-def get_credit_status(party_id: int, current_user=Depends(get_current_user)):
+def get_credit_status(request: Request, party_id: int, current_user=Depends(get_current_user)):
     """Get Credit Status."""
     db = get_db_connection(current_user.company_id)
     try:
         party = db.execute(text("SELECT id, name, credit_limit, credit_used FROM parties WHERE id = :id"),
                            {"id": party_id}).fetchone()
         if not party:
-            raise HTTPException(**http_error(404, ("customer_not_found", request)))
+            raise HTTPException(**http_error(404, "customer_not_found", request))
         limit_ = Decimal(str(party.credit_limit or 0))
         used = Decimal(str(party.credit_used or 0))
         return {
@@ -568,7 +568,7 @@ def update_credit_limit(party_id: int, data: dict, request: Request, current_use
 
 
 @sales_improvements_router.post("/credit-check", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
-def check_credit(data: dict, current_user=Depends(get_current_user)):
+def check_credit(request: Request, data: dict, current_user=Depends(get_current_user)):
     """Check if a customer can place an order of given amount."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -577,7 +577,7 @@ def check_credit(data: dict, current_user=Depends(get_current_user)):
         party = db.execute(text("SELECT credit_limit, credit_used FROM parties WHERE id = :id"),
                            {"id": party_id}).fetchone()
         if not party:
-            raise HTTPException(**http_error(404, ("customer_not_found", request)))
+            raise HTTPException(**http_error(404, "customer_not_found", request))
         limit_ = Decimal(str(party.credit_limit or 0))
         used = Decimal(str(party.credit_used or 0))
         available = limit_ - used

@@ -117,10 +117,10 @@ def _treasury_account_scope(current_user, requested_branch_id: Optional[int] = N
 # --- Endpoints ---
 
 @router.get("/accounts", response_model=List[TreasuryAccountResponse], dependencies=[Depends(require_permission("treasury.view"))])
-def list_treasury_accounts(branch_id: Optional[int] = None, current_user = Depends(get_current_user)):
+def list_treasury_accounts(request: Request, branch_id: Optional[int] = None, current_user = Depends(get_current_user)):
     """عرض حسابات الخزينة والبنوك مع فلترة حسب الفرع"""
     if not current_user.company_id:
-         raise HTTPException(**http_error(400, ("company_required", request)))
+         raise HTTPException(**http_error(400, "company_required", request))
     branch_id, allowed_branch_ids = _treasury_account_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
@@ -187,10 +187,10 @@ def list_treasury_accounts(branch_id: Optional[int] = None, current_user = Depen
         db.close()
 
 @router.get("/transactions", response_model=List[TransactionResponse], dependencies=[Depends(require_permission("treasury.view"))])
-def list_transactions(branch_id: Optional[int] = None, limit: int = 50, current_user = Depends(get_current_user)):
+def list_transactions(request: Request, branch_id: Optional[int] = None, limit: int = 50, current_user = Depends(get_current_user)):
     """عرض سجل العمليات الأخيرة"""
     if not current_user.company_id:
-         raise HTTPException(**http_error(400, ("company_required", request)))
+         raise HTTPException(**http_error(400, "company_required", request))
     branch_id, allowed_branch_ids = _treasury_account_scope(current_user, branch_id)
     db = get_db_connection(current_user.company_id)
     try:
@@ -248,7 +248,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             {"name": account.name}
         ).fetchone()
         if existing:
-            raise HTTPException(**http_error(400, ("treasury_name_duplicate", request)))
+            raise HTTPException(**http_error(400, "treasury_name_duplicate", request))
 
         # Check for duplicate bank account number (if provided)
         if account.account_type == 'bank' and account.account_number:
@@ -259,7 +259,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
                 """
             ), {"account_number": encrypt_pii(account.account_number, tenant_id=current_user.company_id)}).fetchone()
             if existing_bank:
-                raise HTTPException(**http_error(400, ("treasury_iban_duplicate", request)))
+                raise HTTPException(**http_error(400, "treasury_iban_duplicate", request))
 
         # 1. Determine Parent Account from Chart of Accounts
         # 1101 = Cash & Equivalents
@@ -271,7 +271,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             parent_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1101'")).fetchone()
             
         if not parent_account:
-            raise HTTPException(**http_error(500, ("main_cash_account_not_found", request)))
+            raise HTTPException(**http_error(500, "main_cash_account_not_found", request))
         
         parent_id = parent_account[0]
         
@@ -494,7 +494,7 @@ def update_treasury_account(
                 "id": id,
             }).fetchone()
             if dup_bank:
-                raise HTTPException(**http_error(400, ("treasury_iban_duplicate", request)))
+                raise HTTPException(**http_error(400, "treasury_iban_duplicate", request))
         
         # Update treasury account
         db.execute(text("""
@@ -588,7 +588,7 @@ def delete_treasury_account(
         
         # Check if account has balance
         if account.current_balance and abs(account.current_balance) > 0.01:
-            raise HTTPException(**http_error(400, ("cannot_delete_treasury_with_balance", request)))
+            raise HTTPException(**http_error(400, "cannot_delete_treasury_with_balance", request))
         
         # Check if account has transactions
         usage = db.execute(text("""
@@ -620,7 +620,7 @@ def delete_treasury_account(
             branch_id=None
         )
         
-        return {"message": i18n_message(("treasury_account_deleted", request))}
+        return {"message": i18n_message("treasury_account_deleted", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -652,7 +652,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
     if data.amount is None or data.amount <= 0:
         raise HTTPException(**http_error(400, "amount_must_be_positive"))
     if not data.target_account_id:
-        raise HTTPException(**http_error(400, ("expense_account_required", request)))
+        raise HTTPException(**http_error(400, "expense_account_required", request))
 
     from schemas.expenses import ExpenseCreate
     from routers.finance.expenses import create_expense as unified_create_expense
@@ -724,7 +724,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
     
     # Prevent self-transfer
     if data.treasury_id == data.target_treasury_id:
-        raise HTTPException(**http_error(400, ("cannot_transfer_same_account", request)))
+        raise HTTPException(**http_error(400, "cannot_transfer_same_account", request))
     
     if not data.target_treasury_id:
         raise HTTPException(**http_error(400, "receiving_account_required", request))

@@ -60,7 +60,7 @@ def list_campaigns(
 
 
 @router.get("/campaigns/{campaign_id}", dependencies=[Depends(require_permission("crm.campaign_view"))], response_model=Dict[str, Any])
-def get_campaign(campaign_id: int, current_user=Depends(get_current_user)):
+def get_campaign(request: Request, campaign_id: int, current_user=Depends(get_current_user)):
     """Get Campaign."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -138,7 +138,7 @@ def update_campaign(campaign_id: int, data: CampaignUpdate, request: Request, cu
         db.execute(text(f"UPDATE marketing_campaigns SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_campaign", resource_type="campaign", resource_id=str(campaign_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": i18n_message(("campaign_updated", request))}
+        return {"message": i18n_message("campaign_updated", request)}
     finally:
         db.close()
 
@@ -151,7 +151,7 @@ def delete_campaign(campaign_id: int, request: Request, current_user=Depends(get
         db.execute(text("DELETE FROM marketing_campaigns WHERE id = :id"), {"id": campaign_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_campaign", resource_type="campaign", resource_id=str(campaign_id), details={}, request=request)
-        return {"message": i18n_message(("campaign_deleted", request))}
+        return {"message": i18n_message("campaign_deleted", request)}
     finally:
         db.close()
 
@@ -322,7 +322,7 @@ def list_campaign_recipients(
 
 
 @router.post("/campaigns/webhook/track", response_model=Dict[str, Any])
-def campaign_tracking_webhook(payload: TrackingWebhookPayload, company_id: str):
+def campaign_tracking_webhook(request: Request, payload: TrackingWebhookPayload, company_id: str):
     """Public webhook for tracking campaign engagement (opens, clicks, responses).
     Requires company_id query param. Validates a signed payload to prevent tampering."""
     import hashlib
@@ -438,7 +438,7 @@ def attribute_lead_to_campaign(campaign_id: int, lead_id: int, request: Request,
 
 
 @router.get("/campaigns/{campaign_id}/metrics", dependencies=[Depends(require_permission("crm.campaign_view"))], response_model=Dict[str, Any])
-def get_campaign_metrics(campaign_id: int, current_user=Depends(get_current_user)):
+def get_campaign_metrics(request: Request, campaign_id: int, current_user=Depends(get_current_user)):
     """Get detailed engagement metrics and lead attribution for a campaign."""
     db = get_db_connection(current_user.company_id)
     try:

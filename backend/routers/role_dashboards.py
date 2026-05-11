@@ -33,7 +33,7 @@ def _get_company_id(user):
     if cid is None and isinstance(user, dict):
         cid = user.get("company_id")
     if not cid:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing"))
     return cid
 
 
@@ -355,7 +355,7 @@ def get_crm_dashboard(
             dependencies=[Depends(require_permission(["dashboard.industry", "dashboard.view"]))],
             summary="Industry KPIs — auto-detected by company sector")
 @cached("role_dashboard_industry", expire=300)
-def get_industry_dashboard(
+def get_industry_dashboard(request: Request, 
     period: str = Query("mtd"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -390,7 +390,7 @@ def get_industry_dashboard(
             dependencies=[Depends(require_permission("dashboard.view"))],
             summary="Combined Role + Industry Dashboard")
 @cached("role_dashboard_combined", expire=120)
-def get_combined_dashboard(
+def get_combined_dashboard(request: Request, 
     period: str = Query("mtd"),
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
@@ -559,6 +559,6 @@ def _execute_dashboard(handler, current_user, period: str,
         raise
     except Exception as ex:
         logger.error(f"Dashboard error ({handler.__name__}): {ex}")
-        raise HTTPException(**http_error(500, "error_loading_dashboard_data", request))
+        raise HTTPException(**http_error(500, "error_loading_dashboard_data"))
     finally:
         db.close()

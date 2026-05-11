@@ -145,12 +145,12 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     alerts = []
     if low_stock > 0:
         alerts.append({"severity": "high", "code": "LOW_STOCK",
-                        "message": i18n_message("kpi_low_stock_products", request),
+                        "message": i18n_message("kpi_low_stock_products"),
                         "message_ar": f"{low_stock} منتج تحت حد إعادة الطلب",
                         "count": low_stock, "link": "/stock/products?filter=low_stock"})
     if out_of_stock > 0:
         alerts.append({"severity": "high", "code": "OUT_OF_STOCK",
-                        "message": i18n_message("kpi_out_of_stock_products", request),
+                        "message": i18n_message("kpi_out_of_stock_products"),
                         "message_ar": f"{out_of_stock} منتج نفد من المخزون",
                         "count": out_of_stock, "link": "/stock/products?filter=out_of_stock"})
 

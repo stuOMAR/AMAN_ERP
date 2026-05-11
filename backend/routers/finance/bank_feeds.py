@@ -245,7 +245,7 @@ def list_statements(limit: int = 50, current_user=Depends(get_current_user)):
     "/statements/{statement_id}/lines",
     dependencies=[Depends(require_permission("finance.reconciliation_view"))],
 )
-def list_lines(statement_id: int, current_user=Depends(get_current_user)):
+def list_lines(request: Request, statement_id: int, current_user=Depends(get_current_user)):
     """List Lines."""
     db = get_db_connection(current_user.company_id)
     try:

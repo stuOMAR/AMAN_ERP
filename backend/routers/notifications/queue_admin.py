@@ -7,7 +7,7 @@ POST /notifications/dlq/{id}/requeue — requeue from DLQ
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import text
 
 from database import get_db_connection
@@ -73,7 +73,7 @@ def list_queue(
 
 
 @router.post("/queue/{notif_id}/retry")
-def retry_notification(
+def retry_notification(request: Request, 
     notif_id: int,
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):
@@ -132,7 +132,7 @@ def list_dlq(
 
 
 @router.post("/dlq/{notif_id}/requeue")
-def requeue_from_dlq(
+def requeue_from_dlq(request: Request, 
     notif_id: int,
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):

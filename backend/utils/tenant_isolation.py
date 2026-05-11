@@ -44,5 +44,5 @@ def resolve_target_company_id(
         raise HTTPException(**http_error(403, "cross_tenant_access_forbidden", request))
 
     if not own:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
     return own

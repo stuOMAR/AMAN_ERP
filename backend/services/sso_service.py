@@ -263,14 +263,14 @@ def test_ldap_connection(
         # Quick search to confirm base_dn is valid
         conn.search_s(ldap_base_dn, ldap_lib.SCOPE_BASE, "(objectClass=*)", ["dn"])
         conn.unbind_s()
-        return {"success": True, "message": i18n_message("ldap_connection_successful", request)}
+        return {"success": True, "message": i18n_message("ldap_connection_successful")}
     except ldap_lib.INVALID_CREDENTIALS:
-        return {"success": False, "message": i18n_message("ldap_invalid_credentials", request)}
+        return {"success": False, "message": i18n_message("ldap_invalid_credentials")}
     except ldap_lib.SERVER_DOWN:
-        return {"success": False, "message": i18n_message("ldap_server_unreachable", request)}
+        return {"success": False, "message": i18n_message("ldap_server_unreachable")}
     except Exception:
         logger.exception("LDAP test connection failed")
-        return {"success": False, "message": i18n_message("ldap_connection_failed", request)}
+        return {"success": False, "message": i18n_message("ldap_connection_failed")}
 
 
 # ---------------------------------------------------------------------------

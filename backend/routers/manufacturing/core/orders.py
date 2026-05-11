@@ -48,12 +48,12 @@ def _validate_order_warehouse_access(conn, current_user: UserResponse, *warehous
             {"wid": warehouse_id},
         ).fetchone()
         if not warehouse:
-            raise HTTPException(**http_error(404, ("warehouse_not_found", request)))
+            raise HTTPException(**http_error(404, "warehouse_not_found"))
         if warehouse.branch_id:
             validate_branch_access(current_user, warehouse.branch_id)
 
 @router.get("/orders/cost-estimate", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
-def estimate_production_cost(
+def estimate_production_cost(request: Request, 
     bom_id: int = Query(..., description="BOM ID"),
     quantity: float = Query(..., description="Production quantity"),
     current_user: UserResponse = Depends(get_current_user)
@@ -63,7 +63,7 @@ def estimate_production_cost(
     try:
         bom = conn.execute(text("SELECT * FROM bill_of_materials WHERE id = :bid AND is_deleted = false"), {"bid": bom_id}).fetchone()
         if not bom:
-            raise HTTPException(**http_error(404, ("bom_not_found", request)))
+            raise HTTPException(**http_error(404, "bom_not_found", request))
         cost = calculate_production_cost(conn, bom_id, quantity)
         return cost
     finally:
@@ -129,7 +129,7 @@ def list_production_orders(
         conn.close()
  
 @router.get("/orders/{order_id}", response_model=ProductionOrderResponse, dependencies=[Depends(require_permission("manufacturing.view"))])
-def get_production_order(order_id: int, current_user: UserResponse = Depends(get_current_user)):
+def get_production_order(request: Request, order_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Get Production Order."""
     conn = get_db_connection(current_user.company_id)
     try:
@@ -142,7 +142,7 @@ def get_production_order(order_id: int, current_user: UserResponse = Depends(get
         """), {"oid": order_id}).fetchone()
         
         if not o:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if o.branch_id:
             validate_branch_access(current_user, o.branch_id)
@@ -354,7 +354,7 @@ def create_production_order(order: ProductionOrderCreate, request: Request, curr
     except Exception as e:
         trans.rollback()
         logger.error(f"Error creating production order: {e}")
-        raise HTTPException(**http_error(400, ("production_create_failed", request)))
+        raise HTTPException(**http_error(400, "production_create_failed", request))
     finally:
         conn.close()
 
@@ -376,14 +376,14 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status not in ['draft', 'confirmed']:
             logger.warning(f"Cannot start order {order_id} with status {order.status}")
-            raise HTTPException(**http_error(400, ("cannot_start_order_state", request)))
+            raise HTTPException(**http_error(400, "cannot_start_order_state", request))
 
         # Check inventory sufficiency before starting
         if order.bom_id:
@@ -588,14 +588,14 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status != 'in_progress':
             logger.warning(f"Cannot complete order {order_id} with status {order.status}")
-            raise HTTPException(**http_error(400, ("cannot_complete_order_state", request)))
+            raise HTTPException(**http_error(400, "cannot_complete_order_state", request))
 
         # Update status to completed
         updated = conn.execute(text("""
@@ -881,14 +881,14 @@ def cancel_production_order(order_id: int, request: Request, current_user: UserR
         """), {"id": order_id}).fetchone()
         
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         
         if order.status not in ['draft', 'confirmed']:
             logger.warning(f"Cannot cancel order {order_id} with status {order.status}")
-            raise HTTPException(**http_error(400, ("cannot_cancel_order_state", request)))
+            raise HTTPException(**http_error(400, "cannot_cancel_order_state", request))
         
         conn.execute(text("""
             UPDATE production_orders SET status = 'cancelled', updated_at = NOW() WHERE id = :id
@@ -915,7 +915,7 @@ def cancel_production_order(order_id: int, request: Request, current_user: UserR
     except Exception as e:
         trans.rollback()
         logger.error(f"Error cancelling production order {order_id}: {e}")
-        raise HTTPException(**http_error(400, ("production_cancel_failed", request)))
+        raise HTTPException(**http_error(400, "production_cancel_failed", request))
     finally:
         conn.close()
 
@@ -928,12 +928,12 @@ def delete_production_order(order_id: int, request: Request, current_user: UserR
     try:
         order = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         if order.status != 'draft':
-            raise HTTPException(**http_error(400, ("only_draft_orders_deletable", request)))
+            raise HTTPException(**http_error(400, "only_draft_orders_deletable", request))
         
         # Delete operations first (cascade should handle, but be explicit)
         conn.execute(text("DELETE FROM production_order_operations WHERE production_order_id = :id"), {"id": order_id})
@@ -949,7 +949,7 @@ def delete_production_order(order_id: int, request: Request, current_user: UserR
     except Exception as e:
         trans.rollback()
         logger.error(f"Error deleting production order {order_id}: {e}")
-        raise HTTPException(**http_error(400, ("production_delete_failed", request)))
+        raise HTTPException(**http_error(400, "production_delete_failed", request))
     finally:
         conn.close()
 
@@ -962,12 +962,12 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
     try:
         existing = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         from utils.permissions import validate_branch_access
         if existing.branch_id:
             validate_branch_access(current_user, existing.branch_id)
         if existing.status != 'draft':
-            raise HTTPException(**http_error(400, ("only_draft_orders_updatable", request)))
+            raise HTTPException(**http_error(400, "only_draft_orders_updatable", request))
 
         _validate_order_warehouse_access(conn, current_user, order.warehouse_id, order.destination_warehouse_id)
         
@@ -986,7 +986,7 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
         }).fetchone()
         
         if not updated:
-            raise HTTPException(**http_error(500, ("update_failed", request)))
+            raise HTTPException(**http_error(500, "update_failed", request))
         
         # Re-create operations from new route if route changed
         if order.route_id and order.route_id != existing.route_id:
@@ -1031,7 +1031,7 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
     except Exception as e:
         trans.rollback()
         logger.error(f"Error updating production order {order_id}: {e}")
-        raise HTTPException(**http_error(400, ("production_update_failed", request)))
+        raise HTTPException(**http_error(400, "production_update_failed", request))
     finally:
         conn.close()
 
@@ -1045,7 +1045,7 @@ def start_operation(op_id: int, request: Request, current_user: UserResponse = D
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op:
-            raise HTTPException(**http_error(404, ("operation_not_found", request)))
+            raise HTTPException(**http_error(404, "operation_not_found", request))
         
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -1054,7 +1054,7 @@ def start_operation(op_id: int, request: Request, current_user: UserResponse = D
             validate_branch_access(current_user, po.branch_id)
         
         if op.status == 'in_progress':
-            raise HTTPException(**http_error(400, ("operation_already_in_progress", request)))
+            raise HTTPException(**http_error(400, "operation_already_in_progress", request))
 
         # Update status to in_progress
         conn.execute(text("""
@@ -1084,7 +1084,7 @@ def pause_operation(op_id: int, request: Request, current_user: UserResponse = D
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op or op.status != 'in_progress':
-            raise HTTPException(**http_error(400, ("only_in_progress_pausable", request)))
+            raise HTTPException(**http_error(400, "only_in_progress_pausable", request))
 
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -1113,7 +1113,7 @@ def complete_operation(op_id: int, completed_qty: float, request: Request, curre
     try:
         op = conn.execute(text("SELECT * FROM production_order_operations WHERE id = :id"), {"id": op_id}).fetchone()
         if not op:
-            raise HTTPException(**http_error(404, ("operation_not_found", request)))
+            raise HTTPException(**http_error(404, "operation_not_found", request))
 
         # Branch validation via production order
         from utils.permissions import validate_branch_access
@@ -1213,7 +1213,7 @@ def create_qc_check(
         if order.branch_id:
             validate_branch_access(current_user, order.branch_id)
         if order.status not in ("in_progress", "confirmed"):
-            raise HTTPException(**http_error(400, ("quality_check_only_active_orders", request)))
+            raise HTTPException(**http_error(400, "quality_check_only_active_orders", request))
 
         qc_id = conn.execute(text("""
             INSERT INTO mfg_qc_checks (
@@ -1239,7 +1239,7 @@ def create_qc_check(
     except Exception as e:
         conn.rollback()
         logger.error(f"Error creating QC check: {e}")
-        raise HTTPException(**http_error(500, ("quality_inspection_create_failed", request)))
+        raise HTTPException(**http_error(500, "quality_inspection_create_failed", request))
     finally:
         conn.close()
 

@@ -65,7 +65,7 @@ def create_job_opening(data: JobOpeningCreate, company_id: str = Depends(get_cur
 
 
 @router.put("/recruitment/openings/{opening_id}", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def update_job_opening(opening_id: int, data: JobOpeningUpdate, company_id: str = Depends(get_current_user_company)):
+def update_job_opening(request: Request, opening_id: int, data: JobOpeningUpdate, company_id: str = Depends(get_current_user_company)):
     """Update Job Opening."""
     with transactional(company_id) as conn:
         fields, params = [], {"id": opening_id}
@@ -75,11 +75,11 @@ def update_job_opening(opening_id: int, data: JobOpeningUpdate, company_id: str 
                 fields.append(f"{col} = :{f}"); params[f] = v
         if fields:
             conn.execute(text(f"UPDATE job_openings SET {', '.join(fields)} WHERE id = :id"), params)
-        return {"message": i18n_message(("updated_success", request))}
+        return {"message": i18n_message("updated_success", request)}
 
 
 @router.get("/recruitment/openings/{opening_id}/applications", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
-def list_opening_applications(opening_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def list_opening_applications(request: Request, opening_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """List Opening Applications."""
     with transactional(company_id) as conn:
         # Check branch access for this opening
@@ -87,7 +87,7 @@ def list_opening_applications(opening_id: int, current_user: UserResponse = Depe
             opening = conn.execute(text("SELECT branch_id FROM job_openings WHERE id=:id"), {"id": opening_id}).fetchone()
             if opening and opening.branch_id and current_user.allowed_branches:
                 if opening.branch_id not in current_user.allowed_branches:
-                    raise HTTPException(**http_error(403, ("unauthorized_branch_access", request)))
+                    raise HTTPException(**http_error(403, "unauthorized_branch_access", request))
         result = conn.execute(text("""
             SELECT ja.*, jo.title as opening_title
             FROM job_applications ja
@@ -127,12 +127,12 @@ def create_application(data: ApplicationCreate, company_id: str = Depends(get_cu
 
 
 @router.put("/recruitment/applications/{app_id}/stage", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def update_application_stage(app_id: int, data: ApplicationStageUpdate, company_id: str = Depends(get_current_user_company)):
+def update_application_stage(request: Request, app_id: int, data: ApplicationStageUpdate, company_id: str = Depends(get_current_user_company)):
     """Update Application Stage."""
     with transactional(company_id) as conn:
         conn.execute(text("UPDATE job_applications SET stage=:stage, updated_at=NOW() WHERE id=:id"),
                      {"stage": data.stage, "id": app_id})
-        return {"message": i18n_message(("recruitment_stage_updated", request))}
+        return {"message": i18n_message("recruitment_stage_updated", request)}
 
 
 # --- Leave Balance & Carryover (with branch access) ---

@@ -2,7 +2,7 @@
 Inventory Module - Notifications
 """
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import text
 import logging
 
@@ -16,7 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 @notifications_router.get("/notifications", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
-def get_notifications(
+def get_notifications(request: Request, 
     current_user: dict = Depends(get_current_user)
 ):
     """عرض إشعارات المستخدم"""
@@ -46,13 +46,13 @@ def get_notifications(
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Failed to fetch inventory notifications")
-        raise HTTPException(**http_error(500, ("notifications_load_failed", request)))
+        raise HTTPException(**http_error(500, "notifications_load_failed", request))
     finally:
         db.close()
 
 
 @notifications_router.get("/notifications/unread-count", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
-def get_unread_count(
+def get_unread_count(request: Request, 
     current_user: dict = Depends(get_current_user)
 ):
     """عدد الإشعارات غير المقروءة"""
@@ -70,13 +70,13 @@ def get_unread_count(
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
         logger.exception("Failed to fetch unread notification count")
-        raise HTTPException(**http_error(500, ("notifications_count_failed", request)))
+        raise HTTPException(**http_error(500, "notifications_count_failed", request))
     finally:
         db.close()
 
 
 @notifications_router.post("/notifications/{id}/read", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
-def mark_notification_read(
+def mark_notification_read(request: Request, 
     id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -90,13 +90,13 @@ def mark_notification_read(
             UPDATE notifications SET is_read = TRUE, read_at = NOW() WHERE id = :id
         """), {"id": id})
         db.commit()
-        return {"message": i18n_message(("notification_marked_read", request))}
+        return {"message": i18n_message("notification_marked_read", request)}
     finally:
         db.close()
 
 
 @notifications_router.post("/notifications/read-all", dependencies=[Depends(require_permission("notifications.view"))], response_model=Dict[str, Any])
-def mark_all_notifications_read(
+def mark_all_notifications_read(request: Request, 
     current_user: dict = Depends(get_current_user)
 ):
     """تحديد جميع الإشعارات كمقروءة"""
@@ -109,6 +109,6 @@ def mark_all_notifications_read(
             WHERE (user_id = :user OR user_id IS NULL) AND is_read = FALSE
         """), {"user": user_id})
         db.commit()
-        return {"message": i18n_message(("all_notifications_marked_read", request))}
+        return {"message": i18n_message("all_notifications_marked_read", request)}
     finally:
         db.close()

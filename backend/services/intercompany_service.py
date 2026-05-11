@@ -474,7 +474,7 @@ def process_transaction(txn_id: int, company_id: str, user_id: int) -> Dict[str,
         
         conn.commit()
         
-        return {"id": txn_id, "status": "processed", "message": i18n_message("intercompany_transaction_processed", request)}
+        return {"id": txn_id, "status": "processed", "message": i18n_message("intercompany_transaction_processed")}
 
 
 # ---------------------------------------------------------------------------

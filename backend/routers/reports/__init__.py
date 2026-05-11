@@ -135,7 +135,7 @@ async def period_stats(
     with get_tenant_db(tenant_id) as db:
         result = read_period_stats(db, tenant_id, company_id, period_id)
     if not result:
-        raise HTTPException(**http_error(404, ("period_not_found", request)))
+        raise HTTPException(**http_error(404, "period_not_found", request))
     return result
 
 # Backwards-compat re-exports for legacy callers (e.g. services.scheduler)

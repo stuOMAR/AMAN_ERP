@@ -60,7 +60,7 @@ def _line_tax_factor(invoice_tax_amount, original_rows) -> Decimal:
 def _reversal_taxable_amount(original_line, quantity) -> Decimal:
     original_qty = _dec(original_line.quantity)
     if original_qty <= 0:
-        raise HTTPException(**http_error(400, ("original_line_qty_invalid", request)))
+        raise HTTPException(**http_error(400, "original_line_qty_invalid"))
     gross = (_dec(original_line.quantity) * _dec(original_line.unit_price)).quantize(_D2, ROUND_HALF_UP)
     taxable = gross - _dec(getattr(original_line, "discount", 0))
     ratio = _dec(quantity) / original_qty
@@ -74,11 +74,11 @@ def _load_original_sales_invoice_for_return(db, invoice_id: int, customer_id: in
         WHERE id = :id
     """), {"id": invoice_id}).fetchone()
     if not invoice:
-        raise HTTPException(**http_error(404, ("original_invoice_not_found", request)))
+        raise HTTPException(**http_error(404, "original_invoice_not_found"))
     if invoice.invoice_type != "sales":
-        raise HTTPException(**http_error(400, "return_must_link_sales_invoice", request))
+        raise HTTPException(**http_error(400, "return_must_link_sales_invoice"))
     if int(invoice.party_id) != int(customer_id):
-        raise HTTPException(**http_error(400, "invoice_not_for_customer", request))
+        raise HTTPException(**http_error(400, "invoice_not_for_customer"))
 
     rows = db.execute(text("""
         SELECT product_id, quantity, unit_price, tax_rate, tax_rate_id, applied_taxes, discount
@@ -125,14 +125,14 @@ def _load_original_sales_invoice_for_return(db, invoice_id: int, customer_id: in
 def _original_line_for_return(original_lines: dict[int, list], product_id: int, unit_price):
     candidates = original_lines.get(int(product_id), [])
     if not candidates:
-        raise HTTPException(**http_error(400, "item_not_in_invoice", request))
+        raise HTTPException(**http_error(400, "item_not_in_invoice"))
     if len(candidates) == 1:
         return candidates[0]
     price = _dec(unit_price)
     matched = [row for row in candidates if _dec(row.unit_price) == price]
     if len(matched) == 1:
         return matched[0]
-    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity", request))
+    raise HTTPException(**http_error(400, "multi_line_tax_ambiguity"))
 
 
 def _table_columns(db, table_name: str) -> frozenset[str]:
@@ -184,7 +184,7 @@ def list_sales_returns(branch_id: Optional[int] = None, current_user: dict = Dep
     response_model=List[dict],
     dependencies=[Depends(require_permission("sales.view"))],
 )
-def list_unified_returns(
+def list_unified_returns(request: Request, 
     branch_id: Optional[int] = None,
     source: Optional[str] = None,
     limit: int = 200,
@@ -248,7 +248,7 @@ def list_unified_returns(
 
 
 @returns_router.get("/returns/{return_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
-def get_sales_return(return_id: int, current_user: dict = Depends(get_current_user)):
+def get_sales_return(request: Request, return_id: int, current_user: dict = Depends(get_current_user)):
     """جلب تفاصيل مرتجع مبيعات"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -261,7 +261,7 @@ def get_sales_return(return_id: int, current_user: dict = Depends(get_current_us
         """), {"id": return_id}).fetchone()
 
         if not header:
-            raise HTTPException(**http_error(404, ("return_not_found", request)))
+            raise HTTPException(**http_error(404, "return_not_found", request))
 
         # Enforce branch access for single resource
         if header.branch_id:
@@ -405,7 +405,7 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         ret_rate = _dec(data.exchange_rate or 1)
         if ret_currency != base_currency:
             if ret_rate <= 0:
-                raise HTTPException(**http_error(400, ("exchange_rate_must_be_positive", request)))
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
             latest_rate_row = db.execute(text("""
                 SELECT rate_date
                 FROM exchange_rates

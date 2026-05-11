@@ -59,7 +59,7 @@ def list_quotations(branch_id: Optional[int] = None, current_user: dict = Depend
 
 
 @quotations_router.get("/quotations/{id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
-def get_quotation(id: int, current_user: dict = Depends(get_current_user)):
+def get_quotation(request: Request, id: int, current_user: dict = Depends(get_current_user)):
     """Get quotation details"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -73,7 +73,7 @@ def get_quotation(id: int, current_user: dict = Depends(get_current_user)):
         """), {"id": id}).fetchone()
 
         if not quotation:
-            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
+            raise HTTPException(**http_error(404, "quotation_not_found", request))
 
         # Enforce branch access for single resource
         from utils.permissions import validate_branch_access
@@ -116,7 +116,7 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             WHERE id = :id AND (party_type = 'customer' OR is_customer = TRUE)
         """), {"id": quotation.customer_id}).fetchone()
         if not customer:
-            raise HTTPException(**http_error(404, ("customer_not_valid", request)))
+            raise HTTPException(**http_error(404, "customer_not_valid", request))
 
         # Generate SQ Number (SQ-YYYY-XXXX)
         year = datetime.now().year
@@ -146,7 +146,7 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
                 WHERE id = :id
             """), {"id": item.product_id}).fetchone()
             if not product:
-                raise HTTPException(**http_error(400, ("product_not_in_inventory", request)))
+                raise HTTPException(**http_error(400, "product_not_in_inventory", request))
             if product.is_active is False:
                 raise HTTPException(status_code=400, detail=i18n_message("product_inactive_cannot_add_quotation", request))
 
@@ -155,7 +155,7 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             line_subtotal = _dec(item.quantity) * _dec(item.unit_price)
             taxable = line_subtotal - _dec(item.discount)
             if taxable < 0:
-                raise HTTPException(**http_error(400, ("discount_exceeds_line_value", request)))
+                raise HTTPException(**http_error(400, "discount_exceeds_line_value", request))
             line_tax = taxable * (tax_info["tax_rate"] / Decimal('100'))
             line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
 
@@ -249,11 +249,11 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             WHERE q.id = :id
         """), {"id": id}).fetchone()
         if not quotation:
-            raise HTTPException(**http_error(404, ("quotation_not_found", request)))
+            raise HTTPException(**http_error(404, "quotation_not_found", request))
         if quotation.status in ('converted', 'cancelled', 'expired'):
             raise HTTPException(status_code=400, detail=i18n_message("cannot_send_quotation_status", request))
         if not quotation.customer_email:
-            raise HTTPException(**http_error(400, ("no_customer_email", request)))
+            raise HTTPException(**http_error(400, "no_customer_email", request))
 
         items = db.execute(text("""
             SELECT l.*, p.product_name, p.product_code
@@ -263,7 +263,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
             ORDER BY l.id
         """), {"id": id}).fetchall()
         if not items:
-            raise HTTPException(**http_error(400, ("cannot_send_empty_quotation", request)))
+            raise HTTPException(**http_error(400, "cannot_send_empty_quotation", request))
 
         rows_html = "".join(
             "<tr>"

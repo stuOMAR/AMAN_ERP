@@ -167,7 +167,7 @@ async def start_operation(
             {"wid": body.work_order_id},
         ).fetchone()
         if not wo:
-            raise HTTPException(**http_error(404, ("work_order_not_found", request)))
+            raise HTTPException(**http_error(404, "work_order_not_found", request))
 
         # Branch validation
         from utils.permissions import validate_branch_access
@@ -180,10 +180,10 @@ async def start_operation(
             {"oid": body.routing_operation_id},
         ).fetchone()
         if not op:
-            raise HTTPException(**http_error(404, ("operation_not_found", request)))
+            raise HTTPException(**http_error(404, "operation_not_found", request))
 
         if wo.route_id != op.route_id:
-            raise HTTPException(**http_error(400, ("operation_not_in_route", request)))
+            raise HTTPException(**http_error(400, "operation_not_in_route", request))
 
         # 3) Sequence enforcement
         if op.sequence > 1 and not body.supervisor_override:
@@ -226,7 +226,7 @@ async def start_operation(
             {"wid": body.work_order_id, "oid": body.routing_operation_id},
         ).fetchone()
         if existing:
-            raise HTTPException(**http_error(400, ("operation_already_in_progress", request)))
+            raise HTTPException(**http_error(400, "operation_already_in_progress", request))
 
         # 5) Insert log
         now = datetime.now(timezone.utc)
@@ -426,7 +426,7 @@ async def pause_operation(
     "/work-order/{work_order_id}",
     dependencies=[Depends(require_permission("manufacturing.shopfloor_view"))],
 )
-def get_work_order_progress(
+def get_work_order_progress(request: Request, 
     work_order_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -444,7 +444,7 @@ def get_work_order_progress(
             {"wid": work_order_id},
         ).fetchone()
         if not wo:
-            raise HTTPException(**http_error(404, ("work_order_not_found", request)))
+            raise HTTPException(**http_error(404, "work_order_not_found", request))
 
         # Branch validation
         from utils.permissions import validate_branch_access

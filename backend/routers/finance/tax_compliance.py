@@ -375,7 +375,7 @@ def update_tax_classification(
             params["active"] = data.is_active
 
         if not updates:
-            raise HTTPException(**http_error(400, ("pos_no_fields", request)))
+            raise HTTPException(**http_error(400, "pos_no_fields", request))
 
         result = db.execute(text( # noqa: sql-lint
                     f"""
@@ -995,7 +995,7 @@ def saudi_vat_return_report(
 
 
 @router.get("/reports/sy-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
-def syrian_income_tax_report(
+def syrian_income_tax_report(request: Request, 
     fiscal_year: Optional[int] = None,
     year: Optional[int] = None,
     branch_id: Optional[int] = None,
@@ -1271,7 +1271,7 @@ def turkey_kdv_return_report(
 
 
 @router.get("/reports/eg-vat", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
-def egypt_vat_return_report(
+def egypt_vat_return_report(request: Request, 
     period_start: Optional[date] = None,
     period_end: Optional[date] = None,
     year: Optional[int] = None,
@@ -1367,7 +1367,7 @@ def egypt_vat_return_report(
 
 
 @router.get("/reports/generic-income", dependencies=[Depends(require_permission(["taxes.view", "reports.view"]))], response_model=Dict[str, Any])
-def generic_income_tax_report(
+def generic_income_tax_report(request: Request, 
     fiscal_year: Optional[int] = None,
     year: Optional[int] = None,
     country_code: str = "SA",

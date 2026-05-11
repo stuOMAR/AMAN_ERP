@@ -190,7 +190,7 @@ def require_permission(permission: Union[str, List[str]]):
             logger.warning(f"🚫 Permission denied: User {username} tried to access {permission}")
             # PERM-004: Log denied access
             _log_permission_denied(current_user, permission)
-            raise HTTPException(**http_error(403, "permission_denied", request))
+            raise HTTPException(**http_error(403, "permission_denied"))
         
         return current_user
     
@@ -229,7 +229,7 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
         required_perms = [permission] if isinstance(permission, str) else permission
         has_permission = any(check_permission(user_perms, perm) for perm in required_perms)
         if not has_permission:
-            raise HTTPException(**http_error(403, "permission_denied", request))
+            raise HTTPException(**http_error(403, "permission_denied"))
 
         # Re-validate from DB for sensitive ops
         if company_id and user_id:
@@ -243,7 +243,7 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
                 ).fetchone()
                 if row and not row.is_active:
                     logger.warning(f"🔒 Sensitive op blocked: user {username} is deactivated (DB check)")
-                    raise HTTPException(**http_error(403, "account_disabled_contact_admin", request))
+                    raise HTTPException(**http_error(403, "account_disabled_contact_admin"))
             except HTTPException:
                 raise
             except Exception as e:
@@ -292,7 +292,7 @@ def require_module(module_key: str):
 
         if module_key not in enabled:
             logger.warning(f"🚫 Module disabled: User {username} tried to access module '{module_key}'")
-            raise HTTPException(**http_error(403, "feature_not_enabled", request))
+            raise HTTPException(**http_error(403, "feature_not_enabled"))
 
         return current_user
 

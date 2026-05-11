@@ -34,7 +34,7 @@ router = APIRouter()
 from .core import _D2
 
 @router.post("/attendance/check-in", response_model=AttendanceResponse, dependencies=[Depends(require_permission(["hr.attendance.view", "hr.attendance.manage"]))])
-def check_in(current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def check_in(request: Request, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Check In."""
     conn = get_db_connection(company_id)
     trans = conn.begin()
@@ -46,7 +46,7 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         ).fetchone()
         
         if not emp_res:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         
         employee_id = emp_res[0]
         today = date.today()
@@ -110,7 +110,7 @@ def check_in(current_user: UserResponse = Depends(get_current_user), company_id:
         conn.close()
 
 @router.post("/attendance/check-out", response_model=AttendanceResponse, dependencies=[Depends(require_permission(["hr.attendance.view", "hr.attendance.manage"]))])
-def check_out(
+def check_out(request: Request, 
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
@@ -125,7 +125,7 @@ def check_out(
         ).fetchone()
         
         if not emp_res:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         
         employee_id = emp_res[0]
         today = date.today()
@@ -172,7 +172,7 @@ def check_out(
         conn.close()
 
 @router.get("/attendance/status", dependencies=[Depends(require_permission("hr.attendance.view"))], response_model=Dict[str, Any])
-def get_attendance_status(
+def get_attendance_status(request: Request, 
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):

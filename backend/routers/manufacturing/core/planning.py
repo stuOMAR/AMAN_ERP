@@ -35,13 +35,13 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 @router.get("/mrp/calculate/{order_id}", response_model=MRPPlanResponse, dependencies=[Depends(require_permission("manufacturing.manage"))])
-def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(get_current_user)):
+def calculate_mrp_for_order(request: Request, order_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Calculate MRP For Order."""
     conn = get_db_connection(current_user.company_id)
     try:
         order = conn.execute(text("SELECT * FROM production_orders WHERE id = :id"), {"id": order_id}).fetchone()
         if not order:
-            raise HTTPException(**http_error(404, ("order_not_found", request)))
+            raise HTTPException(**http_error(404, "order_not_found", request))
         
         # Branch validation
         from utils.permissions import validate_branch_access
@@ -49,7 +49,7 @@ def calculate_mrp_for_order(order_id: int, current_user: UserResponse = Depends(
             validate_branch_access(current_user, order.branch_id)
         
         if not order.bom_id:
-            raise HTTPException(**http_error(400, ("order_has_no_bom", request)))
+            raise HTTPException(**http_error(400, "order_has_no_bom", request))
 
         # Fetch BOM components
         components = conn.execute(text("""
@@ -279,7 +279,7 @@ def update_capacity_plan(plan_id: int, plan: dict, request: Request, current_use
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="update_capacity_plan", resource_type="capacity_plans",
                      resource_id=str(plan_id), request=request)
-        return {"message": i18n_message(("capacity_plan_updated", request))}
+        return {"message": i18n_message("capacity_plan_updated", request)}
     except Exception as e:
         conn.rollback()
         logger.error(f"Error updating capacity plan {plan_id}: {e}")

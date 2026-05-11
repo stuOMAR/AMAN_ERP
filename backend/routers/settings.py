@@ -238,7 +238,7 @@ PERMISSION_MAPPING = {
 }
 
 @router.get("/", response_model=Dict[str, Any], dependencies=[Depends(require_sensitive_permission("settings.view"))])
-def get_company_settings(
+def get_company_settings(request: Request, 
     current_user: UserResponse = Depends(get_current_user)
 ):
     """
@@ -247,7 +247,7 @@ def get_company_settings(
     """
     company_id = current_user.company_id
     if not company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
         
     db = get_db_connection(company_id)
     
@@ -319,7 +319,7 @@ def update_settings_bulk(
     """
     company_id = current_user.company_id
     if not company_id:
-        raise HTTPException(**http_error(400, ("company_id_missing", request)))
+        raise HTTPException(**http_error(400, "company_id_missing", request))
         
     # Authorization Check
     is_admin = current_user.role in ["system_admin", "company_admin", "admin", "superuser"]
@@ -448,7 +448,7 @@ def test_email_connection(
     password = settings.get("smtp_pass")
 
     if not host or not user or not password:
-        raise HTTPException(**http_error(400, ("smtp_config_missing", request)))
+        raise HTTPException(**http_error(400, "smtp_config_missing", request))
         
     try:
         # Real connection attempt (with timeout)
@@ -459,7 +459,7 @@ def test_email_connection(
         
         return {"success": True, "message": i18n_message("smtp_connection_success", request)}
     except Exception:
-        raise HTTPException(**http_error(400, ("smtp_connection_failed", request)))
+        raise HTTPException(**http_error(400, "smtp_connection_failed", request))
 
 @router.post("/generate-csid", status_code=status.HTTP_200_OK, dependencies=[Depends(require_sensitive_permission("settings.manage", critical=True))], response_model=Dict[str, Any])
 def generate_csid(
@@ -474,12 +474,12 @@ def generate_csid(
     common_name = settings.get("zatca_csr_common_name")
     
     if not otp or not common_name:
-         raise HTTPException(**http_error(400, ("otp_missing", request)))
+         raise HTTPException(**http_error(400, "otp_missing", request))
          
     # Simulation Logic
     import random
     if otp == "000000":
-         raise HTTPException(**http_error(400, ("otp_invalid", request)))
+         raise HTTPException(**http_error(400, "otp_invalid", request))
          
     return {
         "success": True, 

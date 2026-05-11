@@ -56,7 +56,7 @@ def list_articles(
 
 
 @router.get("/knowledge-base/{article_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
-def get_article(article_id: int, current_user=Depends(get_current_user)):
+def get_article(request: Request, article_id: int, current_user=Depends(get_current_user)):
     """Get Article."""
     db = get_db_connection(current_user.company_id)
     try:
@@ -112,7 +112,7 @@ def update_article(article_id: int, data: ArticleUpdate, request: Request, curre
         db.execute(text(f"UPDATE crm_knowledge_base SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_article", resource_type="knowledge_article", resource_id=str(article_id), details={"fields_updated": list(updates.keys())}, request=request)
-        return {"message": i18n_message(("article_updated", request))}
+        return {"message": i18n_message("article_updated", request)}
     finally:
         db.close()
 
@@ -125,7 +125,7 @@ def delete_article(article_id: int, request: Request, current_user=Depends(get_c
         db.execute(text("DELETE FROM crm_knowledge_base WHERE id = :id"), {"id": article_id})
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_delete_article", resource_type="knowledge_article", resource_id=str(article_id), details={}, request=request)
-        return {"message": i18n_message(("article_deleted", request))}
+        return {"message": i18n_message("article_deleted", request)}
     finally:
         db.close()
 

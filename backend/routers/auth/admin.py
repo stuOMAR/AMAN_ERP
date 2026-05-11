@@ -75,7 +75,7 @@ def admin_2fa_setup(
 
 
 @router.post("/admin/2fa/verify", tags=["Authentication"], response_model=Dict[str, Any])
-def admin_2fa_verify(
+def admin_2fa_verify(request: Request, 
     body: AdminTwoFAVerify,
     current_user=Depends(get_current_user),
 ):

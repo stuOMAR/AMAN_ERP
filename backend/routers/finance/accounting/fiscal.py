@@ -589,7 +589,7 @@ def toggle_fiscal_period(
         try:
             period = db.execute(text("SELECT * FROM fiscal_periods WHERE id = :id"), {"id": period_id}).fetchone()
             if not period:
-                raise HTTPException(**http_error(404, ("accounting_period_not_found", request)))
+                raise HTTPException(**http_error(404, "accounting_period_not_found", request))
     
             # Check if the parent fiscal year is closed
             if period.fiscal_year:
@@ -745,7 +745,7 @@ def generate_closing_entries(
                     "SELECT id FROM accounts WHERE account_number IN ('RET', '3100', '32') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
                 )).fetchone()
                 if not ret:
-                    raise HTTPException(**http_error(400, ("retained_earnings_not_found", request)))
+                    raise HTTPException(**http_error(400, "retained_earnings_not_found", request))
                 retained_earnings_id = ret.id
     
             revenues = db.execute(text(  # noqa: sql-lint

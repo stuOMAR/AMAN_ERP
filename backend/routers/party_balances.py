@@ -3,7 +3,7 @@ Party Balance API endpoints.
 Provides per-branch, per-currency balance views for customers and suppliers.
 Uses party_sites and party_site_balances tables.
 """
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from typing import Optional
 from utils.tx import transactional
@@ -14,7 +14,7 @@ router = APIRouter(prefix="/party-balances", tags=["Party Balances"])
 
 
 @router.get("/{party_id}", dependencies=[Depends(require_permission(["sales.view", "purchases.view"]))])
-def get_party_balance_detail(
+def get_party_balance_detail(request: Request, 
     party_id: int,
     branch_id: Optional[int] = Query(None),
     current_user: dict = Depends(get_current_user)

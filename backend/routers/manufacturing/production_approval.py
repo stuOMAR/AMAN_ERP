@@ -38,7 +38,7 @@ async def approve_production_order(
     )
     row = result.fetchone()
     if not row:
-        raise HTTPException(**http_error(404, ("production_order_not_pending", request)))
+        raise HTTPException(**http_error(404, "production_order_not_pending", request))
 
     # Audit
     try:

@@ -76,7 +76,7 @@ def create_work_center(wc: WorkCenterCreate, request: Request, current_user: Use
     except Exception as e:
         conn.rollback()
         logger.error(f"Error creating work center: {e}")
-        raise HTTPException(**http_error(400, ("work_center_create_failed", request)))
+        raise HTTPException(**http_error(400, "work_center_create_failed", request))
     finally:
         conn.close()
 
@@ -97,7 +97,7 @@ def update_work_center(wc_id: int, wc: WorkCenterCreate, request: Request, curre
             "ccid": wc.cost_center_id, "accid": wc.default_expense_account_id, "id": wc_id
         }).fetchone()
         if not updated:
-            raise HTTPException(**http_error(404, ("work_center_not_found", request)))
+            raise HTTPException(**http_error(404, "work_center_not_found", request))
         conn.commit()
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="update_work_center", resource_type="work_centers",
@@ -109,7 +109,7 @@ def update_work_center(wc_id: int, wc: WorkCenterCreate, request: Request, curre
     except Exception as e:
         conn.rollback()
         logger.error(f"Error updating work center {wc_id}: {e}")
-        raise HTTPException(**http_error(400, ("work_center_update_failed", request)))
+        raise HTTPException(**http_error(400, "work_center_update_failed", request))
     finally:
         conn.close()
 
@@ -128,22 +128,22 @@ def delete_work_center(wc_id: int, request: Request, current_user: UserResponse 
         """), {"id": wc_id}).scalar()
         if in_use > 0:
             logger.warning(f"Cannot delete work center {wc_id}: used in {in_use} operation(s)")
-            raise HTTPException(**http_error(400, ("work_center_has_operations", request)))
+            raise HTTPException(**http_error(400, "work_center_has_operations", request))
         
         result = conn.execute(text("UPDATE work_centers SET is_deleted = true, deleted_at = NOW(), updated_at = NOW() WHERE id = :id AND is_deleted = false"), {"id": wc_id})
         conn.commit()
         if result.rowcount == 0:
-            raise HTTPException(**http_error(404, ("work_center_not_found", request)))
+            raise HTTPException(**http_error(404, "work_center_not_found", request))
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="delete_work_center", resource_type="work_centers",
                      resource_id=str(wc_id), request=request)
-        return {"message": i18n_message(("work_center_deleted_success", request))}
+        return {"message": i18n_message("work_center_deleted_success", request)}
     except HTTPException:
         raise
     except Exception as e:
         conn.rollback()
         logger.error(f"Error deleting work center {wc_id}: {e}")
-        raise HTTPException(**http_error(400, ("work_center_delete_failed", request)))
+        raise HTTPException(**http_error(400, "work_center_delete_failed", request))
     finally:
         conn.close()
 

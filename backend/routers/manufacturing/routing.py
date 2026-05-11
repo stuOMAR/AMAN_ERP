@@ -196,7 +196,7 @@ def get_routings_for_product(
     "/{routing_id}",
     dependencies=[Depends(require_permission("manufacturing.routing_view"))],
 )
-def get_routing(
+def get_routing(request: Request, 
     routing_id: int,
     current_user: dict = Depends(get_current_user),
 ):
@@ -205,7 +205,7 @@ def get_routing(
     try:
         data = _fetch_routing(db, routing_id)
         if not data:
-            raise HTTPException(**http_error(404, ("routing_not_found", request)))
+            raise HTTPException(**http_error(404, "routing_not_found", request))
         return data
     finally:
         db.close()
@@ -230,7 +230,7 @@ def update_routing(
             {"rid": routing_id},
         ).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("routing_not_found", request)))
+            raise HTTPException(**http_error(404, "routing_not_found", request))
 
         db.execute(
             text("""
@@ -298,7 +298,7 @@ def update_routing(
     "/{routing_id}/estimate",
     dependencies=[Depends(require_permission("manufacturing.routing_view"))],
 )
-def get_routing_estimate(
+def get_routing_estimate(request: Request, 
     routing_id: int,
     quantity: float = 1.0,
     current_user: dict = Depends(get_current_user),
@@ -316,7 +316,7 @@ def get_routing_estimate(
             {"rid": routing_id},
         ).fetchone()
         if not route:
-            raise HTTPException(**http_error(404, ("routing_not_found", request)))
+            raise HTTPException(**http_error(404, "routing_not_found", request))
 
         ops = db.execute(
             text("""

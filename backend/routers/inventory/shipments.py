@@ -36,7 +36,7 @@ def create_shipment(
     db = get_db_connection(company_id)
     try:
         if shipment.source_warehouse_id == shipment.destination_warehouse_id:
-            raise HTTPException(**http_error(400, ("same_warehouse_shipment", request)))
+            raise HTTPException(**http_error(400, "same_warehouse_shipment", request))
 
         # Validate warehouses
         src = db.execute(text("SELECT warehouse_name, branch_id FROM warehouses WHERE id = :id"),
@@ -51,7 +51,7 @@ def create_shipment(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if (src.branch_id and src.branch_id not in allowed) or (dst.branch_id and dst.branch_id not in allowed):
-                raise HTTPException(**http_error(403, ("cross_branch_shipment_create_denied", request)))
+                raise HTTPException(**http_error(403, "cross_branch_shipment_create_denied", request))
 
         import random
         shipment_ref = f"SHP-{datetime.now().year}-{random.randint(10000, 99999)}"
@@ -222,7 +222,7 @@ def list_incoming_shipments(
 
 
 @shipments_router.get("/shipments/{id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
-def get_shipment_details(
+def get_shipment_details(request: Request, 
     id: int,
     current_user: dict = Depends(get_current_user)
 ):
@@ -249,7 +249,7 @@ def get_shipment_details(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if (src_branch and src_branch not in allowed) and (dst_branch and dst_branch not in allowed):
-                raise HTTPException(**http_error(403, ("shipment_not_viewable", request)))
+                raise HTTPException(**http_error(403, "shipment_not_viewable", request))
 
         items = db.execute(text("""
             SELECT i.*, p.product_name, p.product_code
@@ -301,15 +301,15 @@ def dispatch_shipment(
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.source_warehouse_id}).scalar()
             if src_branch and src_branch not in allowed:
-                raise HTTPException(**http_error(403, ("cross_branch_shipment_dispatch_denied", request)))
+                raise HTTPException(**http_error(403, "cross_branch_shipment_dispatch_denied", request))
 
         # T053: Validate account mappings
         inv_acc = get_mapped_account_id(db, "acc_map_inventory")
         intransit_acc = get_mapped_account_id(db, "acc_map_in_transit")
         if not inv_acc:
-            raise HTTPException(**http_error(400, ("inventory_account_not_configured", request)))
+            raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
         if not intransit_acc:
-            raise HTTPException(**http_error(400, ("in_transit_account_not_configured", request)))
+            raise HTTPException(**http_error(400, "in_transit_account_not_configured", request))
 
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         check_fiscal_period_open(db, today_str)
@@ -461,9 +461,9 @@ def confirm_shipment(
 
         # T055: Idempotent — reject already received/cancelled
         if shipment.status == 'received':
-            raise HTTPException(**http_error(400, ("shipment_already_received", request)))
+            raise HTTPException(**http_error(400, "shipment_already_received", request))
         if shipment.status == 'cancelled':
-            raise HTTPException(**http_error(400, ("cannot_receive_cancelled", request)))
+            raise HTTPException(**http_error(400, "cannot_receive_cancelled", request))
         if shipment.status != 'dispatched':
             raise HTTPException(status_code=400, detail=i18n_message("cannot_receive_shipment_status", request))
 
@@ -472,13 +472,13 @@ def confirm_shipment(
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if dst_branch and dst_branch not in allowed:
-                raise HTTPException(**http_error(403, ("cross_branch_receive_denied", request)))
+                raise HTTPException(**http_error(403, "cross_branch_receive_denied", request))
 
         # T056: Validate account mappings
         inv_acc = get_mapped_account_id(db, "acc_map_inventory")
         intransit_acc = get_mapped_account_id(db, "acc_map_in_transit")
         if not inv_acc or not intransit_acc:
-            raise HTTPException(**http_error(400, ("inventory_transit_accounts_not_configured", request)))
+            raise HTTPException(**http_error(400, "inventory_transit_accounts_not_configured", request))
 
         today_str = datetime.utcnow().strftime("%Y-%m-%d")
         check_fiscal_period_open(db, today_str)
@@ -529,7 +529,7 @@ def confirm_shipment(
                 "wid": shipment.source_warehouse_id,
             }).fetchone()
             if not dispatch_cost_row or Decimal(str(dispatch_cost_row.tx_count or 0)) <= 0:
-                raise HTTPException(**http_error(400, ("no_valid_stock_movement", request)))
+                raise HTTPException(**http_error(400, "no_valid_stock_movement", request))
             source_cost = Decimal(str(dispatch_cost_row.unit_cost or 0))
             item_value = Decimal(str(dispatch_cost_row.total_cost or 0))
             total_transit_value += item_value
@@ -713,13 +713,13 @@ def cancel_shipment(
             raise HTTPException(**http_error(404, "shipment_not_found"))
 
         if shipment.status != 'pending':
-            raise HTTPException(**http_error(400, ("shipment_cannot_cancel", request)))
+            raise HTTPException(**http_error(400, "shipment_cannot_cancel", request))
 
         # INV-S06: Branch access check
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             if shipment.src_branch_id and shipment.src_branch_id not in allowed:
-                raise HTTPException(**http_error(403, ("cross_branch_cancel_denied", request)))
+                raise HTTPException(**http_error(403, "cross_branch_cancel_denied", request))
 
         db.execute(text("""
             UPDATE stock_shipments SET status = 'cancelled' WHERE id = :id

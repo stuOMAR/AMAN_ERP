@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -72,7 +72,7 @@ def list_assets(
         return [dict(row._mapping) for row in assets]
 
 @router.post("/", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def create_asset(asset: AssetCreate, current_user: dict = Depends(get_current_user)):
+def create_asset(request: Request, asset: AssetCreate, current_user: dict = Depends(get_current_user)):
     """Create Asset."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
@@ -240,7 +240,7 @@ def create_asset(asset: AssetCreate, current_user: dict = Depends(get_current_us
 # ===================== B6: IFRS 16 Lease Contracts =====================
 
 @router.get("/{asset_id}", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
-def get_asset(asset_id: int, current_user: dict = Depends(get_current_user)):
+def get_asset(request: Request, asset_id: int, current_user: dict = Depends(get_current_user)):
     """Get Asset."""
     with transactional(current_user.company_id) as conn:
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
@@ -259,7 +259,7 @@ def get_asset(asset_id: int, current_user: dict = Depends(get_current_user)):
         }
 
 @router.put("/{asset_id}", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def update_asset(asset_id: int, data: AssetUpdate, current_user: dict = Depends(get_current_user)):
+def update_asset(request: Request, asset_id: int, data: AssetUpdate, current_user: dict = Depends(get_current_user)):
     """Update an existing asset (only if not disposed)"""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
@@ -284,7 +284,7 @@ def update_asset(asset_id: int, data: AssetUpdate, current_user: dict = Depends(
             conn.execute(text(f"UPDATE assets SET {', '.join(updates)} WHERE id = :id"), params)
             trans.commit()
         
-        return {"message": i18n_message(("asset_updated_success_msg", request))}
+        return {"message": i18n_message("asset_updated_success_msg", request)}
     except HTTPException:
         trans.rollback()
         raise
@@ -296,7 +296,7 @@ def update_asset(asset_id: int, data: AssetUpdate, current_user: dict = Depends(
         conn.close()
 
 @router.post("/{asset_id}/dispose", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
-def dispose_asset(asset_id: int, disposal: AssetDisposal, current_user: dict = Depends(get_current_user)):
+def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, current_user: dict = Depends(get_current_user)):
     """استبعاد أصل ثابت مع معثرات محاسبية (إهلاك متراكم، ربح/خسارة)"""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()

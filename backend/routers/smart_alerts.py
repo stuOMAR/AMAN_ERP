@@ -43,7 +43,7 @@ def list_alert_rules(current_user=Depends(get_current_user)):
 
 
 @router.post("/rules", status_code=201, dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
-def create_alert_rule(data: dict, current_user=Depends(get_current_user)):
+def create_alert_rule(request: Request, data: dict, current_user=Depends(get_current_user)):
     """Create Alert Rule."""
     _validate_rule(data)
     db = get_db_connection(current_user.company_id)
@@ -65,19 +65,19 @@ def create_alert_rule(data: dict, current_user=Depends(get_current_user)):
     except Exception:
         db.rollback()
         logger.exception("create_alert_rule error")
-        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
+        raise HTTPException(**http_error(500, "smart_alert_internal_error", request))
     finally:
         db.close()
 
 
 @router.put("/rules/{rule_id}", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
-def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current_user)):
+def update_alert_rule(request: Request, rule_id: int, data: dict, current_user=Depends(get_current_user)):
     """Update Alert Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("smart_alert_rule_not_found", request)))
+            raise HTTPException(**http_error(404, "smart_alert_rule_not_found", request))
         db.execute(text("""
             UPDATE alert_rules SET
                 name = COALESCE(:name, name),
@@ -104,19 +104,19 @@ def update_alert_rule(rule_id: int, data: dict, current_user=Depends(get_current
     except Exception:
         db.rollback()
         logger.exception("update_alert_rule error")
-        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
+        raise HTTPException(**http_error(500, "smart_alert_internal_error", request))
     finally:
         db.close()
 
 
 @router.delete("/rules/{rule_id}", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
-def delete_alert_rule(rule_id: int, current_user=Depends(get_current_user)):
+def delete_alert_rule(request: Request, rule_id: int, current_user=Depends(get_current_user)):
     """Delete Alert Rule."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alert_rules WHERE id=:id"), {"id": rule_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("smart_alert_rule_not_found", request)))
+            raise HTTPException(**http_error(404, "smart_alert_rule_not_found", request))
         db.execute(text("DELETE FROM alert_rules WHERE id=:id"), {"id": rule_id})
         db.commit()
         return {"success": True}
@@ -124,7 +124,7 @@ def delete_alert_rule(rule_id: int, current_user=Depends(get_current_user)):
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
+        raise HTTPException(**http_error(500, "smart_alert_internal_error", request))
     finally:
         db.close()
 
@@ -157,13 +157,13 @@ def list_alerts(
 
 
 @router.post("/{alert_id}/resolve", dependencies=[Depends(require_permission("settings.edit"))], response_model=Dict[str, Any])
-def resolve_alert(alert_id: int, current_user=Depends(get_current_user)):
+def resolve_alert(request: Request, alert_id: int, current_user=Depends(get_current_user)):
     """Resolve Alert."""
     db = get_db_connection(current_user.company_id)
     try:
         existing = db.execute(text("SELECT id FROM alerts WHERE id=:id"), {"id": alert_id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, ("smart_alert_not_found", request)))
+            raise HTTPException(**http_error(404, "smart_alert_not_found", request))
         db.execute(text("""
             UPDATE alerts SET status='resolved', resolved_at=CURRENT_TIMESTAMP WHERE id=:id
         """), {"id": alert_id})
@@ -177,7 +177,7 @@ def resolve_alert(alert_id: int, current_user=Depends(get_current_user)):
         raise
     except Exception:
         db.rollback()
-        raise HTTPException(**http_error(500, ("smart_alert_internal_error", request)))
+        raise HTTPException(**http_error(500, "smart_alert_internal_error", request))
     finally:
         db.close()
 
@@ -187,7 +187,7 @@ _VALID_RULE_TYPES = {"low_stock", "overdue_receivable", "budget_overspend", "cus
 
 def _validate_rule(data: dict):
     if not data.get("name"):
-        raise HTTPException(**http_error(400, ("smart_alert_rule_name_required", request)))
+        raise HTTPException(**http_error(400, "smart_alert_rule_name_required"))
     if data.get("rule_type") not in _VALID_RULE_TYPES:
         raise HTTPException(
             status_code=400,

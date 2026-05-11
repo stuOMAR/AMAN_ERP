@@ -111,7 +111,7 @@ async def get_custom_report(report_id: int, current_user: dict = Depends(get_cur
     try:
         report = db.execute(text("SELECT * FROM custom_reports WHERE id = :id"), {"id": report_id}).fetchone()
         if not report:
-            raise HTTPException(**http_error(404, ("report_not_found", request)))
+            raise HTTPException(**http_error(404, "report_not_found", request))
             
         config_dict = report.config if isinstance(report.config, dict) else json.loads(report.config)
         config = CustomReportConfig(**config_dict)

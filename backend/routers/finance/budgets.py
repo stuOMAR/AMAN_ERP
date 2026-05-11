@@ -113,7 +113,7 @@ def delete_budget(budget_id: int, request: Request, current_user: UserResponse =
                          action="budgets.delete", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": i18n_message(("budget_deleted", request))}
+            return {"message": i18n_message("budget_deleted", request)}
         except HTTPException:
             raise
         except Exception:
@@ -163,7 +163,7 @@ def set_budget_items(
                          action="budgets.items.update", resource_type="budget",
                          resource_id=str(budget_id), details={"items_count": len(items)},
                          request=request)
-            return {"message": i18n_message(("budget_items_updated", request))}
+            return {"message": i18n_message("budget_items_updated", request)}
         except Exception:
             pass
             logger.exception("Internal error")
@@ -362,7 +362,7 @@ def activate_budget(budget_id: int, request: Request, current_user: UserResponse
                          action="budgets.activate", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": i18n_message(("budget_activated", request))}
+            return {"message": i18n_message("budget_activated", request)}
         except HTTPException:
             raise
         except Exception:
@@ -388,7 +388,7 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
                          action="budgets.close", resource_type="budget",
                          resource_id=str(budget_id), details={},
                          request=request)
-            return {"message": i18n_message(("budget_closed", request))}
+            return {"message": i18n_message("budget_closed", request)}
         except HTTPException:
             raise
         except Exception:

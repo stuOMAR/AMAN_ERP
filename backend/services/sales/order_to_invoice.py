@@ -50,7 +50,7 @@ def convert_order_to_invoice(
     ).fetchone()
 
     if not order:
-        raise HTTPException(**http_error(404, ("sales_order_not_found", request)))
+        raise HTTPException(**http_error(404, "sales_order_not_found"))
 
     order = dict(order._mapping)
 
@@ -72,13 +72,13 @@ def convert_order_to_invoice(
     if order.get("state") != "confirmed" and order.get("status") != "confirmed":
         raise HTTPException(status_code=409, detail={
             "code": "sales_order.invalid_state",
-            "message": i18n_message("order_must_be_confirmed", request),
+            "message": i18n_message("order_must_be_confirmed"),
         })
 
     if order.get("converted_to_invoice_id"):
         raise HTTPException(status_code=409, detail={
             "code": "sales.order_already_converted",
-            "message": i18n_message("order_already_converted", request),
+            "message": i18n_message("order_already_converted"),
         })
 
     # 4. Snapshot lines
@@ -92,7 +92,7 @@ def convert_order_to_invoice(
     ).fetchall()
 
     if not lines:
-        raise HTTPException(**http_error(422, ("order_has_no_lines", request)))
+        raise HTTPException(**http_error(422, "order_has_no_lines"))
 
     # 5. Insert invoice in draft
     inv_result = db.execute(

@@ -62,7 +62,7 @@ def list_lease_contracts(
 
 
 @router.post("/leases", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def create_lease_contract(lease: LeaseContractCreate, current_user: dict = Depends(get_current_user)):
+def create_lease_contract(request: Request, lease: LeaseContractCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء عقد إيجار IFRS 16 مع قيد محاسبي الاعتراف الأولي"""
     with transactional(current_user.company_id) as conn:
         try:

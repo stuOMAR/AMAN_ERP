@@ -1113,7 +1113,7 @@ def widget_cash_flow(
 
 
 @router.get("/widgets/available", dependencies=[Depends(require_permission("dashboard.view"))], response_model=Dict[str, Any])
-def get_available_widgets(current_user=Depends(get_current_user)):
+def get_available_widgets(request: Request, current_user=Depends(get_current_user)):
     """قائمة الـ widgets المتاحة للإضافة"""
     widget_permissions = {
         "sales_today": "sales.view",
@@ -1497,7 +1497,7 @@ def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_
 
 
 @router.post("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
-def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = Depends(get_current_user)):
+def create_analytics_dashboard(request: Request, payload: DashboardCreate, current_user: dict = Depends(get_current_user)):
     """Create a custom analytics dashboard."""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -1552,7 +1552,7 @@ def create_analytics_dashboard(payload: DashboardCreate, current_user: dict = De
 
 
 @router.put("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
-def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, current_user: dict = Depends(get_current_user)):
+def update_analytics_dashboard(request: Request, dashboard_id: int, payload: DashboardUpdate, current_user: dict = Depends(get_current_user)):
     """Update dashboard layout and/or widgets."""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -1615,7 +1615,7 @@ def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, curr
                 })
 
         db.commit()
-        return {"message": i18n_message(("dashboard_updated_success", request))}
+        return {"message": i18n_message("dashboard_updated_success", request)}
     except HTTPException:
         raise
     except Exception as e:
@@ -1627,7 +1627,7 @@ def update_analytics_dashboard(dashboard_id: int, payload: DashboardUpdate, curr
 
 
 @router.delete("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_manage"))], response_model=Dict[str, Any])
-def delete_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_current_user)):
+def delete_analytics_dashboard(request: Request, dashboard_id: int, current_user: dict = Depends(get_current_user)):
     """Delete a custom analytics dashboard. System dashboards cannot be deleted."""
     company_id = get_user_company_id(current_user)
     db = get_db_connection(company_id)
@@ -1645,7 +1645,7 @@ def delete_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(g
         # Widgets cascade-deleted via FK constraint
         db.execute(text("DELETE FROM analytics_dashboards WHERE id = :id"), {"id": dashboard_id})
         db.commit()
-        return {"message": i18n_message(("dashboard_deleted_success", request))}
+        return {"message": i18n_message("dashboard_deleted_success", request)}
     except HTTPException:
         raise
     except Exception as e:

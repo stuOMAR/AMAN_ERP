@@ -118,7 +118,7 @@ invoices_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 @invoices_router.post("/invoices/preview", dependencies=[Depends(require_permission("sales.create"))])
-def preview_invoice_totals(invoice: InvoiceCreate, current_user: dict = Depends(get_current_user)):
+def preview_invoice_totals(request: Request, invoice: InvoiceCreate, current_user: dict = Depends(get_current_user)):
     """حساب إجماليات الفاتورة بدون حفظ — للاستخدام المباشر من الواجهة"""
     from utils.accounting import compute_invoice_totals, compute_line_amounts
 
@@ -126,7 +126,7 @@ def preview_invoice_totals(invoice: InvoiceCreate, current_user: dict = Depends(
     try:
         # Validate branch
         if not invoice.branch_id:
-            raise HTTPException(**http_error(400, ("branch_required", request)))
+            raise HTTPException(**http_error(400, "branch_required", request))
         validate_branch_access(current_user, invoice.branch_id)
 
         line_details = []
@@ -299,7 +299,7 @@ def create_sales_invoice(
              exchange_rate = _dec(rate_row.rate)
 
         if inv_currency != base_currency and exchange_rate <= 0:
-            raise HTTPException(**http_error(400, ("exchange_rate_must_be_positive", request)))
+            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
 
         def to_base(amount):
             return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
@@ -958,13 +958,13 @@ def cancel_invoice(
         if not inv:
             raise HTTPException(**http_error(404, "invoice_not_found"))
         if inv.status == 'cancelled':
-            raise HTTPException(**http_error(400, ("invoice_already_cancelled", request)))
+            raise HTTPException(**http_error(400, "invoice_already_cancelled", request))
         if _dec(inv.paid_amount or 0) > _D2:
             raise HTTPException(**http_error(400, "invoice_paid_cannot_cancel", request))
 
         exchange_rate = _dec(inv.exchange_rate or 1)
         if exchange_rate <= 0:
-            raise HTTPException(**http_error(400, ("invalid_exchange_rate", request)))
+            raise HTTPException(**http_error(400, "invalid_exchange_rate", request))
         total_base = (_dec(inv.total) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
         # 2. Reverse customer balance via party_site_balances
@@ -1196,9 +1196,9 @@ def amend_invoice_header(invoice_id: int, payload: InvoiceHeaderAmend,
             "SELECT id, status, paid_amount, zatca_status FROM invoices WHERE id = :id FOR UPDATE"
         ), {"id": invoice_id}).fetchone()
         if not inv:
-            raise HTTPException(**http_error(404, ("invoice_not_found", request)))
+            raise HTTPException(**http_error(404, "invoice_not_found", request))
         if inv.status == "cancelled":
-            raise HTTPException(**http_error(400, ("cancelled_invoices_cannot_amend", request)))
+            raise HTTPException(**http_error(400, "cancelled_invoices_cannot_amend", request))
         if inv.paid_amount and Decimal(str(inv.paid_amount)) > 0:
             raise HTTPException(**http_error(400, "invoice_has_payments_use_credit_note", request))
         if (inv.zatca_status or "").startswith("cleared"):

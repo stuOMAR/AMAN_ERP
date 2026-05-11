@@ -393,20 +393,20 @@ async def create_account(
                 {"pid": account.parent_id},
             ).fetchone()
             if not parent:
-                raise HTTPException(**http_error(400, ("parent_account_not_found", request)))
+                raise HTTPException(**http_error(400, "parent_account_not_found", request))
             if parent.account_type != account.account_type:
                 raise HTTPException(**http_error(400, "account_type_must_match_parent", request))
 
         # Check if account number already exists
         exists = db.execute(text("SELECT 1 FROM accounts WHERE account_number = :num"), {"num": account.account_number}).fetchone()
         if exists:
-            raise HTTPException(**http_error(400, ("account_number_exists", request)))
+            raise HTTPException(**http_error(400, "account_number_exists", request))
 
         # Check if account code already exists
         if account.account_code:
             code_exists = db.execute(text("SELECT 1 FROM accounts WHERE account_code = :code"), {"code": account.account_code}).fetchone()
             if code_exists:
-                raise HTTPException(**http_error(400, ("account_code_exists", request)))
+                raise HTTPException(**http_error(400, "account_code_exists", request))
 
         db.execute(text("""
             INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, balance, is_active)
@@ -465,17 +465,17 @@ async def delete_account(
             # 1. Check if has children
             has_children = db.execute(text("SELECT 1 FROM accounts WHERE parent_id = :id"), {"id": account_id}).fetchone()
             if has_children:
-                raise HTTPException(**http_error(400, ("account_has_sub_accounts", request)))
+                raise HTTPException(**http_error(400, "account_has_sub_accounts", request))
     
             # 2. Check if has transactions (journal lines)
             has_tx = db.execute(text("SELECT 1 FROM journal_lines WHERE account_id = :id"), {"id": account_id}).fetchone()
             if has_tx:
-                raise HTTPException(**http_error(400, ("account_has_journal_entries", request)))
+                raise HTTPException(**http_error(400, "account_has_journal_entries", request))
     
             # 2b. Check if linked to treasury accounts
             has_treasury = db.execute(text("SELECT 1 FROM treasury_accounts WHERE gl_account_id = :id"), {"id": account_id}).fetchone()
             if has_treasury:
-                raise HTTPException(**http_error(400, ("account_linked_to_treasury", request)))
+                raise HTTPException(**http_error(400, "account_linked_to_treasury", request))
     
             # 2c. Check if used in budget items
             has_budget = db.execute(text("SELECT 1 FROM budget_items WHERE account_id = :id LIMIT 1"), {"id": account_id}).fetchone()
@@ -485,12 +485,12 @@ async def delete_account(
             # 2d. Check if used in company_settings as mapped account
             has_mapping = db.execute(text("SELECT 1 FROM company_settings WHERE setting_value = :id_str AND setting_key LIKE 'acc_map_%' LIMIT 1"), {"id_str": str(account_id)}).fetchone()
             if has_mapping:
-                raise HTTPException(**http_error(400, ("account_used_as_default", request)))
+                raise HTTPException(**http_error(400, "account_used_as_default", request))
     
             # 3. Check for balance
             balance_row = db.execute(text("SELECT balance FROM accounts WHERE id = :id"), {"id": account_id}).fetchone()
             if balance_row and _dec(balance_row[0]).copy_abs() > _D2:
-                raise HTTPException(**http_error(400, ("account_has_nonzero_balance", request)))
+                raise HTTPException(**http_error(400, "account_has_nonzero_balance", request))
     
             # Capture account info before delete
             acct = db.execute(text("SELECT account_code, name FROM accounts WHERE id = :id"), {"id": account_id}).fetchone()

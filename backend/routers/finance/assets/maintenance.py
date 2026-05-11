@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -36,7 +36,7 @@ router = APIRouter()
 from .core import _D2, _D4
 
 @router.put("/maintenance/{maint_id}/complete", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def complete_maintenance(maint_id: int, data: MaintenanceComplete = MaintenanceComplete(), current_user: dict = Depends(get_current_user)):
+def complete_maintenance(request: Request, maint_id: int, data: MaintenanceComplete = MaintenanceComplete(), current_user: dict = Depends(get_current_user)):
     """Complete Maintenance."""
     with transactional(current_user.company_id) as conn:
         conn.execute(text("""
@@ -44,7 +44,7 @@ def complete_maintenance(maint_id: int, data: MaintenanceComplete = MaintenanceC
                 cost = COALESCE(:cost, cost) WHERE id = :id
         """), {"d": (data.completed_date or date.today()).isoformat(),
                "cost": data.actual_cost, "id": maint_id})
-        return {"message": i18n_message(("maintenance_completed", request))}
+        return {"message": i18n_message("maintenance_completed", request)}
 
 
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━

@@ -98,7 +98,7 @@ def create_recurring_template(request: Request, data: dict = Body(...), current_
         try:
             lines = data.pop("lines", [])
             if not lines or len(lines) < 2:
-                raise HTTPException(**http_error(400, ("at_least_two_lines_required", request)))
+                raise HTTPException(**http_error(400, "at_least_two_lines_required", request))
     
             total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
             total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
@@ -203,7 +203,7 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
     
             if lines is not None:
                 if len(lines) < 2:
-                    raise HTTPException(**http_error(400, ("at_least_two_lines_required", request)))
+                    raise HTTPException(**http_error(400, "at_least_two_lines_required", request))
                 total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
                 total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
                 if (total_debit - total_credit).copy_abs() > _D4:

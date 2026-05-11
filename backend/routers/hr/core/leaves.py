@@ -44,7 +44,7 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
                 # Try to find employee linked to this user
                 emp_res = conn.execute(text("SELECT id FROM employees WHERE user_id = :uid"), {"uid": current_user.get("id") if isinstance(current_user, dict) else current_user.id}).fetchone()
                 if not emp_res:
-                    raise HTTPException(**http_error(400, ("user_not_linked_employee", request)))
+                    raise HTTPException(**http_error(400, "user_not_linked_employee", request))
                 employee_id = emp_res[0]
             else:
                 # If sending explicit employee_id, must have manage permission
@@ -52,11 +52,11 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
                      # Check if the employee_id matches self
                      emp_res = conn.execute(text("SELECT id FROM employees WHERE user_id = :uid"), {"uid": current_user.get("id") if isinstance(current_user, dict) else current_user.id}).fetchone()
                      if not emp_res or emp_res[0] != employee_id:
-                         raise HTTPException(**http_error(403, ("not_authorized_leave_others", request)))
+                         raise HTTPException(**http_error(403, "not_authorized_leave_others", request))
     
             # Validate dates
             if request.start_date > request.end_date:
-                raise HTTPException(**http_error(400, ("start_date_after_end", request)))
+                raise HTTPException(**http_error(400, "start_date_after_end", request))
             
             leave_days = (request.end_date - request.start_date).days + 1
             
@@ -71,7 +71,7 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
             """), {"eid": employee_id, "start": request.start_date, "end": request.end_date}).fetchone()
             
             if overlap:
-                raise HTTPException(**http_error(400, ("overlapping_leave_request", request)))
+                raise HTTPException(**http_error(400, "overlapping_leave_request", request))
             
             # Check leave balance for annual leave type
             if request.leave_type in ('annual', 'سنوية'):
@@ -205,7 +205,7 @@ def list_leave_requests(branch_id: Optional[int] = None, current_user: UserRespo
         return [dict(row._mapping) for row in records]
 
 @router.put("/leaves/{leave_id}/status", dependencies=[Depends(require_permission("hr.leaves.manage"))], response_model=Dict[str, Any])
-def update_leave_status(leave_id: int, status_in: str, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def update_leave_status(request: Request, leave_id: int, status_in: str, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Update Leave Status."""
     with transactional(company_id) as conn:
         conn.execute(text("""
@@ -244,13 +244,13 @@ def update_leave_status(leave_id: int, status_in: str, current_user: UserRespons
                      resource_type="leave_request", resource_id=leave_id,
                      details={"new_status": status_in})
 
-        return {"message": i18n_message(("status_updated_success", request))}
+        return {"message": i18n_message("status_updated_success", request)}
 
 
 # --- End of Service Calculation ---
 
 @router.get("/leave-balance/{emp_id}", dependencies=[Depends(require_permission("hr.view"))], response_model=Dict[str, Any])
-def get_leave_balance(emp_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def get_leave_balance(request: Request, emp_id: int, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Get Leave Balance."""
     with transactional(company_id) as conn:
         from datetime import datetime as dt
@@ -261,9 +261,9 @@ def get_leave_balance(emp_id: int, current_user: UserResponse = Depends(get_curr
         # Branch access check
         if emp and current_user.role not in ['admin', 'system_admin', 'manager', 'gm']:
             if current_user.allowed_branches and emp.branch_id not in current_user.allowed_branches:
-                raise HTTPException(**http_error(403, ("unauthorized_employee_access", request)))
+                raise HTTPException(**http_error(403, "unauthorized_employee_access", request))
         if not emp:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         year = dt.now().year
         used = conn.execute(text("""
             SELECT COALESCE(SUM(days_requested),0) as used FROM leave_requests
@@ -286,7 +286,7 @@ def get_leave_balance(emp_id: int, current_user: UserResponse = Depends(get_curr
 
 
 @router.post("/leave-carryover/calculate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
-def calculate_leave_carryover(data: LeaveCarryoverRequest, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def calculate_leave_carryover(request: Request, data: LeaveCarryoverRequest, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Calculate Leave Carryover."""
     with transactional(company_id) as conn:
         from datetime import datetime as dt
@@ -297,11 +297,11 @@ def calculate_leave_carryover(data: LeaveCarryoverRequest, current_user: UserRes
             FROM employees WHERE id=:id
         """), {"id": data.employee_id}).fetchone()
         if not emp:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         # Branch access check
         if current_user.role not in ['admin', 'system_admin', 'manager', 'gm']:
             if current_user.allowed_branches and emp.branch_id not in current_user.allowed_branches:
-                raise HTTPException(**http_error(403, ("unauthorized_employee_access", request)))
+                raise HTTPException(**http_error(403, "unauthorized_employee_access", request))
         used = conn.execute(text("""
             SELECT COALESCE(SUM(days_requested),0) as used FROM leave_requests
             WHERE employee_id=:id AND status='approved' AND EXTRACT(YEAR FROM start_date)=:y

@@ -49,7 +49,7 @@ def _get_user_id(current_user) -> int:
 
 
 @router.get("/{employee_id}/pii")
-def get_employee_pii(
+def get_employee_pii(request: Request, 
     employee_id: int,
     current_user=Depends(require_sensitive_permission("hr.pii")),
 ):
@@ -69,7 +69,7 @@ def get_employee_pii(
         ).fetchone()
 
         if row is None:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
 
         emp = {
             "id": row[0], "employee_code": row[1],
@@ -86,7 +86,7 @@ def get_employee_pii(
 
 
 @router.patch("/{employee_id}/pii")
-def update_employee_pii(
+def update_employee_pii(request: Request, 
     employee_id: int,
     body: PiiUpdate,
     current_user=Depends(require_sensitive_permission("hr.pii")),
@@ -110,7 +110,7 @@ def update_employee_pii(
             {"val": encrypted, "eid": employee_id, "tid": int(tenant_id)},
         )
         if result.rowcount == 0:
-            raise HTTPException(**http_error(404, ("employee_not_found", request)))
+            raise HTTPException(**http_error(404, "employee_not_found", request))
         conn.commit()
 
         # Audit the write

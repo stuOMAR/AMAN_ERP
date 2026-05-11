@@ -272,7 +272,7 @@ def create_batch(
             """), {"pid": batch.product_id, "wid": batch.warehouse_id, "bn": batch.batch_number}).fetchone()
     
             if exists:
-                raise HTTPException(**http_error(400, ("batch_number_duplicate", request)))
+                raise HTTPException(**http_error(400, "batch_number_duplicate", request))
     
             result = db.execute(text("""
                 INSERT INTO product_batches (
@@ -403,7 +403,7 @@ def create_batch(
 
 
 @batches_router.put("/batches/{batch_id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def update_batch(
+def update_batch(request: Request, 
     batch_id: int,
     data: BatchUpdate,
     current_user: dict = Depends(get_current_user)
@@ -634,7 +634,7 @@ def create_serial(
             """), {"pid": serial.product_id, "sn": serial.serial_number}).fetchone()
     
             if exists:
-                raise HTTPException(**http_error(400, ("serial_number_duplicate", request)))
+                raise HTTPException(**http_error(400, "serial_number_duplicate", request))
     
             result = db.execute(text("""
                 INSERT INTO product_serials (
@@ -697,7 +697,7 @@ def create_serial(
 
 
 @batches_router.post("/serials/bulk", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def create_serials_bulk(
+def create_serials_bulk(request: Request, 
     data: SerialBulkCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -705,7 +705,7 @@ def create_serials_bulk(
     with transactional(current_user.company_id) as db:
         try:
             if data.count > 1000:
-                raise HTTPException(**http_error(400, ("max_serials_exceeded", request)))
+                raise HTTPException(**http_error(400, "max_serials_exceeded", request))
     
             product = db.execute(text("SELECT id FROM products WHERE id = :id"), {"id": data.product_id}).fetchone()
             if not product:
@@ -773,7 +773,7 @@ def create_serials_bulk(
 
 
 @batches_router.put("/serials/{serial_id}", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def update_serial(
+def update_serial(request: Request, 
     serial_id: int,
     data: SerialUpdate,
     current_user: dict = Depends(get_current_user)
@@ -806,7 +806,7 @@ def update_serial(
                 db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
                 db.commit()
     
-            return {"message": i18n_message(("serial_number_updated", request))}
+            return {"message": i18n_message("serial_number_updated", request)}
         except HTTPException:
             raise
         except Exception:
@@ -818,7 +818,7 @@ def update_serial(
 # ============ PRODUCT TRACKING CONFIG ============
 
 @batches_router.put("/products/{product_id}/tracking", dependencies=[Depends(require_permission("products.edit"))], response_model=Dict[str, Any])
-def update_product_tracking(
+def update_product_tracking(request: Request, 
     product_id: int,
     has_batch_tracking: Optional[bool] = None,
     has_serial_tracking: Optional[bool] = None,
@@ -857,7 +857,7 @@ def update_product_tracking(
                 db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params) # noqa: sql-lint
                 db.commit()
     
-            return {"message": i18n_message(("tracking_settings_updated", request))}
+            return {"message": i18n_message("tracking_settings_updated", request)}
         except HTTPException:
             raise
         except Exception:
@@ -963,7 +963,7 @@ class QualityInspectionComplete(BaseModel):
 
 
 @batches_router.post("/quality-inspections", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def create_quality_inspection(
+def create_quality_inspection(request: Request, 
     data: QualityInspectionCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -1018,7 +1018,7 @@ def create_quality_inspection(
 
 
 @batches_router.put("/quality-inspections/{inspection_id}/complete", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def complete_quality_inspection(
+def complete_quality_inspection(request: Request, 
     inspection_id: int,
     data: QualityInspectionComplete,
     current_user: dict = Depends(get_current_user)
@@ -1164,7 +1164,7 @@ def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user
 
 
 @batches_router.post("/cycle-counts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def create_cycle_count(
+def create_cycle_count(request: Request, 
     data: CycleCountCreate,
     current_user: dict = Depends(get_current_user)
 ):
@@ -1241,7 +1241,7 @@ def create_cycle_count(
 
 
 @batches_router.put("/cycle-counts/{count_id}/start", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def start_cycle_count(count_id: int, current_user: dict = Depends(get_current_user)):
+def start_cycle_count(request: Request, count_id: int, current_user: dict = Depends(get_current_user)):
     """بدء الجرد الدوري"""
     with transactional(current_user.company_id) as db:
         try:
@@ -1249,13 +1249,13 @@ def start_cycle_count(count_id: int, current_user: dict = Depends(get_current_us
             if not cc:
                 raise HTTPException(**http_error(404, "inventory_not_found"))
             if cc.status != 'draft':
-                raise HTTPException(**http_error(400, ("cycle_count_not_draft", request)))
+                raise HTTPException(**http_error(400, "cycle_count_not_draft", request))
     
             db.execute(text("""
                 UPDATE cycle_counts SET status = 'in_progress', start_date = NOW(), updated_at = NOW()
                 WHERE id = :id
             """), {"id": count_id})
-            return {"message": i18n_message(("cycle_count_started", request))}
+            return {"message": i18n_message("cycle_count_started", request)}
         except HTTPException:
             raise
         except Exception:
@@ -1265,7 +1265,7 @@ def start_cycle_count(count_id: int, current_user: dict = Depends(get_current_us
 
 
 @batches_router.put("/cycle-counts/{count_id}/complete", dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
-def complete_cycle_count(
+def complete_cycle_count(request: Request, 
     count_id: int,
     data: CycleCountComplete,
     current_user: dict = Depends(get_current_user)
