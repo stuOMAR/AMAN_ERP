@@ -301,6 +301,10 @@ def get_customer_statement(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
         # 1. Get Opening Balance (Combined: invoices + POS + payment vouchers)
+        # AUDIT-H3: opening balance must include sales credit notes
+        # (debit-balance reductions), debit notes (additions), and
+        # approved sales returns. Without these, statement opening drifts
+        # from party_site_balances.
         opening_balance = db.execute(text( # noqa: sql-lint
                     f"""
             WITH all_movements AS (
@@ -314,7 +318,45 @@ def get_customer_statement(
                 WHERE invoice_type = 'sales' AND status NOT IN ('cancelled', 'draft')
                 
                 UNION ALL
-                
+
+                -- Debit notes raise AR
+                SELECT
+                    (total * COALESCE(exchange_rate, 1.0)) as debit,
+                    0 as credit,
+                    invoice_date as sale_date,
+                    branch_id,
+                    party_id
+                FROM invoices
+                WHERE invoice_type = 'sales_debit_note'
+                  AND status NOT IN ('cancelled', 'draft')
+
+                UNION ALL
+
+                -- Credit notes reduce AR
+                SELECT
+                    0 as debit,
+                    (total * COALESCE(exchange_rate, 1.0)) as credit,
+                    invoice_date as sale_date,
+                    branch_id,
+                    party_id
+                FROM invoices
+                WHERE invoice_type = 'sales_credit_note'
+                  AND status NOT IN ('cancelled', 'draft')
+
+                UNION ALL
+
+                -- Approved sales returns reduce AR
+                SELECT
+                    0 as debit,
+                    (sr.total * COALESCE(sr.exchange_rate, 1.0)) as credit,
+                    sr.return_date as sale_date,
+                    sr.branch_id,
+                    sr.party_id
+                FROM sales_returns sr
+                WHERE sr.status = 'approved'
+
+                UNION ALL
+
                 SELECT 
                     total_amount as debit, 
                     0 as credit,
@@ -353,6 +395,9 @@ def get_customer_statement(
         # Let's stick to `invoices` for now as primary source.
 
         # 2. Get Transactions (Combined: invoices + POS + payment vouchers)
+        # AUDIT-H3: transactions list must mirror the opening-balance
+        # source set so debit/credit notes and approved returns appear
+        # as their own rows (and the running balance reconciles).
         params["end"] = end_date
         transactions = db.execute(text( # noqa: sql-lint
                     f"""
@@ -364,9 +409,41 @@ def get_customer_statement(
                     currency, exchange_rate, branch_id, party_id
                 FROM invoices
                 WHERE invoice_type = 'sales' AND status NOT IN ('cancelled', 'draft')
-                
+
                 UNION ALL
-                
+
+                SELECT
+                    id, invoice_date as date, invoice_number as ref,
+                    'debit_note' as type, (total * COALESCE(exchange_rate, 1.0)) as debit,
+                    0 as credit,
+                    currency, exchange_rate, branch_id, party_id
+                FROM invoices
+                WHERE invoice_type = 'sales_debit_note'
+                  AND status NOT IN ('cancelled', 'draft')
+
+                UNION ALL
+
+                SELECT
+                    id, invoice_date as date, invoice_number as ref,
+                    'credit_note' as type, 0 as debit,
+                    (total * COALESCE(exchange_rate, 1.0)) as credit,
+                    currency, exchange_rate, branch_id, party_id
+                FROM invoices
+                WHERE invoice_type = 'sales_credit_note'
+                  AND status NOT IN ('cancelled', 'draft')
+
+                UNION ALL
+
+                SELECT
+                    sr.id, sr.return_date as date, sr.return_number as ref,
+                    'return' as type, 0 as debit,
+                    (sr.total * COALESCE(sr.exchange_rate, 1.0)) as credit,
+                    sr.currency, sr.exchange_rate, sr.branch_id, sr.party_id
+                FROM sales_returns sr
+                WHERE sr.status = 'approved'
+
+                UNION ALL
+
                 SELECT 
                     id, CAST(order_date AS DATE) as date, order_number as ref, 
                     'pos_order' as type, total_amount as debit, 
@@ -441,6 +518,10 @@ def get_aging_report(
 
         results = db.execute(text( # noqa: sql-lint
                     f"""
+            -- AUDIT-H3: aging must reflect debit notes (raise AR),
+            -- credit notes (lower AR), and approved sales returns
+            -- (lower AR), otherwise AR aging always overstates the
+            -- real exposure once any credit-side document is issued.
             SELECT 
                 p.name as customer_name,
                 i.invoice_number,
@@ -456,6 +537,61 @@ def get_aging_report(
             AND i.status NOT IN ('draft', 'cancelled', 'paid')
             AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
             {invoice_branch_filter}
+
+            UNION ALL
+
+            -- Sales debit notes carry the same AR sign as a sales invoice.
+            SELECT
+                p.name as customer_name,
+                i.invoice_number,
+                i.invoice_date,
+                i.due_date,
+                (i.total - COALESCE(i.paid_amount, 0)) as due_amount_fc,
+                (i.total - COALESCE(i.paid_amount, 0)) * COALESCE(i.exchange_rate, 1) as due_amount,
+                GREATEST(CURRENT_DATE - COALESCE(i.due_date, i.invoice_date), 0) as days_old,
+                i.currency
+            FROM invoices i
+            JOIN parties p ON i.party_id = p.id
+            WHERE i.invoice_type = 'sales_debit_note'
+              AND i.status NOT IN ('draft', 'cancelled', 'paid')
+              AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
+            {invoice_branch_filter}
+
+            UNION ALL
+
+            -- Sales credit notes reduce AR — emit them as a negative
+            -- aging row so the bucket totals net correctly.
+            SELECT
+                p.name as customer_name,
+                i.invoice_number,
+                i.invoice_date,
+                i.due_date,
+                -1 * i.total as due_amount_fc,
+                -1 * i.total * COALESCE(i.exchange_rate, 1) as due_amount,
+                GREATEST(CURRENT_DATE - i.invoice_date, 0) as days_old,
+                i.currency
+            FROM invoices i
+            JOIN parties p ON i.party_id = p.id
+            WHERE i.invoice_type = 'sales_credit_note'
+              AND i.status NOT IN ('draft', 'cancelled')
+            {invoice_branch_filter}
+
+            UNION ALL
+
+            -- Approved sales returns reduce AR similarly.
+            SELECT
+                p.name as customer_name,
+                sr.return_number as invoice_number,
+                sr.return_date as invoice_date,
+                sr.return_date as due_date,
+                -1 * sr.total as due_amount_fc,
+                -1 * sr.total * COALESCE(sr.exchange_rate, 1) as due_amount,
+                GREATEST(CURRENT_DATE - sr.return_date, 0) as days_old,
+                sr.currency
+            FROM sales_returns sr
+            JOIN parties p ON sr.party_id = p.id
+            WHERE sr.status = 'approved'
+              {branch_scope_filter_from_scope(branch_scope, "sr.branch_id", params)}
 
             UNION ALL
 

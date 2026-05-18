@@ -5,7 +5,7 @@ Handles dynamic key-value settings for each company.
 
 import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List
 
@@ -486,5 +486,4 @@ def generate_csid(
         "message": i18n_message("csid_generated", request), 
         "csid": f"CSID-{random.randint(1000,9999)}-{common_name}"
     }
-
 

@@ -6,7 +6,7 @@ Phase 8.12 Sales Improvements:
   SALES-004: Smart credit limit
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
@@ -23,6 +23,31 @@ from utils.fiscal_lock import check_fiscal_period_open
 
 logger = logging.getLogger(__name__)
 sales_improvements_router = APIRouter()
+
+
+def _get_party_credit_snapshot(db, party_id: int, *, lock_party: bool = False):
+    lock_clause = " FOR UPDATE" if lock_party else ""
+    party = db.execute(text(f"""
+        SELECT id, name, credit_limit
+        FROM parties
+        WHERE id = :id{lock_clause}
+    """), {"id": party_id}).fetchone()
+    if not party:
+        return None
+
+    used = db.execute(text("""
+        SELECT COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0)
+        FROM party_sites ps
+        JOIN party_site_balances psb ON psb.party_site_id = ps.id
+        LEFT JOIN currencies c ON psb.currency = c.code
+        WHERE ps.party_id = :id
+    """), {"id": party_id}).scalar() or 0
+    return {
+        "id": party.id,
+        "name": party.name,
+        "credit_limit": Decimal(str(party.credit_limit or 0)),
+        "credit_used": Decimal(str(used or 0)),
+    }
 
 
 # =====================================================
@@ -56,18 +81,15 @@ def convert_quotation_to_order(sq_id: int, request: Request, current_user=Depend
         # T10.2 #153 — enforce customer credit limit BEFORE creating the
         # order. Without this, an over-limit customer's quotation flows
         # straight through to invoice and breaks AR control. We mirror
-        # the check used by the invoice router (parties.credit_limit
-        # vs. credit_used + this order's grand_total).
-        party_id = sq.party_id or sq.customer_id
+        # the check used by the invoice router: parties.credit_limit against
+        # party_site_balances plus this order's grand_total.
+        party_id = sq.party_id
         if party_id:
-            party = db.execute(text(
-                "SELECT credit_limit, COALESCE(current_balance, 0) AS credit_used "
-                "FROM parties WHERE id = :id FOR UPDATE"
-            ), {"id": party_id}).fetchone()
-            if party and party.credit_limit and float(party.credit_limit) > 0:
+            party = _get_party_credit_snapshot(db, int(party_id), lock_party=True)
+            if party and party["credit_limit"] > 0:
                 from decimal import Decimal as _D
-                limit_ = _D(str(party.credit_limit or 0))
-                used_ = _D(str(party.credit_used or 0))
+                limit_ = _D(str(party["credit_limit"] or 0))
+                used_ = _D(str(party["credit_used"] or 0))
                 grand = _D(str(sq.total or 0))
                 if used_ + grand > limit_:
                     raise HTTPException(
@@ -386,6 +408,8 @@ def pay_commission(request: Request, data: dict, current_user=Depends(get_curren
         commission_acc = get_mapped_account_id(db, "acc_map_sales_commission")
         bank_acc = get_mapped_account_id(db, "acc_map_bank")
         base_currency = get_base_currency(db)
+        if not commission_acc or not bank_acc:
+            raise HTTPException(**http_error(400, "commission_or_bank_account_not_configured", request))
         
         je_id = None
         je_number = None
@@ -432,6 +456,7 @@ def pay_commission(request: Request, data: dict, current_user=Depends(get_curren
             "message": i18n_message("commissions_paid_details", request)
         }
     except HTTPException:
+        db.rollback()
         raise
     except Exception:
         db.rollback()
@@ -525,15 +550,14 @@ def get_credit_status(request: Request, party_id: int, current_user=Depends(get_
     """Get Credit Status."""
     db = get_db_connection(current_user.company_id)
     try:
-        party = db.execute(text("SELECT id, name, credit_limit, credit_used FROM parties WHERE id = :id"),
-                           {"id": party_id}).fetchone()
+        party = _get_party_credit_snapshot(db, party_id)
         if not party:
             raise HTTPException(**http_error(404, "customer_not_found", request))
-        limit_ = Decimal(str(party.credit_limit or 0))
-        used = Decimal(str(party.credit_used or 0))
+        limit_ = party["credit_limit"]
+        used = party["credit_used"]
         return {
             "party_id": party_id,
-            "name": party.name,
+            "name": party["name"],
             "credit_limit": str(limit_),
             "credit_used": str(used),
             "available": str(limit_ - used),
@@ -574,12 +598,11 @@ def check_credit(request: Request, data: dict, current_user=Depends(get_current_
     try:
         party_id = data["party_id"]
         amount = Decimal(str(data["amount"]))
-        party = db.execute(text("SELECT credit_limit, credit_used FROM parties WHERE id = :id"),
-                           {"id": party_id}).fetchone()
+        party = _get_party_credit_snapshot(db, party_id)
         if not party:
             raise HTTPException(**http_error(404, "customer_not_found", request))
-        limit_ = Decimal(str(party.credit_limit or 0))
-        used = Decimal(str(party.credit_used or 0))
+        limit_ = party["credit_limit"]
+        used = party["credit_used"]
         available = limit_ - used
         approved = limit_ == 0 or amount <= available  # 0 = no limit
         return {

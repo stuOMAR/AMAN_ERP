@@ -20,6 +20,7 @@ const HRHome = () => {
     const { t, i18n } = useTranslation();
     const navigate = useNavigate();
     const [stats, setStats] = useState({ employees: 0, present: 0, payroll: 0, leaves: 0 });
+    const [loading, setLoading] = useState(true);
 
     // End of Service Calculator
     const [showEOSModal, setShowEOSModal] = useState(false);
@@ -33,6 +34,7 @@ const HRHome = () => {
 
     useEffect(() => {
         const fetchStats = async () => {
+            setLoading(true);
             try {
                 const [empRes, attRes] = await Promise.all([
                     hrAPI.listEmployees({ limit: 1 }),
@@ -45,9 +47,15 @@ const HRHome = () => {
                 }));
             } catch (err) {
                 toastEmitter.emit(t('common.error'), 'error');
+            } finally {
+                setLoading(false);
             }
         };
-        if (hasPermission('hr.view')) fetchStats();
+        if (hasPermission('hr.view')) {
+            fetchStats();
+        } else {
+            setLoading(false);
+        }
     }, []);
 
     const openEOSCalculator = async () => {
@@ -116,7 +124,7 @@ const HRHome = () => {
                     <div key={index} className="metric-card">
                         <div className="metric-label">{metric.title}</div>
                         <div className="metric-value" style={{ color: metric.color }}>
-                            {!isAuthReady() ? '...' : !hasPermission('hr.reports') ? '***' : (loading ? '...' : metric.value)}
+                            {!isAuthReady() ? '...' : !hasPermission('hr.view') ? '***' : (loading ? '...' : metric.value)}
                         </div>
                     </div>
                 ))}
@@ -210,7 +218,7 @@ const HRHome = () => {
                         </div>
                         <div className="link-item" onClick={() => navigate('/hr/overtime')}>
                             <span className="link-icon">⏱️</span>
-                            {t('hr.overtime_requests')}
+                            {t('hr.overtime_requests.title', 'طلبات العمل الإضافي')}
                             <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                         </div>
                         <div className="link-item" onClick={() => navigate('/hr/gosi')}>
@@ -237,19 +245,19 @@ const HRHome = () => {
                     <div className="links-list">
                         <div className="link-item" onClick={() => navigate('/hr/documents')}>
                             <span className="link-icon">📄</span>
-                            {t('hr.employee_documents')}
+                            {t('hr.employee_documents.title', 'مستندات الموظفين')}
                             <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                         </div>
                         {hasPermission('hr.performance_view') && (
                             <div className="link-item" onClick={() => navigate('/hr/performance')}>
                                 <span className="link-icon">⭐</span>
-                                {t('hr.performance_reviews')}
+                                {t('hr.performance_reviews.title', 'تقييمات الأداء')}
                                 <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                             </div>
                         )}
                         <div className="link-item" onClick={() => navigate('/hr/training')}>
                             <span className="link-icon">🎓</span>
-                            {t('hr.training_programs')}
+                            {t('hr.training_programs.title', 'برامج التدريب')}
                             <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                         </div>
                         <div className="link-item" onClick={() => navigate('/hr/violations')}>
@@ -260,7 +268,7 @@ const HRHome = () => {
                         {getIndustryFeature('hr.custody') && (
                             <div className="link-item" onClick={() => navigate('/hr/custody')}>
                                 <span className="link-icon">📦</span>
-                                {t('hr.custody_management')}
+                                {t('hr.custody_management.title', 'إدارة العهد')}
                                 <span className="link-arrow">{i18n.language === 'ar' ? '←' : '→'}</span>
                             </div>
                         )}

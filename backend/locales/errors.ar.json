@@ -1970,5 +1970,9 @@
   "could_not_validate_credentials": "تعذّر التحقق من بيانات الاعتماد",
   "action_label_approve": "اعتماد",
   "action_label_reject": "رفض",
-  "action_label_return": "إرجاع"
+  "action_label_return": "إرجاع",
+  "commission_or_bank_account_not_configured": "لم يتم ضبط حساب مصروف العمولة أو حساب البنك",
+  "invoice_has_sales_returns": "لا يمكن إلغاء فاتورة لها مرتجعات مبيعات معتمدة",
+  "voucher_cancelled": "لا يمكن تخصيص سند ملغي",
+  "supplier_overpayment_not_allowed": "مبلغ السداد يتجاوز رصيد المورد المستحق؛ فعّل buying.allow_overpayment للسماح بالدفعات المقدمة"
 }

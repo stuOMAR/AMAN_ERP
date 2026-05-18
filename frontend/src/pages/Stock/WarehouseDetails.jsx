@@ -72,6 +72,42 @@ function WarehouseDetails() {
                 </div>
             </div>
 
+            {/* F-31: surface the per-warehouse inventory GL account so users
+                can verify which ledger picks up movements for this warehouse. */}
+            <div className="card mb-6">
+                <div className="flex justify-between items-center mb-2">
+                    <h3 className="section-title">
+                        {t('stock.warehouses.details.gl_section', 'الربط المحاسبي')}
+                    </h3>
+                </div>
+                <div style={{ display: 'flex', gap: 24, flexWrap: 'wrap' }}>
+                    <div>
+                        <div className="text-muted" style={{ fontSize: 12 }}>
+                            {t('branches.name')}
+                        </div>
+                        <div style={{ fontWeight: 600 }}>{warehouse.branch_name || '-'}</div>
+                    </div>
+                    <div>
+                        <div className="text-muted" style={{ fontSize: 12 }}>
+                            {t('stock.warehouses.details.inventory_account', 'حساب المخزون')}
+                        </div>
+                        <div style={{ fontWeight: 600 }}>
+                            {warehouse.gl_inventory_account_id ? (
+                                <>
+                                    {warehouse.gl_inventory_account_code} —{' '}
+                                    {warehouse.gl_inventory_account_name}
+                                </>
+                            ) : (
+                                <span className="text-muted">
+                                    {t('stock.warehouses.details.using_global_default',
+                                        'يستخدم الحساب الافتراضي للشركة')}
+                                </span>
+                            )}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
             <div className="card mb-6">
                 <div className="flex justify-between items-center mb-4">
                     <h3 className="section-title">{t('stock.warehouses.details.inventory')}</h3>

@@ -12,6 +12,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
+from utils.i18n import http_error, i18n_message
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -53,20 +54,37 @@ def post_inventory_adjustment(
 
     base_currency = get_base_currency(db)
     txn_date = txn_date or datetime.now().strftime("%Y-%m-%d")
+    check_fiscal_period_open(db, txn_date if isinstance(txn_date, str) else txn_date)
 
-    # T047: Validate GL account mappings
-    inv_acc = inventory_account_id or get_mapped_account_id(db, "acc_map_inventory")
-    if not inv_acc:
-        raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
+    # F-31: per-warehouse inventory account resolution. We use the resolver
+    # later (one bucket per warehouse) so adjustments that span multiple
+    # warehouses post a balanced entry that hits each warehouse's mapped
+    # inventory account. The legacy behaviour (single global account) still
+    # falls out when only one warehouse is involved or when warehouses share
+    # the same mapping.
+    from utils.inventory_accounts import resolve_warehouse_inventory_account
 
+    # Adjustment account is global by design (P&L offset).
     adj_acc = adjustment_account_id or get_mapped_account_id(db, "acc_map_inventory_adjustment")
     if not adj_acc:
         raise HTTPException(**http_error(400, "adjustment_account_not_configured", request))
+
+    # Probe at least one resolution upfront so the error is surfaced before
+    # any item-level processing happens. The actual per-warehouse account is
+    # resolved again per bucket below.
+    if items:
+        probe_wh = items[0].get("warehouse_id")
+        probe_acc = inventory_account_id or resolve_warehouse_inventory_account(db, probe_wh)
+        if not probe_acc:
+            raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
 
     if not reference:
         from uuid import uuid4
         reference = f"ADJ-{datetime.now().strftime('%Y%m%d')}-{uuid4().hex[:8].upper()}"
 
+    # F-31: track net delta per warehouse so the GL entry can hit the right
+    # per-warehouse inventory account.
+    net_value_per_wh: dict[int, Decimal] = {}
     net_value_delta = Decimal("0")
 
     for item in items:
@@ -109,16 +127,16 @@ def post_inventory_adjustment(
                 db,
                 product_id=pid,
                 warehouse_id=wh,
-                new_qty=float(qty_delta),
-                new_price=float(wh_cost),
+                new_qty=qty_delta,
+                new_price=wh_cost,
             )
             if costing_method in ("fifo", "lifo"):
                 CostingService.create_cost_layer(
                     db,
                     product_id=pid,
                     warehouse_id=wh,
-                    quantity=float(qty_delta),
-                    unit_cost=float(wh_cost),
+                    quantity=qty_delta,
+                    unit_cost=wh_cost,
                     source_document_type="adjustment",
                     source_document_id=reference_id or 0,
                     costing_method=costing_method,
@@ -176,6 +194,7 @@ def post_inventory_adjustment(
         })
 
         net_value_delta += qty_delta * wh_cost
+        net_value_per_wh[wh] = net_value_per_wh.get(wh, Decimal("0")) + (qty_delta * wh_cost)
 
     # GL posting
     net_value = net_value_delta.quantize(_D2, ROUND_HALF_UP)
@@ -187,32 +206,55 @@ def post_inventory_adjustment(
     ).scalar()
 
     if abs(net_value) > Decimal("0.005"):
-        # Fiscal lock check
-        check_fiscal_period_open(db, txn_date if isinstance(txn_date, str) else txn_date)
+        # F-31: build one (Dr inventory / Cr adjustment) pair per warehouse.
+        lines: list[dict] = []
+        for wh_id, wh_delta in net_value_per_wh.items():
+            wh_delta_q = wh_delta.quantize(_D2, ROUND_HALF_UP)
+            if abs(wh_delta_q) <= Decimal("0.005"):
+                continue
+            wh_inv_acc = inventory_account_id or resolve_warehouse_inventory_account(db, wh_id)
+            if not wh_inv_acc:
+                raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
+            if wh_delta_q > 0:
+                lines.append({
+                    "account_id": wh_inv_acc,
+                    "debit": float(wh_delta_q),
+                    "credit": 0,
+                    "description": f"Inventory Adjustment Gain (WH#{wh_id}) - {reference}",
+                })
+                lines.append({
+                    "account_id": adj_acc,
+                    "debit": 0,
+                    "credit": float(wh_delta_q),
+                    "description": f"Adjustment Gain (WH#{wh_id}) - {reference}",
+                })
+            else:
+                abs_val = float(-wh_delta_q)
+                lines.append({
+                    "account_id": adj_acc,
+                    "debit": abs_val,
+                    "credit": 0,
+                    "description": f"Adjustment Loss (WH#{wh_id}) - {reference}",
+                })
+                lines.append({
+                    "account_id": wh_inv_acc,
+                    "debit": 0,
+                    "credit": abs_val,
+                    "description": f"Inventory Decrease (WH#{wh_id}) - {reference}",
+                })
 
-        if net_value > 0:
-            lines = [
-                {"account_id": inv_acc, "debit": float(net_value), "credit": 0, "description": f"Inventory Adjustment Gain - {reference}"},
-                {"account_id": adj_acc, "debit": 0, "credit": float(net_value), "description": f"Adjustment Gain - {reference}"},
-            ]
-        else:
-            abs_val = float(-net_value)
-            lines = [
-                {"account_id": adj_acc, "debit": abs_val, "credit": 0, "description": f"Adjustment Loss - {reference}"},
-                {"account_id": inv_acc, "debit": 0, "credit": abs_val, "description": f"Inventory Decrease - {reference}"},
-            ]
-
-        gl_create_journal_entry(
-            db,
-            company_id=company_id,
-            date=txn_date,
-            description=f"Stock Adjustment - {reference}",
-            lines=lines,
-            user_id=user_id,
-            branch_id=branch_id,
-            reference=reference,
-            currency=base_currency,
-        )
+        if lines:
+            gl_create_journal_entry(
+                db,
+                company_id=company_id,
+                date=txn_date,
+                description=f"Stock Adjustment - {reference}",
+                lines=lines,
+                user_id=user_id,
+                branch_id=branch_id,
+                reference=reference,
+                currency=base_currency,
+            )
 
     # Audit log
     try:
@@ -305,15 +347,24 @@ def create_adjustment(
             if wh_branch and wh_branch not in allowed:
                 raise HTTPException(**http_error(403, "adjustment_warehouse_outside_branch", request))
 
-        # Get current quantity to compute difference
-        stock_row = db.execute(text("SELECT quantity FROM inventory WHERE product_id = :pid AND warehouse_id = :wh"),
-                               {"pid": data.product_id, "wh": data.warehouse_id}).fetchone()
-        current_qty = float(stock_row.quantity) if stock_row else 0.0
-        difference = data.new_quantity - current_qty
+        # INV-QTY: Validate quantity for discrete units
+        from utils.quantity_validation import validate_quantity_for_product
+        validate_quantity_for_product(db, data.product_id, data.new_quantity, request)
+
+        # Get current quantity to compute difference — under lock to prevent
+        # race condition with concurrent sales/adjustments.
+        stock_row = db.execute(text("""
+            SELECT quantity FROM inventory
+            WHERE product_id = :pid AND warehouse_id = :wh
+            FOR UPDATE
+        """), {"pid": data.product_id, "wh": data.warehouse_id}).fetchone()
+        current_qty = Decimal(str(stock_row.quantity)) if stock_row else Decimal("0")
+        new_qty_dec = Decimal(str(data.new_quantity))
+        difference = new_qty_dec - current_qty
 
         if difference == 0:
             raise HTTPException(**http_error(400, "adjustment_quantity_no_change", request))
-        if data.new_quantity < 0:
+        if new_qty_dec < 0:
             raise HTTPException(**http_error(400, "adjustment_negative_quantity", request))
 
         adjustment_type = 'increase' if difference > 0 else 'decrease'
@@ -339,7 +390,7 @@ def create_adjustment(
         """), {
             "num": adj_number, "wh": data.warehouse_id, "pid": data.product_id,
             "type": adjustment_type, "reason": data.reason,
-            "old": current_qty, "new": data.new_quantity, "diff": difference,
+            "old": str(current_qty), "new": str(new_qty_dec), "diff": str(difference),
             "notes": data.notes, "uid": user_id
         }).fetchone()
 
@@ -353,7 +404,7 @@ def create_adjustment(
             items=[{
                 "product_id": data.product_id,
                 "warehouse_id": data.warehouse_id,
-                "quantity_delta": difference,
+                "quantity_delta": str(difference),
                 "reason": data.notes or f"Stock Adjustment {adjustment_type}",
             }],
             reference=adj_number,

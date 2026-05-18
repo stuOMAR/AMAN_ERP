@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { inventoryAPI } from '../../utils/api';
@@ -11,6 +11,7 @@ const StockShipmentForm = () => {
     const navigate = useNavigate();
     const { showToast } = useToast();
     const [loading, setLoading] = useState(false);
+    const submittingRef = useRef(false);
     const [warehouses, setWarehouses] = useState([]);
     const [products, setProducts] = useState([]);
 
@@ -83,6 +84,10 @@ const StockShipmentForm = () => {
             return;
         }
 
+        if (submittingRef.current) {
+            return;
+        }
+        submittingRef.current = true;
         setLoading(true);
         try {
             await inventoryAPI.createShipment({
@@ -96,6 +101,7 @@ const StockShipmentForm = () => {
         } catch (err) {
             showToast(err.response?.data?.detail || t('stock.shipments.form.validation.error'), 'error');
         } finally {
+            submittingRef.current = false;
             setLoading(false);
         }
     };

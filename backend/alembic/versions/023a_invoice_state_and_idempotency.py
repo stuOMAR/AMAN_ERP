@@ -44,13 +44,14 @@ def upgrade() -> None:
             ADD COLUMN IF NOT EXISTS state_reason TEXT;
 
         -- 4. Partial unique index for idempotency
+        DROP INDEX IF EXISTS uix_invoice_idempotency;
         CREATE UNIQUE INDEX IF NOT EXISTS uix_invoice_idempotency
-            ON invoices (tenant_id, sales_order_id, idempotency_key)
+            ON invoices (idempotency_key)
             WHERE idempotency_key IS NOT NULL;
 
         -- 5. Index on state for queries
         CREATE INDEX IF NOT EXISTS ix_invoices_state
-            ON invoices (tenant_id, state);
+            ON invoices (state);
         """
     )
 

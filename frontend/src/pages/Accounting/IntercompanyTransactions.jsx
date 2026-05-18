@@ -260,7 +260,7 @@ function IntercompanyTransactions() {
             <div className="workspace-header">
                 <BackButton />
                 <div>
-                    <h1 className="workspace-title">{t('accounting.intercompany')}</h1>
+                    <h1 className="workspace-title">{t('accounting.intercompany.title', 'المعاملات بين الشركات')}</h1>
                     <p className="workspace-subtitle">{t('accounting.intercompany_desc')}</p>
                 </div>
             </div>

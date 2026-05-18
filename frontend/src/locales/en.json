@@ -1536,6 +1536,7 @@
     "export_failed": "Export failed",
     "advanced_payroll": "Advanced Payroll",
     "overtime_requests": {
+      "title": "Overtime Requests",
       "statuses": {
         "pending": "Pending",
         "approved": "Approved",
@@ -1547,6 +1548,7 @@
     "export_gosi_file": "Export GOSI File",
     "hr_management": "HR Management",
     "employee_documents": {
+      "title": "Employee Documents",
       "types": {
         "passport": "Passport",
         "residence": "Residence Permit",
@@ -1558,6 +1560,7 @@
       }
     },
     "performance_reviews": {
+      "title": "Performance Reviews",
       "frequencies": {
         "quarterly": "Quarterly",
         "semi_annual": "Semi-Annual",
@@ -1565,6 +1568,7 @@
       }
     },
     "training_programs": {
+      "title": "Training Programs",
       "statuses": {
         "planned": "Planned",
         "in_progress": "In Progress",
@@ -1574,6 +1578,7 @@
     },
     "violations_penalties": "Violations & Penalties",
     "custody_management": {
+      "title": "Custody Management",
       "item_types": {
         "laptop": "Laptop",
         "phone": "Phone",
@@ -5696,6 +5701,7 @@
     "ic_transactions": "IC Transactions",
     "ic_transfer": "IC Transfer",
     "intercompany": {
+      "title": "Intercompany Transactions",
       "table": {
         "reference": "Reference",
         "entities": "Entities",

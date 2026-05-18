@@ -4,7 +4,7 @@ AMAN ERP - Expenses Module
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal
@@ -19,6 +19,7 @@ from utils.accounting import (
 )
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.treasury_balance import recalc_treasury_from_gl
 import logging
 
 logger = logging.getLogger(__name__)
@@ -616,11 +617,7 @@ async def create_expense(
                     ), {"id": expense.treasury_id}).scalar() or 0
                     if Decimal(str(treasury_balance)) < Decimal(str(expense.amount)):
                         raise HTTPException(status_code=400, detail=i18n_message("insufficient_treasury_balance", request))
-                    db.execute(text("""
-                        UPDATE treasury_accounts 
-                        SET current_balance = current_balance - :amt 
-                        WHERE id = :id
-                    """), {"amt": str(expense.amount), "id": expense.treasury_id})
+                    recalc_treasury_from_gl(db, expense.treasury_id)
                 
                 # Update project actual_cost if linked
                 if expense.project_id:
@@ -867,11 +864,7 @@ async def approve_expense(
                     ), {"id": expense["treasury_id"]}).scalar() or 0
                     if Decimal(str(treasury_balance)) < Decimal(str(expense["amount"])):
                         raise HTTPException(status_code=400, detail=i18n_message("insufficient_treasury_balance", request))
-                    db.execute(text("""
-                        UPDATE treasury_accounts 
-                        SET current_balance = current_balance - :amt 
-                        WHERE id = :id
-                    """), {"amt": str(expense["amount"]), "id": expense["treasury_id"]})
+                    recalc_treasury_from_gl(db, expense["treasury_id"])
                 
                 # Update project actual_cost if linked
                 if expense["project_id"]:
@@ -982,13 +975,8 @@ async def reverse_expense(
 
         amount = Decimal(str(expense["amount"]))
 
-        # Reverse treasury balance.
         if expense["treasury_id"]:
-            db.execute(text("""
-                UPDATE treasury_accounts
-                SET current_balance = current_balance + :amt
-                WHERE id = :id
-            """), {"amt": str(amount), "id": expense["treasury_id"]})
+            recalc_treasury_from_gl(db, expense["treasury_id"])
 
         # Reverse project actual_cost.
         if expense["project_id"]:
@@ -1204,4 +1192,3 @@ async def get_monthly_expenses(
         """), params).fetchall()
         
         return [dict(r._mapping) for r in result]
-

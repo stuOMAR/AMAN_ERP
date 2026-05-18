@@ -1,6 +1,6 @@
 """Customer receipts and payments (vouchers) endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import List, Optional
 from datetime import datetime
@@ -23,12 +23,26 @@ logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str:
+    return user.get("username") if isinstance(user, dict) else user.username
+
+
 # --- Customer Receipts (Payment Vouchers) ---
 
-@vouchers_router.post("/receipts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
+@vouchers_router.post("/receipts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.receipt"))])
 def create_customer_receipt(request: Request, data: CustomerReceiptCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء سند قبض من عميل"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
         base_currency = get_base_currency(db)
@@ -72,7 +86,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
             "treasury": selected_treasury_id,
             "check_num": data.check_number, "check_date": data.check_date,
-            "ref": data.reference, "notes": data.notes, "user": current_user.id,
+            "ref": data.reference, "notes": data.notes, "user": _user_id(current_user),
             "bid": branch_id,
             "curr": currency, "rate": exchange_rate
         }).fetchone()
@@ -157,11 +171,11 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 
         je_id, je_num = create_journal_entry(
             db=db,
-            company_id=current_user.company_id,
+            company_id=_company_id(current_user),
             date=str(data.voucher_date),
             description=f"Customer Receipt {voucher_num} ({currency})",
             lines=je_lines,
-            user_id=current_user.id,
+            user_id=_user_id(current_user),
             branch_id=branch_id,
             reference=voucher_num,
             status="posted",
@@ -180,7 +194,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 
         db.commit()
         # T12 — scoped invalidation: receipt voucher hits treasury + AR + reports.
-        invalidate_aggregates(str(current_user.company_id),
+        invalidate_aggregates(str(_company_id(current_user)),
                               "treasury", "invoices", "sales_kpi",
                               "reports", "dashboard")
         
@@ -189,8 +203,8 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
         # AUDIT LOG
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.receipt.create",
             resource_type="payment_voucher",
             resource_id=str(voucher_id),
@@ -211,7 +225,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                 "title": i18n_message("notif_payment_collected", request),
                 "message": i18n_message("payment_collected_details", request),
                 "link": f"/sales/receipts/{voucher_id}",
-                "current_uid": current_user.id
+                "current_uid": _user_id(current_user)
             })
         except Exception:
             logger.warning("Failed to send receipt notification", exc_info=True)
@@ -230,7 +244,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 @vouchers_router.post("/payments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
 def create_customer_payment(request: Request, data: CustomerPaymentCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء سند صرف لعميل (رد مبلغ)"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
         base_currency = get_base_currency(db)
@@ -274,7 +288,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
             "treasury": selected_treasury_id,
             "check_num": data.check_number, "check_date": data.check_date,
-            "ref": data.reference, "notes": data.notes, "user": current_user.id,
+            "ref": data.reference, "notes": data.notes, "user": _user_id(current_user),
             "bid": branch_id,
             "curr": currency, "rate": exchange_rate
         }).fetchone()
@@ -363,11 +377,11 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
 
         je_id, je_num = create_journal_entry(
             db=db,
-            company_id=current_user.company_id,
+            company_id=_company_id(current_user),
             date=str(data.voucher_date),
             description=f"Customer Payment {voucher_num} ({currency})",
             lines=valid_lines,
-            user_id=current_user.id,
+            user_id=_user_id(current_user),
             branch_id=branch_id,
             reference=voucher_num,
             status="posted",
@@ -385,7 +399,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
 
         db.commit()
         # T12 — scoped invalidation (payment voucher)
-        invalidate_aggregates(str(current_user.company_id),
+        invalidate_aggregates(str(_company_id(current_user)),
                               "treasury", "invoices", "sales_kpi",
                               "reports", "dashboard")
         
@@ -394,8 +408,8 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
         # AUDIT LOG
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.payment.create",
             resource_type="payment_voucher",
             resource_id=str(voucher_id),
@@ -419,7 +433,7 @@ def list_customer_receipts(branch_id: Optional[int] = None, current_user: dict =
     """قائمة سندات القبض"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         query_str = """
             SELECT pv.id, pv.voucher_number, pv.voucher_date, pv.amount,
@@ -446,7 +460,7 @@ def list_customer_payments(branch_id: Optional[int] = None, current_user: dict =
     """قائمة سندات الصرف (العملاء)"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         query_str = """
             SELECT pv.id, pv.voucher_number, pv.voucher_date, pv.amount,
@@ -471,7 +485,7 @@ def list_customer_payments(branch_id: Optional[int] = None, current_user: dict =
 @vouchers_router.get("/payments/{voucher_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_payment_details(request: Request, voucher_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل سند صرف"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Get Header
         header = db.execute(text("""
@@ -499,7 +513,7 @@ def get_payment_details(request: Request, voucher_id: int, current_user: dict = 
 @vouchers_router.get("/receipts/{voucher_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_receipt_details(request: Request, voucher_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل سند قبض"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Get Header
         header = db.execute(text("""
@@ -560,14 +574,14 @@ def auto_match_receipt(
       2. FIFO fill: apply remainder to oldest open invoices until exhausted.
     Only invoices for the same customer are considered.
     """
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         v = db.execute(
             text(
                 """
-                SELECT id, party_id, amount
+                SELECT id, party_id, amount, status
                 FROM payment_vouchers
-                WHERE id = :id AND voucher_type = 'customer_receipt'
+                WHERE id = :id AND voucher_type = 'receipt' AND party_type = 'customer'
                 FOR UPDATE
                 """
             ),
@@ -575,6 +589,8 @@ def auto_match_receipt(
         ).fetchone()
         if not v:
             raise HTTPException(**http_error(404, "voucher_not_found"))
+        if v.status == "cancelled":
+            raise HTTPException(**http_error(400, "voucher_cancelled", request))
 
         already = db.execute(
             text("SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE voucher_id = :vid"),
@@ -660,8 +676,8 @@ def auto_match_receipt(
         db.commit()
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="payments.auto_match",
             resource_type="voucher",
             resource_id=str(voucher_id),

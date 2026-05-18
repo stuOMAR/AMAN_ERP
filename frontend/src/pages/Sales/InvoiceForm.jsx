@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { salesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
 import { taxesAPI } from '../../services/taxes'
@@ -19,6 +19,7 @@ function InvoiceForm() {
     const location = useLocation()
     const currency = getCurrency()
     const [loading, setLoading] = useState(false)
+    const submittingRef = useRef(false)
     const [initialLoad, setInitialLoad] = useState(true)
     const [customers, setCustomers] = useState([])
     const [customerGroups, setCustomerGroups] = useState([])
@@ -283,18 +284,27 @@ function InvoiceForm() {
         return localTotals
     }
 
+    const buildCalculationPayload = () => ({
+        lines: items.map(i => ({
+            product_id: i.product_id ? Number(i.product_id) : null,
+            quantity: Number(i.quantity) || 0,
+            unit_price: Number(i.unit_price) || 0,
+            discount: Number(i.discount) || 0,
+        })),
+        branch_id: currentBranch?.id || null,
+        customer_id: formData.customer_id ? Number(formData.customer_id) : null,
+        document_date: formData.invoice_date,
+        currency: formData.currency || currency,
+        paid_amount: Number(formData.paid_amount) || 0,
+    })
+
     // Call backend for accurate calculations when items change
     useEffect(() => {
         if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
-            const lines = items.map(i => ({
-                product_id: i.product_id ? Number(i.product_id) : null,
-                quantity: Number(i.quantity) || 0,
-                unit_price: Number(i.unit_price) || 0,
-                discount: Number(i.discount) || 0,
-            }))
+            const calculationPayload = buildCalculationPayload()
 
             // Quick local calc for instant feedback
-            const quick = quickCalc(lines)
+            const quick = quickCalc(calculationPayload.lines)
             setLocalTotals({
                 subtotal: quick.subtotal,
                 discount: items.reduce((s, i) => s + (Number(i.discount) || 0), 0),
@@ -307,14 +317,7 @@ function InvoiceForm() {
             })
 
             // Debounced backend calc for accurate totals
-            previewDebounced({
-                lines,
-                branch_id: currentBranch?.id || null,
-                customer_id: formData.customer_id ? Number(formData.customer_id) : null,
-                document_date: formData.invoice_date,
-                currency: formData.currency || currency,
-                paid_amount: Number(formData.paid_amount) || 0,
-            })
+            previewDebounced(calculationPayload)
         }
     }, [items, formData.currency, formData.customer_id, formData.invoice_date, formData.paid_amount, currentBranch])
 
@@ -346,11 +349,31 @@ function InvoiceForm() {
             window.scrollTo(0, 0)
             return
         }
+        if (submittingRef.current) {
+            return
+        }
+        submittingRef.current = true
         setLoading(true)
         setError(null)
 
         try {
-            const totals = getTotals();
+            const previewResult = await preview(buildCalculationPayload())
+            if (!previewResult) {
+                setError('تعذر احتساب إجمالي الفاتورة، يرجى المحاولة مرة أخرى')
+                window.scrollTo(0, 0)
+                return
+            }
+            const totals = {
+                subtotal: previewResult.subtotal || 0,
+                discount: previewResult.total_discount || 0,
+                markup: 0,
+                tax: previewResult.total_tax || 0,
+                total: previewResult.grand_total || 0,
+                globalEffectType: 'discount',
+                globalEffectPercent: 0,
+                globalMakeupAmount: 0,
+                globalDiscountAmount: previewResult.total_discount || 0,
+            };
             const payload = {
                 ...formData,
                 branch_id: currentBranch ? currentBranch.id : null,
@@ -379,6 +402,7 @@ function InvoiceForm() {
         } catch (err) {
             setError(err.response?.data?.detail || t('sales.invoices.form.error_save'))
         } finally {
+            submittingRef.current = false
             setLoading(false)
         }
     }
@@ -632,7 +656,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="cash"
                                         checked={formData.payment_method === 'cash'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total, treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.cash')}
                                 </label>
@@ -640,7 +664,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="bank"
                                         checked={formData.payment_method === 'bank'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total, treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.bank')}
                                 </label>
@@ -648,7 +672,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="credit"
                                         checked={formData.payment_method === 'credit'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: 0, treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.credit')}
                                 </label>
@@ -657,6 +681,19 @@ function InvoiceForm() {
 
                         {formData.payment_method && formData.payment_method !== 'credit' && (
                             <div className="form-group animate-fade-in">
+                                <label className="form-label">{t('sales.invoices.form.payment.paid_amount')}</label>
+                                <div className="input-with-suffix" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                                    <input
+                                        type="number"
+                                        className="form-input"
+                                        step={getStep()}
+                                        min="0"
+                                        max={getTotals().total}
+                                        value={formData.paid_amount}
+                                        onChange={e => setFormData({ ...formData, paid_amount: Math.min(Number(e.target.value) || 0, getTotals().total) })}
+                                    />
+                                    <span className="input-suffix">{formData.currency}</span>
+                                </div>
                                 <label className="form-label">
                                     {formData.payment_method === 'bank' ? (t('treasury.accounts.bank')) : (t('treasury.accounts.cash'))}
                                 </label>
@@ -692,8 +729,10 @@ function InvoiceForm() {
                                 <div className="input-with-suffix" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                                     <input
                                         type="number" className="form-input" step={getStep()}
+                                        min="0"
+                                        max={getTotals().total}
                                         value={formData.paid_amount}
-                                        onChange={e => setFormData({ ...formData, paid_amount: Number(e.target.value) || 0 })}
+                                        onChange={e => setFormData({ ...formData, paid_amount: Math.min(Number(e.target.value) || 0, getTotals().total) })}
                                     />
                                     <span className="input-suffix">{formData.currency}</span>
                                 </div>

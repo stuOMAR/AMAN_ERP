@@ -280,9 +280,14 @@ def create_supplier(
         ), {"pid": pid}).fetchone()
         
         if not existing_site:
-            db.execute(text("""
+            # F-NEW-002: capture the new site id atomically via RETURNING
+            # rather than `SELECT LASTVAL()`, which is fragile if any other
+            # INSERT consumes a sequence between the two statements on the
+            # same session.
+            site_row = db.execute(text("""
                 INSERT INTO party_sites (party_id, site_name, site_name_en, country, country_code, currency, phone, is_default, is_active)
                 VALUES (:pid, :name, :name_en, :country, :cc, :cur, :phone, TRUE, TRUE)
+                RETURNING id
             """), {
                 "pid": pid,
                 "name": supplier.name,
@@ -291,10 +296,10 @@ def create_supplier(
                 "cc": "",
                 "cur": sup_currency,
                 "phone": supplier.phone
-            })
-            
+            }).fetchone()
+
             # تحديث default_site_id
-            site_id = db.execute(text("SELECT LASTVAL() as id"), {}).fetchone().id
+            site_id = site_row.id
             db.execute(text("UPDATE parties SET default_site_id = :sid WHERE id = :pid"),
                       {"sid": site_id, "pid": pid})
 

@@ -4,14 +4,14 @@ This file is auto-generated when purchases.py was split. Endpoints here
 are mounted under the parent /buying prefix via purchases/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache
+from utils.cache import invalidate_company_cache, cached
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
@@ -501,7 +501,7 @@ def receive_purchase_order(
             """), {"id": receive_data.warehouse_id}).fetchone()
             if not wh_row:
                 raise HTTPException(**http_error(400, "warehouse_not_found", request))
-            if po.branch_id and wh_row.branch_id and int(wh_row.branch_id) != int(po.branch_id):
+            if po.branch_id and (not wh_row.branch_id or int(wh_row.branch_id) != int(po.branch_id)):
                 raise HTTPException(**http_error(400, "warehouse_not_in_po_branch", request))
     
             # QA-F1: block receiving when any quality inspection tied to this PO is FAILED.
@@ -710,7 +710,12 @@ def receive_purchase_order(
             check_fiscal_period_open(db, datetime.now().date())
     
             if receipt_value_base > _D2:
-                acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
+                # F-31: book inventory receipt against the destination warehouse's
+                # mapped account so per-warehouse / per-branch valuation is real.
+                from utils.inventory_accounts import resolve_warehouse_inventory_account
+                acc_inventory = resolve_warehouse_inventory_account(
+                    db, receive_data.warehouse_id
+                )
                 acc_unbilled = get_mapped_account_id(db, "acc_map_unbilled_purchases")
                 
                 if acc_inventory and acc_unbilled:
@@ -768,11 +773,12 @@ def receive_purchase_order(
 
 # === Purchases Summary ===
 @router.get("/summary", dependencies=[Depends(require_permission("buying.view"))], response_model=dict)
+@cached("purchases", expire=30)
 def get_purchases_summary(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """جلب ملخص إحصائيات المشتريات"""
+    """جلب ملخص إحصائيات المشتريات (مُكَش بـ TTL 30s — يُلغى تلقائياً عبر invalidate_aggregates('purchases'))"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
         if branch_id:

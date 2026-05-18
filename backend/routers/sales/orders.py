@@ -1,6 +1,6 @@
 """Sales orders endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -24,12 +24,24 @@ def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str:
+    return user.get("username") if isinstance(user, dict) else user.username
+
+
 @orders_router.get("/orders", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_sales_orders(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض قائمة أوامر البيع"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         query_str = """
             SELECT so.*, p.name as customer_name 
@@ -48,10 +60,104 @@ def list_sales_orders(branch_id: Optional[int] = None, current_user: dict = Depe
         db.close()
 
 
+@orders_router.post("/orders/{order_id}/cancel", dependencies=[Depends(require_permission("sales.void"))], response_model=Dict[str, Any])
+def cancel_sales_order(request: Request, order_id: int, current_user: dict = Depends(get_current_user)):
+    """إلغاء أمر بيع draft وتحرير حجوزات المخزون المرتبطة به."""
+    db = get_db_connection(_company_id(current_user))
+    user_id = _user_id(current_user)
+    username = _username(current_user)
+    try:
+        order = db.execute(text("""
+            SELECT *
+            FROM sales_orders
+            WHERE id = :id
+            FOR UPDATE
+        """), {"id": order_id}).fetchone()
+        if not order:
+            raise HTTPException(**http_error(404, "sales_order_not_found", request))
+
+        if order.branch_id:
+            validate_branch_access(current_user, order.branch_id)
+
+        if order.status == "cancelled":
+            raise HTTPException(**http_error(400, "sales_order_already_cancelled", request))
+        if order.status not in ("draft", "pending", "approved"):
+            raise HTTPException(status_code=400, detail=i18n_message("sales_order_cannot_cancel_status", request))
+
+        lines = db.execute(text("""
+            SELECT product_id, quantity
+            FROM sales_order_lines
+            WHERE so_id = :id
+        """), {"id": order_id}).fetchall()
+
+        if order.warehouse_id:
+            for line in lines:
+                qty = _dec(line.quantity)
+                if qty <= 0:
+                    continue
+                db.execute(text("""
+                    UPDATE inventory
+                    SET reserved_quantity = GREATEST(0, COALESCE(reserved_quantity, 0) - :qty),
+                        updated_at = NOW()
+                    WHERE product_id = :pid AND warehouse_id = :wid
+                """), {
+                    "pid": line.product_id,
+                    "wid": order.warehouse_id,
+                    "qty": qty,
+                })
+                db.execute(text("""
+                    INSERT INTO inventory_transactions (
+                        product_id, warehouse_id, transaction_type, reference_type,
+                        reference_id, reference_document, quantity, notes, created_by
+                    ) VALUES (
+                        :pid, :wid, 'reservation_release', 'sales_order_cancel',
+                        :ref_id, :ref_doc, :qty, :notes, :user
+                    )
+                """), {
+                    "pid": line.product_id,
+                    "wid": order.warehouse_id,
+                    "ref_id": order_id,
+                    "ref_doc": order.so_number,
+                    "qty": -qty,
+                    "notes": "Release reservation for cancelled Sales Order",
+                    "user": user_id,
+                })
+
+        db.execute(text("""
+            UPDATE sales_orders
+            SET status = 'cancelled', updated_at = NOW()
+            WHERE id = :id
+        """), {"id": order_id})
+
+        db.commit()
+        log_activity(
+            db,
+            user_id=user_id,
+            username=username,
+            action="sales.order.cancel",
+            resource_type="sales_order",
+            resource_id=str(order_id),
+            details={"so_number": order.so_number, "total": str(order.total or 0)},
+            request=request,
+            branch_id=order.branch_id,
+        )
+        return {"success": True, "message": i18n_message("sales_order_cancelled", request)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception as e:
+        db.rollback()
+        logger.error(f"Error cancelling Sales Order: {str(e)}")
+        logger.exception("Internal error")
+        raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
 @orders_router.get("/orders/{order_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_sales_order(order_id: int, current_user: dict = Depends(get_current_user)):
     """جلب تفاصيل أمر البيع"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Header
         query = """
@@ -90,7 +196,10 @@ def get_sales_order(order_id: int, current_user: dict = Depends(get_current_user
 @orders_router.post("/orders", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_sales_order(request: Request, data: SOCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء أمر بيع جديد"""
-    db = get_db_connection(current_user.company_id)
+    company_id = _company_id(current_user)
+    user_id = _user_id(current_user)
+    username = _username(current_user)
+    db = get_db_connection(company_id)
     try:
         # 0. Validate quotation if provided
         if data.quotation_id:
@@ -167,7 +276,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         """), {
             "num": so_num, "cust": data.customer_id, "odate": data.order_date,
             "edate": data.expected_delivery_date, "sub": subtotal, "tax": total_tax,
-            "disc": total_discount, "total": grand_total, "notes": data.notes, "user": current_user.id,
+            "disc": total_discount, "total": grand_total, "notes": data.notes, "user": user_id,
             "bid": validated_branch_id, "whid": data.warehouse_id, "qid": data.quotation_id,
             "currency": data.currency, "exchange_rate": data.exchange_rate,
             "party_site_id": data.party_site_id,
@@ -192,33 +301,29 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
 
             # 5. Inventory Reservation
             if data.warehouse_id:
-                # Check/Create inventory record
                 inv = db.execute(text("""
-                    SELECT id, quantity, reserved_quantity FROM inventory 
-                    WHERE product_id = :pid AND warehouse_id = :wid
-                """), {"pid": line["product_id"], "wid": data.warehouse_id}).fetchone()
+                    UPDATE inventory
+                    SET reserved_quantity = COALESCE(reserved_quantity, 0) + :qty,
+                        last_costing_update = NOW(),
+                        updated_at = NOW()
+                    WHERE product_id = :pid
+                      AND warehouse_id = :wid
+                      AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                    RETURNING id
+                """), {
+                    "pid": line["product_id"],
+                    "wid": data.warehouse_id,
+                    "qty": line["quantity"],
+                }).fetchone()
 
                 if not inv:
-                    # Create new inventory record if not exists
-                    inv_id = db.execute(text("""
-                        INSERT INTO inventory (product_id, warehouse_id, quantity, reserved_quantity, available_quantity)
-                        VALUES (:pid, :wid, 0, 0, 0) RETURNING id
+                    exists = db.execute(text("""
+                        SELECT 1 FROM inventory
+                        WHERE product_id = :pid AND warehouse_id = :wid
                     """), {"pid": line["product_id"], "wid": data.warehouse_id}).scalar()
-                    current_qty = Decimal('0')
-                    current_reserved = Decimal('0')
-                else:
-                    inv_id = inv.id
-                    current_qty = _dec(inv.quantity)
-                    current_reserved = _dec(inv.reserved_quantity)
-
-                new_reserved = current_reserved + _dec(line["quantity"])
-                new_available = current_qty - new_reserved
-
-                db.execute(text("""
-                    UPDATE inventory 
-                    SET reserved_quantity = :reserved, available_quantity = :available, last_costing_update = NOW()
-                    WHERE id = :id
-                """), {"reserved": new_reserved, "available": new_available, "id": inv_id})
+                    if not exists:
+                        raise HTTPException(**http_error(400, "no_inventory_record_product", request))
+                    raise HTTPException(**http_error(400, "insufficient_stock_product", request))
 
                 # Log Transaction
                 db.execute(text("""
@@ -236,7 +341,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
                     "ref_doc": so_num,
                     "qty": _dec(line["quantity"]),
                     "notes": "Reservation for Sales Order",
-                    "user": current_user.id
+                    "user": user_id
                 })
 
         # Update quotation status to 'converted' if applicable
@@ -245,7 +350,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
                 UPDATE sales_quotations
                 SET status = 'converted', updated_at = NOW(), updated_by = :user
                 WHERE id = :qid
-            """), {"qid": data.quotation_id, "user": current_user.username})
+            """), {"qid": data.quotation_id, "user": username})
 
         db.commit()
 
@@ -253,8 +358,8 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         # AUDIT LOG
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=user_id,
+            username=username,
             action="sales.order.create",
             resource_type="sales_order",
             resource_id=str(so_id),

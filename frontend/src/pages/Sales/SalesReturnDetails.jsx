@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { salesAPI } from '../../utils/api';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
 import { formatNumber } from '../../utils/format';
 import { useToast } from '../../context/ToastContext';
@@ -19,6 +19,7 @@ const SalesReturnDetails = () => {
     const [ret, setRet] = useState(null);
     const [loading, setLoading] = useState(true);
     const [approving, setApproving] = useState(false);
+    const [cancelling, setCancelling] = useState(false);
 
     useEffect(() => {
         fetchData();
@@ -47,6 +48,21 @@ const SalesReturnDetails = () => {
             showToast(t('common.error'), 'error');
         } finally {
             setApproving(false);
+        }
+    };
+
+    const handleCancel = async () => {
+        if (!window.confirm(t('common.confirm_cancel', 'هل أنت متأكد من الإلغاء؟'))) return;
+
+        try {
+            setCancelling(true);
+            await salesAPI.cancelReturn(id);
+            showToast(t('common.success'), 'success');
+            fetchData();
+        } catch (error) {
+            showToast(error.response?.data?.detail || t('common.error'), 'error');
+        } finally {
+            setCancelling(false);
         }
     };
 
@@ -79,6 +95,15 @@ const SalesReturnDetails = () => {
                             className="btn btn-primary"
                         >
                             {approving ? t('sales.returns.details.approving') : '✅ ' + t('sales.returns.details.approve')}
+                        </button>
+                    )}
+                    {hasPermission('sales.approve_return') && ret.status !== 'cancelled' && (
+                        <button
+                            onClick={handleCancel}
+                            disabled={cancelling}
+                            className="btn btn-danger"
+                        >
+                            {cancelling ? t('common.loading', '...') : t('common.cancel')}
                         </button>
                     )}
                     <button onClick={() => navigate('/sales/returns')} className="btn btn-secondary">

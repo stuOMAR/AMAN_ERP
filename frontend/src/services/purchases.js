@@ -4,6 +4,7 @@ export const purchasesAPI = {
     createInvoice: (data) => api.post('/buying/invoices', data),
     listInvoices: (params) => api.get('/buying/invoices', { params }),
     getInvoice: (id) => api.get(`/buying/invoices/${id}`),
+    cancelInvoice: (id) => api.post(`/buying/invoices/${id}/cancel`),
 
     // Suppliers are owned by the inventory/parties router and reused by buying flows.
     listSuppliers: (params) => api.get('/inventory/suppliers', { params }),
@@ -34,6 +35,7 @@ export const purchasesAPI = {
     listReturns: (params) => api.get('/buying/returns', { params }),
     createReturn: (data) => api.post('/buying/returns', data),
     getReturn: (id) => api.get(`/buying/returns/${id}`),
+    cancelReturn: (id) => api.post(`/buying/returns/${id}/cancel`),
 
     // Purchase Credit Notes
     listCreditNotes: (params) => api.get('/buying/credit-notes', { params }),

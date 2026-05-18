@@ -95,6 +95,11 @@ def list_products(
             limit=limit,
             offset=skip,
         )
+        # INV-COST: Hide cost data from users without stock.view_cost permission.
+        from utils.permissions import check_permission
+        user_perms = getattr(current_user, 'permissions', []) or []
+        can_view_cost = check_permission(user_perms, "stock.view_cost")
+
         return [
             {
                 "id": r["id"],
@@ -104,9 +109,9 @@ def list_products(
                 "item_type": r.get("product_type"),
                 "unit": r.get("unit_of_measure") or "قطعة",
                 "selling_price": str(r.get("selling_price") or 0),
-                "buying_price": str(r.get("cost_price") or 0),
-                "branch_avg_cost": str(r.get("branch_avg_cost") or r.get("cost_price") or 0),
-                "last_buying_price": str(r.get("last_purchase_price") or 0),
+                "buying_price": str(r.get("cost_price") or 0) if can_view_cost else "0",
+                "branch_avg_cost": str(r.get("branch_avg_cost") or r.get("cost_price") or 0) if can_view_cost else "0",
+                "last_buying_price": str(r.get("last_purchase_price") or 0) if can_view_cost else "0",
                 "tax_rate": str(r.get("tax_rate") or 0),
                 "tax_rate_id": r.get("tax_rate_id"),
                 "is_exempt": r.get("is_exempt") or False,
@@ -373,6 +378,15 @@ def get_product(id: int, current_user: dict = Depends(get_current_user)):
         if not product:
             raise HTTPException(**http_error(404, "product_not_found"))
 
+        # INV-COST: Hide cost data from users without stock.view_cost permission.
+        from utils.permissions import check_permission
+        user_perms = getattr(current_user, 'permissions', []) or []
+        if not check_permission(user_perms, "stock.view_cost"):
+            data = dict(product._mapping)
+            data["buying_price"] = 0
+            data["last_buying_price"] = 0
+            return data
+
         return product
     finally:
         db.close()
@@ -514,12 +528,34 @@ def delete_product(
         if stock and stock > 0:
             raise HTTPException(**http_error(400, "cannot_delete_product_with_stock", request))
 
-        # Check if product is used in any transactions
+        # Check if product is used in any transactions (comprehensive check)
         usage = db.execute(text("""
             SELECT COUNT(*) FROM (
                 SELECT 1 FROM invoice_lines WHERE product_id = :id
                 UNION ALL
                 SELECT 1 FROM purchase_order_lines WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM inventory_transactions WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM cost_layers WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM product_batches WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM product_serials WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM pos_order_lines WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM pos_return_items pri
+                    JOIN pos_order_lines pol ON pri.original_item_id = pol.id
+                    WHERE pol.product_id = :id
+                UNION ALL
+                SELECT 1 FROM cycle_count_items WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM delivery_order_lines WHERE product_id = :id
+                UNION ALL
+                SELECT 1 FROM stock_shipment_items si
+                    JOIN stock_shipments s ON si.shipment_id = s.id
+                    WHERE si.product_id = :id AND s.status NOT IN ('cancelled')
             ) AS usage
         """), {"id": id}).scalar()
 

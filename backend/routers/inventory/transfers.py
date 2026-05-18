@@ -3,7 +3,7 @@ Inventory Module - Stock Transfers (Single-item with GL + Multi-item)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -14,15 +14,70 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
 from utils.permissions import require_permission
+from utils.quantity_validation import validate_quantities_for_products
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tx import transactional
 from .schemas import StockTransferSingleCreate, StockTransferCreate
 
 transfers_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
-@transfers_router.post("/transfers", dependencies=[Depends(require_permission("stock.adjustment"))])
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str | None:
+    return user.get("username") if isinstance(user, dict) else getattr(user, "username", None)
+
+
+def _user_permissions(user) -> list:
+    return user.get("permissions", []) if isinstance(user, dict) else (getattr(user, "permissions", []) or [])
+
+
+def _allowed_branches(user) -> list:
+    return user.get("allowed_branches", []) if isinstance(user, dict) else (getattr(user, "allowed_branches", []) or [])
+
+
+def _warehouse_info(db, warehouse_id: int, base_currency: str):
+    return db.execute(text("""
+        SELECT w.id,
+               w.warehouse_name,
+               w.branch_id,
+               w.gl_inventory_account_id,
+               COALESCE(b.default_currency, :base_currency) AS branch_currency
+        FROM warehouses w
+        LEFT JOIN branches b ON b.id = w.branch_id
+        WHERE w.id = :id
+    """), {"id": warehouse_id, "base_currency": base_currency}).fetchone()
+
+
+def _resolve_inventory_account_for_wh(db, wh_row) -> int | None:
+    """Return the inventory GL account for a warehouse with global fallback.
+
+    Equivalent to ``utils.inventory_accounts.resolve_warehouse_inventory_account``
+    but reuses the already-fetched warehouse row to avoid an extra query.
+    """
+    if wh_row and wh_row.gl_inventory_account_id:
+        return int(wh_row.gl_inventory_account_id)
+    from utils.accounting import get_mapped_account_id
+    acc = get_mapped_account_id(db, "acc_map_inventory")
+    return int(acc) if acc else None
+
+
+def _next_transfer_doc_id(db) -> int:
+    """Allocate a stable transfer document id from the DB sequence."""
+    return int(db.execute(text("""
+        SELECT nextval(pg_get_serial_sequence('stock_transfer_log', 'id'))
+    """)).scalar())
+
+
+@transfers_router.post("/transfers", dependencies=[Depends(require_permission("stock.transfer"))])
 def create_stock_transfer(
     transfer: StockTransferSingleCreate,
     request: Request,
@@ -30,34 +85,37 @@ def create_stock_transfer(
 ):
     """تحويل مخزني مباشر بين المستودعات مع تطبيق سياسة التكلفة"""
 
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(_company_id(current_user)) as db:
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
-        user_id = current_user.id
+        user_id = _user_id(current_user)
         transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        transfer_doc_id = uuid.uuid4().int % 2147483647
+        transfer_doc_id = _next_transfer_doc_id(db)
 
         # 1. Validate source and destination are different
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
             raise HTTPException(**http_error(400, "same_warehouse_transfer", request))
 
         # 2. Check warehouses exist
-        src_wh = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"),
-                           {"id": transfer.source_warehouse_id}).fetchone()
-        dst_wh = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"),
-                           {"id": transfer.destination_warehouse_id}).fetchone()
+        src_wh = _warehouse_info(db, transfer.source_warehouse_id, base_currency)
+        dst_wh = _warehouse_info(db, transfer.destination_warehouse_id, base_currency)
 
         if not src_wh:
             raise HTTPException(**http_error(404, "source_warehouse_not_found", request))
         if not dst_wh:
             raise HTTPException(**http_error(404, "dest_warehouse_not_found", request))
 
+        # F-30: cross-currency transfers are now allowed. The journal entry
+        # is always posted in base currency against the per-warehouse
+        # inventory accounts (F-31), so the value never needs FX conversion.
+        # The branch currency is recorded on the transaction-side fields of
+        # journal_lines for reporting purposes.
+
         # INV-006: Check branch access on both warehouses
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
-            dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
+        allowed = _allowed_branches(current_user)
+        if allowed and "*" not in _user_permissions(current_user):
+            src_branch = src_wh.branch_id
+            dst_branch = dst_wh.branch_id
             if (src_branch and src_branch not in allowed) or (dst_branch and dst_branch not in allowed):
                 raise HTTPException(**http_error(403, "cross_branch_transfer_denied", request))
 
@@ -66,6 +124,9 @@ def create_stock_transfer(
                             {"id": transfer.product_id}).fetchone()
         if not product:
             raise HTTPException(**http_error(404, "product_not_found"))
+
+        # INV-QTY: Validate quantity for discrete units
+        validate_quantities_for_products(db, [{"product_id": transfer.product_id, "quantity": transfer.quantity}], request)
 
         # 4. Check available stock in source — lock row to prevent phantom stock
         source_inv = db.execute(text("""
@@ -137,8 +198,8 @@ def create_stock_transfer(
                         db,
                         product_id=transfer.product_id,
                         warehouse_id=transfer.destination_warehouse_id,
-                        quantity=float(consumed["quantity"]),
-                        unit_cost=float(consumed["unit_cost"]),
+                        quantity=consumed["quantity"],
+                        unit_cost=consumed["unit_cost"],
                         source_document_type="transfer",
                         source_document_id=transfer_doc_id,
                         costing_method=dest_method,
@@ -148,8 +209,8 @@ def create_stock_transfer(
                     db,
                     product_id=transfer.product_id,
                     warehouse_id=transfer.destination_warehouse_id,
-                    quantity=float(transfer_qty),
-                    unit_cost=float(source_cost),
+                    quantity=transfer_qty,
+                    unit_cost=source_cost,
                     source_document_type="transfer",
                     source_document_id=transfer_doc_id,
                     costing_method=dest_method,
@@ -169,8 +230,8 @@ def create_stock_transfer(
                 SET quantity = :qty, average_cost = :cost, updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
             """), {
-                "qty": float(new_total_qty),
-                "cost": float(new_avg_cost),
+                "qty": str(new_total_qty),
+                "cost": str(new_avg_cost.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                 "pid": transfer.product_id,
                 "wh": transfer.destination_warehouse_id
             })
@@ -192,8 +253,8 @@ def create_stock_transfer(
             """), {
                 "pid": transfer.product_id,
                 "wh": transfer.destination_warehouse_id,
-                "qty": transfer.quantity,
-                "cost": float(source_cost)
+                "qty": str(transfer_qty),
+                "cost": str(source_cost)
             })
             new_avg_cost = source_cost
 
@@ -209,11 +270,11 @@ def create_stock_transfer(
             "wh": transfer.source_warehouse_id,
             "ref_id": transfer_doc_id,
             "ref_doc": transfer_ref,
-            "qty": -transfer.quantity,
+            "qty": str(-transfer_qty),
             "notes": transfer.notes or f"تحويل إلى {dst_wh.warehouse_name}",
             "user": user_id,
-            "unit_cost": float(source_cost),
-            "total_cost": float(transfer_value),
+            "unit_cost": str(source_cost),
+            "total_cost": str(transfer_value),
         })
 
         db.execute(text("""
@@ -227,11 +288,11 @@ def create_stock_transfer(
             "wh": transfer.destination_warehouse_id,
             "ref_id": transfer_doc_id,
             "ref_doc": transfer_ref,
-            "qty": transfer.quantity,
+            "qty": str(transfer_qty),
             "notes": transfer.notes or f"تحويل من {src_wh.warehouse_name}",
             "user": user_id,
-            "unit_cost": float(source_cost),
-            "total_cost": float(transfer_value),
+            "unit_cost": str(source_cost),
+            "total_cost": str(transfer_value),
         })
 
         # 9. Log in stock_transfer_log for V2 tracking
@@ -244,34 +305,61 @@ def create_stock_transfer(
             "pid": transfer.product_id,
             "fwh": transfer.source_warehouse_id,
             "twh": transfer.destination_warehouse_id,
-            "qty": transfer.quantity,
-            "tcost": float(source_cost),
-            "fcast": float(source_cost),
-            "tcast_b": float(dest_cost_before),
-            "tcast_a": float(new_avg_cost)
+            "qty": str(transfer_qty),
+            "tcost": str(source_cost),
+            "fcast": str(source_cost),
+            "tcast_b": str(dest_cost_before),
+            "tcast_a": str(new_avg_cost)
         })
 
-        # 9b. Create GL Journal Entry for warehouse transfer via GL service
-        src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
-        dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
+        # 9b. Create GL Journal Entry for warehouse transfer via GL service.
+        # F-31: use per-warehouse inventory accounts so the entry has real
+        # ledger meaning when src/dst are mapped to different accounts.
+        # When both warehouses share the same account (or fall back to the
+        # global mapping) the result is the legacy debit/credit on a single
+        # account, which still keeps the trial balance reconciled.
+        src_branch = src_wh.branch_id
+        dst_branch = dst_wh.branch_id
 
         gl_transfer_value = float(transfer_value)
         if gl_transfer_value > 0.01:
-            from utils.accounting import get_mapped_account_id
+            src_inv_acc = _resolve_inventory_account_for_wh(db, src_wh)
+            dst_inv_acc = _resolve_inventory_account_for_wh(db, dst_wh)
 
-            acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
-
-            if acc_inventory:
+            if src_inv_acc and dst_inv_acc:
                 transfer_date = datetime.now().strftime("%Y-%m-%d")
                 # Fiscal-period lock: block posting into a closed period.
                 check_fiscal_period_open(db, transfer_date)
+                # F-30: capture per-side currency on the transactional fields
+                # (txn_currency / txn_amount) while keeping the booking-side
+                # value in base currency for clean balancing.
+                src_currency = (src_wh.branch_currency or base_currency).upper()
+                dst_currency = (dst_wh.branch_currency or base_currency).upper()
                 lines = [
-                    {"account_id": acc_inventory, "debit": gl_transfer_value, "credit": 0, "description": f"Transfer In - {dst_wh.warehouse_name}"},
-                    {"account_id": acc_inventory, "debit": 0, "credit": gl_transfer_value, "description": f"Transfer Out - {src_wh.warehouse_name}"},
+                    {
+                        "account_id": dst_inv_acc,
+                        "debit": gl_transfer_value,
+                        "credit": 0,
+                        "description": f"Transfer In - WH#{dst_wh.id} {dst_wh.warehouse_name} / branch {dst_branch or '-'}",
+                        "amount_currency": gl_transfer_value,
+                        "currency": base_currency,
+                        "txn_currency": dst_currency,
+                        "txn_amount": gl_transfer_value,
+                    },
+                    {
+                        "account_id": src_inv_acc,
+                        "debit": 0,
+                        "credit": gl_transfer_value,
+                        "description": f"Transfer Out - WH#{src_wh.id} {src_wh.warehouse_name} / branch {src_branch or '-'}",
+                        "amount_currency": gl_transfer_value,
+                        "currency": base_currency,
+                        "txn_currency": src_currency,
+                        "txn_amount": gl_transfer_value,
+                    },
                 ]
                 gl_create_journal_entry(
                     db,
-                    company_id=current_user.company_id,
+                    company_id=_company_id(current_user),
                     date=transfer_date,
                     description=f"تحويل مخزني: {src_wh.warehouse_name} → {dst_wh.warehouse_name}",
                     lines=lines,
@@ -279,22 +367,23 @@ def create_stock_transfer(
                     branch_id=src_branch or dst_branch,
                     reference=transfer_ref,
                     currency=base_currency,
+                    source="inventory_transfer",
+                    source_id=transfer_doc_id,
+                    idempotency_key=f"inventory_transfer:{transfer_doc_id}",
                 )
 
         # 10. Log activity
         log_activity(
             db,
             user_id=user_id,
-            username=current_user.username if hasattr(current_user, 'username') else None,
+            username=_username(current_user),
             action="stock.transfer",
             resource_type="stock_transfer",
             resource_id=str(transfer.product_id),
-            details={"product": product.product_name, "qty": transfer.quantity, "from": src_wh.warehouse_name, "to": dst_wh.warehouse_name},
+            details={"product": product.product_name, "qty": str(transfer_qty), "from": src_wh.warehouse_name, "to": dst_wh.warehouse_name},
             request=request,
             branch_id=src_branch
         )
-
-        db.commit()
 
         return {
             "message": i18n_message("transfer_successful", request),
@@ -308,16 +397,6 @@ def create_stock_transfer(
             }
         }
 
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Stock transfer error: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
-
 
 @transfers_router.post("/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.transfer"))])
 def transfer_stock(
@@ -325,29 +404,45 @@ def transfer_stock(
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
-    """نقل مخزون بين المستودعات (متعدد الأصناف)"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    """نقل مخزون بين المستودعات (متعدد الأصناف).
+
+    H4: مُلَف بـ ``transactional()`` ليطابق سلوك single-item transfer ـ يضمن
+    rollback تلقائي إذا فشل GL post بعد تحريك المخزون.
+
+    M10: عند ``policy_type == 'global_wac'`` لا يتغير ``products.cost_price``
+    العام عند التحويل لأن الكمية الإجمالية للمنتج لا تتغير ـ يتغير فقط
+    ``inventory.average_cost`` لكل مستودع. هذا متعمد ومتسق مع نموذج WAC.
+    """
+    with transactional(_company_id(current_user)) as db:
+        from utils.accounting import get_base_currency
+        base_currency = get_base_currency(db)
+        user_id = _user_id(current_user)
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
             raise HTTPException(**http_error(400, "cannot_transfer_same_warehouse", request))
 
         # Validate warehouses exist
-        src = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).fetchone()
-        dst = db.execute(text("SELECT warehouse_name FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).fetchone()
+        src = _warehouse_info(db, transfer.source_warehouse_id, base_currency)
+        dst = _warehouse_info(db, transfer.destination_warehouse_id, base_currency)
 
         if not src or not dst:
             raise HTTPException(**http_error(404, "warehouse_not_found"))
+        # F-30: cross-currency transfers are allowed (see single-item endpoint
+        # for the rationale). JE posted in base currency against per-warehouse
+        # inventory accounts (F-31).
 
         # INV-006: Check branch access on both warehouses
-        allowed = getattr(current_user, 'allowed_branches', []) or []
-        if allowed and "*" not in getattr(current_user, 'permissions', []):
-            src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
-            dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.destination_warehouse_id}).scalar()
+        allowed = _allowed_branches(current_user)
+        if allowed and "*" not in _user_permissions(current_user):
+            src_branch = src.branch_id
+            dst_branch = dst.branch_id
             if (src_branch and src_branch not in allowed) or (dst_branch and dst_branch not in allowed):
                 raise HTTPException(**http_error(403, "cross_branch_transfer_denied", request))
 
         transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
-        transfer_doc_id = uuid.uuid4().int % 2147483647
+        transfer_doc_id = _next_transfer_doc_id(db)
+
+        # INV-QTY: Validate quantities for discrete units
+        validate_quantities_for_products(db, transfer.items, request)
 
         # INV-L04: Validate fiscal period is open before any inventory/GL movement.
         from utils.fiscal_lock import check_fiscal_period_open
@@ -441,8 +536,8 @@ def transfer_stock(
                             db,
                             product_id=item.product_id,
                             warehouse_id=transfer.destination_warehouse_id,
-                            quantity=float(consumed["quantity"]),
-                            unit_cost=float(consumed["unit_cost"]),
+                            quantity=consumed["quantity"],
+                            unit_cost=consumed["unit_cost"],
                             source_document_type="transfer",
                             source_document_id=transfer_doc_id,
                             costing_method=dest_method,
@@ -452,8 +547,8 @@ def transfer_stock(
                         db,
                         product_id=item.product_id,
                         warehouse_id=transfer.destination_warehouse_id,
-                        quantity=float(item_qty),
-                        unit_cost=float(source_cost),
+                        quantity=item_qty,
+                        unit_cost=source_cost,
                         source_document_type="transfer",
                         source_document_id=transfer_doc_id,
                         costing_method=dest_method,
@@ -471,8 +566,8 @@ def transfer_stock(
                     UPDATE inventory SET quantity = :qty, average_cost = :cost, updated_at = NOW()
                     WHERE product_id = :pid AND warehouse_id = :wh
                 """), {
-                    "qty": float(new_total_qty),
-                    "cost": float(new_avg_cost),
+                    "qty": str(new_total_qty),
+                    "cost": str(new_avg_cost.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                     "pid": item.product_id,
                     "wh": transfer.destination_warehouse_id,
                 })
@@ -493,8 +588,8 @@ def transfer_stock(
                 """), {
                     "pid": item.product_id,
                     "wh": transfer.destination_warehouse_id,
-                    "qty": item.quantity,
-                    "cost": float(source_cost),
+                    "qty": str(item_qty),
+                    "cost": str(source_cost),
                 })
 
             # 3. Log Transactions
@@ -513,11 +608,11 @@ def transfer_stock(
                 "wh": transfer.source_warehouse_id,
                 "ref_id": transfer_doc_id,
                 "ref_doc": transfer_ref,
-                "qty": -item.quantity,
+                "qty": str(-item_qty),
                 "notes": f"Transfer to {dst.warehouse_name} ({transfer_ref})",
-                "user": current_user.id,
-                "unit_cost": float(source_cost),
-                "total_cost": float(item_value),
+                "user": user_id,
+                "unit_cost": str(source_cost),
+                "total_cost": str(item_value),
             })
 
             db.execute(text("""
@@ -535,81 +630,76 @@ def transfer_stock(
                 "wh": transfer.destination_warehouse_id,
                 "ref_id": transfer_doc_id,
                 "ref_doc": transfer_ref,
-                "qty": item.quantity,
+                "qty": str(item_qty),
                 "notes": f"Transfer from {src.warehouse_name} ({transfer_ref})",
-                "user": current_user.id,
-                "unit_cost": float(source_cost),
-                "total_cost": float(item_value),
+                "user": user_id,
+                "unit_cost": str(source_cost),
+                "total_cost": str(item_value),
             })
 
-        # INV-L04: Emit one aggregate GL journal entry covering all items in this
-        # multi-item transfer (debit destination-side inventory, credit source-side
-        # inventory, both using the same acc_map_inventory account — the goods are
-        # just moving between locations, not changing book value).
+        # INV-L04 / F-31: Emit one aggregate GL journal entry covering all
+        # items in this multi-item transfer. We post Dr Inventory-Destination
+        # / Cr Inventory-Source using each warehouse's mapped account so the
+        # entry is meaningful when the two warehouses (or branches) carry
+        # separate inventory ledgers. When the same account is mapped to both
+        # warehouses the result collapses to the legacy in-place debit/credit.
         if total_transfer_value > Decimal("0.01"):
-            from utils.accounting import get_mapped_account_id
-            acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
-            if acc_inventory:
-                src_branch_id = db.execute(
-                    text("SELECT branch_id FROM warehouses WHERE id = :id"),
-                    {"id": transfer.source_warehouse_id},
-                ).scalar()
-                dst_branch_id = db.execute(
-                    text("SELECT branch_id FROM warehouses WHERE id = :id"),
-                    {"id": transfer.destination_warehouse_id},
-                ).scalar()
-                base_currency = db.execute(
-                    text("SELECT currency FROM companies WHERE id = :cid"),
-                    {"cid": current_user.company_id},
-                ).scalar() or "SAR"
+            src_inv_acc = _resolve_inventory_account_for_wh(db, src)
+            dst_inv_acc = _resolve_inventory_account_for_wh(db, dst)
+            if src_inv_acc and dst_inv_acc:
+                src_branch_id = src.branch_id
+                dst_branch_id = dst.branch_id
+                # F-30: capture per-side currency on the txn fields.
+                src_currency = (src.branch_currency or base_currency).upper()
+                dst_currency = (dst.branch_currency or base_currency).upper()
                 lines = [
                     {
-                        "account_id": acc_inventory,
+                        "account_id": dst_inv_acc,
                         "debit": float(total_transfer_value),
                         "credit": 0,
-                        "description": f"Transfer In - {dst.warehouse_name}",
+                        "description": f"Transfer In - WH#{dst.id} {dst.warehouse_name} / branch {dst_branch_id or '-'}",
+                        "amount_currency": float(total_transfer_value),
+                        "currency": base_currency,
+                        "txn_currency": dst_currency,
+                        "txn_amount": float(total_transfer_value),
                     },
                     {
-                        "account_id": acc_inventory,
+                        "account_id": src_inv_acc,
                         "debit": 0,
                         "credit": float(total_transfer_value),
-                        "description": f"Transfer Out - {src.warehouse_name}",
+                        "description": f"Transfer Out - WH#{src.id} {src.warehouse_name} / branch {src_branch_id or '-'}",
+                        "amount_currency": float(total_transfer_value),
+                        "currency": base_currency,
+                        "txn_currency": src_currency,
+                        "txn_amount": float(total_transfer_value),
                     },
                 ]
                 gl_create_journal_entry(
                     db,
-                    company_id=current_user.company_id,
+                    company_id=_company_id(current_user),
                     date=transfer_date,
                     description=f"تحويل مخزني ({len(transfer.items)} صنف): {src.warehouse_name} → {dst.warehouse_name}",
                     lines=lines,
-                    user_id=current_user.id,
+                    user_id=user_id,
                     branch_id=src_branch_id or dst_branch_id,
                     reference=transfer_ref,
                     currency=base_currency,
+                    source="inventory_transfer",
+                    source_id=transfer_doc_id,
+                    idempotency_key=f"inventory_transfer:{transfer_doc_id}",
                 )
-
-        db.commit()
 
         # AUDIT LOG
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=user_id,
+            username=_username(current_user),
             action="stock.transfer",
             resource_type="stock_transfer",
             resource_id=transfer_ref,
             details={"from": transfer.source_warehouse_id, "to": transfer.destination_warehouse_id, "items_count": len(transfer.items)},
             request=request,
-            branch_id=db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": transfer.source_warehouse_id}).scalar()
+            branch_id=src.branch_id
         )
 
         return {"message": i18n_message("stock_transfer_success", request), "reference": transfer_ref}
-
-    except HTTPException:
-        raise
-    except Exception:
-        db.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()

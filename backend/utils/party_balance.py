@@ -16,11 +16,14 @@ _POSITIVE_BALANCE_DOCUMENTS = {
     "supplier_payment",
     "purchase_return",
     "purchase_credit_note",
+    "purchase_invoice_cancel",
+    "supplier_refund_cancel",
 }
 
 _NEGATIVE_BALANCE_DOCUMENTS = {
     "purchase_invoice",
     "purchase_debit_note",
+    "purchase_return_cancel",
     "landed_cost",
     "supplier_refund",
 }
@@ -54,14 +57,18 @@ def update_party_site_balance(db, party_id: int, branch_id: int, currency: str, 
     """), {"pid": party_id, "cur": currency}).fetchone()
 
     if not site:
-        # Create a new site for this party/currency
+        # Create a new site for this party/currency.
+        # F-NEW-001: use RETURNING id (instead of LASTVAL()) so the id is
+        # captured atomically with the INSERT and is robust against any
+        # other sequence-using INSERTs that may interleave on the same
+        # session.
         party = db.execute(text("SELECT name FROM parties WHERE id = :pid"), {"pid": party_id}).fetchone()
         site_name = f"{party.name} - {currency}" if party else f"Site {currency}"
-        db.execute(text("""
+        site = db.execute(text("""
             INSERT INTO party_sites (party_id, site_name, currency, is_default, is_active)
             VALUES (:pid, :name, :cur, FALSE, TRUE)
-        """), {"pid": party_id, "name": site_name, "cur": currency})
-        site = db.execute(text("SELECT LASTVAL() as id"), {}).fetchone()
+            RETURNING id
+        """), {"pid": party_id, "name": site_name, "cur": currency}).fetchone()
 
     site_id = site.id
 

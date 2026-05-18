@@ -207,6 +207,9 @@ class WarehouseCreate(BaseModel):
     location: Optional[str] = None
     branch_id: Optional[int] = None
     is_default: bool = False
+    # F-31: optional per-warehouse inventory GL account. When NULL we keep
+    # using the global acc_map_inventory mapping (backward compatible).
+    gl_inventory_account_id: Optional[int] = None
 
 
 class WarehouseResponse(BaseModel):
@@ -217,6 +220,9 @@ class WarehouseResponse(BaseModel):
     branch_id: Optional[int] = None
     branch_name: Optional[str] = None
     is_default: bool = False
+    gl_inventory_account_id: Optional[int] = None
+    gl_inventory_account_code: Optional[str] = None
+    gl_inventory_account_name: Optional[str] = None
 
     model_config = ConfigDict(from_attributes=True)
 

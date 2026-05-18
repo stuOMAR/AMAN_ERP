@@ -4,7 +4,7 @@ This file is auto-generated when purchases.py was split. Endpoints here
 are mounted under the parent /buying prefix via purchases/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
@@ -19,12 +19,19 @@ from utils.audit import log_activity
 from utils.permissions import (
     branch_scope_filter_from_scope,
     require_permission,
+    require_sensitive_permission,
     require_module,
     resolve_branch_scope,
     validate_branch_access,
     validate_treasury_account_access,
 )
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
+from utils.accounting import (
+    compute_invoice_totals,
+    compute_line_amounts,
+    get_mapped_account_id,
+    generate_sequential_number,
+    get_base_currency,
+)
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
@@ -137,6 +144,18 @@ router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str:
+    return user.get("username") if isinstance(user, dict) else user.username
+
+
 @router.get("/returns", dependencies=[Depends(require_permission("buying.view"))], response_model=List[dict])
 def list_purchase_returns(
     branch_id: Optional[int] = None,
@@ -145,7 +164,7 @@ def list_purchase_returns(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض مردودات المشتريات"""
-    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    company_id = _company_id(current_user)
     with transactional(company_id) as db:
         branch_scope = resolve_branch_scope(current_user, branch_id)
 
@@ -182,7 +201,7 @@ def get_purchase_return(request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب تفاصيل مردود مشتريات"""
-    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    company_id = _company_id(current_user)
     with transactional(company_id) as db:
         # Get Invoice
         query = """
@@ -220,13 +239,8 @@ def create_purchase_return(
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء مردود مشتريات (خصم من المخزون + قيد دائن للمورد + سند قبض اختياري)"""
-    # Get company_id and user_id robustly
-    if isinstance(current_user, dict):
-        company_id = current_user.get("company_id")
-        user_id = current_user.get("id")
-    else:
-        company_id = getattr(current_user, "company_id", None)
-        user_id = getattr(current_user, "id", None)
+    company_id = _company_id(current_user)
+    user_id = _user_id(current_user)
 
     with transactional(company_id) as db:
         try:
@@ -588,7 +602,10 @@ def create_purchase_return(
             check_fiscal_period_open(db, invoice.invoice_date)
     
             # Credit: Inventory | Debit: Accounts Payable
-            inventory_acc = get_mapped_account_id(db, "acc_map_inventory")
+            # F-31: credit the source warehouse's inventory account so per-warehouse
+            # valuation drops by the returned amount.
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+            inventory_acc = resolve_warehouse_inventory_account(db, wh_id)
             ap_acc = get_mapped_account_id(db, "acc_map_ap")
             vat_acc = get_mapped_account_id(db, "acc_map_vat_in")
     
@@ -617,7 +634,7 @@ def create_purchase_return(
     
                 gl_create_journal_entry(
                     db=db,
-                    company_id=current_user.company_id,
+                    company_id=company_id,
                     date=str(invoice.invoice_date),
                     description=f"مردود مشتريات {return_number} ({invoice.currency})",
                     reference=return_number,
@@ -641,18 +658,19 @@ def create_purchase_return(
                 vid = db.execute(text("""
                     INSERT INTO payment_vouchers (
                         voucher_number, voucher_type, voucher_date, party_type, party_id,
-                        amount, payment_method, notes, status, created_by,
-                        currency, exchange_rate
+                amount, payment_method, notes, status, created_by,
+                        currency, exchange_rate, treasury_account_id
                     ) VALUES (
                         :vnum, 'refund', :vdate, 'supplier', :supp,
                         :amt, :method, :notes, 'posted', :user,
-                        :currency, :exchange_rate
+                        :currency, :exchange_rate, :treasury_id
                     ) RETURNING id
                 """), {
                     "vnum": voucher_num, "vdate": invoice.invoice_date, "supp": invoice.supplier_id,
                     "amt": invoice.paid_amount, "method": invoice.payment_method or 'cash',
                     "notes": f"استرداد نقدي عن مردود {return_number}", "user": user_id,
-                    "currency": invoice.currency or base_currency, "exchange_rate": exchange_rate
+                    "currency": invoice.currency or base_currency, "exchange_rate": exchange_rate,
+                    "treasury_id": invoice.treasury_id,
                 }).fetchone()[0]
     
                 # Allocation
@@ -672,8 +690,15 @@ def create_purchase_return(
                 )
     
                 # GL for Refund
-                cash_acc = get_mapped_account_id(db, "acc_map_cash_main")
-                if invoice.payment_method == 'bank': 
+                refund_treasury_id = invoice.treasury_id
+                selected_treasury = None
+                if refund_treasury_id:
+                    selected_treasury = validate_treasury_account_access(
+                        db, current_user, refund_treasury_id, branch_id
+                    )
+
+                cash_acc = selected_treasury["gl_account_id"] if selected_treasury else get_mapped_account_id(db, "acc_map_cash_main")
+                if invoice.payment_method == 'bank' and not selected_treasury:
                     cash_acc = get_mapped_account_id(db, "acc_map_bank")
     
                 if cash_acc and ap_acc:
@@ -684,7 +709,7 @@ def create_purchase_return(
                     
                     gl_create_journal_entry(
                         db=db,
-                        company_id=current_user.company_id,
+                        company_id=company_id,
                         date=str(invoice.invoice_date),
                         description=f"سند قبض مورد {voucher_num} ({invoice.currency})",
                         reference=voucher_num,
@@ -696,12 +721,16 @@ def create_purchase_return(
                         source="payment_voucher",
                         source_id=vid
                     )
+
+                    if refund_treasury_id:
+                        from utils.treasury_balance import recalc_treasury_from_gl
+                        recalc_treasury_from_gl(db, refund_treasury_id)
     
     
             log_activity(
                 db,
                 user_id=user_id,
-                username=getattr(current_user, "username", "unknown") if not isinstance(current_user, dict) else current_user.get("username", "unknown"),
+                username=_username(current_user),
                 action="purchase_return.create",
                 resource_type="invoice",
                 resource_id=str(new_invoice_id),
@@ -717,3 +746,235 @@ def create_purchase_return(
         except Exception as e:
             logger.exception("Error creating return")
             raise HTTPException(**http_error(500, "return_creation_error", request))
+
+
+@router.post("/returns/{id}/cancel", dependencies=[Depends(require_sensitive_permission("buying.void"))], response_model=Dict[str, Any])
+def cancel_purchase_return(request: Request, id: int, current_user: dict = Depends(get_current_user)):
+    """Cancel a posted purchase return with stock, party-balance, GL, and refund reversal."""
+    company_id = _company_id(current_user)
+    user_id = _user_id(current_user)
+    username = _username(current_user)
+
+    with transactional(company_id) as db:
+        inv = db.execute(text("""
+            SELECT *
+            FROM invoices
+            WHERE id = :id
+              AND invoice_type = 'purchase_return'
+            FOR UPDATE
+        """), {"id": id}).fetchone()
+        if not inv:
+            raise HTTPException(**http_error(404, "return_not_found_msg", request))
+        validate_branch_access(current_user, inv.branch_id)
+        if inv.status in ("cancelled", "void"):
+            raise HTTPException(**http_error(400, "purchase_return_already_cancelled", request))
+
+        reversal_date = datetime.now().date()
+        check_fiscal_period_open(db, reversal_date, request=request)
+
+        purchase_return_je = db.execute(text("""
+            SELECT id
+            FROM journal_entries
+            WHERE source = 'purchase_return'
+              AND source_id = :id
+              AND status = 'posted'
+            ORDER BY id DESC
+            LIMIT 1
+        """), {"id": id}).fetchone()
+        if not purchase_return_je and _dec(inv.total) > _D2:
+            raise HTTPException(**http_error(400, "purchase_return_no_je_to_reverse", request))
+
+        lines = db.execute(text("""
+            SELECT *
+            FROM invoice_lines
+            WHERE invoice_id = :id
+              AND product_id IS NOT NULL
+        """), {"id": id}).fetchall()
+
+        from services.costing_service import CostingService
+        for line in lines:
+            qty = _dec(line.quantity)
+            tx = db.execute(text("""
+                SELECT warehouse_id, unit_cost
+                FROM inventory_transactions
+                WHERE reference_type = 'purchase_return'
+                  AND reference_id = :id
+                  AND product_id = :product_id
+                ORDER BY id ASC
+                LIMIT 1
+                FOR UPDATE
+            """), {"id": id, "product_id": line.product_id}).fetchone()
+            wh_id = tx.warehouse_id if tx and tx.warehouse_id else None
+            if not wh_id:
+                wh_id = db.execute(text("""
+                    SELECT id
+                    FROM warehouses
+                    WHERE is_active = TRUE
+                    ORDER BY is_default DESC, id ASC
+                    LIMIT 1
+                """)).scalar()
+            if not wh_id:
+                raise HTTPException(**http_error(400, "at_least_one_warehouse_required", request))
+
+            unit_cost = _dec(tx.unit_cost) if tx and tx.unit_cost is not None else _dec(line.unit_price)
+            costing_method = CostingService._get_product_costing_method(db, line.product_id, wh_id)
+            if costing_method in ("fifo", "lifo"):
+                CostingService.create_cost_layer(
+                    db,
+                    product_id=line.product_id,
+                    warehouse_id=wh_id,
+                    quantity=qty,
+                    unit_cost=unit_cost,
+                    source_document_type="purchase_return_cancel",
+                    source_document_id=id,
+                    costing_method=costing_method,
+                )
+            else:
+                CostingService.update_cost(
+                    db,
+                    product_id=line.product_id,
+                    warehouse_id=wh_id,
+                    new_qty=qty,
+                    new_price=unit_cost,
+                )
+
+            db.execute(text("""
+                INSERT INTO inventory (product_id, warehouse_id, quantity, average_cost, updated_at)
+                VALUES (:product_id, :warehouse_id, :qty, :unit_cost, NOW())
+                ON CONFLICT (product_id, warehouse_id)
+                DO UPDATE SET quantity = inventory.quantity + EXCLUDED.quantity,
+                              updated_at = NOW()
+            """), {
+                "product_id": line.product_id,
+                "warehouse_id": wh_id,
+                "qty": qty,
+                "unit_cost": unit_cost,
+            })
+
+            total_cost = (qty * unit_cost).quantize(_D2, ROUND_HALF_UP)
+            db.execute(text("""
+                INSERT INTO inventory_transactions (
+                    product_id, warehouse_id, transaction_type,
+                    reference_type, reference_id, reference_document,
+                    quantity, unit_cost, total_cost, notes, created_by
+                ) VALUES (
+                    :product_id, :warehouse_id, 'purchase_return_cancel',
+                    'purchase_return_cancel', :id, :doc,
+                    :qty, :unit_cost, :total_cost, :notes, :user_id
+                )
+            """), {
+                "product_id": line.product_id,
+                "warehouse_id": wh_id,
+                "id": id,
+                "doc": inv.invoice_number,
+                "qty": qty,
+                "unit_cost": unit_cost,
+                "total_cost": total_cost,
+                "notes": "Cancel purchase return stock reversal",
+                "user_id": user_id,
+            })
+
+        update_party_site_balance(
+            db,
+            party_id=inv.party_id,
+            branch_id=inv.branch_id,
+            currency=inv.currency or get_base_currency(db),
+            amount=-_dec(inv.total),
+            document_type="purchase_return_cancel",
+        )
+
+        if purchase_return_je:
+            from services.gl_service import reverse_journal_entry
+            reverse_journal_entry(
+                db,
+                je_id=purchase_return_je.id,
+                user_id=user_id,
+                company_id=company_id,
+                reversal_date=str(reversal_date),
+                reason=f"Cancel purchase return {inv.invoice_number}",
+                request=request,
+            )
+
+        refund_rows = db.execute(text("""
+            SELECT pa.voucher_id,
+                   pa.allocated_amount,
+                   pv.treasury_account_id,
+                   EXISTS (
+                       SELECT 1
+                       FROM journal_entries je
+                       WHERE je.source = 'payment_voucher'
+                         AND je.source_id = pv.id
+                         AND je.status = 'posted'
+                   ) AS has_payment_voucher_je
+            FROM payment_allocations pa
+            JOIN payment_vouchers pv ON pv.id = pa.voucher_id
+            WHERE pa.invoice_id = :id
+            FOR UPDATE OF pa, pv
+        """), {"id": id}).fetchall()
+        treasury_ids = set()
+        refund_balance_reversal = Decimal("0")
+        for row in refund_rows:
+            refund_balance_reversal += _dec(row.allocated_amount)
+            if row.has_payment_voucher_je:
+                from services.gl_service import reverse_journal_entry
+                voucher_je = db.execute(text("""
+                    SELECT id
+                    FROM journal_entries
+                    WHERE source = 'payment_voucher'
+                      AND source_id = :voucher_id
+                      AND status = 'posted'
+                    ORDER BY id DESC
+                    LIMIT 1
+                """), {"voucher_id": row.voucher_id}).fetchone()
+                if voucher_je:
+                    reverse_journal_entry(
+                        db,
+                        je_id=voucher_je.id,
+                        user_id=user_id,
+                        company_id=company_id,
+                        reversal_date=str(reversal_date),
+                        reason=f"Cancel refund for purchase return {inv.invoice_number}",
+                        request=request,
+                    )
+            db.execute(text("DELETE FROM payment_allocations WHERE voucher_id = :voucher_id AND invoice_id = :id"),
+                       {"voucher_id": row.voucher_id, "id": id})
+            db.execute(text("UPDATE payment_vouchers SET status = 'void' WHERE id = :voucher_id"),
+                       {"voucher_id": row.voucher_id})
+            if row.treasury_account_id:
+                treasury_ids.add(row.treasury_account_id)
+
+        if refund_balance_reversal > _D2:
+            update_party_site_balance(
+                db,
+                party_id=inv.party_id,
+                branch_id=inv.branch_id,
+                currency=inv.currency or get_base_currency(db),
+                amount=refund_balance_reversal,
+                document_type="supplier_refund_cancel",
+            )
+
+        db.execute(text("""
+            UPDATE invoices
+            SET status = 'cancelled',
+                updated_at = NOW()
+            WHERE id = :id
+        """), {"id": id})
+
+        if treasury_ids:
+            from utils.treasury_balance import recalc_treasury_from_gl
+            for treasury_id in treasury_ids:
+                recalc_treasury_from_gl(db, treasury_id)
+
+        log_activity(
+            db,
+            user_id=user_id,
+            username=username,
+            action="purchase_return.cancel",
+            resource_type="invoice",
+            resource_id=str(id),
+            details={"return_number": inv.invoice_number, "total": str(inv.total or 0)},
+            request=request,
+            branch_id=inv.branch_id,
+        )
+
+        return {"success": True, "message": i18n_message("purchase_return_cancelled", request)}

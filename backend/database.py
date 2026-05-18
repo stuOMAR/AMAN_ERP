@@ -402,16 +402,25 @@ def initialize_company_default_data(company_id: str, admin_username: str,
     """Initialize default data for company"""
     db_name = f"aman_{company_id}"
     connection_url = settings.get_company_database_url(company_id)
+    company_engine = None
     
     try:
         company_engine = create_engine(connection_url)
         hashed_password = hash_password(admin_password)
         
-        with company_engine.connect() as conn:
+        with company_engine.begin() as conn:
             # Create admin user
             conn.execute(text("""
                 INSERT INTO company_users (username, password, email, full_name, role, permissions)
                 VALUES (:username, :password, :email, :full_name, 'superuser', :permissions)
+                ON CONFLICT (username) DO UPDATE SET
+                    password = EXCLUDED.password,
+                    email = EXCLUDED.email,
+                    full_name = EXCLUDED.full_name,
+                    role = 'superuser',
+                    permissions = EXCLUDED.permissions,
+                    is_active = TRUE,
+                    updated_at = CURRENT_TIMESTAMP
             """), {
                 "username": admin_username,
                 "password": hashed_password,
@@ -454,7 +463,14 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             for acc in root_accounts:
                 result = conn.execute(text("""
                     INSERT INTO accounts (account_number, account_code, name, name_en, account_type, currency)
-                    VALUES (:number, :code, :name, :name_en, :type, :currency) RETURNING id
+                    VALUES (:number, :code, :name, :name_en, :type, :currency)
+                    ON CONFLICT (account_number) DO UPDATE SET
+                        account_code = EXCLUDED.account_code,
+                        name = EXCLUDED.name,
+                        name_en = EXCLUDED.name_en,
+                        account_type = EXCLUDED.account_type,
+                        currency = EXCLUDED.currency
+                    RETURNING id
                 """), {"number": acc[0], "code": acc[1], "name": acc[2], "name_en": acc[3], "type": acc[4], "currency": currency})
                 inserted_ids[acc[0]] = result.fetchone()[0]
 
@@ -598,7 +614,15 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 parent_id = inserted_ids.get(acc[5])
                 result = conn.execute(text("""
                     INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency)
-                    VALUES (:number, :code, :name, :name_en, :type, :parent_id, :currency) RETURNING id
+                    VALUES (:number, :code, :name, :name_en, :type, :parent_id, :currency)
+                    ON CONFLICT (account_number) DO UPDATE SET
+                        account_code = EXCLUDED.account_code,
+                        name = EXCLUDED.name,
+                        name_en = EXCLUDED.name_en,
+                        account_type = EXCLUDED.account_type,
+                        parent_id = EXCLUDED.parent_id,
+                        currency = EXCLUDED.currency
+                    RETURNING id
                 """), {"number": acc[0], "code": acc[1], "name": acc[2], "name_en": acc[3], "type": acc[4], "parent_id": parent_id, "currency": currency})
                 inserted_ids[acc[0]] = result.fetchone()[0]
 
@@ -752,6 +776,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             for key, value in settings_data:
                 conn.execute(text("""
                     INSERT INTO company_settings (setting_key, setting_value) VALUES (:key, :value)
+                    ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value
                 """), {"key": key, "value": value})
             
             # Insert Mappings
@@ -776,6 +801,14 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             branch_result = conn.execute(text("""
                 INSERT INTO branches (branch_code, branch_name, branch_name_en, country, country_code, default_currency, is_default, is_active)
                 VALUES ('BR001', 'الفرع الرئيسي', 'Main Branch', :country_name, :country_code, :currency, TRUE, TRUE)
+                ON CONFLICT (branch_code) DO UPDATE SET
+                    branch_name = EXCLUDED.branch_name,
+                    branch_name_en = EXCLUDED.branch_name_en,
+                    country = EXCLUDED.country,
+                    country_code = EXCLUDED.country_code,
+                    default_currency = EXCLUDED.default_currency,
+                    is_default = TRUE,
+                    is_active = TRUE
                 RETURNING id
             """), {"country_name": country_ar, "country_code": country, "currency": currency}).fetchone()
             branch_id = branch_result[0]
@@ -785,6 +818,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             if user_id_result:
                 conn.execute(text("""
                     INSERT INTO user_branches (user_id, branch_id) VALUES (:uid, :bid)
+                    ON CONFLICT (user_id, branch_id) DO NOTHING
                 """), {"uid": user_id_result[0], "bid": branch_id})
 
             # Create default party_sites and party_site_balances tables
@@ -834,6 +868,12 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             conn.execute(text("""
                 INSERT INTO warehouses (warehouse_code, warehouse_name, warehouse_name_en, branch_id, is_default, is_active)
                 VALUES ('WH001', 'المستودع الرئيسي', 'Main Warehouse', :bid, TRUE, TRUE)
+                ON CONFLICT (warehouse_code) DO UPDATE SET
+                    warehouse_name = EXCLUDED.warehouse_name,
+                    warehouse_name_en = EXCLUDED.warehouse_name_en,
+                    branch_id = EXCLUDED.branch_id,
+                    is_default = TRUE,
+                    is_active = TRUE
             """), {"bid": branch_id})
 
             
@@ -849,6 +889,10 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 conn.execute(text("""
                     INSERT INTO product_units (unit_code, unit_name, unit_name_en, abbreviation)
                     VALUES (:code, :name, :name_en, :abbr)
+                    ON CONFLICT (unit_code) DO UPDATE SET
+                        unit_name = EXCLUDED.unit_name,
+                        unit_name_en = EXCLUDED.unit_name_en,
+                        abbreviation = EXCLUDED.abbreviation
                 """), {"code": unit[0], "name": unit[1], "name_en": unit[2], "abbr": unit[3]})
             
             # Tax rates are entered manually by the user — no auto-seed.
@@ -964,10 +1008,13 @@ def initialize_company_default_data(company_id: str, admin_username: str,
             # Default Costing Policy
             conn.execute(text("""
                 INSERT INTO costing_policies (policy_name, policy_type, description, is_active, created_by)
-                VALUES ('Default Global WAC', 'global_wac', 'Standard unified cost across all branches', TRUE, 1)
+                SELECT 'Default Global WAC', 'global_wac', 'Standard unified cost across all branches', TRUE, 1
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM costing_policies
+                    WHERE policy_name = 'Default Global WAC'
+                       OR (policy_type = 'global_wac' AND is_active = TRUE)
+                )
             """))
-            
-            conn.commit()
 
         # DB-015: Populate central user index for fast login lookup
         try:
@@ -991,4 +1038,5 @@ def initialize_company_default_data(company_id: str, admin_username: str,
         logger.error(f"❌ Error initializing data: {str(e)}")
         return False, str(e)
     finally:
-        company_engine.dispose()
+        if company_engine is not None:
+            company_engine.dispose()

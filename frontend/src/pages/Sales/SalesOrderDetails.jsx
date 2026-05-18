@@ -1,18 +1,20 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { salesAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { formatNumber } from '../../utils/format';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { useToast } from '../../context/ToastContext'
 
 
 function SalesOrderDetails() {
     const { t } = useTranslation()
     const { id } = useParams()
     const navigate = useNavigate()
+    const { showToast } = useToast()
     const currency = getCurrency()
     const [order, setOrder] = useState(null)
     const [loading, setLoading] = useState(true)
@@ -31,6 +33,18 @@ function SalesOrderDetails() {
         }
         fetchOrder()
     }, [id])
+
+    const handleCancel = async () => {
+        if (!window.confirm(t('common.confirm_cancel', 'هل أنت متأكد من الإلغاء؟'))) return
+        try {
+            await salesAPI.cancelOrder(id)
+            showToast(t('common.success'), 'success')
+            const response = await salesAPI.getOrder(id)
+            setOrder(response.data)
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.error'), 'error')
+        }
+    }
 
     if (loading) return <PageLoading />
     if (error) return <div className="alert alert-error m-4">{error}</div>
@@ -61,6 +75,11 @@ function SalesOrderDetails() {
                     <button className="btn btn-secondary" onClick={() => window.print()}>
                         🖨️ {t('sales.orders.details.print')}
                     </button>
+                    {hasPermission('sales.void') && !['cancelled', 'delivered', 'invoiced'].includes(order.status) && (
+                        <button className="btn btn-danger" onClick={handleCancel}>
+                            {t('common.cancel')}
+                        </button>
+                    )}
                     <Link to="/sales/orders" className="btn btn-secondary">
                         {t('sales.orders.details.back_to_list')}
                     </Link>

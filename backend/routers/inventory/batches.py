@@ -19,6 +19,7 @@ from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import require_permission
+from utils.quantity_validation import validate_quantity_for_product
 
 batches_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -264,6 +265,10 @@ def create_batch(
     
             if not product:
                 raise HTTPException(**http_error(404, "product_not_found"))
+
+            # INV-QTY: Validate quantity for discrete units (only if qty > 0)
+            if batch.quantity and batch.quantity > 0:
+                validate_quantity_for_product(db, batch.product_id, batch.quantity, request)
     
             # Check duplicate batch number
             exists = db.execute(text("""
@@ -331,8 +336,8 @@ def create_batch(
                 """), {
                     "pid": batch.product_id,
                     "wid": batch.warehouse_id,
-                    "qty": batch.quantity,
-                    "cost": float(unit_cost),
+                    "qty": str(Decimal(str(batch.quantity))),
+                    "cost": str(unit_cost),
                 })
     
                 # Log inventory transaction
@@ -1418,10 +1423,14 @@ def complete_cycle_count(request: Request,
             # T023: Post GL journal entries for cycle count variances
             if data.auto_adjust and variance_count > 0:
                 from utils.accounting import get_mapped_account_id, get_base_currency
+                from utils.inventory_accounts import resolve_warehouse_inventory_account
                 from utils.fiscal_lock import check_fiscal_period_open
                 from services.gl_service import create_journal_entry as gl_create_journal_entry
     
-                acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
+                # F-31: book the variance against the warehouse-mapped inventory
+                # account. cycle_counts always operate on a single warehouse,
+                # so we resolve once here.
+                acc_inventory = resolve_warehouse_inventory_account(db, cc.warehouse_id)
                 acc_variance = get_mapped_account_id(db, "acc_map_inventory_adjustment")
                 base_currency = get_base_currency(db)
     

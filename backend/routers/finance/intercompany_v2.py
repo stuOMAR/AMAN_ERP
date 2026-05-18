@@ -105,7 +105,15 @@ def list_transactions(
 ):
     """List intercompany transactions (v2 tables)."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    return intercompany_service.get_transactions(str(company_id), status_filter or status, entity_id, branch_id)
+    try:
+        return intercompany_service.get_transactions(str(company_id), status_filter or status, entity_id, branch_id)
+    except Exception as e:
+        err_str = str(e).lower()
+        if "does not exist" in err_str or "undefinedtable" in err_str or "undefinedcolumn" in err_str:
+            logger.warning(f"Intercompany tables not migrated: {e}")
+            return []
+        logger.exception("Error listing intercompany transactions")
+        raise HTTPException(**http_error(500, "internal_error", request))
 
 
 @router.get("/transactions/{txn_id}", dependencies=[Depends(require_permission(["intercompany.view", "accounting.view"]))], response_model=Dict[str, Any])

@@ -3,7 +3,7 @@ AMAN ERP - Companies Router
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, File, UploadFile, Body
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 import logging
 import os
@@ -126,7 +126,9 @@ async def register_new_company(request_body: CompanyCreateRequest, request: Requ
             )
             
             if not success:
-                logger.warning(f"⚠️ Warning: {message}")
+                _cleanup_company_database(db_name, db_user)
+                logger.error("Failed to initialize company default data: %s", message)
+                raise HTTPException(**http_error(500, "company_creation_failed", request))
             
             # Fetch template modules
             enabled_modules = None
@@ -654,4 +656,3 @@ async def upload_company_logo(
     except Exception:
         logger.exception("Error uploading logo")
         raise HTTPException(**http_error(500, "internal_error"))
-

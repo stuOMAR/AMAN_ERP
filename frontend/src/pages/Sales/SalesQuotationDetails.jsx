@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams, useNavigate, Link } from 'react-router-dom'
 import { salesAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
@@ -65,6 +65,20 @@ function SalesQuotationDetails() {
         }
     }
 
+    const handleCancel = async () => {
+        if (!window.confirm(t('common.confirm_cancel', 'هل أنت متأكد من الإلغاء؟'))) return
+        setActionLoading('cancel')
+        try {
+            const response = await salesAPI.cancelQuotation(id)
+            showToast(response.data?.message || t('common.success'), 'success')
+            await refreshQuotation()
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.error'), 'error')
+        } finally {
+            setActionLoading(null)
+        }
+    }
+
     if (loading) return <PageLoading />
     if (error) return <div className="alert alert-error m-4">{error}</div>
     if (!quotation) return <div className="p-4 text-center">{t('sales.quotations.empty')}</div>
@@ -107,6 +121,15 @@ function SalesQuotationDetails() {
                     <button className="btn btn-secondary" onClick={() => window.print()}>
                         🖨️ {t('sales.quotations.details.print')}
                     </button>
+                    {hasPermission('sales.void') && quotation.status !== 'converted' && quotation.status !== 'cancelled' && (
+                        <button
+                            className="btn btn-danger"
+                            onClick={handleCancel}
+                            disabled={actionLoading !== null}
+                        >
+                            {actionLoading === 'cancel' ? t('common.loading', '...') : t('common.cancel')}
+                        </button>
+                    )}
                     <Link to="/sales/quotations" className="btn btn-secondary">
                         {t('sales.quotations.details.back_to_list')}
                     </Link>

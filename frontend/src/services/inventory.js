@@ -26,7 +26,9 @@ export const inventoryAPI = {
     updateWarehouse: (id, data) => api.put(`/inventory/warehouses/${id}`, data),
     deleteWarehouse: (id) => api.delete(`/inventory/warehouses/${id}`),
     getWarehouse: (id) => api.get(`/inventory/warehouses/${id}`),
-    getWarehouseSpecificStock: (id) => api.get(`/inventory/warehouses/${id}/current-stock?t=${new Date().getTime()}`),
+    getWarehouseSpecificStock: (id) => api.get(`/inventory/warehouses/${id}/current-stock`, {
+        headers: { 'Cache-Control': 'no-cache' },
+    }),
 
     // Transfers
     transferStock: (data) => api.post('/inventory/transfer', data),
@@ -53,6 +55,7 @@ export const inventoryAPI = {
     dispatchShipment: (id) => api.post(`/inventory/shipments/${id}/dispatch`),
     confirmShipment: (id) => api.post(`/inventory/shipments/${id}/confirm`),
     cancelShipment: (id) => api.post(`/inventory/shipments/${id}/cancel`),
+    recallShipment: (id) => api.post(`/inventory/shipments/${id}/recall`),
 
     // Stock Adjustments
     listAdjustments: (params) => api.get('/inventory/adjustments', { params }),

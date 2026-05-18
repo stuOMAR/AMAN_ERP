@@ -1970,5 +1970,9 @@
   "could_not_validate_credentials": "Could not validate credentials",
   "action_label_approve": "approve",
   "action_label_reject": "reject",
-  "action_label_return": "return"
+  "action_label_return": "return",
+  "commission_or_bank_account_not_configured": "Commission expense or bank account is not configured",
+  "invoice_has_sales_returns": "Cannot cancel an invoice that has approved sales returns",
+  "voucher_cancelled": "Cannot allocate a cancelled voucher",
+  "supplier_overpayment_not_allowed": "Supplier payment exceeds the outstanding balance; enable buying.allow_overpayment to allow prepayments"
 }

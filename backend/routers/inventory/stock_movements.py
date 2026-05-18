@@ -16,7 +16,7 @@ from typing import List as _List, Optional as _Optional
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -55,7 +55,7 @@ class StockAdjustmentCreate(BaseModel):
 @stock_movements_router.post(
     "/adjustment",
     status_code=status.HTTP_201_CREATED,
-    dependencies=[Depends(require_permission("stock.adjust"))],
+    dependencies=[Depends(require_permission("stock.adjustment"))],
 )
 def create_stock_adjustment(
     adjustment: StockAdjustmentCreate,
@@ -80,10 +80,16 @@ def create_stock_adjustment(
         if not acc_check:
             raise HTTPException(**http_error(404, "adjustment_account_not_found"))
 
-        # Resolve inventory account
+        # Resolve inventory account.
+        # F-31: when not supplied explicitly the helper falls back to each
+        # warehouse's mapped account internally; we only keep this branch
+        # for the legacy "inventory account NULL" guard. The caller may
+        # still pass an explicit override that wins over both layers.
         inv_account_id = adjustment.inventory_account_id
-        if inv_account_id is None:
-            inv_account_id = get_mapped_account_id(db, "acc_map_inventory")
+        if not inv_account_id:
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+            primary_wh = adjustment.items[0].warehouse_id if adjustment.items else None
+            inv_account_id = resolve_warehouse_inventory_account(db, primary_wh)
         if not inv_account_id:
             raise HTTPException(**http_error(400, "inventory_account_not_mapped"))
 

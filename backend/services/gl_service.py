@@ -3,7 +3,7 @@ from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 from fastapi import HTTPException
 from datetime import datetime
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Union
 from decimal import Decimal, ROUND_HALF_UP
 
 from utils.accounting import generate_sequential_number, update_account_balance
@@ -12,6 +12,13 @@ from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
+
+# F-NEW-004: monetary/rate inputs may arrive as Decimal, str, int, or float
+# (Pydantic-coerced JSON payloads, legacy callers, etc.). All numeric work
+# below funnels them through ``_dec(...)`` immediately, so the annotation
+# describes the acceptable input domain rather than internal precision
+# (which is always Decimal).
+Numeric = Union[Decimal, float, int, str]
 
 
 def round_amount(value: Decimal | float | str, precision: int = 4) -> Decimal:
@@ -119,7 +126,7 @@ def create_journal_entry(
     reference: Optional[str] = None,
     status: str = "posted",
     currency: Optional[str] = None,
-    exchange_rate: float = 1.0,
+    exchange_rate: Numeric = 1.0,
     source: str = "manual",
     source_id: Optional[int] = None,
     username: Optional[str] = None,
@@ -130,17 +137,22 @@ def create_journal_entry(
     """
     Centralized function to create a journal entry, validate it, insert lines, 
     and update account balances if posted.
-    
+
+    F-NEW-004: ``exchange_rate``, line ``debit``/``credit``/``amount_currency``
+    accept Decimal/float/int/str — they are normalised through ``_dec(...)``
+    before any arithmetic, so the annotation describes the acceptable input
+    domain rather than internal precision (which is always Decimal).
+
     lines format:
         [
             {
                 "account_id": int,
-                "debit": float,
-                "credit": float,
+                "debit": Numeric,
+                "credit": Numeric,
                 "description": str (optional),
                 "cost_center_id": int (optional),
                 "currency": str (optional),
-                "amount_currency": float (optional)
+                "amount_currency": Numeric (optional)
             }
         ]
     """
@@ -547,7 +559,11 @@ def reverse_journal_entry(
         reference=f"REV-{head.entry_number}",
         status="posted",
         currency=head.currency,
-        exchange_rate=float(head.exchange_rate or 1),
+        # F-NEW-004: pass the Decimal exchange rate straight through; the
+        # callee normalises via ``_dec(...)``. The legacy ``float(...)``
+        # cast was a precision-leak (inherited from the float-typed param)
+        # and is no longer needed.
+        exchange_rate=head.exchange_rate or Decimal("1"),
         source="reversal",
         source_id=je_id,
     )

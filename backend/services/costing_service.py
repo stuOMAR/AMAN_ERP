@@ -1,12 +1,19 @@
 
 from sqlalchemy import text
-from typing import Optional
+from typing import Optional, Union
 from decimal import Decimal, ROUND_HALF_UP
 from contextlib import nullcontext
 
 # FIN-FIX: Precision constants for costing calculations
 _D4 = Decimal('0.0001')
 _dec = lambda v: Decimal(str(v or 0))
+
+# F-NEW-003: monetary/quantity inputs may arrive as Decimal, str, int, or
+# float (e.g. from Pydantic-coerced JSON payloads). All numeric helpers in
+# this module funnel them through ``_dec(...)`` immediately, so the type
+# annotation describes the acceptable input domain rather than the
+# arithmetic precision (which is always Decimal internally).
+Numeric = Union[Decimal, float, int, str]
 
 class CostingService:
     @staticmethod
@@ -17,12 +24,17 @@ class CostingService:
 
     @staticmethod
     def calculate_new_cost(
-        current_qty: float,
-        current_cost: float,
-        new_qty: float,
-        new_price: float
+        current_qty: Numeric,
+        current_cost: Numeric,
+        new_qty: Numeric,
+        new_price: Numeric
     ) -> Decimal:
-        """Standard WAC Formula using Decimal for precision."""
+        """Standard WAC Formula using Decimal for precision.
+
+        F-NEW-003: inputs may be ``Decimal``, ``float``, ``int`` or ``str``;
+        all four are normalised through ``_dec(...)`` so the arithmetic is
+        always Decimal-precise even though the call site can be loose.
+        """
         d_curr_qty = _dec(current_qty)
         d_curr_cost = _dec(current_cost)
         d_new_qty = _dec(new_qty)
@@ -46,12 +58,15 @@ class CostingService:
         db,
         product_id: int,
         warehouse_id: int,
-        new_qty: float,
-        new_price: float
+        new_qty: Numeric,
+        new_price: Numeric
     ):
         """
         Updates product cost based on the active policy.
         CALLED BEFORE INVENTORY QUANTITY UPDATE (to use current stock stats).
+
+        F-NEW-003: ``new_qty`` / ``new_price`` accept Decimal/float/int/str
+        and are coerced to Decimal at every arithmetic boundary.
         """
         if hasattr(db, "in_transaction") and hasattr(db, "begin") and hasattr(db, "begin_nested"):
             tx_context = db.begin_nested() if db.in_transaction() else db.begin()
@@ -235,8 +250,8 @@ class CostingService:
         return inv_per_unit
 
     @staticmethod
-    def get_cogs_cost(db, product_id: int, warehouse_id: Optional[int] = None) -> float:
-        """Get the unit cost for COGS based on current policy."""
+    def get_cogs_cost(db, product_id: int, warehouse_id: Optional[int] = None) -> Decimal:
+        """Get the unit cost for COGS based on current policy. Returns Decimal."""
         policy_type = CostingService.get_active_policy(db)
 
         if policy_type == 'per_warehouse_wac' and warehouse_id:
@@ -245,11 +260,11 @@ class CostingService:
                 WHERE product_id = :pid AND warehouse_id = :wh
             """), {"pid": product_id, "wh": warehouse_id}).scalar()
             if cost is not None:
-                return float(cost)
+                return _dec(cost)
 
         # Default to Global Product Cost
         cost = db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": product_id}).scalar()
-        return float(cost or 0)
+        return _dec(cost)
 
     @staticmethod
     def create_snapshot(db, warehouse_id=None, product_id=None):
@@ -567,7 +582,7 @@ class CostingService:
         if (
             original_source_document_type
             and original_source_document_id
-            and original_source_document_type in ("sales_invoice", "invoice", "pos_sale", "pos_order", "delivery_order")
+            and original_source_document_type in ("sales_invoice", "invoice", "pos_sale", "pos_order", "delivery_order", "shipment_dispatch")
         ):
             consumptions = db.execute(text("""
                 SELECT clc.id, clc.cost_layer_id, clc.quantity_consumed,

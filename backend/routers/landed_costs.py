@@ -4,7 +4,7 @@ AMAN ERP — Landed Costs Router
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -24,7 +24,7 @@ from utils.accounting import (
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 
-router = APIRouter(prefix="/purchases/landed-costs", tags=["Landed Costs"], dependencies=[Depends(require_module("landed_costs"))])
+router = APIRouter(prefix="/purchases/landed-costs", tags=["Landed Costs"], dependencies=[Depends(require_module("buying"))])
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
@@ -66,7 +66,7 @@ class LandedCostCreate(BaseModel):
 
 # ─── LIST ──────────────────────────────────────────────────────────────────────
 
-@router.get("", dependencies=[Depends(require_permission("purchases.view"))], response_model=List[Dict[str, Any]])
+@router.get("", dependencies=[Depends(require_permission("buying.view"))], response_model=List[Dict[str, Any]])
 def list_landed_costs(
     status_filter: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -97,7 +97,7 @@ def list_landed_costs(
 
 # ─── GET ONE ───────────────────────────────────────────────────────────────────
 
-@router.get("/{lc_id}", dependencies=[Depends(require_permission("purchases.view"))], response_model=Dict[str, Any])
+@router.get("/{lc_id}", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
 def get_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Get Landed Cost."""
     company_id = _u(current_user, "company_id")
@@ -137,7 +137,7 @@ def get_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(g
 
 # ─── CREATE ────────────────────────────────────────────────────────────────────
 
-@router.post("", status_code=201, dependencies=[Depends(require_permission("purchases.create"))], response_model=Dict[str, Any])
+@router.post("", status_code=201, dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def create_landed_cost(body: LandedCostCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """Create Landed Cost."""
     company_id = _u(current_user, "company_id")
@@ -227,7 +227,7 @@ def create_landed_cost(body: LandedCostCreate, request: Request, current_user: d
 
 # ─── ALLOCATE & POST ──────────────────────────────────────────────────────────
 
-@router.post("/{lc_id}/allocate", dependencies=[Depends(require_permission("purchases.create"))], response_model=Dict[str, Any])
+@router.post("/{lc_id}/allocate", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """
     توزيع التكاليف المُضافة على أصناف أمر الشراء / استلام البضاعة
@@ -385,7 +385,7 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
             raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.post("/{lc_id}/post", dependencies=[Depends(require_permission("purchases.create"))], response_model=Dict[str, Any])
+@router.post("/{lc_id}/post", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
 def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """
     ترحيل التكاليف المُضافة — تحديث تكلفة المنتجات + قيد محاسبي
@@ -420,7 +420,11 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                 raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
     
             # T032: Update costs through CostingService instead of direct column updates
+            # F-31: track the inventory debit broken down by warehouse so the
+            # journal entry hits the correct per-warehouse inventory accounts.
             from services.costing_service import CostingService
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+            warehouse_debit_base: Dict[int, Decimal] = {}
             for alloc in allocations:
                 wh_rows = db.execute(text("""
                     SELECT warehouse_id, COALESCE(SUM(quantity), 0) AS received_qty
@@ -438,13 +442,17 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
                         continue
                     wh_amount = allocated_remaining if idx == len(wh_rows) - 1 else (_dec(alloc.allocated_amount) * wh_qty / received_total).quantize(_D2, ROUND_HALF_UP)
                     allocated_remaining -= wh_amount
+                    base_amount = (wh_amount * exchange_rate).quantize(_D2, ROUND_HALF_UP)
                     CostingService.apply_landed_cost_adjustment(
                         db,
                         product_id=alloc.product_id,
                         warehouse_id=wh_row.warehouse_id,
                         quantity=wh_qty,
-                        allocated_amount=(wh_amount * exchange_rate).quantize(_D2, ROUND_HALF_UP),
+                        allocated_amount=base_amount,
                         po_line_id=alloc.po_line_id,
+                    )
+                    warehouse_debit_base[wh_row.warehouse_id] = (
+                        warehouse_debit_base.get(wh_row.warehouse_id, Decimal("0")) + wh_amount
                     )
     
             # Build GL journal entry lines via GL service
@@ -453,17 +461,38 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
     
             je_lines = []
     
-            # Dr: Inventory
-            inv_account = get_mapped_account_id(db, "acc_map_inventory")
-            if inv_account:
-                je_lines.append({
-                    "account_id": inv_account,
-                    "debit": total_cost,
-                    "credit": 0,
-                    "description": "تكاليف مُضافة - مخزون",
-                    "amount_currency": total_cost,
-                    "currency": lc_currency,
-                })
+            # Dr: Inventory — split per warehouse using each warehouse's
+            # mapped inventory account (F-31). When all warehouses fall back
+            # to the same global account this collapses to the legacy single
+            # debit line.
+            if warehouse_debit_base:
+                for wh_id, wh_amount in warehouse_debit_base.items():
+                    if wh_amount <= 0:
+                        continue
+                    wh_inv_acc = resolve_warehouse_inventory_account(db, wh_id)
+                    if not wh_inv_acc:
+                        raise HTTPException(**http_error(400, "inventory_account_not_configured", request))
+                    je_lines.append({
+                        "account_id": wh_inv_acc,
+                        "debit": wh_amount,
+                        "credit": 0,
+                        "description": f"تكاليف مُضافة - مخزون (WH#{wh_id})",
+                        "amount_currency": wh_amount,
+                        "currency": lc_currency,
+                    })
+            else:
+                # Defensive fallback: nothing was allocated to a warehouse but
+                # we still need a balanced entry. Use the global mapping.
+                inv_account = get_mapped_account_id(db, "acc_map_inventory")
+                if inv_account:
+                    je_lines.append({
+                        "account_id": inv_account,
+                        "debit": total_cost,
+                        "credit": 0,
+                        "description": "تكاليف مُضافة - مخزون",
+                        "amount_currency": total_cost,
+                        "currency": lc_currency,
+                    })
     
             # Cr: Per cost type (group by vendor or expense type)
             cost_items = db.execute(text(

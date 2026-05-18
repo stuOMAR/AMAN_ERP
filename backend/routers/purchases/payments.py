@@ -4,7 +4,7 @@ This file is auto-generated when purchases.py was split. Endpoints here
 are mounted under the parent /buying prefix via purchases/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
@@ -22,6 +22,7 @@ from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.treasury_balance import recalc_treasury_from_gl
 from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
@@ -77,7 +78,13 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                 )
             amount_base = (_dec(data.amount) * voucher_rate).quantize(_D2, ROUND_HALF_UP)
             if data.voucher_type != 'refund' and amount_base > (supplier_balance + _D2):
-                # Allow overpayment but log warning (some businesses prepay)
+                allow_overpayment = db.execute(text("""
+                    SELECT LOWER(COALESCE(setting_value, 'false'))
+                    FROM company_settings
+                    WHERE setting_key = 'buying.allow_overpayment'
+                """)).scalar() in ("1", "true", "yes", "on")
+                if not allow_overpayment:
+                    raise HTTPException(**http_error(400, "supplier_overpayment_not_allowed", request))
                 logger.warning(f"Supplier payment {data.amount} exceeds balance {supplier_balance} for supplier {data.supplier_id}")
             
             # Prefix based on type
@@ -218,19 +225,6 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     
                     amount_base_cash = (amount_treasury_curr * treasury_rate).quantize(_D2, ROUND_HALF_UP)
                     
-                    # Update Treasury account specific balance
-                    # Payment decreases balance (Credit Asset), Refund increases balance (Debit Asset)
-                    if data.voucher_type == 'refund':
-                        balance_change_treasury = abs(amount_treasury_curr)
-                    else:
-                        balance_change_treasury = -abs(amount_treasury_curr)
-    
-                    db.execute(text("""
-                        UPDATE treasury_accounts
-                        SET current_balance = COALESCE(current_balance, 0) + :change
-                        WHERE id = :id
-                    """), {"change": balance_change_treasury, "id": treasury_id})
-            
             # Fallback to legacy mappings if no treasury linked
             if not cash_acc:
                 cash_acc = get_mapped_account_id(db, "acc_map_cash_main")
@@ -278,6 +272,9 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
                     source="payment_voucher",
                     source_id=voucher_id
                 )
+
+                if treasury_id:
+                    recalc_treasury_from_gl(db, treasury_id)
     
             # T12 — scoped invalidation: supplier payment hits treasury + AP + reports.
             invalidate_aggregates(str(current_user.company_id),

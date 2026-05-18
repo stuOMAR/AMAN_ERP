@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { salesAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
@@ -15,8 +15,10 @@ function CustomerReceipts() {
     const { t } = useTranslation();
     const { showToast } = useToast();
     const navigate = useNavigate();
+    const location = useLocation();
     const { currentBranch } = useBranch();
     const currency = getCurrency();
+    const isPaymentsRoute = location.pathname.includes('/sales/payments');
     const [vouchers, setVouchers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
@@ -27,20 +29,18 @@ function CustomerReceipts() {
             fetchVouchers();
         }, 300)
         return () => clearTimeout(timer)
-    }, [currentBranch]);
+    }, [currentBranch, isPaymentsRoute]);
 
     const fetchVouchers = async () => {
         try {
             setLoading(true);
-            const [receiptsRes, paymentsRes] = await Promise.all([
-                salesAPI.listReceipts({ branch_id: currentBranch?.id }),
-                salesAPI.listPayments({ branch_id: currentBranch?.id })
-            ]);
-
-            const unified = [
-                ...receiptsRes.data.map(r => ({ ...r, type: 'receipt' })),
-                ...paymentsRes.data.map(p => ({ ...p, type: 'refund' }))
-            ].sort((a, b) => new Date(b.voucher_date) - new Date(a.voucher_date));
+            const response = isPaymentsRoute
+                ? await salesAPI.listPayments({ branch_id: currentBranch?.id })
+                : await salesAPI.listReceipts({ branch_id: currentBranch?.id });
+            const voucherType = isPaymentsRoute ? 'refund' : 'receipt';
+            const unified = response.data
+                .map(voucher => ({ ...voucher, type: voucherType }))
+                .sort((a, b) => new Date(b.voucher_date) - new Date(a.voucher_date));
 
             setVouchers(unified);
         } catch (error) {
@@ -65,11 +65,11 @@ function CustomerReceipts() {
                 <BackButton />
                 <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                     <div>
-                        <h1 className="workspace-title">{t('sales.receipts.title')}</h1>
-                        <p className="workspace-subtitle">{t('sales.receipts.subtitle')}</p>
+                        <h1 className="workspace-title">{isPaymentsRoute ? t('sales.payments.title') : t('sales.receipts.title')}</h1>
+                        <p className="workspace-subtitle">{isPaymentsRoute ? t('sales.payments.subtitle') : t('sales.receipts.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={() => navigate('/sales/receipts/new')}>
-                        + {t('sales.receipts.create_new')}
+                    <button className="btn btn-primary" onClick={() => navigate(isPaymentsRoute ? '/sales/payments/new' : '/sales/receipts/new')}>
+                        + {isPaymentsRoute ? t('sales.payments.create_new') : t('sales.receipts.create_new')}
                     </button>
                 </div>
             </div>
@@ -77,7 +77,7 @@ function CustomerReceipts() {
             <div className="mb-4">
                 <input
                     type="text"
-                    placeholder={t('sales.receipts.search_placeholder')}
+                    placeholder={isPaymentsRoute ? t('sales.payments.search_placeholder') : t('sales.receipts.search_placeholder')}
                     value={search}
                     onChange={(e) => setSearch(e.target.value)}
                     className="form-input w-full max-w-md"
@@ -102,7 +102,7 @@ function CustomerReceipts() {
                         {filteredVouchers.length === 0 ? (
                             <tr>
                                 <td colSpan="8" className="px-6 py-8 text-center text-muted">
-                                    {t('sales.receipts.empty')}
+                                    {isPaymentsRoute ? t('sales.payments.empty') : t('sales.receipts.empty')}
                                 </td>
                             </tr>
                         ) : (

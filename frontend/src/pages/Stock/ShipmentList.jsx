@@ -46,7 +46,8 @@ const ShipmentList = () => {
             pending: { bg: '#FEF3C7', color: '#D97706', label: t('stock.shipments.status.pending') },
             dispatched: { bg: '#DBEAFE', color: '#2563EB', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
             received: { bg: '#D1FAE5', color: '#059669', label: t('stock.shipments.status.received') },
-            cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') }
+            cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') },
+            recalled: { bg: '#FECACA', color: '#991B1B', label: t('stock.shipments.status.recalled', 'تم الاسترداد') }
         };
         const s = styles[status] || styles.pending;
         return (
@@ -148,6 +149,7 @@ const ShipmentList = () => {
                         { value: 'dispatched', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
                         { value: 'received', label: t('stock.shipments.status.received') },
                         { value: 'cancelled', label: t('stock.shipments.status.cancelled') },
+                        { value: 'recalled', label: t('stock.shipments.status.recalled', 'تم الاسترداد') },
                     ],
                 }]}
                 filterValues={{ status: statusFilter }}

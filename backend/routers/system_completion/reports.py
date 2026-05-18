@@ -2,7 +2,7 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Response
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -37,6 +37,7 @@ router = APIRouter()
 @router.get("/reports/consolidation/trial-balance",
             dependencies=[Depends(require_permission("accounting.view"))], tags=["Consolidation"], response_model=Dict[str, Any])
 def consolidated_trial_balance(
+    request: Request,
     company_ids: Optional[str] = None,  # comma-separated
     as_of_date: Optional[str] = None,
     current_user: dict = Depends(get_current_user)
@@ -44,95 +45,101 @@ def consolidated_trial_balance(
     """
     ميزان مراجعة موحّد — يجمع أرصدة الحسابات من عدة شركات
     """
-    with system_engine.connect() as sys_conn:
-        # Get user's accessible companies
-        user_id = _u(current_user, "user_id")
-        if company_ids:
-            ids = [c.strip() for c in company_ids.split(",")]
-        else:
-            companies = sys_conn.execute(text("""
-                SELECT DISTINCT company_id FROM users WHERE id = :uid
-            """), {"uid": user_id}).fetchall()
-            ids = [c.company_id for c in companies]
+    try:
+        with system_engine.connect() as sys_conn:
+            # Get user's accessible companies
+            user_id = _u(current_user, "user_id")
+            if company_ids:
+                ids = [c.strip() for c in company_ids.split(",")]
+            else:
+                companies = sys_conn.execute(text("""
+                    SELECT DISTINCT company_id FROM users WHERE id = :uid
+                """), {"uid": user_id}).fetchall()
+                ids = [c.company_id for c in companies]
 
-        if not ids:
-            # Use current company
-            ids = [_u(current_user, "company_id")]
+            if not ids:
+                # Use current company
+                ids = [_u(current_user, "company_id")]
 
-        consolidated = {}
-        company_details = []
+            consolidated = {}
+            company_details = []
 
-        for cid in ids:
-            try:
-                with transactional(cid) as db:
-                    # Get company name
-                    comp_name = db.execute(text(
-                        "SELECT setting_value FROM company_settings WHERE setting_key = 'company_name' LIMIT 1"
-                    )).scalar() or cid
+            for cid in ids:
+                try:
+                    with transactional(cid) as db:
+                        # Get company name
+                        comp_name = db.execute(text(
+                            "SELECT setting_value FROM company_settings WHERE setting_key = 'company_name' LIMIT 1"
+                        )).scalar() or cid
 
-                    company_details.append({"id": cid, "name": comp_name})
+                        company_details.append({"id": cid, "name": comp_name})
 
-                    accounts = db.execute(text("""
-                        SELECT a.account_code, a.name, a.name_en,
-                               a.account_type,
-                               COALESCE(a.balance, 0) as balance
-                        FROM accounts a
-                        WHERE a.is_active = true
-                        ORDER BY a.account_code
-                    """)).fetchall()
+                        accounts = db.execute(text("""
+                            SELECT a.account_code, a.name, a.name_en,
+                                   a.account_type,
+                                   COALESCE(a.balance, 0) as balance
+                            FROM accounts a
+                            WHERE a.is_active = true
+                            ORDER BY a.account_code
+                        """)).fetchall()
 
-                    for acc in accounts:
-                        code = acc.account_code
-                        if code not in consolidated:
-                            consolidated[code] = {
-                                "account_code": code,
-                                "account_name": acc.name,
-                                "account_name_en": acc.name_en or '',
-                                "account_type": acc.account_type,
-                                "total_debit": 0,
-                                "total_credit": 0,
-                                "net_balance": 0,
-                                "company_balances": {}
-                            }
+                        for acc in accounts:
+                            code = acc.account_code
+                            if code not in consolidated:
+                                consolidated[code] = {
+                                    "account_code": code,
+                                    "account_name": acc.name,
+                                    "account_name_en": acc.name_en or '',
+                                    "account_type": acc.account_type,
+                                    "total_debit": 0,
+                                    "total_credit": 0,
+                                    "net_balance": 0,
+                                    "company_balances": {}
+                                }
 
-                        bal = float(acc.balance or 0)
-                        # Debit-normal: asset, expense. Credit-normal: liability, equity, revenue
-                        if acc.account_type in ('asset', 'expense'):
-                            consolidated[code]["total_debit"] += abs(bal) if bal >= 0 else 0
-                            consolidated[code]["total_credit"] += abs(bal) if bal < 0 else 0
-                        else:
-                            consolidated[code]["total_credit"] += abs(bal) if bal >= 0 else 0
-                            consolidated[code]["total_debit"] += abs(bal) if bal < 0 else 0
+                            bal = float(acc.balance or 0)
+                            # Debit-normal: asset, expense. Credit-normal: liability, equity, revenue
+                            if acc.account_type in ('asset', 'expense'):
+                                consolidated[code]["total_debit"] += abs(bal) if bal >= 0 else 0
+                                consolidated[code]["total_credit"] += abs(bal) if bal < 0 else 0
+                            else:
+                                consolidated[code]["total_credit"] += abs(bal) if bal >= 0 else 0
+                                consolidated[code]["total_debit"] += abs(bal) if bal < 0 else 0
 
-                        consolidated[code]["net_balance"] += bal
-                        consolidated[code]["company_balances"][cid] = bal
+                            consolidated[code]["net_balance"] += bal
+                            consolidated[code]["company_balances"][cid] = bal
 
-            except Exception as e:
-                logger.error(f"Consolidation error for company {cid}: {e}")
-                continue
+                except Exception as e:
+                    logger.error(f"Consolidation error for company {cid}: {e}")
+                    continue
 
-        # Sort by account code
-        result = sorted(consolidated.values(), key=lambda x: x['account_code'])
+            # Sort by account code
+            result = sorted(consolidated.values(), key=lambda x: x['account_code'])
 
-        # Round
-        for r in result:
-            r["total_debit"] = round(r["total_debit"], 2)
-            r["total_credit"] = round(r["total_credit"], 2)
-            r["net_balance"] = round(r["net_balance"], 2)
+            # Round
+            for r in result:
+                r["total_debit"] = round(r["total_debit"], 2)
+                r["total_credit"] = round(r["total_credit"], 2)
+                r["net_balance"] = round(r["net_balance"], 2)
 
-        total_debit = sum(r["total_debit"] for r in result)
-        total_credit = sum(r["total_credit"] for r in result)
+            total_debit = sum(r["total_debit"] for r in result)
+            total_credit = sum(r["total_credit"] for r in result)
 
-        return {
-            "companies": company_details,
-            "as_of_date": as_of_date or date.today().isoformat(),
-            "accounts": result,
-            "totals": {
-                "total_debit": round(total_debit, 2),
-                "total_credit": round(total_credit, 2),
-                "difference": round(total_debit - total_credit, 2)
+            return {
+                "companies": company_details,
+                "as_of_date": as_of_date or date.today().isoformat(),
+                "accounts": result,
+                "totals": {
+                    "total_debit": round(total_debit, 2),
+                    "total_credit": round(total_credit, 2),
+                    "difference": round(total_debit - total_credit, 2)
+                }
             }
-        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        logger.exception(f"Consolidation trial balance failed: {e}")
+        raise HTTPException(**http_error(500, "internal_error", request))
 
 
 @router.get("/reports/consolidation/income-statement",

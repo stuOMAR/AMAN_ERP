@@ -84,12 +84,16 @@ def check_fiscal_period_open(db, entry_date, raise_error=True, request=None):
         err_str = str(e).lower()
         table_missing = "does not exist" in err_str or "undefinedtable" in err_str
         if table_missing:
-            logger.warning(
-                "Fiscal period check skipped: fiscal_period_locks table is missing. "
-                "Run migrations or call create_fiscal_lock_table(). Error: %s",
+            # ACC-FIX-02 (P1): fail-closed — block postings when fiscal lock
+            # infrastructure is missing. This prevents silent bypass of period locks.
+            logger.error(
+                "Fiscal period check BLOCKED: fiscal_period_locks table is missing. "
+                "Run migrations to restore fiscal lock infrastructure. Error: %s",
                 e,
             )
-            return True
+            if raise_error:
+                raise HTTPException(**http_error(500, "fiscal_lock_check_failed", request))
+            return False
         # Unexpected DB error — don't silently allow; fail closed.
         logger.error("Fiscal period check failed with unexpected error: %s", e)
         if raise_error:

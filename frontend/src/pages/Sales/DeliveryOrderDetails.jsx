@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useParams } from 'react-router-dom'
 import { deliveryOrdersAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useToast } from '../../context/ToastContext'
@@ -17,6 +17,14 @@ function DeliveryOrderDetails() {
     const [order, setOrder] = useState(null)
     const [loading, setLoading] = useState(true)
     const [actionLoading, setActionLoading] = useState(false)
+
+    // M3: gate each action button on the same permission the backend
+    // endpoint requires, so view-only users never see buttons that
+    // would return 403.
+    const canConfirm  = hasPermission('sales.create')
+    const canDeliver  = hasPermission('sales.create')
+    const canInvoice  = hasPermission('sales.create')
+    const canCancel   = hasPermission('sales.void')
 
     const fetchOrder = async () => {
         try {
@@ -59,22 +67,22 @@ function DeliveryOrderDetails() {
                     <span className={`status-badge ${order.status}`}>{t(`delivery_orders.status_${order.status}`, order.status)}</span>
                 </div>
                 <div className="header-actions">
-                    {order.status === 'draft' && (
+                    {canConfirm && order.status === 'draft' && (
                         <button className="btn btn-primary" disabled={actionLoading} onClick={() => handleAction('confirm', t('common.confirm'))}>
                             ✅ {t('common.confirm')}
                         </button>
                     )}
-                    {order.status === 'confirmed' && (
+                    {canDeliver && order.status === 'confirmed' && (
                         <button className="btn btn-primary" disabled={actionLoading} onClick={() => handleAction('deliver', t('delivery_orders.mark_delivered'))}>
                             📦 {t('delivery_orders.mark_delivered')}
                         </button>
                     )}
-                    {(order.status === 'delivered' || order.status === 'confirmed') && (
+                    {canInvoice && (order.status === 'delivered' || order.status === 'confirmed') && (
                         <button className="btn btn-success" disabled={actionLoading} onClick={() => handleAction('invoice', t('delivery_orders.create_invoice'))}>
                             🧾 {t('delivery_orders.create_invoice')}
                         </button>
                     )}
-                    {order.status === 'draft' && (
+                    {canCancel && order.status === 'draft' && (
                         <button className="btn btn-danger" disabled={actionLoading} onClick={() => handleAction('cancel', t('common.cancel'))}>
                             ❌ {t('common.cancel')}
                         </button>

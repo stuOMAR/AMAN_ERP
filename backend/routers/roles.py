@@ -45,8 +45,10 @@ AVAILABLE_PERMISSIONS = [
     {"key": "sales.create", "section": "sales", "label_ar": "إنشاء فواتير وطلبات بيع", "label_en": "Create Invoices & Sales Orders"},
     {"key": "sales.edit", "section": "sales", "label_ar": "تعديل الفواتير", "label_en": "Edit Invoices"},
     {"key": "sales.delete", "section": "sales", "label_ar": "حذف / إلغاء فواتير", "label_en": "Delete / Cancel Invoices"},
+    {"key": "sales.receipt", "section": "sales", "label_ar": "إنشاء سندات قبض العملاء", "label_en": "Create Customer Receipts"},
     {"key": "sales.void", "section": "sales", "label_ar": "إلغاء فاتورة معتمدة (Void)", "label_en": "Void Posted Invoice"},
     {"key": "sales.approve_return", "section": "sales", "label_ar": "اعتماد مرتجع المبيعات", "label_en": "Approve Sales Return"},
+    {"key": "sales.return_outside_window", "section": "sales", "label_ar": "السماح بمرتجع خارج نافذة الإرجاع", "label_en": "Allow Returns Outside Window"},
     {"key": "sales.manage_credit_notes", "section": "sales", "label_ar": "إصدار وإدارة الإشعارات الدائنة/المدينة", "label_en": "Issue & Manage Credit / Debit Notes"},
     {"key": "sales.reports", "section": "sales", "label_ar": "تقارير المبيعات", "label_en": "Sales Reports"},
 
@@ -55,6 +57,7 @@ AVAILABLE_PERMISSIONS = [
     {"key": "buying.create", "section": "buying", "label_ar": "إنشاء فواتير وأوامر شراء", "label_en": "Create Purchase Invoices & Orders"},
     {"key": "buying.edit", "section": "buying", "label_ar": "تعديل فواتير الشراء", "label_en": "Edit Purchase Invoices"},
     {"key": "buying.delete", "section": "buying", "label_ar": "حذف فواتير الشراء", "label_en": "Delete Purchase Invoices"},
+    {"key": "buying.void", "section": "buying", "label_ar": "إلغاء فاتورة شراء معتمدة (Void)", "label_en": "Void Posted Purchase Invoice"},
     {"key": "buying.approve", "section": "buying", "label_ar": "اعتماد أوامر الشراء", "label_en": "Approve Purchase Orders"},
     {"key": "buying.receive", "section": "buying", "label_ar": "استلام البضائع", "label_en": "Receive Goods"},
     {"key": "buying.reports", "section": "buying", "label_ar": "تقارير المشتريات", "label_en": "Purchase Reports"},
@@ -509,7 +512,7 @@ DEFAULT_ROLES = {
             "dashboard.view", "dashboard.financial",
             "accounting.view", "accounting.create_journal_entry", "accounting.post_journal_entry",
             "treasury.view", "treasury.create", "reconciliation.view", "reconciliation.create",
-            "sales.view", "buying.view", "expenses.view", "expenses.create",
+            "sales.view", "sales.receipt", "buying.view", "expenses.view", "expenses.create",
             "taxes.view", "currencies.view", "reports.view", "reports.financial",
             "branches.view", "notifications.view", "finance.accounting_view", "finance.accounting_read",
         ]
@@ -519,7 +522,7 @@ DEFAULT_ROLES = {
         "description": "تحصيلات العملاء وسندات القبض والشيكات تحت التحصيل دون صلاحيات الموردين أو إعدادات الحسابات",
         "permissions": [
             "dashboard.view", "dashboard.sales",
-            "sales.view", "sales.create", "sales.reports", "parties.view", "parties.manage",
+            "sales.view", "sales.create", "sales.receipt", "sales.reports", "parties.view", "parties.manage",
             "treasury.view", "treasury.create", "reconciliation.view",
             "accounting.view", "reports.view", "branches.view", "notifications.view", "finance.accounting_read",
         ]
@@ -586,7 +589,7 @@ DEFAULT_ROLES = {
         "description": "إدارة تشغيلية لفرع محدد: مبيعات، مشتريات، مخزون، مصاريف واعتمادات تشغيلية",
         "permissions": [
             "dashboard.view", "dashboard.sales", "dashboard.procurement", "dashboard.warehouse", "dashboard.pos",
-            "sales.view", "sales.create", "sales.edit", "buying.view", "buying.create", "buying.receive",
+            "sales.view", "sales.create", "sales.receipt", "sales.edit", "buying.view", "buying.create", "buying.receive",
             "products.view", "stock.view", "stock.transfer", "inventory.view",
             "treasury.view", "treasury.create", "expenses.view", "expenses.create", "expenses.approve",
             "reports.view", "projects.view", "pos.view", "pos.create", "pos.sessions", "pos.returns",
@@ -658,7 +661,7 @@ DEFAULT_ROLES = {
         "permissions": [
             "dashboard.view",
             "pos.view", "pos.create", "pos.sessions", "pos.returns",
-            "sales.view", "sales.create",
+            "sales.view", "sales.create", "sales.receipt",
             "products.view", "stock.view",
             "treasury.view", "treasury.create",
             "notifications.view",

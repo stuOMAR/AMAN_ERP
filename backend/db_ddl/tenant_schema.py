@@ -469,10 +469,15 @@ def get_additional_base_tables_sql() -> str:
         country VARCHAR(100),
         branch_id INTEGER REFERENCES branches(id),
         manager_id INTEGER REFERENCES company_users(id),
+        -- F-31: per-warehouse inventory GL account. Optional — when NULL
+        -- the global acc_map_inventory mapping is used as fallback.
+        gl_inventory_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
         is_default BOOLEAN DEFAULT FALSE,
         is_active BOOLEAN DEFAULT TRUE,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE INDEX IF NOT EXISTS idx_warehouses_gl_inventory_account
+        ON warehouses(gl_inventory_account_id);
     
     CREATE TABLE IF NOT EXISTS inventory (
         id SERIAL PRIMARY KEY,
@@ -7102,11 +7107,12 @@ def get_feature023_tables_sql() -> str:
     EXCEPTION WHEN duplicate_object THEN NULL;
     END $$;
 
+    DROP INDEX IF EXISTS uix_invoice_idempotency;
     CREATE UNIQUE INDEX IF NOT EXISTS uix_invoice_idempotency
-        ON invoices (tenant_id, sales_order_id, idempotency_key)
+        ON invoices (idempotency_key)
         WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS ix_invoices_state
-        ON invoices (tenant_id, state);
+        ON invoices (state);
 
     -- ═══════════════════════════════════════════════════════════════════
     -- Feature 023: Sales order → invoice link

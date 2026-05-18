@@ -3,7 +3,7 @@
 Mounted under the parent router via core/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from routers.roles import DEFAULT_ROLES
@@ -23,6 +23,7 @@ from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.treasury_balance import recalc_treasury_from_gl
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
@@ -913,11 +914,7 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
                     LIMIT 1
                 """), {"gl_id": acc_bank}).fetchone() if acc_bank else None
                 if treasury:
-                    conn.execute(text("""
-                        UPDATE treasury_accounts
-                        SET current_balance = current_balance - :amt, updated_at = CURRENT_TIMESTAMP
-                        WHERE id = :tid
-                    """), {"amt": str(total_net_all), "tid": treasury.id})
+                    recalc_treasury_from_gl(conn, treasury.id)
             except Exception as tres_err:
                 logger.warning(f"Treasury balance update for payroll skipped: {tres_err}")
 
@@ -1144,4 +1141,3 @@ def generate_single_payslip(request: Request, data: PayslipGenerateRequest, comp
 
 
 # --- Recruitment ---
-

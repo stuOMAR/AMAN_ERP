@@ -79,7 +79,7 @@ function AccountingHome() {
         {
             title: i18n.t('accounting.advanced_accounting'),
             items: [
-                { label: t('accounting.intercompany', 'المعاملات بين الشركات'), path: '/accounting/intercompany/transactions', icon: '🏢', permission: 'accounting.view', highlight: true, color: '#0f766e' },
+                { label: t('accounting.intercompany.title', 'المعاملات بين الشركات'), path: '/accounting/intercompany/transactions', icon: '🏢', permission: 'accounting.view', highlight: true, color: '#0f766e' },
                 { label: t('accounting.revenue_recognition', 'الاعتراف بالإيراد'), path: '/accounting/revenue-recognition', icon: '📊', permission: 'accounting.view' },
                 { label: t('zakat.title', 'حاسبة الزكاة'), path: '/accounting/zakat', icon: '🕌', permission: 'accounting.view' }
             ]

@@ -4,7 +4,7 @@ AMAN ERP — Delivery Orders Router
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
@@ -22,6 +22,7 @@ from utils.accounting import (
     get_base_currency
 )
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.party_balance import update_party_site_balance
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from services.tax_engine import resolve_line_tax
 
@@ -273,7 +274,13 @@ def confirm_delivery_order(do_id: int, request: Request, current_user: dict = De
     user_id = current_user.get("user_id")
     with transactional(company_id) as db:
         try:
-            order = db.execute(text("SELECT * FROM delivery_orders WHERE id = :id"), {"id": do_id}).fetchone()
+            # AUDIT-H2: lock the DO header row to serialise concurrent
+            # confirm/create-invoice/cancel attempts. Without FOR UPDATE
+            # two parallel calls could each pass the status check and
+            # double-deduct stock.
+            order = db.execute(text(
+                "SELECT * FROM delivery_orders WHERE id = :id FOR UPDATE"
+            ), {"id": do_id}).fetchone()
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status != 'draft':
@@ -379,7 +386,11 @@ def mark_delivered(do_id: int, request: Request, current_user: dict = Depends(ge
     """تسجيل وصول الشحنة / تسليم العميل"""
     company_id = current_user.get("company_id")
     with transactional(company_id) as db:
-        order = db.execute(text("SELECT * FROM delivery_orders WHERE id = :id"), {"id": do_id}).fetchone()
+        # AUDIT-H2: lock the DO row before transitioning to 'delivered'
+        # to keep concurrent deliver/cancel calls serialised.
+        order = db.execute(text(
+            "SELECT * FROM delivery_orders WHERE id = :id FOR UPDATE"
+        ), {"id": do_id}).fetchone()
         if not order:
             raise HTTPException(**http_error(404, "delivery_order_not_found"))
         if order.status not in ('confirmed', 'shipped'):
@@ -402,7 +413,10 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
     user_id = current_user.get("user_id")
     with transactional(company_id) as db:
         try:
-            order = db.execute(text("SELECT * FROM delivery_orders WHERE id = :id"), {"id": do_id}).fetchone()
+            # AUDIT-H2: lock DO row to prevent concurrent invoice creation.
+            order = db.execute(text(
+                "SELECT * FROM delivery_orders WHERE id = :id FOR UPDATE"
+            ), {"id": do_id}).fetchone()
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status not in ('confirmed', 'delivered'):
@@ -446,24 +460,31 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
             tax_total = totals["total_tax"]
             grand_total = totals["grand_total"]
     
-            # Create invoice
+            # AUDIT-C2: align column list with the actual `invoices` DDL
+            # (db_ddl/tenant_schema.py:948). The legacy INSERT used
+            # `total_amount`, `delivery_order_id`, and `payment_method`,
+            # none of which exist on the table — so the DO→Invoice flow
+            # would fail at runtime or silently drop columns where
+            # tolerant DBs allow it. We now use the canonical column set
+            # and persist the linkage via the existing `related_invoice_id`
+            # field (already used by sales returns / credit notes).
             inv = db.execute(text("""
                 INSERT INTO invoices (
                     invoice_number, invoice_type, invoice_date, party_id,
-                    subtotal, tax_amount, total_amount, status,
-                    branch_id, warehouse_id, delivery_order_id, currency,
-                    payment_method, created_by
+                    subtotal, tax_amount, total, status,
+                    branch_id, warehouse_id, currency,
+                    created_by
                 ) VALUES (
                     :num, 'sales', CURRENT_DATE, :pid,
                     :sub, :tax, :total, 'posted',
-                    :bid, :wid, :doid, :curr,
-                    'credit', :uid
+                    :bid, :wid, :curr,
+                    :uid
                 ) RETURNING id
             """), {
                 "num": inv_number, "pid": order.party_id,
                 "sub": subtotal, "tax": tax_total, "total": grand_total,
                 "bid": order.branch_id, "wid": order.warehouse_id,
-                "doid": do_id, "curr": base_currency, "uid": user_id
+                "curr": base_currency, "uid": user_id
             })
             inv_id = inv.fetchone()[0]
     
@@ -489,17 +510,19 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
             # Link DO to invoice
             db.execute(text("UPDATE delivery_orders SET invoice_id = :iid WHERE id = :doid"),
                        {"iid": inv_id, "doid": do_id})
-    
+
             # ── Fiscal period check before GL posting ──
             check_fiscal_period_open(db, datetime.now().date())
-    
+
             # ── Create Journal Entry via centralized GL service (TASK-015) ──
             ar_account = get_mapped_account_id(db, "acc_map_ar")
             revenue_account = get_mapped_account_id(db, "acc_map_sales_rev")
             vat_out_account = get_mapped_account_id(db, "acc_map_vat_out")
             cogs_account = get_mapped_account_id(db, "acc_map_cogs")
-            inventory_account = get_mapped_account_id(db, "acc_map_inventory")
-    
+            # F-31: credit the source warehouse's inventory account.
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+            inventory_account = resolve_warehouse_inventory_account(db, order.warehouse_id)
+
             total_cogs = _dec(db.execute(text("""
                 SELECT COALESCE(SUM(ABS(total_cost)), 0)
                 FROM inventory_transactions
@@ -507,7 +530,7 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                   AND reference_id = :doid
                   AND transaction_type = 'delivery'
             """), {"doid": do_id}).scalar()).quantize(_D2, ROUND_HALF_UP)
-    
+
             je_lines = []
             if ar_account:
                 je_lines.append({"account_id": ar_account, "debit": grand_total, "credit": 0,
@@ -523,10 +546,10 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                                  "description": "تكلفة البضاعة المباعة"})
                 je_lines.append({"account_id": inventory_account, "debit": 0, "credit": total_cogs,
                                  "description": "خصم مخزون (COGS)"})
-    
+
             if not je_lines:
                 raise HTTPException(**http_error(400, "ar_sales_revenue_accounts_incomplete", request))
-    
+
             je_id, je_number = create_journal_entry(
                 db=db,
                 company_id=company_id,
@@ -543,21 +566,25 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                 username=current_user.get("username"),
                 idempotency_key=f"do-invoice-{do_id}",
             )
-    
+
             # Update invoice with JE
             db.execute(text("UPDATE invoices SET journal_entry_id = :jeid WHERE id = :iid"),
                        {"jeid": je_id, "iid": inv_id})
-    
-            # Party transaction
-            db.execute(text("""
-                INSERT INTO party_transactions (
-                    party_id, transaction_type, debit, credit, balance,
-                    reference_type, reference_id, description, created_by
-                ) VALUES (:pid, 'invoice', :amt, 0, :amt, 'invoice', :iid, :desc, :uid)
-            """), {"pid": order.party_id, "amt": grand_total, "iid": inv_id,
-                   "desc": f"فاتورة {inv_number}", "uid": user_id})
-    
-    
+
+            # AUDIT-C2: customer balance must flow through
+            # party_site_balances (the source of truth for AR aging /
+            # statements / credit checks). The legacy INSERT into
+            # `party_transactions` was a stale code path that no report
+            # reads from. Sign matches `sales/invoices.py:687`: the
+            # remaining receivable increases the customer's balance.
+            update_party_site_balance(
+                db,
+                party_id=order.party_id,
+                branch_id=order.branch_id,
+                currency=base_currency,
+                amount=float(grand_total),
+            )
+
             return {
                 "message": i18n_message("delivery_invoice_created", request),
                 "invoice_id": inv_id,
@@ -582,7 +609,10 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
     user_id = current_user.get("user_id")
     with transactional(company_id) as db:
         try:
-            order = db.execute(text("SELECT * FROM delivery_orders WHERE id = :id"), {"id": do_id}).fetchone()
+            # AUDIT-H2: lock DO row to prevent racing cancel + confirm.
+            order = db.execute(text(
+                "SELECT * FROM delivery_orders WHERE id = :id FOR UPDATE"
+            ), {"id": do_id}).fetchone()
             if not order:
                 raise HTTPException(**http_error(404, "delivery_order_not_found"))
             if order.status == 'cancelled':

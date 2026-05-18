@@ -28,10 +28,14 @@ def list_warehouses(request: Request, branch_id: Optional[int] = None, current_u
     try:
         branch_scope = resolve_branch_scope(current_user, branch_id)
         query = """
-            SELECT w.id, w.warehouse_name as name, w.warehouse_code as code, 
-                   w.branch_id, COALESCE(b.branch_name, '') as branch_name
+            SELECT w.id, w.warehouse_name as name, w.warehouse_code as code,
+                   w.branch_id, COALESCE(b.branch_name, '') as branch_name,
+                   w.gl_inventory_account_id,
+                   a.account_code AS gl_inventory_account_code,
+                   a.name AS gl_inventory_account_name
             FROM warehouses w
             LEFT JOIN branches b ON w.branch_id = b.id
+            LEFT JOIN accounts a ON w.gl_inventory_account_id = a.id
             WHERE 1=1
         """
         params = {}
@@ -44,7 +48,10 @@ def list_warehouses(request: Request, branch_id: Optional[int] = None, current_u
             "name": r.name,
             "code": r.code,
             "branch_id": r.branch_id,
-            "branch_name": r.branch_name
+            "branch_name": r.branch_name,
+            "gl_inventory_account_id": r.gl_inventory_account_id,
+            "gl_inventory_account_code": r.gl_inventory_account_code,
+            "gl_inventory_account_name": r.gl_inventory_account_name,
         } for r in result]
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.
@@ -59,15 +66,47 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
     """Create Warehouse."""
     db = get_db_connection(current_user.company_id)
     try:
+        # INV-003: Branch access enforcement on creation
+        if warehouse.branch_id:
+            allowed = getattr(current_user, 'allowed_branches', []) or []
+            if allowed and "*" not in getattr(current_user, 'permissions', []):
+                if warehouse.branch_id not in allowed:
+                    raise HTTPException(**http_error(403, "cross_branch_create_denied", request))
+
         # Check duplicate code
         exists = db.execute(text("SELECT 1 FROM warehouses WHERE warehouse_code = :code"), {"code": warehouse.code}).scalar()
         if exists:
             raise HTTPException(**http_error(400, "warehouse_code_duplicate", request))
 
+        # F-31: validate the optional inventory account belongs to this tenant
+        # and is a leaf (non-header) asset account so postings are allowed.
+        if warehouse.gl_inventory_account_id is not None:
+            acc_row = db.execute(
+                text(
+                    """
+                    SELECT id, account_type, COALESCE(is_header, FALSE) AS is_header
+                    FROM accounts
+                    WHERE id = :id
+                    """
+                ),
+                {"id": warehouse.gl_inventory_account_id},
+            ).fetchone()
+            if not acc_row:
+                raise HTTPException(**http_error(400, "inventory_account_not_found", request))
+            if acc_row.is_header:
+                raise HTTPException(**http_error(400, "inventory_account_must_be_leaf", request))
+            if (acc_row.account_type or "").lower() != "asset":
+                raise HTTPException(**http_error(400, "inventory_account_must_be_asset", request))
+
         result = db.execute(text("""
-            INSERT INTO warehouses (warehouse_name, warehouse_code, branch_id) 
-            VALUES (:name, :code, :branch_id) RETURNING id
-        """), {"name": warehouse.name, "code": warehouse.code, "branch_id": warehouse.branch_id}).fetchone()
+            INSERT INTO warehouses (warehouse_name, warehouse_code, branch_id, gl_inventory_account_id)
+            VALUES (:name, :code, :branch_id, :acc_id) RETURNING id
+        """), {
+            "name": warehouse.name,
+            "code": warehouse.code,
+            "branch_id": warehouse.branch_id,
+            "acc_id": warehouse.gl_inventory_account_id,
+        }).fetchone()
 
         # Get branch name if branch_id is set
         branch_name = None
@@ -78,7 +117,12 @@ def create_warehouse(warehouse: WarehouseCreate, request: Request, current_user:
         log_activity(
             db, user_id=current_user.id, username=current_user.username,
             action="warehouse.create", resource_type="warehouse",
-            resource_id=str(result[0]), details={"name": warehouse.name, "code": warehouse.code},
+            resource_id=str(result[0]),
+            details={
+                "name": warehouse.name,
+                "code": warehouse.code,
+                "gl_inventory_account_id": warehouse.gl_inventory_account_id,
+            },
             request=request, branch_id=warehouse.branch_id
         )
         db.commit()
@@ -112,10 +156,40 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
         # BUG-FIX: Convert branch_id to int if it's None or invalid
         safe_branch_id = warehouse.branch_id if warehouse.branch_id is not None else None
 
+        # F-31: validate the inventory account if provided. Allow clearing the
+        # mapping back to NULL so the warehouse falls back to the global one.
+        if warehouse.gl_inventory_account_id is not None:
+            acc_row = db.execute(
+                text(
+                    """
+                    SELECT id, account_type, COALESCE(is_header, FALSE) AS is_header
+                    FROM accounts
+                    WHERE id = :id
+                    """
+                ),
+                {"id": warehouse.gl_inventory_account_id},
+            ).fetchone()
+            if not acc_row:
+                raise HTTPException(**http_error(400, "inventory_account_not_found", request))
+            if acc_row.is_header:
+                raise HTTPException(**http_error(400, "inventory_account_must_be_leaf", request))
+            if (acc_row.account_type or "").lower() != "asset":
+                raise HTTPException(**http_error(400, "inventory_account_must_be_asset", request))
+
         db.execute(text("""
-            UPDATE warehouses SET warehouse_name = :name, warehouse_code = :code, branch_id = :branch_id
+            UPDATE warehouses
+            SET warehouse_name = :name,
+                warehouse_code = :code,
+                branch_id = :branch_id,
+                gl_inventory_account_id = :acc_id
             WHERE id = :id
-        """), {"name": warehouse.name, "code": warehouse.code, "branch_id": safe_branch_id, "id": id})
+        """), {
+            "name": warehouse.name,
+            "code": warehouse.code,
+            "branch_id": safe_branch_id,
+            "acc_id": warehouse.gl_inventory_account_id,
+            "id": id,
+        })
 
         # Get branch name if branch_id is set
         branch_name = None
@@ -126,7 +200,11 @@ def update_warehouse(id: int, warehouse: WarehouseCreate, request: Request, curr
         log_activity(
             db, user_id=current_user.id, username=current_user.username,
             action="warehouse.update", resource_type="warehouse",
-            resource_id=str(id), details={"name": warehouse.name},
+            resource_id=str(id),
+            details={
+                "name": warehouse.name,
+                "gl_inventory_account_id": warehouse.gl_inventory_account_id,
+            },
             request=request, branch_id=warehouse.branch_id
         )
         db.commit()
@@ -179,6 +257,32 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
         if txn_count and txn_count > 0:
             raise HTTPException(**http_error(400, "cannot_delete_warehouse_with_movements", request))
 
+        # INV-DEL: Check active cost layers (FIFO/LIFO not exhausted)
+        active_layers = db.execute(text(
+            "SELECT COUNT(*) FROM cost_layers WHERE warehouse_id = :id AND is_exhausted = FALSE"
+        ), {"id": id}).scalar()
+        if active_layers and active_layers > 0:
+            raise HTTPException(**http_error(400, "cannot_delete_warehouse_with_movements", request))
+
+        # INV-DEL: Check pending/dispatched shipments referencing this warehouse
+        pending_shipments = db.execute(text("""
+            SELECT COUNT(*) FROM stock_shipments
+            WHERE (source_warehouse_id = :id OR destination_warehouse_id = :id)
+              AND status IN ('pending', 'dispatched')
+        """), {"id": id}).scalar()
+        if pending_shipments and pending_shipments > 0:
+            raise HTTPException(**http_error(400, "cannot_delete_warehouse_with_movements", request))
+
+        linked_docs = db.execute(text("""
+            SELECT COUNT(*) FROM (
+                SELECT 1 FROM purchase_orders WHERE warehouse_id = :id
+                UNION ALL
+                SELECT 1 FROM delivery_orders WHERE warehouse_id = :id
+            ) AS refs
+        """), {"id": id}).scalar()
+        if linked_docs and linked_docs > 0:
+            raise HTTPException(**http_error(400, "cannot_delete_warehouse_with_movements", request))
+
         db.execute(text("DELETE FROM warehouses WHERE id = :id"), {"id": id})
 
         # INV-012: Audit log
@@ -207,10 +311,14 @@ def get_warehouse(request: Request, id: int, current_user: dict = Depends(get_cu
     db = get_db_connection(current_user.company_id)
     try:
         warehouse = db.execute(text("""
-            SELECT w.id, w.warehouse_name as name, w.warehouse_code as code, 
-                   w.branch_id, b.branch_name
+            SELECT w.id, w.warehouse_name as name, w.warehouse_code as code,
+                   w.branch_id, b.branch_name,
+                   w.gl_inventory_account_id,
+                   a.account_code AS gl_inventory_account_code,
+                   a.name AS gl_inventory_account_name
             FROM warehouses w
             LEFT JOIN branches b ON w.branch_id = b.id
+            LEFT JOIN accounts a ON w.gl_inventory_account_id = a.id
             WHERE w.id = :id
         """), {"id": id}).fetchone()
         if not warehouse:
@@ -222,7 +330,16 @@ def get_warehouse(request: Request, id: int, current_user: dict = Depends(get_cu
             if warehouse.branch_id and warehouse.branch_id not in allowed:
                 raise HTTPException(**http_error(403, "cross_branch_access_denied", request))
 
-        return {"id": warehouse.id, "name": warehouse.name, "code": warehouse.code, "branch_id": warehouse.branch_id, "branch_name": warehouse.branch_name}
+        return {
+            "id": warehouse.id,
+            "name": warehouse.name,
+            "code": warehouse.code,
+            "branch_id": warehouse.branch_id,
+            "branch_name": warehouse.branch_name,
+            "gl_inventory_account_id": warehouse.gl_inventory_account_id,
+            "gl_inventory_account_code": warehouse.gl_inventory_account_code,
+            "gl_inventory_account_name": warehouse.gl_inventory_account_name,
+        }
     finally:
         db.close()
 

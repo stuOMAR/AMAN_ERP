@@ -1,8 +1,0 @@
-{
-  "_meta": {
-    "status": "complete",
-    "generated_at": "2026-04-21",
-    "note": "TASK-044: verified ar.json and en.json are in perfect parity (9840 keys each, 0 missing on either side). All keys that were previously listed here are already translated in frontend/src/locales/ar.json. Regenerate only if a future scan finds missing keys."
-  },
-  "pending": []
-}

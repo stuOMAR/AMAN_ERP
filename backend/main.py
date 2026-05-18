@@ -739,7 +739,6 @@ except ImportError:
 # ── Feature 023: Sales/POS/CRM/ZATCA + Inventory/Manufacturing ──────
 try:
     from routers.sales.order_to_invoice import router as order_to_invoice_router
-    from routers.sales.cancellation import router as sales_cancellation_router
     from routers.returns_unified import router as returns_unified_router
     from routers.pos.offline import router as pos_offline_router
     from routers.pos.cancellation import router as pos_cancellation_router
@@ -756,7 +755,6 @@ try:
     from routers.inventory.transfer_deprecated import router as transfer_deprecated_router
 
     app.include_router(order_to_invoice_router, prefix="/api")
-    app.include_router(sales_cancellation_router, prefix="/api")
     app.include_router(returns_unified_router, prefix="/api")
     app.include_router(pos_offline_router, prefix="/api")
     app.include_router(pos_cancellation_router, prefix="/api")

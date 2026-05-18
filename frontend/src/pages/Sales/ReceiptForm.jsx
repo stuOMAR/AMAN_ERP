@@ -19,6 +19,7 @@ function ReceiptForm() {
     const { currentBranch } = useBranch();
     const { showToast } = useToast();
     const currency = getCurrency();
+    const isPaymentsRoute = location.pathname.includes('/sales/payments');
     const [loading, setLoading] = useState(false);
     const [customers, setCustomers] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
@@ -28,7 +29,7 @@ function ReceiptForm() {
         party_site_id: '',
         voucher_date: new Date().toISOString().split('T')[0],
         amount: 0,
-        voucher_type: 'receipt', // 'receipt' or 'refund'
+        voucher_type: isPaymentsRoute ? 'refund' : 'receipt',
         payment_method: '',
         bank_account_id: null,
         check_number: '',
@@ -265,7 +266,7 @@ function ReceiptForm() {
             }
 
             showToast(t('sales.receipts.form.errors.create_success'), 'success');
-            navigate('/sales/receipts');
+            navigate(formData.voucher_type === 'refund' ? '/sales/payments' : '/sales/receipts');
         } catch (error) {
             showToast(t('sales.receipts.form.errors.create_failed') + ': ' + (error.response?.data?.detail || error.message), 'error');
         } finally {

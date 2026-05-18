@@ -585,7 +585,7 @@ function App() {
                 <Route path="/intercompany/entities" element={<Navigate to="/accounting/intercompany/entities" replace />} />
                 <Route path="/intercompany/consolidation" element={<Navigate to="/accounting/intercompany/consolidation" replace />} />
                 <Route path="/intercompany/mappings" element={<Navigate to="/accounting/intercompany/mappings" replace />} />
-                <Route path="/stock/valuation-report" element={<PrivateRoute permission="reports.view"><InventoryValuation /></PrivateRoute>} />
+                <Route path="/stock/valuation-report" element={<PrivateRoute permission="stock.reports"><InventoryValuation /></PrivateRoute>} />
                 <Route path="/admin/companies" element={<PrivateRoute role="system_admin"><CompanyList /></PrivateRoute>} />
                 <Route path="/admin/audit-logs" element={<PrivateRoute permission="audit.view"><AuditLogs /></PrivateRoute>} />
                 <Route path="/admin/roles" element={<PrivateRoute permission="admin.roles"><RoleManagement /></PrivateRoute>} />
@@ -623,10 +623,11 @@ function App() {
                 <Route path="/sales/returns/new" element={<PrivateRoute permission="sales.create"><SalesReturnForm /></PrivateRoute>} />
                 <Route path="/sales/returns/:id" element={<PrivateRoute permission="sales.view"><SalesReturnDetails /></PrivateRoute>} />
                 <Route path="/sales/receipts" element={<PrivateRoute permission="sales.view"><CustomerReceipts /></PrivateRoute>} />
-                <Route path="/sales/receipts/new" element={<PrivateRoute permission="sales.create"><ReceiptForm /></PrivateRoute>} />
+                {/* M1: backend requires sales.receipt; align FE guard to match */}
+                <Route path="/sales/receipts/new" element={<PrivateRoute permission="sales.receipt"><ReceiptForm /></PrivateRoute>} />
                 <Route path="/sales/receipts/:id" element={<PrivateRoute permission="sales.view"><ReceiptDetails /></PrivateRoute>} />
                 <Route path="/sales/payments" element={<PrivateRoute permission="sales.view"><CustomerReceipts /></PrivateRoute>} />
-                <Route path="/sales/payments/new" element={<PrivateRoute permission="sales.create"><ReceiptForm /></PrivateRoute>} />
+                <Route path="/sales/payments/new" element={<PrivateRoute permission="sales.receipt"><ReceiptForm /></PrivateRoute>} />
                 <Route path="/sales/payments/:id" element={<PrivateRoute permission="sales.view"><ReceiptDetails /></PrivateRoute>} />
                 <Route path="/sales/price-lists" element={<PrivateRoute permission="sales.view"><PriceLists /></PrivateRoute>} />
                 <Route path="/sales/reports/analytics" element={<PrivateRoute permission="sales.reports"><SalesReports /></PrivateRoute>} />
@@ -692,7 +693,7 @@ function App() {
                 <Route path="/stock" element={<PrivateRoute permission="stock.view"><StockHome /></PrivateRoute>} />
                 <Route path="/stock/products" element={<PrivateRoute permission="stock.view"><ProductList /></PrivateRoute>} />
                 <Route path="/stock/products/new" element={<PrivateRoute permission="products.create"><ProductForm /></PrivateRoute>} />
-                <Route path="/stock/products/:id" element={<PrivateRoute permission="stock.view"><ProductForm /></PrivateRoute>} />
+                <Route path="/stock/products/:id" element={<PrivateRoute permission="products.edit"><ProductForm /></PrivateRoute>} />
                 <Route path="/stock/categories" element={<PrivateRoute permission="stock.view"><CategoryList /></PrivateRoute>} />
                 <Route path="/stock/warehouses" element={<PrivateRoute permission="stock.view"><WarehouseList /></PrivateRoute>} />
                 <Route path="/stock/warehouses/:id" element={<PrivateRoute permission="stock.view"><WarehouseDetails /></PrivateRoute>} />
@@ -701,7 +702,7 @@ function App() {
                 <Route path="/stock/adjustments/new" element={<PrivateRoute permission="stock.adjustment"><StockAdjustmentForm /></PrivateRoute>} />
 
                 <Route path="/stock/shipments" element={<PrivateRoute permission="stock.view"><ShipmentList /></PrivateRoute>} />
-                <Route path="/stock/shipments/new" element={<PrivateRoute permission="stock.view"><StockShipmentForm /></PrivateRoute>} />
+                <Route path="/stock/shipments/new" element={<PrivateRoute permission="stock.transfer"><StockShipmentForm /></PrivateRoute>} />
                 <Route path="/stock/shipments/incoming" element={<PrivateRoute permission="stock.view"><IncomingShipments /></PrivateRoute>} />
                 <Route path="/stock/shipments/:id" element={<PrivateRoute permission="stock.view"><ShipmentDetails /></PrivateRoute>} />
 
@@ -719,8 +720,8 @@ function App() {
                 <Route path="/stock/cycle-counts" element={<PrivateRoute permission="stock.view"><CycleCounts /></PrivateRoute>} />
 
                 {/* Costing (FIFO/LIFO) */}
-                <Route path="/stock/cost-layers" element={<PrivateRoute permission="stock.view"><CostLayerList /></PrivateRoute>} />
-                <Route path="/stock/costing-method" element={<PrivateRoute permission="stock.view"><CostingMethodForm /></PrivateRoute>} />
+                <Route path="/stock/cost-layers" element={<PrivateRoute permission="stock.view_cost"><CostLayerList /></PrivateRoute>} />
+                <Route path="/stock/costing-method" element={<PrivateRoute permission="inventory.costing_manage"><CostingMethodForm /></PrivateRoute>} />
                 <Route path="/stock/costing-valuation" element={<PrivateRoute permission="stock.reports"><ValuationReport /></PrivateRoute>} />
 
                 {/* Demand Forecasting */}
@@ -769,7 +770,8 @@ function App() {
 
                 {/* 3-Way Matching */}
                 <Route path="/buying/matching" element={<PrivateRoute permission="buying.view"><MatchList /></PrivateRoute>} />
-                <Route path="/buying/matching/tolerances" element={<PrivateRoute permission="buying.view"><ToleranceConfig /></PrivateRoute>} />
+                {/* M2: saving tolerances requires buying.edit; view-only users can still read */}
+                <Route path="/buying/matching/tolerances" element={<PrivateRoute permission="buying.edit"><ToleranceConfig /></PrivateRoute>} />
                 <Route path="/buying/matching/:id" element={<PrivateRoute permission="buying.view"><MatchDetail /></PrivateRoute>} />
 
                 {/* Treasury Routes */}

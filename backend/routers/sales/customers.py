@@ -8,6 +8,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
+from utils.cache import cached
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from .schemas import CustomerCreate, CustomerGroupCreate
 
@@ -15,12 +16,25 @@ customers_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str:
+    return user.get("username") if isinstance(user, dict) else user.username
+
+
 # --- Summary ---
 @customers_router.get("/summary", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
+@cached("sales_kpi", expire=30)
 def get_sales_summary(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
-    """ملخص المبيعات"""
+    """ملخص المبيعات (مُكَش بـ TTL 30s — يُلغى تلقائياً عند أي post عبر invalidate_aggregates('sales_kpi'))"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         params = {}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
@@ -59,7 +73,7 @@ def get_sales_summary(branch_id: Optional[int] = None, current_user: dict = Depe
 def list_customers(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض قائمة العملاء مع أرصدة من party_site_balances"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         branch_cur = base_cur
@@ -128,7 +142,7 @@ def get_customer_transactions(
 ):
     """كشف حساب عميل"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         customer_exists = db.execute(text(
             "SELECT 1 FROM parties WHERE id = :cid AND (party_type = 'customer' OR is_customer = TRUE)"
@@ -169,7 +183,7 @@ def get_customer_transactions(
 @customers_router.post("/customers", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(["parties.manage", "sales.create"]))], response_model=Dict[str, Any])
 def create_customer(request: Request, customer: CustomerCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء عميل جديد مع إنشاء موقع افتراضي تلقائياً"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Generate Customer Code
         from utils.accounting import generate_sequential_number
@@ -201,9 +215,10 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         cust_currency = customer.currency or base_cur
         
-        db.execute(text("""
+        site = db.execute(text("""
             INSERT INTO party_sites (party_id, site_name, site_name_en, country, country_code, currency, phone, is_default, is_active)
             VALUES (:pid, :name, :name_en, :country, :cc, :cur, :phone, TRUE, TRUE)
+            RETURNING id
         """), {
             "pid": pid,
             "name": customer.name,
@@ -212,10 +227,10 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
             "cc": "",
             "cur": cust_currency,
             "phone": customer.phone
-        })
+        }).fetchone()
         
         # تحديث default_site_id
-        site_id = db.execute(text("SELECT LASTVAL() as id"), {}).fetchone().id
+        site_id = site.id
         db.execute(text("UPDATE parties SET default_site_id = :sid WHERE id = :pid"),
                   {"sid": site_id, "pid": pid})
 
@@ -223,8 +238,8 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
 
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.customer.create",
             resource_type="customer",
             resource_id=str(result[0]),
@@ -244,7 +259,7 @@ def create_customer(request: Request, customer: CustomerCreate, current_user: di
 @customers_router.get("/customers/{customer_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_customer(customer_id: int, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض بيانات عميل محدد مع أرصدة من party_site_balances"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         customer = db.execute(text("""
             SELECT p.id, p.party_code, p.name, p.name_en, p.party_type, p.is_customer, p.email, p.phone, p.mobile, 
@@ -311,7 +326,7 @@ def get_customer(customer_id: int, branch_id: Optional[int] = None, current_user
 @customers_router.put("/customers/{customer_id}", response_model=dict, dependencies=[Depends(require_permission(["parties.manage", "sales.edit"]))])
 def update_customer(customer_id: int, customer: CustomerCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """تحديث عميل"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Check if exists
         existing = db.execute(text("SELECT id, branch_id FROM parties WHERE id = :id AND (party_type = 'customer' OR is_customer = TRUE)"), {"id": customer_id}).fetchone()
@@ -341,8 +356,8 @@ def update_customer(customer_id: int, customer: CustomerCreate, request: Request
         # PTY-009: Log activity for customer update
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.customer.update",
             resource_type="customer",
             resource_id=str(customer_id),
@@ -371,7 +386,7 @@ def get_customer_outstanding_invoices(
 ):
     """Fetch unpaid/partial invoices for a customer"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         query = """
             SELECT id, invoice_number, invoice_date, total, paid_amount, status, invoice_type,
@@ -400,7 +415,7 @@ def get_customer_outstanding_invoices(
 @customers_router.get("/customer-groups", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_customer_groups(current_user: dict = Depends(get_current_user)):
     """قائمة مجموعات العملاء"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         result = db.execute(text("""
             SELECT g.*, (SELECT COUNT(*) FROM parties p WHERE p.party_group_id = g.id AND (p.party_type = 'customer' OR p.is_customer = TRUE)) as customer_count
@@ -419,7 +434,7 @@ def create_customer_group(
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء مجموعة عملاء جديدة"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         result = db.execute(text("""
             INSERT INTO party_groups (group_name, group_name_en, description, discount_percentage, effect_type, application_scope, payment_days, status)
@@ -435,8 +450,8 @@ def create_customer_group(
 
         log_activity(
             db,
-            user_id=current_user.get("id") if isinstance(current_user, dict) else current_user.id,
-            username=current_user.get("username") if isinstance(current_user, dict) else current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.customer_group.create",
             resource_type="customer_group",
             resource_id=str(result[0]),
@@ -461,7 +476,7 @@ def update_customer_group(
     current_user: dict = Depends(get_current_user)
 ):
     """تعديل مجموعة عملاء"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         db.execute(text("""
             UPDATE party_groups SET 
@@ -478,8 +493,8 @@ def update_customer_group(
 
         log_activity(
             db,
-            user_id=current_user.get("id") if isinstance(current_user, dict) else current_user.id,
-            username=current_user.get("username") if isinstance(current_user, dict) else current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.customer_group.update",
             resource_type="customer_group",
             resource_id=str(group_id),
@@ -503,7 +518,7 @@ def delete_customer_group(
     current_user: dict = Depends(get_current_user)
 ):
     """حذف مجموعة عملاء"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Check if any customers linked
         count = db.execute(text("SELECT COUNT(*) FROM parties WHERE party_group_id = :id"), {"id": group_id}).scalar()
@@ -514,8 +529,8 @@ def delete_customer_group(
 
         log_activity(
             db,
-            user_id=current_user.get("id") if isinstance(current_user, dict) else current_user.id,
-            username=current_user.get("username") if isinstance(current_user, dict) else current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.customer_group.delete",
             resource_type="customer_group",
             resource_id=str(group_id),

@@ -91,6 +91,7 @@ def _load_sales_invoice_reverse_context(db, invoice_id: int, party_id: int):
         SELECT id, party_id, total, tax_amount, invoice_type, branch_id, invoice_date
         FROM invoices
         WHERE id = :id
+        FOR UPDATE
     """), {"id": invoice_id}).fetchone()
     if not orig:
         raise HTTPException(**http_error(400, "linked_invoice_not_found"))
@@ -103,6 +104,7 @@ def _load_sales_invoice_reverse_context(db, invoice_id: int, party_id: int):
         SELECT product_id, quantity, unit_price, tax_rate, tax_rate_id, applied_taxes, discount
         FROM invoice_lines
         WHERE invoice_id = :id
+        FOR UPDATE
     """), {"id": invoice_id}).fetchall()
     by_product: dict[int, list] = {}
     for row in rows:
@@ -403,7 +405,7 @@ def create_sales_credit_note(
             "num": inv_num, "party": party_id, "date": inv_date,
             "sub": subtotal, "tax": tax_total, "disc": discount_total,
             "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None),
+            "branch": branch_id,
             "rel": related_invoice_id, "curr": currency,
             "rate": exchange_rate, "user": current_user.id,
             "party_site_id": data.get("party_site_id"),
@@ -480,7 +482,7 @@ def create_sales_credit_note(
             ),
             lines=valid_lines,
             user_id=current_user.id,
-            branch_id=branch_id or (current_user.allowed_branches[0] if current_user.allowed_branches else None),
+            branch_id=branch_id,
             reference=inv_num,
             status="posted",
             currency=currency,
@@ -505,8 +507,7 @@ def create_sales_credit_note(
 
         # Update customer balance via party_site_balances (credit note REDUCES what customer owes)
         gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
-        effective_branch = branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None)
-        update_party_site_balance(db, party_id=party_id, branch_id=effective_branch,
+        update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
                                   currency=currency, amount=-float(gl_total_base))
 
         db.commit()
@@ -743,7 +744,7 @@ def create_sales_debit_note(
             "num": inv_num, "party": party_id, "date": inv_date,
             "sub": subtotal, "tax": tax_total, "disc": discount_total,
             "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None),
+            "branch": branch_id,
             "rel": related_invoice_id, "curr": currency,
             "rate": exchange_rate, "user": current_user.id,
             "party_site_id": data.get("party_site_id"),
@@ -807,7 +808,7 @@ def create_sales_debit_note(
             description=f"إشعار مدين مبيعات {inv_num}",
             lines=valid_dn_lines,
             user_id=current_user.id,
-            branch_id=branch_id or (current_user.allowed_branches[0] if current_user.allowed_branches else None),
+            branch_id=branch_id,
             reference=inv_num,
             status="posted",
             currency=currency,
@@ -820,8 +821,7 @@ def create_sales_debit_note(
 
         # Update customer balance via party_site_balances (debit note INCREASES what customer owes)
         gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
-        effective_branch = branch_id or (current_user.allowed_branches[0] if getattr(current_user, 'allowed_branches', []) else None)
-        update_party_site_balance(db, party_id=party_id, branch_id=effective_branch,
+        update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
                                   currency=currency, amount=float(gl_total_base))
 
         db.commit()

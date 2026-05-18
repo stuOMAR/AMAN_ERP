@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import { inventoryAPI } from '../../utils/api';
@@ -14,9 +14,13 @@ const StockTransferForm = () => {
     const { currentBranch } = useBranch();
     const { showToast } = useToast();
     const [loading, setLoading] = useState(false);
+    const submittingRef = useRef(false);
     const [initialLoad, setInitialLoad] = useState(true);
     const [warehouses, setWarehouses] = useState([]);
     const [sourceStock, setSourceStock] = useState([]);
+    const visibleWarehouses = currentBranch?.id
+        ? warehouses.filter(w => !w.branch_id || Number(w.branch_id) === Number(currentBranch.id))
+        : warehouses;
 
     const [formData, setFormData] = useState({
         source_warehouse_id: '',
@@ -97,6 +101,24 @@ const StockTransferForm = () => {
             return;
         }
 
+        const requestedByProduct = formData.items.reduce((acc, item) => {
+            const productId = Number(item.product_id);
+            acc[productId] = (acc[productId] || 0) + Number(item.quantity || 0);
+            return acc;
+        }, {});
+        const exceedsAvailable = Object.entries(requestedByProduct).some(([productId, requested]) => {
+            const stockRow = sourceStock.find(p => Number(p.id) === Number(productId));
+            return !stockRow || requested > Number(stockRow.quantity || 0);
+        });
+        if (exceedsAvailable) {
+            showToast(t('stock.transfer.validation.insufficient_stock', 'الكمية المطلوبة تتجاوز المتاح في المستودع المصدر'), 'error');
+            return;
+        }
+
+        if (submittingRef.current) {
+            return;
+        }
+        submittingRef.current = true;
         try {
             setLoading(true);
             const payload = {
@@ -115,6 +137,7 @@ const StockTransferForm = () => {
         } catch (error) {
             showToast(t('stock.transfer.validation.error') + (error.response?.data?.detail || error.message), 'error');
         } finally {
+            submittingRef.current = false;
             setLoading(false);
         }
     };
@@ -141,7 +164,7 @@ const StockTransferForm = () => {
                                 onChange={e => setFormData({ ...formData, source_warehouse_id: e.target.value })}
                             >
                                 <option value="">{t('stock.transfer.select_warehouse')}</option>
-                                {warehouses.map(w => (
+                                {visibleWarehouses.map(w => (
                                     <option key={w.id} value={w.id}>{w.name}</option>
                                 ))}
                             </select>
@@ -155,7 +178,7 @@ const StockTransferForm = () => {
                                 onChange={e => setFormData({ ...formData, destination_warehouse_id: e.target.value })}
                             >
                                 <option value="">{t('stock.transfer.select_warehouse')}</option>
-                                {warehouses.map(w => (
+                                {visibleWarehouses.map(w => (
                                     <option key={w.id} value={w.id}>{w.name}</option>
                                 ))}
                             </select>

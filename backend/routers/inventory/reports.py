@@ -10,6 +10,7 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
+from utils.cache import cached
 from utils.permissions import branch_scope_filter, require_permission
 
 reports_router = APIRouter()
@@ -17,11 +18,12 @@ logger = logging.getLogger(__name__)
 
 
 @reports_router.get("/summary", response_model=dict, dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
+@cached("inventory", expire=30)
 def get_inventory_summary(
     branch_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
-    """جلب ملخص إحصائيات المخزون"""
+    """جلب ملخص إحصائيات المخزون (مُكَش بـ TTL 30s — يُلغى تلقائياً عبر invalidate_aggregates('inventory'))"""
     db = get_db_connection(current_user.company_id)
     try:
         # 1. Total Products
@@ -36,13 +38,12 @@ def get_inventory_summary(
 
         product_count = db.execute(text(prod_count_query), prod_count_params).scalar() or 0
 
-        # 2. Total Inventory Value (Cost * Qty)
+        # 2. Total Inventory Value (WAC-based: average_cost * qty per warehouse row)
         val_query = """
-            SELECT COALESCE(SUM(p.cost_price * i.quantity), 0)
-            FROM products p
-            JOIN inventory i ON p.id = i.product_id
+            SELECT COALESCE(SUM(i.average_cost * i.quantity), 0)
+            FROM inventory i
             JOIN warehouses w ON i.warehouse_id = w.id
-            WHERE 1=1
+            WHERE i.quantity > 0
         """
         val_params = {}
 
@@ -54,7 +55,7 @@ def get_inventory_summary(
         low_params = {}
         low_where = branch_scope_filter(current_user, branch_id, "w.branch_id", low_params, branch_param="bid")
 
-        val_query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", val_params, branch_param="bid")
+        val_query += branch_scope_filter(current_user, branch_id, "w.branch_id", val_params, branch_param="bid")
 
         inventory_value = db.execute(text(val_query), val_params).scalar() or 0
 
@@ -155,7 +156,7 @@ def get_warehouse_stock(
         db.close()
 
 
-@reports_router.get("/movements", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))], response_model=List[Dict[str, Any]])
+@reports_router.get("/movements", dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))], response_model=Dict[str, Any])
 def get_stock_movements(
     request: Request,
     item_name: Optional[str] = None,
@@ -164,63 +165,96 @@ def get_stock_movements(
     transaction_type: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
+    skip: int = 0,
+    limit: int = 200,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب سجل حركات المخزون"""
     db = get_db_connection(current_user.company_id)
     try:
-        query = """
-            SELECT t.id, t.created_at, t.transaction_type, CONCAT(t.reference_type, ' #', t.reference_id) as reference_document,
-                   p.product_name, p.product_code,
-                   w.warehouse_name,
-                   t.quantity,
-                   u.full_name as user_name
+        # Build WHERE conditions
+        conditions = ["1=1"]
+        params = {}
+
+        branch_filter = branch_scope_filter(current_user, branch_id, "w.branch_id", params)
+        if branch_filter.strip():
+            conditions.append(branch_filter.strip())
+
+        if item_name:
+            conditions.append("(p.product_name ILIKE :item OR p.product_code ILIKE :item)")
+            params['item'] = f"%{item_name}%"
+
+        if warehouse and warehouse.strip():
+            conditions.append("t.warehouse_id = :warehouse")
+            params['warehouse'] = int(warehouse)
+
+        if transaction_type:
+            from utils.inventory_constants import TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN
+            types = {
+                'purchase_in': [TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN, 'purchase_invoice_cancel'],
+                'purchase_receipt': [TX_PURCHASE_RECEIPT],
+                'purchase_invoice': [TX_PURCHASE_INVOICE],
+                'purchase_return': [TX_PURCHASE_RETURN],
+                # M5: sales invoices write transaction_type='sale' (sales/invoices.py:673)
+                # and delivery orders write 'delivery' (delivery_orders.py:354).
+                # The old mapping only listed 'sales_out' which matched nothing,
+                # so the "Sales" filter in Stock Movements always returned empty.
+                'sales_out': ['sale', 'sales_out', 'delivery'],
+                'transfer': ['transfer_in', 'transfer_out'],
+                'adjustment': ['adjustment_in', 'adjustment_out'],
+                'shipment': ['shipment_in', 'shipment_out', 'shipment_dispatch', 'shipment_receive']
+            }
+            if transaction_type in types:
+                conditions.append("t.transaction_type = ANY(:types)")
+                params['types'] = types[transaction_type]
+
+        if start_date:
+            conditions.append("t.created_at >= :start")
+            params['start'] = start_date
+
+        if end_date:
+            conditions.append("t.created_at <= :end")
+            params['end'] = end_date
+
+        where_clause = " AND ".join(conditions)
+        base_from = """
             FROM inventory_transactions t
             JOIN products p ON t.product_id = p.id
             JOIN warehouses w ON t.warehouse_id = w.id
             LEFT JOIN company_users u ON t.created_by = u.id
-            WHERE 1=1
         """
-        params = {}
-        query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params)
 
-        if item_name:
-            query += " AND (p.product_name ILIKE :item OR p.product_code ILIKE :item)"
-            params['item'] = f"%{item_name}%"
+        # Count total
+        total = db.execute(
+            text(f"SELECT COUNT(*) {base_from} WHERE {where_clause}"), params
+        ).scalar() or 0
 
-        if warehouse and warehouse.strip():
-            query += " AND t.warehouse_id = :warehouse"
-            params['warehouse'] = int(warehouse)
+        # Fetch paginated results
+        safe_limit = min(limit, 500)
+        params['_limit'] = safe_limit
+        params['_skip'] = skip
 
-        if transaction_type:
-            # T038: Include all purchase-related transaction types
-            from utils.inventory_constants import TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN
-            types = {
-                'purchase_in': [TX_PURCHASE_RECEIPT, TX_PURCHASE_INVOICE, TX_PURCHASE_RETURN],
-                'purchase_receipt': [TX_PURCHASE_RECEIPT],
-                'purchase_invoice': [TX_PURCHASE_INVOICE],
-                'purchase_return': [TX_PURCHASE_RETURN],
-                'sales_out': ['sales_out'],
-                'transfer': ['transfer_in', 'transfer_out'],
-                'adjustment': ['adjustment_in', 'adjustment_out'],
-                'shipment': ['shipment_in', 'shipment_out']
-            }
-            if transaction_type in types:
-                query += " AND t.transaction_type = ANY(:types)"
-                params['types'] = types[transaction_type]
+        result = db.execute(text(f"""
+            SELECT t.id, t.created_at, t.transaction_type,
+                   CONCAT(t.reference_type, ' #', t.reference_id) as reference_document,
+                   p.product_name, p.product_code,
+                   w.warehouse_name,
+                   t.quantity,
+                   u.full_name as user_name
+            {base_from}
+            WHERE {where_clause}
+            ORDER BY t.created_at DESC
+            LIMIT :_limit OFFSET :_skip
+        """), params).fetchall()
 
-        if start_date:
-            query += " AND t.created_at >= :start"
-            params['start'] = start_date
-
-        if end_date:
-            query += " AND t.created_at <= :end"
-            params['end'] = end_date
-
-        query += " ORDER BY t.created_at DESC LIMIT 200"
-
-        result = db.execute(text(query), params).fetchall()
-        return [dict(r._mapping) for r in result]
+        items = [dict(r._mapping) for r in result]
+        return {
+            "items": items,
+            "total": total,
+            "has_more": (skip + len(items)) < total,
+            "skip": skip,
+            "limit": safe_limit,
+        }
 
     except Exception:
         # SEC-T2.10: do not leak internal exception text to the client.

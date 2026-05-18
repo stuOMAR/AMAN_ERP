@@ -95,7 +95,7 @@ const Violations = () => {
                             <th>{t('hr.violations.description')}</th>
                             <th>{t('hr.violations.action')}</th>
                             <th>{t('hr.violations.deduction')}</th>
-                            <th>{t('hr.violations.actions')}</th>
+                            <th>{t('common.actions', 'إجراءات')}</th>
                         </tr>
                     </thead>
                     <tbody>

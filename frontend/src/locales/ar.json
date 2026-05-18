@@ -5450,6 +5450,7 @@
     "ic_transactions": "المعاملات بين الشركات",
     "ic_transfer": "تحويل بين الشركات",
     "intercompany": {
+      "title": "المعاملات بين الشركات",
       "table": {
         "reference": "المرجع",
         "entities": "الكيانات",
@@ -6408,6 +6409,7 @@
     "export_failed": "فشل التصدير",
     "advanced_payroll": "الرواتب المتقدمة",
     "overtime_requests": {
+      "title": "طلبات العمل الإضافي",
       "statuses": {
         "pending": "معلق",
         "approved": "موافق",
@@ -6419,6 +6421,7 @@
     "export_gosi_file": "تصدير ملف التأمينات (GOSI)",
     "hr_management": "إدارة الموارد البشرية",
     "employee_documents": {
+      "title": "مستندات الموظفين",
       "types": {
         "passport": "جواز سفر",
         "residence": "إقامة",
@@ -6430,6 +6433,7 @@
       }
     },
     "performance_reviews": {
+      "title": "تقييمات الأداء",
       "frequencies": {
         "quarterly": "ربع سنوي",
         "semi_annual": "نصف سنوي",
@@ -6437,6 +6441,7 @@
       }
     },
     "training_programs": {
+      "title": "برامج التدريب",
       "statuses": {
         "planned": "مخطط",
         "in_progress": "جاري",
@@ -6446,6 +6451,7 @@
     },
     "violations_penalties": "المخالفات والجزاءات",
     "custody_management": {
+      "title": "إدارة العهد",
       "item_types": {
         "laptop": "لابتوب",
         "phone": "جوال",

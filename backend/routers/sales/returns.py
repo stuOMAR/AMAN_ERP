@@ -1,6 +1,6 @@
 """Sales returns endpoints."""
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
+from utils.permissions import branch_scope_filter_from_scope, check_permission, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from services.tax_engine import resolve_line_tax
@@ -29,6 +29,18 @@ _TABLE_COLUMNS_CACHE: dict[tuple[str, str], frozenset[str]] = {}
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str:
+    return user.get("username") if isinstance(user, dict) else user.username
 
 
 def _json_param(value):
@@ -72,6 +84,7 @@ def _load_original_sales_invoice_for_return(db, invoice_id: int, customer_id: in
         SELECT id, party_id, branch_id, invoice_type, invoice_date, tax_amount
         FROM invoices
         WHERE id = :id
+        FOR UPDATE
     """), {"id": invoice_id}).fetchone()
     if not invoice:
         raise HTTPException(**http_error(404, "original_invoice_not_found"))
@@ -85,6 +98,7 @@ def _load_original_sales_invoice_for_return(db, invoice_id: int, customer_id: in
         FROM invoice_lines
         WHERE invoice_id = :id
           AND product_id IS NOT NULL
+        FOR UPDATE
     """), {"id": invoice_id}).fetchall()
     by_product: dict[int, list] = {}
     for row in rows:
@@ -160,7 +174,7 @@ def list_sales_returns(branch_id: Optional[int] = None, current_user: dict = Dep
     """عرض قائمة مرتجعات المبيعات"""
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         query_str = """
             SELECT r.*, p.name as customer_name 
@@ -202,7 +216,7 @@ def list_unified_returns(request: Request,
         raise HTTPException(**http_error(400, "source_must_be_sales_or_pos", request))
     limit = max(1, min(int(limit or 200), 1000))
 
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Defensive: if migration 0019 has not yet been applied on this tenant
         # (or the view was dropped), fall back to an inline UNION ALL so the
@@ -250,7 +264,7 @@ def list_unified_returns(request: Request,
 @returns_router.get("/returns/{return_id}", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
 def get_sales_return(request: Request, return_id: int, current_user: dict = Depends(get_current_user)):
     """جلب تفاصيل مرتجع مبيعات"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         header = db.execute(text("""
             SELECT r.*, p.name as customer_name, i.invoice_number
@@ -285,7 +299,7 @@ def get_sales_return(request: Request, return_id: int, current_user: dict = Depe
 @returns_router.post("/returns", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_sales_return(request: Request, data: SalesReturnCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء مرتجع مبيعات جديد (مسودة)"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Generate Sequential Return Number
         from utils.accounting import generate_sequential_number
@@ -299,6 +313,21 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
             original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_original_sales_invoice_for_return(
                 db, data.invoice_id, data.customer_id
             )
+        return_warehouse_id = data.warehouse_id
+        if original_invoice:
+            original_warehouse_id = db.execute(text("""
+                SELECT warehouse_id
+                FROM inventory_transactions
+                WHERE reference_id = :invoice_id
+                  AND reference_type IN ('sales_invoice', 'invoice')
+                  AND warehouse_id IS NOT NULL
+                ORDER BY id ASC
+                LIMIT 1
+            """), {"invoice_id": data.invoice_id}).scalar()
+            if return_warehouse_id and original_warehouse_id and int(return_warehouse_id) != int(original_warehouse_id):
+                raise HTTPException(**http_error(400, "return_warehouse_mismatch_invoice", request))
+            if not return_warehouse_id:
+                return_warehouse_id = original_warehouse_id
 
         # Determine Branch
         branch_id = data.branch_id
@@ -333,7 +362,8 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
                 ), {"id": data.invoice_id}).fetchone()
                 if inv_row and inv_row.invoice_date:
                     age_days = (data.return_date - inv_row.invoice_date).days
-                    if age_days > window_days:
+                    user_permissions = current_user.get("permissions", []) if isinstance(current_user, dict) else (getattr(current_user, "permissions", []) or [])
+                    if age_days > window_days and not check_permission(user_permissions, "sales.return_outside_window"):
                         raise HTTPException(
                             status_code=400,
                             detail=(
@@ -436,11 +466,11 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         """), {
             "num": ret_num, "cust": data.customer_id, "inv": data.invoice_id,
             "rdate": data.return_date, "sub": subtotal, "tax": total_tax,
-            "total": grand_total, "notes": data.notes, "user": current_user.id,
+            "total": grand_total, "notes": data.notes, "user": _user_id(current_user),
             "rmethod": data.refund_method, "ramount": data.refund_amount,
             "rbank": data.bank_account_id, "treasury": selected_treasury_id,
             "rcheck": data.check_number,
-            "rcheckdate": data.check_date, "bid": branch_id, "wh_id": data.warehouse_id,
+            "rcheckdate": data.check_date, "bid": branch_id, "wh_id": return_warehouse_id,
             "currency": ret_currency, "exchange_rate": ret_rate
         }).fetchone()
 
@@ -488,8 +518,8 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
         # AUDIT LOG
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.return.create",
             resource_type="sales_return",
             resource_id=str(ret_id),
@@ -512,7 +542,7 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
 @returns_router.post("/returns/{return_id}/approve", dependencies=[Depends(require_sensitive_permission("sales.approve_return"))], response_model=Dict[str, Any])
 def approve_sales_return(return_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """اعتماد مرتجع المبيعات (تحديث المخزون وقيد محاسبي)"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         # Get base currency
         base_currency_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
@@ -521,7 +551,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
         base_currency = base_currency_row[0] if base_currency_row else "SYP"
 
         # 1. Fetch Return details
-        header = db.execute(text("SELECT * FROM sales_returns WHERE id = :id"), {"id": return_id}).fetchone()
+        header = db.execute(text("SELECT * FROM sales_returns WHERE id = :id FOR UPDATE"), {"id": return_id}).fetchone()
         if not header or header.status != 'draft':
             raise HTTPException(**http_error(400, "return_not_found_or_already_approved", request))
         branch_id = validate_branch_access(current_user, header.branch_id)
@@ -636,13 +666,20 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                     "qty": line.quantity,
                     "cost": restored_cost,
                     "total_cost": restored_total.quantize(_D2, ROUND_HALF_UP),
-                    "user": current_user.id if not isinstance(current_user, dict) else current_user.get("id")
+                    "user": _user_id(current_user)
                 })
 
                 total_cost_reversal += restored_total.quantize(_D2, ROUND_HALF_UP)
 
         # 3. Update Status
-        db.execute(text("UPDATE sales_returns SET status = 'approved' WHERE id = :id"), {"id": return_id})
+        updated = db.execute(text("""
+            UPDATE sales_returns
+            SET status = 'approved'
+            WHERE id = :id AND status = 'draft'
+            RETURNING id
+        """), {"id": return_id}).fetchone()
+        if not updated:
+            raise HTTPException(**http_error(400, "return_not_found_or_already_approved", request))
 
         exchange_rate = _dec(header.exchange_rate or 1)
         if header.currency and header.currency != base_currency:
@@ -664,22 +701,20 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
         # 4. Update Customer Balance via party_site_balances (Reduction)
+        # AUDIT-H1: balance must be expressed in the *document* currency,
+        # because party_site_balances is keyed by `(party_site, currency)`
+        # and storing a base-currency amount under a foreign-currency key
+        # would double-apply the exchange rate (e.g. a USD-100 return
+        # would reduce the USD balance by 375 SAR-equivalent units).
+        # `gl_total` (in base currency) stays in the GL block below.
         gl_total = to_base(header.total)
         update_party_site_balance(db, party_id=header.party_id, branch_id=header.branch_id,
-                                  currency=header.currency or base_currency, amount=-float(gl_total))
+                                  currency=header.currency or base_currency,
+                                  amount=-float(_dec(header.total)))
 
-        # 4.5 Update Original Invoice Status (Treat return as payment/settlement)
-        if header.invoice_id:
-            db.execute(text("""
-                UPDATE invoices 
-                SET paid_amount = COALESCE(paid_amount, 0) + :return_val,
-                    status = CASE 
-                        WHEN (COALESCE(paid_amount, 0) + :return_val) >= total THEN 'paid'
-                        WHEN (COALESCE(paid_amount, 0) + :return_val) > 0 THEN 'partial'
-                        ELSE status
-                    END
-                WHERE id = :inv_id
-            """), {"return_val": header.total, "inv_id": header.invoice_id})
+        # Returns reduce receivables through their own GL/audit trail; they
+        # are not cash collections, so the source invoice paid_amount is left
+        # untouched for aging and payment-history reporting.
 
         # 5. GL Entry (Automated using Dynamic Mappings)
         acc_sales = get_mapped_account_id(db, "acc_map_sales_rev")
@@ -688,7 +723,10 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
         acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
         acc_bank = get_mapped_account_id(db, "acc_map_bank")
         acc_cogs = get_mapped_account_id(db, "acc_map_cogs")
-        acc_inventory = get_mapped_account_id(db, "acc_map_inventory")
+        # F-31: returned goods come back into the receiving warehouse —
+        # debit its mapped inventory account.
+        from utils.inventory_accounts import resolve_warehouse_inventory_account
+        acc_inventory = resolve_warehouse_inventory_account(db, wh_id)
 
         je_lines = []
         gl_subtotal = to_base(header.subtotal)
@@ -724,14 +762,18 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                 "bank": header.bank_account_id, "treasury": selected_treasury_id,
                 "check_num": header.check_number,
                 "check_date": header.check_date,
-                "ref": f"Refund for {header.return_number}", "user": current_user.id,
+                "ref": f"Refund for {header.return_number}", "user": _user_id(current_user),
                 "branch_id": branch_id,
             }).scalar()
 
             # C. Update Customer Balance via party_site_balances
+            # AUDIT-H1: same currency rule as #4 above — increment AR
+            # by the document-currency amount, not the base-currency
+            # gl_refund.
             gl_refund = to_base(header.refund_amount)
             update_party_site_balance(db, party_id=header.party_id, branch_id=header.branch_id,
-                                      currency=header.currency or base_currency, amount=float(gl_refund))
+                                      currency=header.currency or base_currency,
+                                      amount=float(_dec(header.refund_amount)))
 
             # GL for Refund
             acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
@@ -746,10 +788,6 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                 # Debit AR
                 je_lines.append({"account_id": acc_ar, "debit": gl_refund, "credit": 0, "description": f"AR Offset (Refund) - {header.return_number}"})
 
-            # Update Treasury Balance for refund — T1.3a idempotent recompute
-            if selected_treasury_id:
-                from utils.treasury_balance import recalc_treasury_from_gl
-                recalc_treasury_from_gl(db, selected_treasury_id)
         # Inventory Reversal
         if total_cost_reversal > 0:
             je_lines.append({"account_id": acc_inventory, "debit": total_cost_reversal, "credit": 0, "description": f"Inv Increase - {header.return_number}"})
@@ -773,11 +811,11 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
 
         je_id, je_num = create_journal_entry(
             db=db,
-            company_id=current_user.company_id,
+            company_id=_company_id(current_user),
             date=str(header.return_date),
             description=f"Sales Return {header.return_number} ({header.currency})",
             lines=valid_lines,
-            user_id=current_user.id,
+            user_id=_user_id(current_user),
             branch_id=header.branch_id,
             reference=header.return_number,
             status="posted",
@@ -785,16 +823,20 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             exchange_rate=1.0,  # amounts already in base currency
             source="SalesReturn",
             source_id=return_id,
-            username=getattr(current_user, "username", None),
+            username=_username(current_user),
             idempotency_key=f"ret-{header.return_number}",
         )
+
+        if selected_treasury_id:
+            from utils.treasury_balance import recalc_treasury_from_gl
+            recalc_treasury_from_gl(db, selected_treasury_id)
 
         db.commit()
 
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
             action="sales.return.approve",
             resource_type="sales_return",
             resource_id=str(return_id),
@@ -810,6 +852,239 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
     except Exception as e:
         db.rollback()
         logger.error(f"Error approving return: {str(e)}")
+        logger.exception("Internal error")
+        raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
+@returns_router.post("/returns/{return_id}/cancel", dependencies=[Depends(require_sensitive_permission("sales.approve_return"))], response_model=Dict[str, Any])
+def cancel_sales_return(return_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+    """Cancel a sales return. Drafts are voided; approved returns are fully reversed."""
+    db = get_db_connection(_company_id(current_user))
+    try:
+        header = db.execute(text("""
+            SELECT *
+            FROM sales_returns
+            WHERE id = :id
+            FOR UPDATE
+        """), {"id": return_id}).fetchone()
+        if not header:
+            raise HTTPException(**http_error(404, "return_not_found", request))
+        if header.branch_id:
+            validate_branch_access(current_user, header.branch_id)
+        if header.status == "cancelled":
+            raise HTTPException(**http_error(400, "sales_return_already_cancelled", request))
+
+        if header.status == "draft":
+            db.execute(text("""
+                UPDATE sales_returns
+                SET status = 'cancelled',
+                    updated_at = NOW()
+                WHERE id = :id AND status = 'draft'
+            """), {"id": return_id})
+        elif header.status == "approved":
+            reversal_date = datetime.now().date()
+            check_fiscal_period_open(db, reversal_date, request=request)
+
+            je = db.execute(text("""
+                SELECT id
+                FROM journal_entries
+                WHERE source = 'SalesReturn'
+                  AND source_id = :return_id
+                  AND status = 'posted'
+                ORDER BY id DESC
+                LIMIT 1
+            """), {"return_id": return_id}).fetchone()
+            if not je:
+                raise HTTPException(**http_error(400, "sales_return_no_je_to_reverse", request))
+
+            wh_id = header.warehouse_id or db.execute(text("""
+                SELECT warehouse_id
+                FROM inventory_transactions
+                WHERE reference_type = 'sales_return'
+                  AND reference_id = :return_id
+                  AND warehouse_id IS NOT NULL
+                ORDER BY id ASC
+                LIMIT 1
+            """), {"return_id": return_id}).scalar()
+            if not wh_id:
+                raise HTTPException(**http_error(400, "sales_return_cancel_warehouse_missing", request))
+
+            lines = db.execute(text("""
+                SELECT *
+                FROM sales_return_lines
+                WHERE return_id = :return_id
+            """), {"return_id": return_id}).fetchall()
+
+            from services.costing_service import CostingService
+            for line in lines:
+                if not line.product_id:
+                    continue
+                qty = _dec(line.quantity)
+                tx = db.execute(text("""
+                    SELECT unit_cost, total_cost
+                    FROM inventory_transactions
+                    WHERE reference_type = 'sales_return'
+                      AND reference_id = :return_id
+                      AND product_id = :product_id
+                    ORDER BY id ASC
+                    LIMIT 1
+                    FOR UPDATE
+                """), {"return_id": return_id, "product_id": line.product_id}).fetchone()
+                unit_cost = _dec(tx.unit_cost) if tx and tx.unit_cost is not None else _dec(line.unit_price)
+                costing_method = CostingService._get_product_costing_method(db, line.product_id, wh_id)
+                if costing_method in ("fifo", "lifo"):
+                    try:
+                        CostingService.consume_layers(
+                            db,
+                            product_id=line.product_id,
+                            warehouse_id=wh_id,
+                            quantity=qty,
+                            sale_document_type="sales_return_cancel",
+                            sale_document_id=return_id,
+                            costing_method=costing_method,
+                        )
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc))
+                else:
+                    CostingService.update_cost(
+                        db,
+                        product_id=line.product_id,
+                        warehouse_id=wh_id,
+                        new_qty=-qty,
+                        new_price=unit_cost,
+                    )
+
+                stock_update = db.execute(text("""
+                    UPDATE inventory
+                    SET quantity = quantity - :qty,
+                        updated_at = NOW()
+                    WHERE product_id = :product_id
+                      AND warehouse_id = :warehouse_id
+                      AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                    RETURNING id
+                """), {
+                    "qty": qty,
+                    "product_id": line.product_id,
+                    "warehouse_id": wh_id,
+                }).fetchone()
+                if not stock_update:
+                    raise HTTPException(**http_error(400, "insufficient_stock_for_sales_return_cancel", request))
+
+                total_cost = (unit_cost * qty).quantize(_D2, ROUND_HALF_UP)
+                db.execute(text("""
+                    INSERT INTO inventory_transactions (
+                        product_id, warehouse_id, transaction_type,
+                        reference_type, reference_id, reference_document,
+                        quantity, unit_cost, total_cost, notes, created_by
+                    ) VALUES (
+                        :product_id, :warehouse_id, 'sales_return_cancel',
+                        'sales_return_cancel', :return_id, :return_number,
+                        :qty, :unit_cost, :total_cost, :notes, :user_id
+                    )
+                """), {
+                    "product_id": line.product_id,
+                    "warehouse_id": wh_id,
+                    "return_id": return_id,
+                    "return_number": header.return_number,
+                    "qty": -qty,
+                    "unit_cost": unit_cost,
+                    "total_cost": total_cost,
+                    "notes": "Cancel approved sales return",
+                    "user_id": _user_id(current_user),
+                })
+
+            exchange_rate = _dec(header.exchange_rate or 1)
+            gl_total = (_dec(header.total) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+            # AUDIT-H1: cancel of an approved return restores AR — use
+            # the document-currency amount to undo what the original
+            # approve flow recorded under the same (party_site, currency)
+            # key.
+            update_party_site_balance(
+                db,
+                party_id=header.party_id,
+                branch_id=header.branch_id,
+                currency=header.currency or (db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"),
+                amount=float(_dec(header.total)),
+            )
+
+            from services.gl_service import reverse_journal_entry
+            reverse_journal_entry(
+                db,
+                je_id=je.id,
+                user_id=_user_id(current_user),
+                company_id=_company_id(current_user),
+                reversal_date=str(reversal_date),
+                reason=f"Cancel sales return {header.return_number}",
+                request=request,
+            )
+
+            refund_vouchers = db.execute(text("""
+                SELECT id, treasury_account_id, amount
+                FROM payment_vouchers
+                WHERE voucher_type = 'payment'
+                  AND party_type = 'customer'
+                  AND party_id = :party_id
+                  AND reference = :reference
+                  AND status = 'posted'
+                FOR UPDATE
+            """), {
+                "party_id": header.party_id,
+                "reference": f"Refund for {header.return_number}",
+            }).fetchall()
+            treasury_ids = {row.treasury_account_id for row in refund_vouchers if row.treasury_account_id}
+            refund_reversal_total = Decimal("0")
+            refund_reversal_total_fc = Decimal("0")
+            for row in refund_vouchers:
+                row_amount_fc = _dec(row.amount)
+                refund_reversal_total += (row_amount_fc * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+                refund_reversal_total_fc += row_amount_fc
+                db.execute(text("UPDATE payment_vouchers SET status = 'void' WHERE id = :id"), {"id": row.id})
+            if refund_reversal_total > _D2:
+                # AUDIT-H1: keep the FC sum on the (party_site, currency)
+                # ledger; the BC equivalent is only used for treasury /
+                # GL reconciliation below.
+                update_party_site_balance(
+                    db,
+                    party_id=header.party_id,
+                    branch_id=header.branch_id,
+                    currency=header.currency or (db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"),
+                    amount=-float(refund_reversal_total_fc),
+                )
+
+            db.execute(text("""
+                UPDATE sales_returns
+                SET status = 'cancelled',
+                    updated_at = NOW()
+                WHERE id = :id AND status = 'approved'
+            """), {"id": return_id})
+
+            if treasury_ids:
+                from utils.treasury_balance import recalc_treasury_from_gl
+                for treasury_id in treasury_ids:
+                    recalc_treasury_from_gl(db, treasury_id)
+        else:
+            raise HTTPException(**http_error(400, "sales_return_cannot_cancel_status", request))
+
+        log_activity(
+            db,
+            user_id=_user_id(current_user),
+            username=_username(current_user),
+            action="sales.return.cancel",
+            resource_type="sales_return",
+            resource_id=str(return_id),
+            details={"return_number": header.return_number},
+            request=request,
+            branch_id=header.branch_id,
+        )
+        db.commit()
+        return {"success": True, "message": i18n_message("sales_return_cancelled", request)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:

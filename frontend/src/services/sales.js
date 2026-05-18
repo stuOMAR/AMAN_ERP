@@ -14,12 +14,14 @@ export const salesAPI = {
     listOrders: (params) => api.get('/sales/orders', { params }),
     getOrder: (id) => api.get(`/sales/orders/${id}`),
     createOrder: (data) => api.post('/sales/orders', data),
+    cancelOrder: (id) => api.post(`/sales/orders/${id}/cancel`),
 
     // Quotations
     listQuotations: (params) => api.get('/sales/quotations', { params }),
     getQuotation: (id) => api.get(`/sales/quotations/${id}`),
     createQuotation: (data) => api.post('/sales/quotations', data),
     sendQuotation: (id) => api.post(`/sales/quotations/${id}/send-email`),
+    cancelQuotation: (id) => api.post(`/sales/quotations/${id}/cancel`),
 
     // Customer Groups
     listCustomerGroups: (params) => api.get('/sales/customer-groups', { params }),
@@ -32,6 +34,7 @@ export const salesAPI = {
     getReturn: (id) => api.get(`/sales/returns/${id}`),
     createReturn: (data) => api.post('/sales/returns', data),
     approveReturn: (id) => api.post(`/sales/returns/${id}/approve`),
+    cancelReturn: (id) => api.post(`/sales/returns/${id}/cancel`),
 
     // Customer Receipts
     createReceipt: (data) => api.post('/sales/receipts', data),

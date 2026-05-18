@@ -5,6 +5,7 @@ Inventory Module - Shared Pydantic Schemas
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 from typing import Optional, List
 from datetime import datetime
+from decimal import Decimal
 import re
 
 
@@ -15,10 +16,12 @@ class ProductCreate(BaseModel):
     item_name_en: Optional[str] = None
     item_type: str = 'product'  # product, service, consumable
     unit: str = 'قطعة'
-    selling_price: float = Field(default=0.0, ge=0)
-    buying_price: float = Field(default=0.0, ge=0)  # Represents WAC (Weighted Average Cost)
-    last_buying_price: float = Field(default=0.0, ge=0)  # Represents Last Purchase Price
-    tax_rate: Optional[float] = None  # Ignored — resolved by tax engine; kept for backward compat
+    # M4: monetary and quantity fields use Decimal to prevent floating-point
+    # accumulation errors in WAC/FIFO calculations and transfer valuations.
+    selling_price: Decimal = Field(default=Decimal('0'), ge=0)
+    buying_price: Decimal = Field(default=Decimal('0'), ge=0)  # Represents WAC (Weighted Average Cost)
+    last_buying_price: Decimal = Field(default=Decimal('0'), ge=0)  # Represents Last Purchase Price
+    tax_rate: Optional[Decimal] = None  # Ignored — resolved by tax engine; kept for backward compat
     tax_rate_id: Optional[int] = None  # Link to tax_rates table
     tax_group_id: Optional[int] = None  # Link to tax_groups table (multi-tax)
     tax_classification_id: Optional[int] = None  # Link to tax_classifications table
@@ -36,8 +39,8 @@ class ProductCreate(BaseModel):
 class ProductResponse(ProductCreate):
     id: int
     category_name: Optional[str] = None
-    current_stock: float
-    reserved_quantity: float = 0
+    current_stock: Decimal
+    reserved_quantity: Decimal = Decimal('0')
     has_batch_tracking: bool = False
     has_serial_tracking: bool = False
     has_expiry_tracking: bool = False
@@ -102,13 +105,14 @@ class StockTransferSingleCreate(BaseModel):
     product_id: int
     source_warehouse_id: int
     destination_warehouse_id: int
-    quantity: float = Field(..., gt=0)
+    # M4: Decimal prevents floating-point drift in WAC recalculation
+    quantity: Decimal = Field(..., gt=0)
     notes: Optional[str] = None
 
 
 class StockTransferItem(BaseModel):
     product_id: int
-    quantity: float = Field(..., gt=0)
+    quantity: Decimal = Field(..., gt=0)
 
 
 class StockTransferCreate(BaseModel):
@@ -138,13 +142,13 @@ class PriceListCreate(BaseModel):
 
 class PriceListItemUpdate(BaseModel):
     product_id: int
-    price: float
+    price: Decimal  # M4: price must be Decimal
 
 
 # --- Shipment Schemas ---
 class ShipmentItemCreate(BaseModel):
     product_id: int
-    quantity: float = Field(..., gt=0)
+    quantity: Decimal = Field(..., gt=0)  # M4
 
 
 class ShipmentCreate(BaseModel):
@@ -158,6 +162,6 @@ class ShipmentCreate(BaseModel):
 class StockAdjustmentCreate(BaseModel):
     warehouse_id: int
     product_id: int
-    new_quantity: float = Field(..., ge=0)
+    new_quantity: Decimal = Field(..., ge=0)  # M4
     reason: Optional[str] = "Physical Count"
     notes: Optional[str] = None

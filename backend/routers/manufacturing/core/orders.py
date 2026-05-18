@@ -508,7 +508,17 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
             settings = {s.setting_key: s.setting_value for s in settings_res}
             
             wip_acc_id = settings.get('acc_map_wip')
-            rm_acc_id = settings.get('acc_map_raw_materials') or settings.get('acc_map_inventory')
+            # F-31: prefer the source warehouse's mapped inventory account
+            # so material consumption credits the same account that the
+            # purchase originally debited. Falls back to acc_map_raw_materials
+            # then acc_map_inventory (legacy behaviour) when a warehouse
+            # mapping is missing.
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+            rm_acc_id = (
+                resolve_warehouse_inventory_account(db=conn, warehouse_id=order.warehouse_id, fallback_to_global=False)
+                or settings.get('acc_map_raw_materials')
+                or settings.get('acc_map_inventory')
+            )
             
             if wip_acc_id and rm_acc_id and total_material_cost > 0:
                 # Validate fiscal period is open before creating GL entry
@@ -643,8 +653,16 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
         settings = {s.setting_key: s.setting_value for s in settings_res}
         
         wip_acc_id = settings.get('acc_map_wip')
-        fg_acc_id = settings.get('acc_map_finished_goods') or settings.get('acc_map_inventory')
-        
+        # F-31: prefer the destination warehouse's mapped account so the
+        # finished-goods debit lands on the correct branch ledger. Falls back
+        # to acc_map_finished_goods then acc_map_inventory (legacy behaviour).
+        from utils.inventory_accounts import resolve_warehouse_inventory_account
+        fg_acc_id = (
+            resolve_warehouse_inventory_account(db=conn, warehouse_id=order.destination_warehouse_id, fallback_to_global=False)
+            or settings.get('acc_map_finished_goods')
+            or settings.get('acc_map_inventory')
+        )
+
         # Credit Accounts for Labor/Overhead absorption (Contra-expense or Liability)
         # Using a simplistic approach: Credit a "Manufacturing Absorbed Costs" account or Payroll
         # For this phase, we credit WIP for the total transfer to FG, 

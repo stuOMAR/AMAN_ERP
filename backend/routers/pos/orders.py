@@ -417,7 +417,10 @@ def create_order(
 
         acc_bank = get_mapped_account_id(db, "acc_map_bank_main") or get_acc_id("BNK")
         acc_cogs = get_mapped_account_id(db, "acc_map_cogs") or get_acc_id("CGS")
-        acc_inventory = get_mapped_account_id(db, "acc_map_inventory") or get_acc_id("INV")
+        # F-31: credit the source warehouse's inventory account so per-warehouse
+        # valuation reflects the COGS movement.
+        from utils.inventory_accounts import resolve_warehouse_inventory_account
+        acc_inventory = resolve_warehouse_inventory_account(db, warehouse_id) or get_acc_id("INV")
 
         je_lines = []
         # A. Debit: Payments (Cash/Bank)
@@ -895,7 +898,10 @@ def create_return(
     acc_sales = get_mapped_account_id(db, "acc_map_sales") or get_acc_id("SALE-G")
     acc_cash = get_mapped_account_id(db, "acc_map_cash_main") or get_acc_id("BOX")
     acc_cogs = get_mapped_account_id(db, "acc_map_cogs") or get_acc_id("CGS")
-    acc_inventory = get_mapped_account_id(db, "acc_map_inventory") or get_acc_id("INV")
+    # F-31: returned goods come back into the order's source warehouse, so
+    # debit its mapped inventory account.
+    from utils.inventory_accounts import resolve_warehouse_inventory_account
+    acc_inventory = resolve_warehouse_inventory_account(db, order.warehouse_id) or get_acc_id("INV")
     acc_vat_out = get_mapped_account_id(db, "acc_map_vat_output") or get_acc_id("VAT-OUT")
 
     # Get treasury for session

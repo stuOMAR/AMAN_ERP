@@ -116,8 +116,8 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     # (void / approve_return / manage_credit_notes) so existing admin roles keep working.
     # NOTE: sales.create does NOT alias to these — that's the whole point of T2.3.
     "sales.manage":   ["sales.view", "sales.create", "sales.edit", "sales.delete",
-                       "sales.void", "sales.approve_return", "sales.manage_credit_notes"],
-    "buying.manage":  ["buying.view", "buying.create", "buying.edit", "buying.delete", "buying.approve", "buying.receive"],
+                       "sales.receipt", "sales.void", "sales.approve_return", "sales.return_outside_window", "sales.manage_credit_notes"],
+    "buying.manage":  ["buying.view", "buying.create", "buying.edit", "buying.delete", "buying.approve", "buying.receive", "buying.void"],
     # costing.* legacy keys route to canonical inventory.costing_*
     "costing.view":   ["inventory.costing_view"],
     "costing.manage": ["inventory.costing_manage", "inventory.costing_view"],
@@ -206,7 +206,8 @@ SENSITIVE_PERMISSIONS = {
     "treasury.manage", "treasury.edit",
     "sales.delete", "buying.delete",
     # T2.3 (2026-05-01): granular sensitive sales operations
-    "sales.void", "sales.approve_return", "sales.manage_credit_notes",
+    "sales.receipt", "sales.void", "sales.approve_return", "sales.manage_credit_notes",
+    "buying.void",
     "hr.payroll", "hr.manage",
     "admin.users", "settings.manage",
 }
@@ -219,7 +220,7 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
             user_perms = current_user.get("permissions", [])
             username = current_user.get("username", "unknown")
             company_id = current_user.get("company_id")
-            user_id = current_user.get("user_id")
+            user_id = current_user.get("user_id") or current_user.get("id")
         else:
             user_perms = getattr(current_user, 'permissions', []) or []
             username = getattr(current_user, 'username', 'unknown')
@@ -875,4 +876,3 @@ def mask_pii(record: Dict[str, Any], fields: tuple) -> Dict[str, Any]:
 
 def mask_pii_list(records: List[Dict[str, Any]], fields: tuple) -> List[Dict[str, Any]]:
     return [mask_pii(r, fields) for r in records]
-

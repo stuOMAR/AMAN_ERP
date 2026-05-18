@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { purchasesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
@@ -18,6 +18,7 @@ function PurchaseInvoiceForm() {
     const location = useLocation()
     const { showToast } = useToast()
     const [loading, setLoading] = useState(false)
+    const submittingRef = useRef(false)
     const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
     const currency = getCurrency()
@@ -334,6 +335,10 @@ function PurchaseInvoiceForm() {
             return
         }
 
+        if (submittingRef.current) {
+            return
+        }
+        submittingRef.current = true
         setLoading(true)
         setError(null)
 
@@ -375,6 +380,7 @@ function PurchaseInvoiceForm() {
             const errMsg = err.response?.data?.detail
             setError(typeof errMsg === 'string' ? errMsg : JSON.stringify(errMsg) || t('buying.purchase_invoices.form.error_saving'))
         } finally {
+            submittingRef.current = false
             setLoading(false)
         }
     }

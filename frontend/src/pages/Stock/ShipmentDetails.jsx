@@ -73,12 +73,27 @@ const ShipmentDetails = () => {
         }
     };
 
+    const handleRecall = async () => {
+        if (!window.confirm(t('stock.shipments.details.recall_confirm', 'هل تريد استرداد هذه الشحنة وإعادة المخزون إلى المصدر؟'))) return;
+        setActionLoading(true);
+        try {
+            await inventoryAPI.recallShipment(id);
+            showToast(t('stock.shipments.details.recall_success', 'تم استرداد الشحنة بنجاح'), 'success');
+            fetchDetails();
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('stock.shipments.details.recall_error', 'فشل استرداد الشحنة'), 'error');
+        } finally {
+            setActionLoading(false);
+        }
+    };
+
     const getStatusBadge = (status) => {
         const styles = {
             pending: { bg: '#FEF3C7', color: '#D97706', label: t('stock.shipments.status.pending') },
             dispatched: { bg: '#DBEAFE', color: '#2563EB', label: t('stock.shipments.status.dispatched', 'تم الشحن') },
             received: { bg: '#D1FAE5', color: '#059669', label: t('stock.shipments.status.received') },
-            cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') }
+            cancelled: { bg: '#FEE2E2', color: '#DC2626', label: t('stock.shipments.status.cancelled') },
+            recalled: { bg: '#FECACA', color: '#991B1B', label: t('stock.shipments.status.recalled', 'تم الاسترداد') }
         };
         const s = styles[status] || styles.pending;
         return (
@@ -137,6 +152,14 @@ const ShipmentDetails = () => {
 
             {shipment.status === 'dispatched' && (
                 <div className="section-card" style={{ marginBottom: '20px', display: 'flex', gap: '12px', justifyContent: 'flex-end' }}>
+                    <button
+                        className="btn btn-secondary"
+                        style={{ background: '#FEE2E2', color: '#991B1B' }}
+                        onClick={handleRecall}
+                        disabled={actionLoading}
+                    >
+                        ↩️ {t('stock.shipments.details.recall', 'استرداد الشحنة')}
+                    </button>
                     <button
                         className="btn btn-primary"
                         style={{ background: '#059669' }}
