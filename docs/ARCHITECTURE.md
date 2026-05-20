@@ -865,6 +865,21 @@ Axios instance بـ:
 ### 12.6 Alerts
 - `monitoring/alertmanager.yml` + `monitoring/alerts/`
 
+### 12.7 Operational API Consumers
+
+Some finance endpoints are intentionally API-facing rather than page-facing. They are kept behind their existing backend permissions and are consumed by operations, integrations, schedulers, or admin/API clients.
+
+| Endpoint group | Intended consumer |
+|----------------|-------------------|
+| `POST /api/finance/accounting-depth/ecl/compute`, `GET /api/finance/accounting-depth/ecl/provisions`, `POST /api/finance/accounting-depth/nrv/run`, `GET /api/finance/accounting-depth/nrv/tests`, `POST /api/finance/accounting-depth/cgu`, `GET /api/finance/accounting-depth/cgu`, `POST /api/finance/accounting-depth/ifrs15/contracts`, `GET /api/finance/accounting-depth/ifrs15/contracts/{contract_id}`, `POST /api/finance/accounting-depth/ifrs15/recognise`, `POST /api/finance/accounting-depth/einvoice/submit`, `GET /api/finance/accounting-depth/einvoice/submissions`, `POST /api/finance/accounting-depth/einvoice/{submission_id}/refresh`, `GET /api/finance/accounting-depth/einvoice/outbox` | Finance close/compliance API clients that run, inspect, and reconcile IFRS 9, IAS 2, IAS 36, IFRS 15, and e-invoicing operations through the services wired in `backend/routers/finance/accounting_depth.py`. These are controlled operational APIs, not general navigation pages. |
+| `POST /api/finance/accounting-depth/einvoice/outbox/relay` | E-invoicing operations and retry workers. The runbook documents this endpoint as the on-demand relay for failed/offline e-invoice submissions. |
+| `POST /api/finance/bank-feeds/import`, `GET /api/finance/bank-feeds/statements`, `GET /api/finance/bank-feeds/statements/{statement_id}/lines` | Bank-feed ingestion connectors and reconciliation/admin API clients for MT940, CAMT.053, and CSV statements. The router docstring identifies this as the statement-ingestion and drill-down API surface. |
+| `GET /api/finance/payments/{provider}/{charge_id}`, `POST /api/finance/payments/{provider}/{charge_id}/refund` | Payment-gateway operations and support integrations that need to inspect or issue audited provider refunds against a stored `gateway_charges` record. |
+| `GET /api/petty-cash/funds`, `POST /api/petty-cash/funds`, `POST /api/petty-cash/funds/{fund_id}/replenish`, `POST /api/petty-cash/funds/{fund_id}/disburse` | Treasury cash-custodian workflows and mobile/API clients. The router owns petty-cash fund listing, creation, replenishment, and disbursement posting. |
+| `POST /api/finance/subscriptions/dunning/scan`, `GET /api/finance/subscriptions/dunning/open`, `POST /api/finance/subscriptions/dunning/{case_id}/resolve` | Subscription collections operations. `scan` opens or updates overdue dunning cases, `open` feeds collector/admin queues, and `resolve` closes a case after payment or reconciliation. |
+| `POST /api/reports/cache/refresh` | Operations/admin cache maintenance. The endpoint refreshes report materialized views and warms cache entries on demand. |
+| `GET /api/reports/period_stats` | Reporting/API clients that read canonical period metrics from `mv_period_stats` with live-compute fallback; this is the backend source for period KPI integrations rather than a standalone page. |
+
 ---
 
 ## 13. الاختبارات وضمان الجودة
