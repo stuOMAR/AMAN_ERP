@@ -130,12 +130,7 @@ export default function ContractDetails() {
         ? Math.ceil((new Date(contract.end_date) - new Date()) / (1000 * 60 * 60 * 24))
         : null
 
-    // Calculate item totals
-    const subtotal = (contract.items || []).reduce((sum, item) => sum + (item.quantity * item.unit_price), 0)
-    const taxTotal = (contract.items || []).reduce((sum, item) => {
-        const taxable = (item.quantity * item.unit_price) - (item.discount || 0)
-        return sum + (taxable * (item.tax_rate || 0) / 100)
-    }, 0)
+    // Item totals are now calculated by the backend
 
     return (
         <div className="workspace fade-in">
@@ -277,11 +272,11 @@ export default function ContractDetails() {
                     <div style={{ marginTop: '12px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}>
                             <span>{t('contracts.details.subtotal')}</span>
-                            <span>{formatNumber(subtotal)} {contract.currency || currency}</span>
+                            <span>{formatNumber(contract.subtotal || 0)} {contract.currency || currency}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '10px 0', borderBottom: '1px solid #eee' }}>
                             <span>{t('contracts.details.tax')}</span>
-                            <span>{formatNumber(taxTotal)} {contract.currency || currency}</span>
+                            <span>{formatNumber(contract.tax_amount || 0)} {contract.currency || currency}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', padding: '14px 0', fontWeight: 'bold', fontSize: '1.2rem' }}>
                             <span>{t('contracts.details.grand_total')}</span>

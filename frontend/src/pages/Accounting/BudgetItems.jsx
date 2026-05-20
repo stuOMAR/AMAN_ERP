@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Save, Search, AlertTriangle, Lock } from 'lucide-react';
+import Decimal from 'decimal.js';
 import { useParams } from 'react-router-dom';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
@@ -103,7 +104,7 @@ const BudgetItems = () => {
 
     const handleAmountChange = (accountId, field, value) => {
         if (!canManageBudgets) return;
-        const floatValue = parseFloat(value) || 0;
+        const decValue = new Decimal(value || '0');
         setBudgetItems(prev => {
             const currentItem = prev[accountId] || { planned: 0, notes: '' };
             if (field === 'monthly') {
@@ -111,8 +112,8 @@ const BudgetItems = () => {
                     ...prev,
                     [accountId]: {
                         ...currentItem,
-                        planned: floatValue * budgetMonths,
-                        monthly: floatValue
+                        planned: decValue.times(budgetMonths).toNumber(),
+                        monthly: decValue.toNumber()
                     }
                 };
             } else {
@@ -120,8 +121,8 @@ const BudgetItems = () => {
                     ...prev,
                     [accountId]: {
                         ...currentItem,
-                        planned: floatValue,
-                        monthly: floatValue / budgetMonths
+                        planned: decValue.toNumber(),
+                        monthly: decValue.div(budgetMonths).toNumber()
                     }
                 };
             }

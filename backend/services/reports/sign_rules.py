@@ -63,7 +63,7 @@ def get_category(db: Any, account_id: str) -> str:
         return "unknown"
 
 
-def apply_sign(amount: float, normal_side: str, report_type: str = "balance") -> float:
+def apply_sign(amount, normal_side: str, report_type: str = "balance"):
     """Apply sign convention based on normal side and report type.
 
     Args:

@@ -66,7 +66,7 @@ export default function ServicePricelists() {
       ...form,
       scope_ref_id: form.scope_ref_id ? parseInt(form.scope_ref_id) : null,
       item_id: parseInt(form.item_id),
-      price: parseFloat(form.price),
+      price: form.price,
       valid_from: form.valid_from || null,
       valid_to: form.valid_to || null,
     };

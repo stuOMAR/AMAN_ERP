@@ -82,13 +82,13 @@ function InvoiceList() {
             render: (val, row) => {
                 const invoiceCurrency = row.currency || row.base_currency || fallbackBaseCurrency
                 const baseCurrency = row.base_currency || fallbackBaseCurrency
-                const baseValue = Number(row.total_base ?? (Number(val || 0) * Number(row.exchange_rate || 1)))
                 const isSameCurrency = invoiceCurrency === baseCurrency
+                const baseValue = row.total_base ?? null
 
                 return (
                     <div>
                         <div>{formatNumber(val)} <small>{invoiceCurrency}</small></div>
-                        {!isSameCurrency && (
+                        {!isSameCurrency && baseValue != null && (
                             <div className="text-muted" style={{ fontSize: '12px', fontWeight: 500 }}>
                                 {formatNumber(baseValue)} <small>{baseCurrency}</small>
                             </div>

@@ -1,5 +1,9 @@
 import api from './apiClient'
 
+const idempotencyHeaders = () => ({
+    headers: { 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` }
+})
+
 export const inventoryAPI = {
     listProducts: (params) => api.get('/inventory/products', { params }),
     getProduct: (id) => api.get(`/inventory/products/${id}`),
@@ -31,7 +35,7 @@ export const inventoryAPI = {
     }),
 
     // Transfers
-    transferStock: (data) => api.post('/inventory/transfer', data),
+    transferStock: (data) => api.post('/inventory/transfer', data, idempotencyHeaders()),
 
     getSummary: (params) => api.get('/inventory/summary', { params }),
 
@@ -48,24 +52,24 @@ export const inventoryAPI = {
     getStockMovements: (params) => api.get('/inventory/movements', { params }),
 
     // Shipments
-    createShipment: (data) => api.post('/inventory/shipments', data),
+    createShipment: (data) => api.post('/inventory/shipments', data, idempotencyHeaders()),
     listShipments: (params) => api.get('/inventory/shipments', { params }),
     getIncomingShipments: (params) => api.get('/inventory/shipments/incoming', { params }),
     getShipmentDetails: (id) => api.get(`/inventory/shipments/${id}`),
-    dispatchShipment: (id) => api.post(`/inventory/shipments/${id}/dispatch`),
-    confirmShipment: (id) => api.post(`/inventory/shipments/${id}/confirm`),
-    cancelShipment: (id) => api.post(`/inventory/shipments/${id}/cancel`),
-    recallShipment: (id) => api.post(`/inventory/shipments/${id}/recall`),
+    dispatchShipment: (id) => api.post(`/inventory/shipments/${id}/dispatch`, null, idempotencyHeaders()),
+    confirmShipment: (id) => api.post(`/inventory/shipments/${id}/confirm`, null, idempotencyHeaders()),
+    cancelShipment: (id) => api.post(`/inventory/shipments/${id}/cancel`, null, idempotencyHeaders()),
+    recallShipment: (id) => api.post(`/inventory/shipments/${id}/recall`, null, idempotencyHeaders()),
 
     // Stock Adjustments
     listAdjustments: (params) => api.get('/inventory/adjustments', { params }),
-    createAdjustment: (data) => api.post('/inventory/adjustments', data),
+    createAdjustment: (data) => api.post('/inventory/adjustments', data, idempotencyHeaders()),
     getValuationReport: (params) => api.get('/inventory/valuation-report', { params }),
 
     // Batches (INV-101)
     listBatches: (params) => api.get('/inventory/batches', { params }),
     getBatch: (id) => api.get(`/inventory/batches/${id}`),
-    createBatch: (data) => api.post('/inventory/batches', data),
+    createBatch: (data) => api.post('/inventory/batches', data, idempotencyHeaders()),
     updateBatch: (id, data) => api.put(`/inventory/batches/${id}`, data),
     getProductBatches: (productId, params) => api.get(`/inventory/batches/product/${productId}`, { params }),
     getExpiryAlerts: (params) => api.get('/inventory/batches/expiry-alerts', { params }),
@@ -73,8 +77,8 @@ export const inventoryAPI = {
     // Serial Numbers (INV-102)
     listSerials: (params) => api.get('/inventory/serials', { params }),
     getSerial: (id) => api.get(`/inventory/serials/${id}`),
-    createSerial: (data) => api.post('/inventory/serials', data),
-    createSerialsBulk: (data) => api.post('/inventory/serials/bulk', data),
+    createSerial: (data) => api.post('/inventory/serials', data, idempotencyHeaders()),
+    createSerialsBulk: (data) => api.post('/inventory/serials/bulk', data, idempotencyHeaders()),
     updateSerial: (id, data) => api.put(`/inventory/serials/${id}`, data),
     lookupSerial: (serialNumber) => api.get(`/inventory/serials/lookup/${serialNumber}`),
 
@@ -84,15 +88,15 @@ export const inventoryAPI = {
     // Quality Control (INV-104)
     listQualityInspections: (params) => api.get('/inventory/quality-inspections', { params }),
     getQualityInspection: (id) => api.get(`/inventory/quality-inspections/${id}`),
-    createQualityInspection: (data) => api.post('/inventory/quality-inspections', data),
+    createQualityInspection: (data) => api.post('/inventory/quality-inspections', data, idempotencyHeaders()),
     completeQualityInspection: (id, data) => api.put(`/inventory/quality-inspections/${id}/complete`, data),
 
     // Cycle Counts (INV-105)
     listCycleCounts: (params) => api.get('/inventory/cycle-counts', { params }),
     getCycleCount: (id) => api.get(`/inventory/cycle-counts/${id}`),
-    createCycleCount: (data) => api.post('/inventory/cycle-counts', data),
+    createCycleCount: (data) => api.post('/inventory/cycle-counts', data, idempotencyHeaders()),
     startCycleCount: (id) => api.put(`/inventory/cycle-counts/${id}/start`),
-    completeCycleCount: (id, data) => api.put(`/inventory/cycle-counts/${id}/complete`, data)
+    completeCycleCount: (id, data) => api.put(`/inventory/cycle-counts/${id}/complete`, data, idempotencyHeaders())
 }
 
 export const costingPolicyAPI = {

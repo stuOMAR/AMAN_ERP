@@ -59,7 +59,7 @@ def get_sales_kpis(db, start_date: date, end_date: date,
             WHERE i.invoice_type = 'sales' AND i.invoice_date BETWEEN :s AND :e {invoice_branch_sql}
             GROUP BY p.name ORDER BY total DESC LIMIT 10
         """), {"s": start_date, "e": end_date, "base_currency": base_currency, **invoice_bp}).fetchall()
-        top_customers = [{"name": r[0], "value": float(r[1])} for r in rows]
+        top_customers = [{"name": r[0], "value": Decimal(str(r[1]))} for r in rows]
     except Exception:
         pass
 

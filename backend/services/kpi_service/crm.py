@@ -52,7 +52,7 @@ def get_crm_kpis(db, start_date: date, end_date: date,
             FROM sales_opportunities o WHERE o.stage NOT IN ('won','lost','cancelled') {opp_branch_sql}
             GROUP BY o.stage ORDER BY COUNT(*) DESC
         """), {"base_currency": base_currency, **opp_bp}).fetchall()
-        pipeline_stages = [{"stage": r[0], "count": int(r[1]), "value": float(r[2])} for r in stages]
+        pipeline_stages = [{"stage": r[0], "count": int(r[1]), "value": Decimal(str(r[2]))} for r in stages]
     except Exception:
         pass
 

@@ -31,7 +31,7 @@ def _build_revenue_expense_chart(db, start_date: date, end_date: date,
             GROUP BY TO_CHAR(je.entry_date, 'YYYY-MM')
             ORDER BY month
         """), {"s": start_date, "e": end_date, **bp}).fetchall()
-        data = [{"month": r[0], "revenue": float(r[1]), "expenses": float(r[2])} for r in rows]
+        data = [{"month": r[0], "revenue": Decimal(str(r[1])), "expenses": Decimal(str(r[2]))} for r in rows]
     except Exception:
         pass
     return [{"id": "revenue_vs_expenses", "type": "line", "title": "Revenue vs Expenses",
@@ -52,7 +52,7 @@ def _build_sales_trend_chart(db, start_date: date, end_date: date,
             WHERE i.invoice_type = 'sales' AND i.invoice_date BETWEEN :s AND :e AND i.status != 'cancelled' {branch_sql}
             GROUP BY DATE(i.invoice_date) ORDER BY day
         """), {"s": start_date, "e": end_date, "base_currency": base_currency, **bp}).fetchall()
-        data = [{"date": str(r[0]), "value": float(r[1])} for r in rows]
+        data = [{"date": str(r[0]), "value": Decimal(str(r[1]))} for r in rows]
     except Exception:
         pass
     return [{"id": "sales_trend", "type": "line", "title": "Sales Trend",
@@ -88,7 +88,7 @@ def _build_ar_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
             WHERE i.invoice_type = 'sales' AND i.status IN ('sent', 'partially_paid') AND i.due_date IS NOT NULL {branch_sql}
             GROUP BY bucket
         """), {"today": as_of, "base_currency": base_currency, **bp}).fetchall()
-        bucket_map = {r[0]: float(r[1]) for r in rows}
+        bucket_map = {r[0]: Decimal(str(r[1])) for r in rows}
         for a in aging:
             a["value"] = bucket_map.get(a["bucket"], 0)
     except Exception:

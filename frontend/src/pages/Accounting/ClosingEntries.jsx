@@ -4,6 +4,7 @@ import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import { TrendingUp, TrendingDown, DollarSign, AlertTriangle } from 'lucide-react'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
@@ -66,7 +67,7 @@ export default function ClosingEntries() {
 
     const formatNum = (n) => {
         if (!n && n !== 0) return '-'
-        return parseFloat(n).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        return formatNumber(n)
     }
 
     return (

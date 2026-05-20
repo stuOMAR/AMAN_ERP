@@ -18,6 +18,14 @@ const FORMATS = {
     zatca: { label: 'ZATCA', width: '210mm', icon: '🏛️' }
 };
 
+const isPositiveDecimalString = (value) => {
+    if (value === null || value === undefined || value === '') return false;
+    const normalized = String(value).trim();
+    if (!/^\d+(\.\d+)?$/.test(normalized)) return false;
+    const [intPart, fracPart = ''] = normalized.split('.');
+    return /[1-9]/.test(`${intPart}${fracPart}`);
+};
+
 const InvoicePrintModal = ({ invoice, onClose }) => {
     const { t, i18n } = useTranslation();
     const [format, setFormat] = useState('a4');
@@ -102,7 +110,7 @@ const InvoicePrintModal = ({ invoice, onClose }) => {
             <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 16 }}>
                 <div style={{ minWidth: 250, border: '1px solid #ddd', borderRadius: 8, padding: 16 }}>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('common.subtotal', 'المجموع الفرعي')}</span><strong>{formatNumber(invoice.subtotal)} {currency}</strong></div>
-                    {invoice.discount > 0 && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#dc2626' }}><span>{t('common.discount', 'الخصم')}</span><strong>-{formatNumber(invoice.discount)} {currency}</strong></div>}
+                    {isPositiveDecimalString(invoice.discount) && <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8, color: '#dc2626' }}><span>{t('common.discount', 'الخصم')}</span><strong>-{formatNumber(invoice.discount)} {currency}</strong></div>}
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('common.tax', 'الضريبة')}</span><strong>{formatNumber(invoice.tax_amount)} {currency}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #2563eb', paddingTop: 8, fontSize: 18 }}><strong>{t('common.total', 'الإجمالي')}</strong><strong style={{ color: '#2563eb' }}>{formatNumber(invoice.total)} {currency}</strong></div>
                 </div>
@@ -140,8 +148,8 @@ const InvoicePrintModal = ({ invoice, onClose }) => {
                 <div className="th-sep" />
                 <table className="th-tbl"><tbody>
                     <tr><td>{t('common.subtotal', 'المجموع')}</td><td style={{ textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(invoice.subtotal)}</td></tr>
-                    {invoice.tax_amount > 0 && <tr><td>{t('common.tax', 'الضريبة')}</td><td style={{ textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(invoice.tax_amount)}</td></tr>}
-                    {invoice.discount > 0 && <tr><td>{t('common.discount', 'الخصم')}</td><td style={{ textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(invoice.discount)}</td></tr>}
+                    {isPositiveDecimalString(invoice.tax_amount) && <tr><td>{t('common.tax', 'الضريبة')}</td><td style={{ textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(invoice.tax_amount)}</td></tr>}
+                    {isPositiveDecimalString(invoice.discount) && <tr><td>{t('common.discount', 'الخصم')}</td><td style={{ textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(invoice.discount)}</td></tr>}
                 </tbody></table>
                 <div className="th-sep" />
                 <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 700, fontSize: fs + 2 }}>
@@ -175,14 +183,13 @@ const InvoicePrintModal = ({ invoice, onClose }) => {
                 <thead><tr><th>#</th><th>{t('common.description', 'الوصف')}</th><th>{t('common.qty', 'الكمية')}</th><th>{t('common.unit_price', 'سعر الوحدة')}</th><th>{t('common.tax_rate', 'نسبة الضريبة')}</th><th>{t('common.tax', 'الضريبة')}</th><th>{t('common.total', 'الإجمالي')}</th></tr></thead>
                 <tbody>
                     {lines.map((line, i) => {
-                        const taxAmt = (line.quantity * line.unit_price - (line.discount || 0)) * ((line.tax_rate || 0) / 100);
-                        return <tr key={i}><td>{i + 1}</td><td>{line.description || line.product_name}</td><td>{line.quantity}</td><td>{formatNumber(line.unit_price)}</td><td>{line.tax_rate || 0}%</td><td>{formatNumber(taxAmt)}</td><td>{formatNumber(line.total)}</td></tr>;
+                        return <tr key={i}><td>{i + 1}</td><td>{line.description || line.product_name}</td><td>{line.quantity}</td><td>{formatNumber(line.unit_price)}</td><td>{line.tax_rate || 0}%</td><td>{formatNumber(line.tax_amount)}</td><td>{formatNumber(line.total)}</td></tr>;
                     })}
                 </tbody>
             </table>
             <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
                 <div style={{ minWidth: 280, border: '2px solid #1e3a5f', borderRadius: 8, padding: 16 }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span>{t('sales.print.taxable_amount', 'المبلغ الخاضع للضريبة')}</span><strong>{formatNumber(invoice.subtotal - (invoice.discount || 0))} {currency}</strong></div>
+                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span>{t('sales.print.taxable_amount', 'المبلغ الخاضع للضريبة')}</span><strong>{formatNumber(invoice.taxable_amount)} {currency}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 6 }}><span>{t('sales.print.vat_amount', 'مبلغ الضريبة')}</span><strong>{formatNumber(invoice.tax_amount)} {currency}</strong></div>
                     <div style={{ display: 'flex', justifyContent: 'space-between', borderTop: '2px solid #1e3a5f', paddingTop: 8, fontSize: 18 }}><strong>{t('sales.print.total_with_vat', 'الإجمالي شامل الضريبة')}</strong><strong style={{ color: '#1e3a5f' }}>{formatNumber(invoice.total)} {currency}</strong></div>
                 </div>

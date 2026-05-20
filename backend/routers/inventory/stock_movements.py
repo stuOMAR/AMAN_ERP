@@ -38,8 +38,7 @@ logger = logging.getLogger(__name__)
 class StockAdjustmentItem(BaseModel):
     product_id: int
     warehouse_id: int
-    quantity_delta: float  # positive = stock_in, negative = stock_out
-    unit_cost: float = Field(..., gt=0)
+    quantity_delta: Decimal  # positive = stock_in, negative = stock_out
     reason: _Optional[str] = None
 
 
@@ -70,7 +69,13 @@ def create_stock_adjustment(
     if not adjustment.items:
         raise HTTPException(**http_error(400, "no_items"))
 
-    db = get_db_connection(current_user.company_id)
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+    username = current_user.get("username") if isinstance(current_user, dict) else getattr(current_user, "username", None)
+    allowed = current_user.get("allowed_branches", []) if isinstance(current_user, dict) else (getattr(current_user, "allowed_branches", []) or [])
+    permissions = current_user.get("permissions", []) if isinstance(current_user, dict) else (getattr(current_user, "permissions", []) or [])
+
+    db = get_db_connection(company_id)
     try:
         # Validate adjustment account exists
         acc_check = db.execute(
@@ -103,6 +108,8 @@ def create_stock_adjustment(
             ).fetchone()
             if not wh:
                 raise HTTPException(**http_error(404, "warehouse_not_found"))
+            if allowed and "*" not in permissions and wh.branch_id and wh.branch_id not in allowed:
+                raise HTTPException(**http_error(403, "warehouse_access_denied", request))
 
         # T050: Call shared helper — supports multi-item + explicit adjustment_account_id
         result = post_inventory_adjustment(
@@ -111,8 +118,7 @@ def create_stock_adjustment(
                 {
                     "product_id": item.product_id,
                     "warehouse_id": item.warehouse_id,
-                    "quantity_delta": item.quantity_delta,
-                    "unit_cost": item.unit_cost,
+                    "quantity_delta": str(item.quantity_delta),
                     "reason": item.reason,
                 }
                 for item in adjustment.items
@@ -122,9 +128,9 @@ def create_stock_adjustment(
             reference=adjustment.reference,
             notes=adjustment.notes,
             txn_date=txn_date,
-            user_id=current_user.id,
-            username=getattr(current_user, "username", None),
-            company_id=current_user.company_id,
+            user_id=user_id,
+            username=username,
+            company_id=company_id,
             request=request,
         )
 

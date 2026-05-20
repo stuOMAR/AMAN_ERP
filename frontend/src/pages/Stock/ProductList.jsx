@@ -38,7 +38,6 @@ function ProductList() {
 
     const [branchPrices, setBranchPrices] = useState({});
     const [branchCurrency, setBranchCurrency] = useState('SAR');
-    const [branchRate, setBranchRate] = useState(1);
 
     useEffect(() => {
         const fetchData = async () => {
@@ -51,7 +50,6 @@ function ProductList() {
                 setProducts(prodRes.data)
                 setBranchPrices(priceRes.data?.prices || {})
                 setBranchCurrency(priceRes.data?.currency || 'SAR')
-                setBranchRate(priceRes.data?.rate || 1)
 
                 try {
                     const policyRes = await api.get('/costing-policies/current')
@@ -175,14 +173,13 @@ function ProductList() {
             label: t('stock.products.table.cost'),
             width: '10%',
             render: (val, row) => {
-                const branchCost = row.branch_avg_cost;
-                const rawCost = branchCost && parseFloat(branchCost) > 0 ? branchCost : val;
-                // Convert from SAR to branch currency
-                const displayCost = branchRate !== 1 ? (parseFloat(rawCost) / branchRate) : rawCost;
+                const displayCost = row.display_cost ?? val;
+                const displayCurrency = row.display_cost_currency || branchCurrency;
+                const isBranchCost = row.cost_source === 'branch_avg';
                 return (
                     <div style={{ fontWeight: '600', color: 'var(--text-primary)' }}>
-                        {formatNumber(displayCost || 0)} {branchCurrency}
-                        {branchCost && parseFloat(branchCost) > 0 && parseFloat(branchCost) !== parseFloat(val) && (
+                        {formatNumber(displayCost || 0)} {displayCurrency}
+                        {isBranchCost && (
                             <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
                                 {t('stock.products.branch_cost', 'Branch Avg')}
                             </div>

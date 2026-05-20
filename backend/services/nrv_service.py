@@ -95,10 +95,10 @@ def run_nrv_test(
             description=f"IAS 2 NRV write-down as of {as_of}",
             lines=[
                 {"account_id": writedown_expense_account_id,
-                 "debit": float(total_writedown), "credit": 0,
+                 "debit": Decimal(str(total_writedown)), "credit": Decimal("0"),
                  "description": "Inventory NRV write-down expense"},
                 {"account_id": inventory_account_id,
-                 "debit": 0, "credit": float(total_writedown),
+                 "debit": Decimal("0"), "credit": Decimal(str(total_writedown)),
                  "description": "Inventory reduced to NRV"},
             ],
             user_id=user_id,

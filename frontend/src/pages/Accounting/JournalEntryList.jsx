@@ -2,6 +2,7 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
+import Decimal from 'decimal.js'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
@@ -286,8 +287,8 @@ function JournalEntryList() {
                                     ))}
                                     <tr style={{ fontWeight: 'bold', borderTop: '2px solid var(--border)' }}>
                                         <td colSpan="2">{t('common.total')}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + parseFloat(l.debit || 0), 0))}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s + parseFloat(l.credit || 0), 0))}</td>
+                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0')).toString())}</td>
+                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0')).toString())}</td>
                                     </tr>
                                 </tbody>
                             </table>

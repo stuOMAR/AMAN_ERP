@@ -11,6 +11,7 @@ import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import useInvoiceCalc from '../../hooks/useInvoiceCalc';
+import Decimal from 'decimal.js';
 
 
 const SalesReturnForm = () => {
@@ -36,7 +37,7 @@ const SalesReturnForm = () => {
         items: [],
         notes: '',
         refund_method: 'credit',
-        refund_amount: 0,
+        refund_amount: '',
         bank_account_id: '',
         check_number: '',
         check_date: ''
@@ -100,29 +101,17 @@ const SalesReturnForm = () => {
                 const res = await salesAPI.getInvoice(invoiceId);
                 const invoiceDetails = res.data;
 
-                // Map invoice items to return items
-                newItems = invoiceDetails.items.map(item => {
-                    const quantity = Number(item.quantity) || 0;
-                    const unitPrice = Number(item.unit_price) || 0;
-                    const discount = Number(item.discount) || 0;
-                    const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0;
-                    const taxRate = Number(item.tax_rate) || 0;
-
-                    const taxable = (quantity * unitPrice) - discount;
-                    const total = taxable * (1 + taxRate / 100);
-
-                    return {
-                        product_id: item.product_id || '',
-                        description: item.description || '',
-                        quantity: String(item.quantity || '0'),
-                        max_quantity: String(item.quantity || '0'),
-                        unit_price: String(item.unit_price || '0'),
-                        tax_rate: item.tax_rate != null ? String(item.tax_rate) : null,
-                        discount: String(item.discount || '0'),
-                        reason: '',
-                        unit: item.unit || '',
-                    };
-                });
+                // Map invoice items to raw return inputs. Totals/tax are
+                // previewed by the backend.
+                newItems = invoiceDetails.items.map(item => ({
+                    product_id: item.product_id || '',
+                    description: item.description || '',
+                    quantity: String(item.quantity || '0'),
+                    max_quantity: String(item.quantity || '0'),
+                    unit_price: String(item.unit_price || '0'),
+                    reason: '',
+                    unit: item.unit || '',
+                }));
 
                 notesRef = `${t('sales.returns.form.auto_note')} #${invoiceDetails.invoice_number}`;
                 setSelectedInvoiceInfo(invoiceDetails);
@@ -146,7 +135,7 @@ const SalesReturnForm = () => {
     const isDiscreteUnit = (unit) => DISCRETE_UNITS.includes((unit || '').trim().toLowerCase()) || DISCRETE_UNITS.includes((unit || '').trim());
 
     const addItem = () => {
-        setFormData({ ...formData, items: [...formData.items, { product_id: '', description: '', quantity: 1, max_quantity: 999999, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, reason: '', unit: '' }] })
+        setFormData({ ...formData, items: [...formData.items, { product_id: '', description: '', quantity: '1', max_quantity: '999999', unit_price: '', reason: '', unit: '' }] })
     };
 
     const removeItem = (index) => {
@@ -177,11 +166,15 @@ const SalesReturnForm = () => {
 
                 // Quantity cap guard (display only)
                 if (field === 'quantity') {
-                    const max = parseFloat(item.max_quantity);
-                    const entered = parseFloat(value);
-                    if (!isNaN(max) && !isNaN(entered) && entered > max) {
-                        showToast(`${t('sales.returns.form.errors.max_quantity')} (${max})`, 'error');
-                        updated[field] = String(max);
+                    try {
+                        const max = new Decimal(item.max_quantity || '0');
+                        const entered = new Decimal(value || '0');
+                        if (max.gt(0) && entered.gt(max)) {
+                            showToast(`${t('sales.returns.form.errors.max_quantity')} (${item.max_quantity})`, 'error');
+                            updated[field] = String(item.max_quantity);
+                        }
+                    } catch {
+                        updated[field] = value;
                     }
                 }
 
@@ -202,15 +195,15 @@ const SalesReturnForm = () => {
                     product_id: i.product_id ? parseInt(i.product_id, 10) : null,
                     quantity: String(i.quantity || '0'),
                     unit_price: String(i.unit_price || '0'),
-                    tax_rate: i.tax_rate != null ? String(i.tax_rate) : null,
-                    discount: String(i.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
                 customer_id: formData.customer_id ? parseInt(formData.customer_id, 10) : null,
+                related_invoice_id: formData.invoice_id ? parseInt(formData.invoice_id, 10) : null,
+                document_date: formData.return_date,
                 currency,
-            });
+            }, '/sales/returns/preview');
         }
-    }, [formData.items, formData.customer_id, currentBranch, currency, previewDebounced]);
+    }, [formData.items, formData.customer_id, formData.invoice_id, formData.return_date, currentBranch, currency, previewDebounced]);
 
 
     // Auto-sync refund_amount from backend total when method is not 'credit'
@@ -246,13 +239,11 @@ const SalesReturnForm = () => {
                     product_id: item.product_id ? parseInt(item.product_id) : null,
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: String(item.tax_rate || 0),
-                    discount: String(item.discount || 0),
                 })),
                 bank_account_id: formData.bank_account_id ? parseInt(formData.bank_account_id) : null,
                 check_number: formData.check_number || null,
                 check_date: formData.check_date || null,
-                refund_amount: formData.refund_method !== 'credit' ? String(formData.refund_amount || 0) : 0,
+                refund_amount: formData.refund_method !== 'credit' ? String(formData.refund_amount || 0) : '0',
                 branch_id: currentBranch?.id
             };
 
@@ -362,7 +353,7 @@ const SalesReturnForm = () => {
                                             }`}>
                                             <span className="font-black">{t('sales.returns.form.alerts.remaining_amount')}:</span>
                                             <span className="font-black text-2xl">
-                                                {formatNumber(selectedInvoiceInfo.total - (selectedInvoiceInfo.paid_amount || 0))} {currency}
+                                                {selectedInvoiceInfo.remaining_balance != null ? formatNumber(selectedInvoiceInfo.remaining_balance) : '—'} {currency}
                                             </span>
                                         </div>
                                     )}
@@ -396,7 +387,6 @@ const SalesReturnForm = () => {
                                     <th style={{ width: '25%' }}>{t('sales.quotations.form.items.product')}</th>
                                     <th style={{ width: '8%' }}>{t('sales.quotations.form.items.quantity')}</th>
                                     <th style={{ width: '12%' }}>{t('sales.quotations.form.items.price')}</th>
-                                    <th style={{ width: '10%' }}>{t('sales.invoices.form.items.discount')} (%)</th>
                                     <th style={{ width: '8%' }}>{t('sales.quotations.form.items.tax')}</th>
                                     <th style={{ width: '12%' }}>{t('sales.quotations.form.items.total')}</th>
                                     <th style={{ width: '20%' }}>{t('sales.returns.details.reason')}</th>
@@ -429,11 +419,7 @@ const SalesReturnForm = () => {
                                                     min={isDiscreteUnit(item.unit) ? "1" : "0.01"}
                                                     step={isDiscreteUnit(item.unit) ? "1" : "any"}
                                                     value={item.quantity}
-                                                    onChange={(e) => {
-                                                        let val = Number(e.target.value) || 0;
-                                                        if (isDiscreteUnit(item.unit)) val = Math.round(val);
-                                                        updateItem(index, 'quantity', val);
-                                                    }}
+                                                    onChange={(e) => updateItem(index, 'quantity', e.target.value)}
                                                     className="form-input text-center"
                                                 />
                                             </td>
@@ -443,33 +429,19 @@ const SalesReturnForm = () => {
                                                     min="0"
                                                     step="any"
                                                     value={item.unit_price}
-                                                    onChange={(e) => updateItem(index, 'unit_price', Number(e.target.value) || 0)}
+                                                    onChange={(e) => updateItem(index, 'unit_price', e.target.value)}
                                                     className="form-input text-center"
                                                 />
                                             </td>
                                             <td>
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    max="100"
-                                                    step="0.01"
-                                                    value={item.discount_percent}
-                                                    onChange={(e) => updateItem(index, 'discount_percent', Number(e.target.value) || 0)}
-                                                    className="form-input text-center"
-                                                />
-                                            </td>
-                                            <td>
-                                                <input
-                                                    type="number"
-                                                    min="0"
-                                                    step="any"
-                                                    value={item.tax_rate}
-                                                    onChange={(e) => updateItem(index, 'tax_rate', Number(e.target.value) || 0)}
-                                                    className="form-input text-center"
-                                                />
+                                                {backendLines?.find(line => line.index === index)?.tax_rate ?? backendLines?.[index]?.tax_rate ?? '—'}
                                             </td>
                                              <td style={{ fontWeight: 'bold' }}>
-                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+                                                {(() => {
+                                                    const line = backendLines?.find(l => l.index === index) || backendLines?.[index];
+                                                    const total = line?.line_total ?? line?.total;
+                                                    return total !== null && total !== undefined && total !== '' ? formatNumber(total) : '—';
+                                                })()}
                                              </td>
                                             <td>
                                                 <input
@@ -601,11 +573,11 @@ const SalesReturnForm = () => {
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.subtotal')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.subtotal) : '—'} <small>{currency}</small></span>
+                            <span>{backendTotals?.subtotal != null ? formatNumber(backendTotals.subtotal) : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.tax')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.totalTax) : '—'} <small>{currency}</small></span>
+                            <span>{backendTotals?.totalTax != null ? formatNumber(backendTotals.totalTax) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '16px 0' }}></div>
@@ -619,7 +591,7 @@ const SalesReturnForm = () => {
                             marginBottom: '24px'
                         }}>
                             <span>{t('sales.quotations.details.grand_total')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
+                            <span>{backendTotals?.grandTotal != null ? formatNumber(backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div className="form-actions" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

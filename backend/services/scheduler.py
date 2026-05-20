@@ -196,7 +196,7 @@ def flatten_report_data(data_nodes):
             flat_data.append({
                 "Account Number": node.get("account_number", ""),
                 "Account Name": f"{'  ' * indent}{node.get('name', '')}",
-                "Balance": f"{float(node.get('balance', 0)):,.2f}",
+                "Balance": f"{Decimal(str(node.get('balance', 0))):,.2f}",
                 "Type": node.get("account_type", "")
             })
             if node.get("children"):
@@ -234,7 +234,7 @@ def process_scheduled_report(conn, report):
             flat.append({
                 "Account Number": "",
                 "Account Name": "Net Income / صافي الدخل",
-                "Balance": f"{float(data.get('total', 0)):,.2f}",
+                "Balance": f"{Decimal(str(data.get('total', 0))):,.2f}",
                 "Type": ""
             })
             
@@ -743,7 +743,7 @@ def auto_fx_revaluation():
                     continue
 
                 for r in rates:
-                    ccy, new_rate = r.currency_code, float(r.rate)
+                    ccy, new_rate = r.currency_code, Decimal(str(r.rate))
                     balances = conn.execute(text("""
                         SELECT a.id AS account_id,
                                COALESCE(SUM(jl.debit_currency - jl.credit_currency), 0) AS fx_balance,
@@ -761,8 +761,8 @@ def auto_fx_revaluation():
                     lines = []
                     total_adj = 0.0
                     for b in balances:
-                        revalued = float(b.fx_balance) * new_rate
-                        adj = revalued - float(b.local_balance)
+                        revalued = Decimal(str(b.fx_balance)) * new_rate
+                        adj = revalued - Decimal(str(b.local_balance))
                         if abs(adj) < 0.005:
                             continue
                         if adj > 0:
@@ -851,7 +851,7 @@ def check_zatca_csid_expiry():
                 )).fetchall()
 
                 for r in rows:
-                    days_left = float(r.days_left or 0)
+                    days_left = Decimal(str(r.days_left or 0))
                     last_t = r.last_alert_threshold_days
                     # Choose the strictest threshold the row has crossed
                     # but not yet alerted at.
@@ -1200,7 +1200,7 @@ def check_low_stock_alerts():
 
             with eng.begin() as conn:
                 for item in low:
-                    effective = float(item.quantity) - float(item.reserved_quantity)
+                    effective = Decimal(str(item.quantity)) - Decimal(str(item.reserved_quantity))
                     try:
                         conn.execute(text("""
                             INSERT INTO notifications
@@ -1216,7 +1216,7 @@ def check_low_stock_alerts():
                             "msg": (
                                 f"المنتج '{item.product_name or item.product_id}': "
                                 f"الكمية المتاحة {effective:.2f} "
-                                f"وصلت أو تجاوزت حد إعادة الطلب {float(item.reorder_level):.2f}"
+                                f"وصلت أو تجاوزت حد إعادة الطلب {Decimal(str(item.reorder_level)):.2f}"
                             ),
                         })
                     except Exception:
@@ -1259,8 +1259,8 @@ def process_pos_offline_inbox():
                                 "SELECT sale_price FROM products WHERE id = :pid"
                             ), {"pid": pid}).fetchone()
                             if cur_price_row:
-                                cur = float(cur_price_row[0] or 0)
-                                ordered = float(line.get("unit_price") or line.get("price") or 0)
+                                cur = Decimal(str(cur_price_row[0] or 0))
+                                ordered = Decimal(str(line.get("unit_price") or line.get("price") or 0))
                                 if cur > 0 and ordered > 0 and abs(cur - ordered) / cur > 0.05:
                                     conflict_reason = (
                                         f"price drift >5% on product {pid}: "
@@ -1272,7 +1272,7 @@ def process_pos_offline_inbox():
                         if not conflict_reason:
                             for line in order_lines:
                                 pid = line.get("product_id")
-                                qty = float(line.get("quantity") or line.get("qty") or 0)
+                                qty = Decimal(str(line.get("quantity") or line.get("qty") or 0))
                                 if not pid or qty <= 0:
                                     continue
                                 stock_row = conn.execute(text("""
@@ -1280,10 +1280,10 @@ def process_pos_offline_inbox():
                                     FROM inventory WHERE product_id = :pid
                                     LIMIT 1
                                 """), {"pid": pid}).fetchone()
-                                if stock_row and float(stock_row.avail) < qty:
+                                if stock_row and Decimal(str(stock_row.avail)) < qty:
                                     conflict_reason = (
                                         f"insufficient stock for product {pid}: "
-                                        f"need {qty} have {float(stock_row.avail):.2f}"
+                                        f"need {qty} have {Decimal(str(stock_row.avail)):.2f}"
                                     )
                                     break
 
@@ -1404,7 +1404,7 @@ def _evaluate_single_alert(eng, rule, condition: dict):
     """Evaluate one alert rule and insert an alert if triggered."""
     import json as _json
     rule_type = rule.rule_type
-    threshold = float(rule.threshold or 0)
+    threshold = Decimal(str(rule.threshold or 0))
 
     with eng.begin() as conn:
         triggered = False
@@ -1427,12 +1427,12 @@ def _evaluate_single_alert(eng, rule, condition: dict):
                 WHERE status NOT IN ('paid','cancelled')
                   AND due_date < CURRENT_DATE - INTERVAL '{days} days'
             """)).scalar() or 0  # noqa: sql-lint
-            if float(total_row) > threshold:
+            if Decimal(str(total_row)) > threshold:
                 triggered = True
-                details = {"overdue_amount": float(total_row), "days": days}
+                details = {"overdue_amount": Decimal(str(total_row)), "days": days}
 
         elif rule_type == "budget_overspend":
-            pct = float(condition.get("overspend_pct", 100))
+            pct = Decimal(str(condition.get("overspend_pct", 100)))
             over = conn.execute(text("""
                 SELECT COUNT(*) FROM budget_items
                 WHERE allocated_amount > 0

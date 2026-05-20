@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useParams, useNavigate } from 'react-router-dom';
+import Decimal from 'decimal.js';
 import { resourceAPI } from '../../utils/api';
 import { Trash2, Edit, UserPlus } from 'lucide-react';
+import { formatNumber } from '../../utils/format';
 import '../../index.css';
 import '../../components/ModuleStyles.css';
 import BackButton from '../../components/common/BackButton';
@@ -37,7 +39,7 @@ const ProjectResources = () => {
         }
     };
 
-    const totalPercent = allocations.reduce((s, a) => s + parseFloat(a.allocation_percent || 0), 0);
+    const totalPercent = allocations.reduce((s, a) => s.plus(new Decimal(a.allocation_percent || '0')), new Decimal('0'));
 
     return (
         <div className="module-container" dir={isRTL ? 'rtl' : 'ltr'}>
@@ -88,11 +90,11 @@ const ProjectResources = () => {
                                     <td>{a.role || '—'}</td>
                                     <td>
                                         <span className={`badge ${
-                                            parseFloat(a.allocation_percent) > 100 ? 'badge-danger' :
-                                            parseFloat(a.allocation_percent) > 80 ? 'badge-warning' :
+                                            new Decimal(a.allocation_percent || '0').gt(100) ? 'badge-danger' :
+                                            new Decimal(a.allocation_percent || '0').gt(80) ? 'badge-warning' :
                                             'badge-success'
                                         }`}>
-                                            {parseFloat(a.allocation_percent).toFixed(0)}%
+                                            {formatNumber(a.allocation_percent || '0')}%
                                         </span>
                                     </td>
                                     <td>{new Date(a.start_date + 'T00:00:00').toLocaleDateString(i18n.language)}</td>

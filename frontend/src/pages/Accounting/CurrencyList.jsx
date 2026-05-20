@@ -144,7 +144,7 @@ export default function CurrencyList() {
         try {
             await currenciesAPI.addRate({
                 currency_id: selectedCurrency.id,
-                rate: Number(rateData.rate),
+                rate: rateData.rate,
                 rate_date: rateData.rate_date || null
             })
             showToast(t('accounting.currencies.rate_updated'), 'success')
@@ -218,7 +218,7 @@ export default function CurrencyList() {
             headerStyle: { textAlign: 'end' },
             render: (val, row) => (
                 <span className="font-mono">
-                    {parseFloat(val).toFixed(4)}
+                    {val}
                     {canManageCurrencies && (
                         <button
                             onClick={(e) => { e.stopPropagation(); openRateModal(row); }}
@@ -485,7 +485,7 @@ export default function CurrencyList() {
                                             rateHistory.map(h => (
                                                 <tr key={h.id}>
                                                     <td className="py-2">{h.rate_date}</td>
-                                                    <td className="py-2 font-mono">{parseFloat(h.rate).toFixed(6)}</td>
+                                                    <td className="py-2 font-mono">{h.rate}</td>
                                                     <td className="py-2 text-muted small">{h.source}</td>
                                                 </tr>
                                             ))

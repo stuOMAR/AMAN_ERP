@@ -12,18 +12,23 @@ function InventoryValuation() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
     const { showToast } = useToast()
+    const currency = getCurrency()
     const [data, setData] = useState([])
+    const [totals, setTotals] = useState({ grand_total_value: '0', item_count: 0 })
+    const [reportCurrency, setReportCurrency] = useState(currency)
     const [loading, setLoading] = useState(false)
     const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState(null)
-    const currency = getCurrency()
 
     const fetchData = async () => {
         try {
             setLoading(true)
             setError(null)
             const response = await inventoryAPI.getValuationReport({ branch_id: currentBranch?.id })
-            setData(response.data)
+            const payload = response.data || {}
+            setData(Array.isArray(payload) ? payload : (payload.items || []))
+            setTotals(Array.isArray(payload) ? { grand_total_value: '0', item_count: payload.length } : (payload.totals || { grand_total_value: '0', item_count: 0 }))
+            setReportCurrency(payload.currency || currency)
         } catch (err) {
             showToast(t('errors.fetch_failed'), 'error')
             setError(t('errors.fetch_failed'))
@@ -40,8 +45,8 @@ function InventoryValuation() {
         return () => clearTimeout(timer)
     }, [currentBranch])
 
-    const totalValuation = data.reduce((sum, item) => sum + item.valuation, 0)
-    const totalItems = data.length
+    const totalValuation = totals.grand_total_value || '0'
+    const totalItems = totals.item_count ?? data.length
 
     return (
         <div className="workspace fade-in">
@@ -64,7 +69,7 @@ function InventoryValuation() {
             <div className="metrics-grid mb-6 mt-4">
                 <div className="metric-card">
                     <div className="metric-label">{t('reports.inventory_valuation.total_value')}</div>
-                    <div className="metric-value">{formatNumber(totalValuation)} <small>{currency}</small></div>
+                    <div className="metric-value">{formatNumber(totalValuation)} <small>{reportCurrency}</small></div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('reports.inventory_valuation.item_count')}</div>
@@ -125,7 +130,7 @@ function InventoryValuation() {
                                 <tfoot>
                                     <tr className="fw-bold bg-light">
                                         <td colSpan="6" className="text-end">{t('reports.inventory_valuation.grand_total')}</td>
-                                        <td className="text-end">{formatNumber(totalValuation)} {currency}</td>
+                                        <td className="text-end">{formatNumber(totalValuation)} {reportCurrency}</td>
                                     </tr>
                                 </tfoot>
                             )}

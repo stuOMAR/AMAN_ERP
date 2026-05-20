@@ -19,7 +19,7 @@ const StockTransferForm = () => {
     const [warehouses, setWarehouses] = useState([]);
     const [sourceStock, setSourceStock] = useState([]);
     const visibleWarehouses = currentBranch?.id
-        ? warehouses.filter(w => !w.branch_id || Number(w.branch_id) === Number(currentBranch.id))
+        ? warehouses.filter(w => !w.branch_id || String(w.branch_id) === String(currentBranch.id))
         : warehouses;
 
     const [formData, setFormData] = useState({
@@ -98,20 +98,6 @@ const StockTransferForm = () => {
 
         if (formData.source_warehouse_id === formData.destination_warehouse_id) {
             showToast(t('stock.transfer.validation.source_dest_same'), 'error');
-            return;
-        }
-
-        const requestedByProduct = formData.items.reduce((acc, item) => {
-            const productId = Number(item.product_id);
-            acc[productId] = (acc[productId] || 0) + Number(item.quantity || 0);
-            return acc;
-        }, {});
-        const exceedsAvailable = Object.entries(requestedByProduct).some(([productId, requested]) => {
-            const stockRow = sourceStock.find(p => Number(p.id) === Number(productId));
-            return !stockRow || requested > Number(stockRow.quantity || 0);
-        });
-        if (exceedsAvailable) {
-            showToast(t('stock.transfer.validation.insufficient_stock', 'الكمية المطلوبة تتجاوز المتاح في المستودع المصدر'), 'error');
             return;
         }
 

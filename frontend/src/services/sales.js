@@ -17,12 +17,14 @@ export const salesAPI = {
     // Sales Orders
     listOrders: (params) => api.get('/sales/orders', { params }),
     getOrder: (id) => api.get(`/sales/orders/${id}`),
+    previewOrder: (data) => api.post('/sales/orders/preview', data),
     createOrder: (data) => api.post('/sales/orders', data, idempotencyHeaders()),
     cancelOrder: (id) => api.post(`/sales/orders/${id}/cancel`),
 
     // Quotations
     listQuotations: (params) => api.get('/sales/quotations', { params }),
     getQuotation: (id) => api.get(`/sales/quotations/${id}`),
+    previewQuotation: (data) => api.post('/sales/quotations/preview', data),
     createQuotation: (data) => api.post('/sales/quotations', data, idempotencyHeaders()),
     sendQuotation: (id) => api.post(`/sales/quotations/${id}/send-email`),
     cancelQuotation: (id) => api.post(`/sales/quotations/${id}/cancel`),
@@ -36,12 +38,14 @@ export const salesAPI = {
     // Sales Returns
     listReturns: (params) => api.get('/sales/returns', { params }),
     getReturn: (id) => api.get(`/sales/returns/${id}`),
+    previewReturn: (data) => api.post('/sales/returns/preview', data),
     createReturn: (data) => api.post('/sales/returns', data, idempotencyHeaders()),
     approveReturn: (id) => api.post(`/sales/returns/${id}/approve`),
     cancelReturn: (id) => api.post(`/sales/returns/${id}/cancel`),
 
     // Customer Receipts
     createReceipt: (data) => api.post('/sales/receipts', data, idempotencyHeaders()),
+    previewReceiptAllocation: (data) => api.post('/sales/receipts/preview', data),
     listReceipts: (params) => api.get('/sales/receipts', { params }),
     getReceipt: (id) => api.get(`/sales/receipts/${id}`),
     getOutstandingInvoices: (customerId, params) => api.get(`/sales/customers/${customerId}/outstanding-invoices`, { params }),
@@ -56,11 +60,13 @@ export const salesAPI = {
     // Sales Credit Notes
     listCreditNotes: (params) => api.get('/sales/credit-notes', { params }),
     getCreditNote: (id) => api.get(`/sales/credit-notes/${id}`),
+    previewCreditNote: (data) => api.post('/sales/credit-notes/preview', data),
     createCreditNote: (data) => api.post('/sales/credit-notes', data, idempotencyHeaders()),
 
     // Sales Debit Notes
     listDebitNotes: (params) => api.get('/sales/debit-notes', { params }),
     getDebitNote: (id) => api.get(`/sales/debit-notes/${id}`),
+    previewDebitNote: (data) => api.post('/sales/debit-notes/preview', data),
     createDebitNote: (data) => api.post('/sales/debit-notes', data, idempotencyHeaders()),
 
     getSummary: (params) => api.get('/sales/summary', { params }),

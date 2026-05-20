@@ -310,7 +310,7 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
                     period_id=body.period_id,
                     run_id=0,  # WPS export without explicit run
                     treasury_account_id=0,  # Will be resolved from company settings
-                    total_amount=float(total_amount),
+                    total_amount=Decimal(str(total_amount)),
                     description=f"WPS export for period {period.name}",
                 )
             except Exception as e:

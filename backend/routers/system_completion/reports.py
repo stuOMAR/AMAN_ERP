@@ -97,7 +97,7 @@ def consolidated_trial_balance(
                                     "company_balances": {}
                                 }
 
-                            bal = float(acc.balance or 0)
+                            bal = Decimal(str(acc.balance or 0))
                             # Debit-normal: asset, expense. Credit-normal: liability, equity, revenue
                             if acc.account_type in ('asset', 'expense'):
                                 consolidated[code]["total_debit"] += abs(bal) if bal >= 0 else 0
@@ -181,9 +181,9 @@ def consolidated_income_statement(
                     FROM accounts a WHERE a.account_type = 'expense'
                 """)).scalar() or 0
 
-                rev = float(revenue)
-                c = float(cogs)
-                exp = float(expenses)
+                rev = Decimal(str(revenue))
+                c = Decimal(str(cogs))
+                exp = Decimal(str(expenses))
 
                 company_results.append({
                     "company_id": cid,
@@ -254,9 +254,9 @@ def consolidated_balance_sheet(
                     FROM accounts a WHERE a.account_type = 'equity'
                 """)).scalar() or 0
 
-                a = float(assets)
-                l = float(liabilities)
-                e = float(equity)
+                a = Decimal(str(assets))
+                l = Decimal(str(liabilities))
+                e = Decimal(str(equity))
 
                 company_results.append({
                     "company_id": cid,
@@ -337,8 +337,8 @@ def fx_gain_loss_report(
                 ORDER BY je.entry_date
             """), params).fetchall()
     
-            realized_gains  = sum(float(r.credit_amount) for r in realized_rows)
-            realized_losses = sum(float(r.debit_amount)  for r in realized_rows)
+            realized_gains  = sum(Decimal(str(r.credit_amount)) for r in realized_rows)
+            realized_losses = sum(Decimal(str(r.debit_amount))  for r in realized_rows)
     
             # ── 2. Unrealized FX: Open foreign-currency invoices vs current rates ──
             base_ccy = db.execute(text(
@@ -369,16 +369,16 @@ def fx_gain_loss_report(
             rate_rows = db.execute(text(
                 "SELECT code, COALESCE(current_rate, 1.0) as rate FROM currencies WHERE is_active = TRUE"
             )).fetchall()
-            current_rates = {r.code: float(r.rate) for r in rate_rows}
+            current_rates = {r.code: Decimal(str(r.rate)) for r in rate_rows}
     
             unrealized = []
             total_unrealized_gain  = 0.0
             total_unrealized_loss  = 0.0
             for inv in open_inv_rows:
                 curr     = inv.currency
-                booked   = float(inv.booked_rate)
+                booked   = Decimal(str(inv.booked_rate))
                 current  = current_rates.get(curr, booked)
-                open_fc  = float(inv.open_fc_amount or 0)
+                open_fc  = Decimal(str(inv.open_fc_amount or 0))
                 diff     = open_fc * (current - booked)
                 # For purchase invoices (liability), a weaker base currency = loss
                 if inv.invoice_type == 'purchase':
@@ -408,7 +408,7 @@ def fx_gain_loss_report(
                         "je_id": r.je_id, "ref": r.reference,
                         "date": str(r.entry_date), "description": r.description,
                         "currency": r.currency,
-                        "debit": float(r.debit_amount), "credit": float(r.credit_amount),
+                        "debit": Decimal(str(r.debit_amount)), "credit": Decimal(str(r.credit_amount)),
                         "account": r.account_name,
                     } for r in realized_rows],
                     "total_gains":  round(realized_gains, 2),

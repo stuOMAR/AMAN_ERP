@@ -358,7 +358,7 @@ def confirm_delivery_order(do_id: int, request: Request, current_user: dict = De
                     "pid": line.product_id, "wid": warehouse_id,
                     "qty": -delivered_qty, "doid": do_id,
                     "notes": f"تسليم بموجب {order.delivery_number}", "uid": user_id,
-                    "uc": float(unit_cost), "tc": float(total_cost)
+                    "uc": Decimal(str(unit_cost)), "tc": Decimal(str(total_cost))
                 })
     
             # Update status
@@ -406,13 +406,34 @@ def mark_delivered(do_id: int, request: Request, current_user: dict = Depends(ge
 
 # ─── CREATE INVOICE FROM DO ───────────────────────────────────────────────────
 
+from fastapi import Header
+
 @router.post("/{do_id}/create-invoice", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_invoice_from_delivery(do_id: int, request: Request, current_user: dict = Depends(get_current_user)):
+def create_invoice_from_delivery(
+    do_id: int, 
+    request: Request, 
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user: dict = Depends(get_current_user)
+):
     """إنشاء فاتورة مبيعات من أمر التسليم"""
     company_id = current_user.get("company_id")
     user_id = current_user.get("user_id")
     with transactional(company_id) as db:
         try:
+            if idempotency_key:
+                existing = db.execute(text("""
+                    SELECT id, invoice_number, journal_entry_id FROM invoices
+                    WHERE idempotency_key = :key
+                """), {"key": idempotency_key}).fetchone()
+                if existing:
+                    return {
+                        "message": i18n_message("delivery_invoice_created", request),
+                        "invoice_id": existing.id,
+                        "invoice_number": existing.invoice_number,
+                        "journal_entry_id": existing.journal_entry_id,
+                        "idempotent_replay": True
+                    }
+
             # AUDIT-H2: lock DO row to prevent concurrent invoice creation.
             order = db.execute(text(
                 "SELECT * FROM delivery_orders WHERE id = :id FOR UPDATE"
@@ -473,18 +494,19 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                     invoice_number, invoice_type, invoice_date, party_id,
                     subtotal, tax_amount, total, status,
                     branch_id, warehouse_id, currency,
-                    created_by
+                    created_by, idempotency_key
                 ) VALUES (
                     :num, 'sales', CURRENT_DATE, :pid,
                     :sub, :tax, :total, 'posted',
                     :bid, :wid, :curr,
-                    :uid
+                    :uid, :idem_key
                 ) RETURNING id
             """), {
                 "num": inv_number, "pid": order.party_id,
                 "sub": subtotal, "tax": tax_total, "total": grand_total,
                 "bid": order.branch_id, "wid": order.warehouse_id,
-                "curr": base_currency, "uid": user_id
+                "curr": base_currency, "uid": user_id,
+                "idem_key": idempotency_key
             })
             inv_id = inv.fetchone()[0]
     
@@ -564,7 +586,7 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                 source="DeliveryOrder",
                 source_id=do_id,
                 username=current_user.get("username"),
-                idempotency_key=f"do-invoice-{do_id}",
+                idempotency_key=f"{idempotency_key}:je" if idempotency_key else None,
             )
 
             # Update invoice with JE
@@ -582,7 +604,7 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
                 party_id=order.party_id,
                 branch_id=order.branch_id,
                 currency=base_currency,
-                amount=float(grand_total),
+                amount=Decimal(str(grand_total)),
             )
 
             return {
@@ -654,7 +676,7 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
                                 product_id=line.product_id,
                                 warehouse_id=order.warehouse_id,
                                 quantity=delivered_qty,
-                                unit_cost=float(unit_cost),
+                                unit_cost=Decimal(str(unit_cost)),
                                 source_document_type="delivery_cancel",
                                 source_document_id=do_id,
                                 costing_method=costing_method,
@@ -671,8 +693,8 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
                             db,
                             product_id=line.product_id,
                             warehouse_id=order.warehouse_id,
-                            new_qty=float(delivered_qty),
-                            new_price=float(unit_cost),
+                            new_qty=Decimal(str(delivered_qty)),
+                            new_price=Decimal(str(unit_cost)),
                         )
 
                     db.execute(text("""
@@ -685,7 +707,7 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
                         "qty": delivered_qty,
                         "pid": line.product_id,
                         "wid": order.warehouse_id,
-                        "cost": float(unit_cost),
+                        "cost": Decimal(str(unit_cost)),
                     })
     
                     db.execute(text("""
@@ -698,7 +720,7 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
                         "pid": line.product_id, "wid": order.warehouse_id,
                         "qty": delivered_qty, "doid": do_id,
                         "notes": f"إلغاء أمر تسليم {order.delivery_number}", "uid": user_id,
-                        "uc": float(unit_cost), "tc": float(total_cost)
+                        "uc": Decimal(str(unit_cost)), "tc": Decimal(str(total_cost))
                     })
     
             db.execute(text("UPDATE delivery_orders SET status = 'cancelled' WHERE id = :id"), {"id": do_id})

@@ -8,8 +8,8 @@ Credit Note (إشعار دائن): Reduces customer balance (e.g., returns, pric
 Debit Note (إشعار مدين): Increases customer balance (e.g., undercharge correction, additional charges)
   GL: Debit AR, Credit Sales Revenue + VAT Output
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Body, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date
@@ -26,7 +26,10 @@ from utils.accounting import (
 )
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from services.tax_engine import resolve_line_tax
+from services.sales.preview import preview_sales_totals, resolve_document_exchange_rate
 from utils.party_balance import update_party_site_balance
+from utils.tax_precision import money_str, rate_str
+from .schemas import SalesDocumentPreviewRequest
 import json
 import logging
 
@@ -36,10 +39,107 @@ credit_notes_router = APIRouter()
 
 _D2 = Decimal("0.01")
 _D4 = Decimal("0.0001")
+_COLUMN_CACHE: dict[str, set[str]] = {}
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _table_columns(db, table_name: str) -> set[str]:
+    cached = _COLUMN_CACHE.get(table_name)
+    if cached is not None:
+        return cached
+    cols = {
+        row.column_name
+        for row in db.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+            {"t": table_name},
+        ).fetchall()
+    }
+    _COLUMN_CACHE[table_name] = cols
+    return cols
+
+
+def _resolve_rate_or_400(db, request: Request, *, currency: str, base_currency: str, document_date, provided_rate) -> Decimal:
+    try:
+        return resolve_document_exchange_rate(
+            db,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=document_date,
+            provided_rate=provided_rate,
+        )
+    except ValueError as exc:
+        raise HTTPException(**http_error(400, str(exc) or "exchange_rate_must_be_positive", request))
+
+
+def _insert_note_header(
+    db,
+    *,
+    invoice_type: str,
+    invoice_number: str,
+    party_id: int,
+    invoice_date,
+    subtotal: Decimal,
+    tax_total: Decimal,
+    discount_total: Decimal,
+    total: Decimal,
+    status_value: str,
+    notes: str,
+    branch_id: int | None,
+    related_invoice_id,
+    currency: str,
+    exchange_rate: Decimal,
+    user_id: int,
+    party_site_id,
+    idempotency_key: str | None,
+):
+    cols = [
+        "invoice_number", "invoice_type", "party_id", "invoice_date",
+        "subtotal", "tax_amount", "discount", "total", "paid_amount", "status",
+        "notes", "branch_id", "related_invoice_id", "currency", "exchange_rate", "created_by",
+    ]
+    vals = [
+        ":num", ":invoice_type", ":party", ":date",
+        ":sub", ":tax", ":disc", ":total", "0", ":status",
+        ":notes", ":branch", ":rel", ":curr", ":rate", ":user",
+    ]
+    params = {
+        "num": invoice_number,
+        "invoice_type": invoice_type,
+        "party": party_id,
+        "date": invoice_date,
+        "sub": subtotal,
+        "tax": tax_total,
+        "disc": discount_total,
+        "total": total,
+        "status": status_value,
+        "notes": notes,
+        "branch": branch_id,
+        "rel": related_invoice_id,
+        "curr": currency,
+        "rate": exchange_rate,
+        "user": user_id,
+    }
+    invoice_cols = _table_columns(db, "invoices")
+    if party_site_id and "party_site_id" in invoice_cols:
+        cols.append("party_site_id")
+        vals.append(":party_site_id")
+        params["party_site_id"] = party_site_id
+    if idempotency_key and "idempotency_key" in invoice_cols:
+        cols.append("idempotency_key")
+        vals.append(":idem_key")
+        params["idem_key"] = idempotency_key
+
+    sql = f"INSERT INTO invoices ({', '.join(cols)}) VALUES ({', '.join(vals)})"
+    if idempotency_key and "idempotency_key" in invoice_cols:
+        sql += """
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
+        """
+    sql += " RETURNING id"
+    return db.execute(text(sql), params).fetchone()
 
 
 def _json_param(value):
@@ -228,6 +328,92 @@ def list_sales_credit_notes(
         db.close()
 
 
+@credit_notes_router.post("/credit-notes/preview", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
+def preview_sales_credit_note(data: SalesDocumentPreviewRequest, current_user: dict = Depends(get_current_user)):
+    """Preview a sales credit note without writing invoice, balance, or GL state."""
+    db = get_db_connection(current_user.company_id)
+    try:
+        party_id = data.party_id or data.customer_id
+        requested_branch_id = data.branch_id
+
+        if not data.related_invoice_id:
+            branch_id = validate_branch_access(current_user, requested_branch_id) if requested_branch_id else None
+            return preview_sales_totals(
+                db,
+                lines=data.lines,
+                branch_id=branch_id,
+                party_id=party_id,
+                document_date=data.document_date,
+                currency=data.currency,
+                paid_amount=data.paid_amount,
+                header_discount_pct=data.header_discount_pct,
+                markup_amount=data.markup_amount,
+            )
+
+        original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_sales_invoice_reverse_context(
+            db,
+            data.related_invoice_id,
+            party_id,
+        )
+        if original_invoice.branch_id:
+            validate_branch_access(current_user, original_invoice.branch_id)
+
+        subtotal = Decimal("0")
+        tax_total = Decimal("0")
+        discount_total = Decimal("0")
+        line_details = []
+        for index, line in enumerate(data.lines):
+            if not line.product_id:
+                continue
+            qty = _dec(line.quantity)
+            original_line = _original_line_for_reversal(original_lines, int(line.product_id), line.unit_price)
+            reverse_key = _line_key(original_line.product_id, original_line.unit_price, original_line.tax_rate)
+            already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
+            available_qty = _dec(original_line.quantity) - already_qty
+            exceeds_available = qty > available_qty
+            preview_qty = min(qty, available_qty) if available_qty > 0 else Decimal("0")
+            tax_rate = _dec(original_line.tax_rate)
+            discount = _reversal_discount_amount(original_line, preview_qty)
+            line_net = _reversal_taxable_amount(original_line, preview_qty)
+            line_tax = (line_net * tax_rate / Decimal("100") * original_tax_factor).quantize(_D2, ROUND_HALF_UP)
+            line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
+            already_reversed_qty[reverse_key] = already_qty + preview_qty
+            subtotal += line_net
+            tax_total += line_tax
+            discount_total += discount
+            line_details.append({
+                "index": index,
+                "product_id": line.product_id,
+                "description": line.description,
+                "quantity": money_str(preview_qty),
+                "available_quantity": money_str(available_qty),
+                "exceeds_available": exceeds_available,
+                "unit_price": money_str(original_line.unit_price),
+                "tax_rate": rate_str(tax_rate),
+                "tax_rate_id": original_line.tax_rate_id,
+                "applied_taxes": original_line.applied_taxes,
+                "discount": money_str(discount),
+                "subtotal": money_str(line_net),
+                "tax_amount": money_str(line_tax),
+                "line_total": money_str(line_total),
+                "total": money_str(line_total),
+            })
+
+        total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
+        return {
+            "subtotal": money_str(subtotal),
+            "total_discount": money_str(discount_total),
+            "total_tax": money_str(tax_total),
+            "grand_total": money_str(total),
+            "paid_amount": money_str(data.paid_amount),
+            "remaining_balance": money_str(total - _dec(data.paid_amount)),
+            "currency": data.currency,
+            "lines": line_details,
+        }
+    finally:
+        db.close()
+
+
 @credit_notes_router.get("/credit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_sales_credit_note(note_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل إشعار دائن"""
@@ -272,6 +458,7 @@ def get_sales_credit_note(note_id: int, current_user: dict = Depends(get_current
 def create_sales_credit_note(
     request: Request,
     data: dict = Body(...),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -297,6 +484,26 @@ def create_sales_credit_note(
         if not party_id:
             raise HTTPException(**http_error(400, "customer_required"))
 
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, invoice_number FROM invoices
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                je = db.execute(text("""
+                    SELECT id FROM journal_entries
+                    WHERE source = 'SalesCreditNote' AND source_id = :source_id LIMIT 1
+                """), {"source_id": existing.id}).fetchone()
+                je_id = je.id if je else None
+                return {
+                    "success": True,
+                    "id": existing.id,
+                    "invoice_number": existing.invoice_number,
+                    "journal_entry_id": je_id,
+                    "message": i18n_message("credit_note_created_number", request),
+                    "idempotent_replay": True
+                }
+
         original_invoice = None
         original_lines = {}
         already_reversed_qty = {}
@@ -314,9 +521,14 @@ def create_sales_credit_note(
 
         base_currency = get_base_currency(db)
         currency = data.get("currency", base_currency)
-        exchange_rate = _dec(data.get("exchange_rate", 1))
-        if exchange_rate <= 0:
-            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
+        exchange_rate = _resolve_rate_or_400(
+            db,
+            request,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=inv_date,
+            provided_rate=data.get("exchange_rate"),
+        )
         requested_branch_id = data.get("branch_id")
         if original_invoice:
             if (
@@ -389,28 +601,46 @@ def create_sales_credit_note(
 
         # Generate number & insert
         inv_num = generate_sequential_number(db, "SCN", "invoices", "invoice_number", branch_id=branch_id)
-        result = db.execute(text("""
-            INSERT INTO invoices (
-                invoice_number, invoice_type, party_id, invoice_date, 
-                subtotal, tax_amount, discount, total, paid_amount, status,
-                notes, branch_id, related_invoice_id,
-                currency, exchange_rate, created_by, party_site_id
-            ) VALUES (
-                :num, 'sales_credit_note', :party, :date,
-                :sub, :tax, :disc, :total, 0, 'posted',
-                :notes, :branch, :rel,
-                :curr, :rate, :user, :party_site_id
-            ) RETURNING id
-        """), {
-            "num": inv_num, "party": party_id, "date": inv_date,
-            "sub": subtotal, "tax": tax_total, "disc": discount_total,
-            "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id,
-            "rel": related_invoice_id, "curr": currency,
-            "rate": exchange_rate, "user": current_user.id,
-            "party_site_id": data.get("party_site_id"),
-        })
-        note_id = result.fetchone()[0]
+        result = _insert_note_header(
+            db,
+            invoice_type="sales_credit_note",
+            invoice_number=inv_num,
+            party_id=party_id,
+            invoice_date=inv_date,
+            subtotal=subtotal,
+            tax_total=tax_total,
+            discount_total=discount_total,
+            total=total,
+            status_value="posted",
+            notes=data.get("notes", ""),
+            branch_id=branch_id,
+            related_invoice_id=related_invoice_id,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            user_id=current_user.id,
+            party_site_id=data.get("party_site_id"),
+            idempotency_key=idempotency_key,
+        )
+        if result is None and idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, invoice_number FROM invoices
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                je = db.execute(text("""
+                    SELECT id FROM journal_entries
+                    WHERE source = 'SalesCreditNote' AND source_id = :source_id LIMIT 1
+                """), {"source_id": existing.id}).fetchone()
+                return {
+                    "success": True,
+                    "id": existing.id,
+                    "invoice_number": existing.invoice_number,
+                    "journal_entry_id": je.id if je else None,
+                    "message": i18n_message("credit_note_created_number", request),
+                    "idempotent_replay": True,
+                }
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+        note_id = result[0]
 
         # Insert lines
         for cl in computed_lines:
@@ -490,7 +720,7 @@ def create_sales_credit_note(
             source="SalesCreditNote",
             source_id=note_id,  # Fix 8: use note_id (the CN document) not related_invoice_id
             username=getattr(current_user, "username", None),
-            idempotency_key=f"scn-{inv_num}",
+            idempotency_key=f"{idempotency_key}:je" if idempotency_key else None,
         )
 
         # Update related invoice paid_amount (credit note reduces what's owed)
@@ -608,6 +838,27 @@ def list_sales_debit_notes(
         db.close()
 
 
+@credit_notes_router.post("/debit-notes/preview", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
+def preview_sales_debit_note(data: SalesDocumentPreviewRequest, current_user: dict = Depends(get_current_user)):
+    """Preview a sales debit note without writing invoice, balance, or GL state."""
+    db = get_db_connection(current_user.company_id)
+    try:
+        branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+        return preview_sales_totals(
+            db,
+            lines=data.lines,
+            branch_id=branch_id,
+            party_id=data.party_id or data.customer_id,
+            document_date=data.document_date,
+            currency=data.currency,
+            paid_amount=data.paid_amount,
+            header_discount_pct=data.header_discount_pct,
+            markup_amount=data.markup_amount,
+        )
+    finally:
+        db.close()
+
+
 @credit_notes_router.get("/debit-notes/{note_id}", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def get_sales_debit_note(note_id: int, current_user: dict = Depends(get_current_user)):
     """تفاصيل إشعار مدين"""
@@ -652,6 +903,7 @@ def get_sales_debit_note(note_id: int, current_user: dict = Depends(get_current_
 def create_sales_debit_note(
     request: Request,
     data: dict = Body(...),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user),
 ):
     """
@@ -672,6 +924,26 @@ def create_sales_debit_note(
         if not party_id:
             raise HTTPException(**http_error(400, "customer_required"))
 
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, invoice_number FROM invoices
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                je = db.execute(text("""
+                    SELECT id FROM journal_entries
+                    WHERE source = 'SalesDebitNote' AND source_id = :source_id LIMIT 1
+                """), {"source_id": existing.id}).fetchone()
+                je_id = je.id if je else None
+                return {
+                    "success": True,
+                    "id": existing.id,
+                    "invoice_number": existing.invoice_number,
+                    "journal_entry_id": je_id,
+                    "message": i18n_message("debit_note_created_number", request),
+                    "idempotent_replay": True
+                }
+
         # Validate related invoice if provided
         if related_invoice_id:
             orig = db.execute(text(
@@ -689,9 +961,14 @@ def create_sales_debit_note(
 
         base_currency = get_base_currency(db)
         currency = data.get("currency", base_currency)
-        exchange_rate = _dec(data.get("exchange_rate", 1))
-        if exchange_rate <= 0:
-            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
+        exchange_rate = _resolve_rate_or_400(
+            db,
+            request,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=inv_date,
+            provided_rate=data.get("exchange_rate"),
+        )
         branch_id = validate_branch_access(current_user, data.get("branch_id"))
 
         subtotal = Decimal("0")
@@ -728,28 +1005,46 @@ def create_sales_debit_note(
         total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
 
         inv_num = generate_sequential_number(db, "SDN", "invoices", "invoice_number", branch_id=branch_id)
-        result = db.execute(text("""
-            INSERT INTO invoices (
-                invoice_number, invoice_type, party_id, invoice_date,
-                subtotal, tax_amount, discount, total, paid_amount, status,
-                notes, branch_id, related_invoice_id,
-                currency, exchange_rate, created_by, party_site_id
-            ) VALUES (
-                :num, 'sales_debit_note', :party, :date,
-                :sub, :tax, :disc, :total, 0, 'unpaid',
-                :notes, :branch, :rel,
-                :curr, :rate, :user, :party_site_id
-            ) RETURNING id
-        """), {
-            "num": inv_num, "party": party_id, "date": inv_date,
-            "sub": subtotal, "tax": tax_total, "disc": discount_total,
-            "total": total, "notes": data.get("notes", ""),
-            "branch": branch_id,
-            "rel": related_invoice_id, "curr": currency,
-            "rate": exchange_rate, "user": current_user.id,
-            "party_site_id": data.get("party_site_id"),
-        })
-        note_id = result.fetchone()[0]
+        result = _insert_note_header(
+            db,
+            invoice_type="sales_debit_note",
+            invoice_number=inv_num,
+            party_id=party_id,
+            invoice_date=inv_date,
+            subtotal=subtotal,
+            tax_total=tax_total,
+            discount_total=discount_total,
+            total=total,
+            status_value="unpaid",
+            notes=data.get("notes", ""),
+            branch_id=branch_id,
+            related_invoice_id=related_invoice_id,
+            currency=currency,
+            exchange_rate=exchange_rate,
+            user_id=current_user.id,
+            party_site_id=data.get("party_site_id"),
+            idempotency_key=idempotency_key,
+        )
+        if result is None and idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, invoice_number FROM invoices
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                je = db.execute(text("""
+                    SELECT id FROM journal_entries
+                    WHERE source = 'SalesDebitNote' AND source_id = :source_id LIMIT 1
+                """), {"source_id": existing.id}).fetchone()
+                return {
+                    "success": True,
+                    "id": existing.id,
+                    "invoice_number": existing.invoice_number,
+                    "journal_entry_id": je.id if je else None,
+                    "message": i18n_message("debit_note_created_number", request),
+                    "idempotent_replay": True,
+                }
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+        note_id = result[0]
 
         for cl in computed_lines:
             db.execute(text("""
@@ -816,7 +1111,7 @@ def create_sales_debit_note(
             source="SalesDebitNote",
             source_id=note_id,
             username=getattr(current_user, "username", None),
-            idempotency_key=f"sdn-{inv_num}",
+            idempotency_key=f"{idempotency_key}:je" if idempotency_key else None,
         )
 
         # Update customer balance via party_site_balances (debit note INCREASES what customer owes)

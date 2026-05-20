@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { reportsAPI, accountingAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
+import Decimal from 'decimal.js'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
@@ -80,20 +81,20 @@ function GeneralLedger() {
     const selectedAccountData = accounts.find(a => String(a.id) === String(selectedAccount))
 
     // Calculate running balance (backend already computes it, but re-compute for display)
-    let runningBalance = openingBalance
+    let runningBalance = new Decimal(openingBalance || '0')
     const entriesWithBalance = entries.map(entry => {
-        const debit = parseFloat(entry.debit || 0)
-        const credit = parseFloat(entry.credit || 0)
+        const debit = new Decimal(entry.debit || '0')
+        const credit = new Decimal(entry.credit || '0')
         if (selectedAccountData && ['asset', 'expense'].includes(selectedAccountData.account_type)) {
-            runningBalance += debit - credit
+            runningBalance = runningBalance.plus(debit).minus(credit)
         } else {
-            runningBalance += credit - debit
+            runningBalance = runningBalance.plus(credit).minus(debit)
         }
-        return { ...entry, running_balance: runningBalance }
+        return { ...entry, running_balance: runningBalance.toNumber() }
     })
 
-    const totalDebit = entries.reduce((sum, e) => sum + parseFloat(e.debit || 0), 0)
-    const totalCredit = entries.reduce((sum, e) => sum + parseFloat(e.credit || 0), 0)
+    const totalDebit = entries.reduce((sum, e) => sum.plus(new Decimal(e.debit || '0')), new Decimal('0'))
+    const totalCredit = entries.reduce((sum, e) => sum.plus(new Decimal(e.credit || '0')), new Decimal('0'))
 
     return (
         <div className="workspace fade-in">
@@ -239,11 +240,11 @@ function GeneralLedger() {
                                                 <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.description}</td>
                                                 {isAggregated && <td style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{entry.account_name || '-'}</td>}
                                                 <td style={{ color: entry.reference ? 'var(--text-primary)' : 'var(--text-light)' }}>{entry.reference || '-'}</td>
-                                                <td style={{ textAlign: 'left', fontWeight: parseFloat(entry.debit) > 0 ? '600' : '400', color: parseFloat(entry.debit) > 0 ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {parseFloat(entry.debit) > 0 ? formatNumber(entry.debit) : '-'}
+                                                <td style={{ textAlign: 'left', fontWeight: new Decimal(entry.debit || '0').gt(0) ? '600' : '400', color: new Decimal(entry.debit || '0').gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {new Decimal(entry.debit || '0').gt(0) ? formatNumber(entry.debit) : '-'}
                                                 </td>
-                                                <td style={{ textAlign: 'left', fontWeight: parseFloat(entry.credit) > 0 ? '600' : '400', color: parseFloat(entry.credit) > 0 ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {parseFloat(entry.credit) > 0 ? formatNumber(entry.credit) : '-'}
+                                                <td style={{ textAlign: 'left', fontWeight: new Decimal(entry.credit || '0').gt(0) ? '600' : '400', color: new Decimal(entry.credit || '0').gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {new Decimal(entry.credit || '0').gt(0) ? formatNumber(entry.credit) : '-'}
                                                 </td>
                                                 <td style={{ textAlign: 'left', fontWeight: 'bold', color: entry.running_balance >= 0 ? 'var(--text-primary)' : '#DC2626' }}>
                                                     {formatNumber(Math.abs(entry.running_balance))}

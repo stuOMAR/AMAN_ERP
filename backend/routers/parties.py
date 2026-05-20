@@ -99,7 +99,7 @@ async def get_customers(
                      display_currency = d["balance_currency"]
                  
                  d["display_currency"] = display_currency
-                 d["balance"] = float(d.get("balance") or 0)
+                 d["balance"] = Decimal(str(d.get("balance") or 0))
                  d["balance_display"] = d["balance"]
                  
                  # Also provide SAR equivalent for "all branches" view
@@ -109,9 +109,9 @@ async def get_customers(
                      if rate:
                          d["balance_sar"] = float(d["balance"]) * float(rate)
                      else:
-                         d["balance_sar"] = float(d["balance"])
+                         d["balance_sar"] = Decimal(str(d["balance"]))
                  else:
-                     d["balance_sar"] = float(d["balance"])
+                     d["balance_sar"] = Decimal(str(d["balance"]))
                  
                  parties.append(d)
                  
@@ -207,7 +207,7 @@ async def get_suppliers(
                      display_currency = d["balance_currency"]
                  
                  d["display_currency"] = display_currency
-                 d["balance"] = float(d.get("balance") or 0)
+                 d["balance"] = Decimal(str(d.get("balance") or 0))
                  d["balance_display"] = d["balance"]
                  
                  # Also provide SAR equivalent for "all branches" view
@@ -215,11 +215,11 @@ async def get_suppliers(
                      rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), 
                                      {"c": d["balance_currency"]}).scalar()
                      if rate:
-                         d["balance_sar"] = float(d["balance"]) * float(rate)
+                         d["balance_sar"] = Decimal(str(d["balance"])) * float(rate)
                      else:
-                         d["balance_sar"] = float(d["balance"])
+                         d["balance_sar"] = Decimal(str(d["balance"]))
                  else:
-                     d["balance_sar"] = float(d["balance"])
+                     d["balance_sar"] = Decimal(str(d["balance"]))
                  
                  parties.append(d)
                  

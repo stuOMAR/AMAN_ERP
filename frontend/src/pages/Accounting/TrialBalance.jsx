@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react'
 import { useTranslation } from 'react-i18next'
+import Decimal from 'decimal.js'
 import { reportsAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
@@ -14,7 +15,7 @@ function TrialBalance() {
     const [loading, setLoading] = useState(true)
     const [initialLoad, setInitialLoad] = useState(true)
     const [error, setError] = useState('')
-    const [totals, setTotals] = useState({ debit: 0, credit: 0, balance: 0 })
+    const [totals, setTotals] = useState({ debit: '0', credit: '0', balance: '0' })
     const [startDate, setStartDate] = useState(new Date(new Date().getFullYear(), 0, 1))
     const [endDate, setEndDate] = useState(new Date())
     const [showExport, setShowExport] = useState(false)
@@ -42,24 +43,24 @@ function TrialBalance() {
                 setCurrency(result.currency || currentBranch?.default_currency || 'SAR')
 
                 // Calculate Totals from closing balances
-                let debSum = 0
-                let credSum = 0
+                let debSum = new Decimal('0')
+                let credSum = new Decimal('0')
 
                 if (Array.isArray(data)) {
                     data.forEach(acc => {
-                        const debit = parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
-                        const credit = parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
-                        debSum += debit
-                        credSum += credit
+                        const debit = new Decimal(acc.closing_debit || acc.period_debit || acc.debit || '0')
+                        const credit = new Decimal(acc.closing_credit || acc.period_credit || acc.credit || '0')
+                        debSum = debSum.plus(debit)
+                        credSum = credSum.plus(credit)
                     })
                 }
 
                 if (result.totals) {
-                    debSum = parseFloat(result.totals.closing_debit || result.totals.period_debit || 0)
-                    credSum = parseFloat(result.totals.closing_credit || result.totals.period_credit || 0)
+                    debSum = new Decimal(result.totals.closing_debit || result.totals.period_debit || '0')
+                    credSum = new Decimal(result.totals.closing_credit || result.totals.period_credit || '0')
                 }
 
-                setTotals({ debit: debSum, credit: credSum, balance: debSum - credSum })
+                setTotals({ debit: debSum.toString(), credit: credSum.toString(), balance: debSum.minus(credSum).toString() })
             } catch (err) {
                 console.error('Trial balance error:', err)
                 setError(t('common.error'))
@@ -154,7 +155,7 @@ function TrialBalance() {
                     <div className={`metric-value ${Math.abs(totals.balance) < 0.01 ? 'text-success' : 'text-error'}`}>
                         {formatNumber(totals.balance)} <small>{currency}</small>
                     </div>
-                    {Math.abs(totals.balance) < 0.01 && <div className="metric-change">{t('accounting.trial_balance.matched')} ✅</div>}
+                    {new Decimal(totals.balance || '0').abs().lt('0.01') && <div className="metric-change">{t('accounting.trial_balance.matched')} ✅</div>}
                 </div>
             </div>
 
@@ -174,11 +175,11 @@ function TrialBalance() {
                             if (typeAccounts.length === 0) return null
 
                             // Calculate Group Totals
-                            let groupDebit = 0
-                            let groupCredit = 0
+                            let groupDebit = new Decimal('0')
+                            let groupCredit = new Decimal('0')
                             typeAccounts.forEach(acc => {
-                                groupDebit += parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
-                                groupCredit += parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
+                                groupDebit = groupDebit.plus(new Decimal(acc.closing_debit || acc.period_debit || acc.debit || '0'))
+                                groupCredit = groupCredit.plus(new Decimal(acc.closing_credit || acc.period_credit || acc.credit || '0'))
                             })
 
                             const typeLabels = {
@@ -197,8 +198,8 @@ function TrialBalance() {
                                         </td>
                                     </tr>
                                     {typeAccounts.map(acc => {
-                                        const debit = parseFloat(acc.closing_debit || acc.period_debit || acc.debit || 0)
-                                        const credit = parseFloat(acc.closing_credit || acc.period_credit || acc.credit || 0)
+                                        const debit = new Decimal(acc.closing_debit || acc.period_debit || acc.debit || '0')
+                                        const credit = new Decimal(acc.closing_credit || acc.period_credit || acc.credit || '0')
 
                                         return (
                                             <tr key={acc.account_id || acc.id} className="hover-row">
@@ -207,11 +208,11 @@ function TrialBalance() {
                                                     {acc.parent_id ? <span style={{ marginRight: '8px', color: 'var(--text-secondary)' }}>↳</span> : ''}
                                                     {acc.name}
                                                 </td>
-                                                <td style={{ textAlign: 'left', color: debit > 0 ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {debit > 0 ? formatNumber(debit) : '-'}
+                                                <td style={{ textAlign: 'left', color: debit.gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {debit.gt(0) ? formatNumber(debit.toString()) : '-'}
                                                 </td>
-                                                <td style={{ textAlign: 'left', color: credit > 0 ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {credit > 0 ? formatNumber(credit) : '-'}
+                                                <td style={{ textAlign: 'left', color: credit.gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {credit.gt(0) ? formatNumber(credit.toString()) : '-'}
                                                 </td>
                                             </tr>
                                         )
@@ -220,8 +221,8 @@ function TrialBalance() {
                                         <td colSpan="2" style={{ textAlign: 'left', fontWeight: 'bold', paddingLeft: '24px' }}>
                                             {t('accounting.trial_balance.total_for')} {typeLabels[type]}
                                         </td>
-                                        <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(groupDebit)}</td>
-                                        <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(groupCredit)}</td>
+                                        <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(groupDebit.toString())}</td>
+                                        <td style={{ textAlign: 'left', fontWeight: 'bold' }}>{formatNumber(groupCredit.toString())}</td>
                                     </tr>
                                 </React.Fragment>
                             )

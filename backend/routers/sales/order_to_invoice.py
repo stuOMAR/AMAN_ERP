@@ -11,6 +11,7 @@ from typing import Optional
 from database import get_company_db
 from routers.auth import get_current_user
 from schemas import UserResponse
+from utils.permissions import require_permission
 
 router = APIRouter()
 
@@ -19,7 +20,7 @@ def get_db(current_user: UserResponse = Depends(get_current_user)):
     yield from get_company_db(current_user.company_id)
 
 
-@router.post("/sales/orders/{order_id}/invoice")
+@router.post("/sales/orders/{order_id}/invoice", dependencies=[Depends(require_permission("sales.create"))])
 async def order_to_invoice(
     order_id: int,
     request: Request,

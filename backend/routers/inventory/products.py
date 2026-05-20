@@ -7,6 +7,7 @@ from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from database import get_db_connection
@@ -87,6 +88,23 @@ def list_products(
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
     with transactional(current_user.company_id) as db:
+        base_currency = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        display_currency = base_currency
+        display_rate = Decimal("1")
+        scoped_branch_id = branch_scope.get("branch_id")
+        if scoped_branch_id:
+            branch_currency = db.execute(text("""
+                SELECT default_currency FROM branches WHERE id = :id
+            """), {"id": scoped_branch_id}).scalar()
+            if branch_currency:
+                display_currency = branch_currency
+        if display_currency != base_currency:
+            rate_val = db.execute(text("""
+                SELECT current_rate FROM currencies WHERE code = :code
+            """), {"code": display_currency}).scalar()
+            if rate_val and Decimal(str(rate_val)) > 0:
+                display_rate = Decimal(str(rate_val))
+
         repo = ProductRepository(db)
         rows = repo.list(
             branch_id=branch_scope["branch_id"],
@@ -100,8 +118,13 @@ def list_products(
         user_perms = getattr(current_user, 'permissions', []) or []
         can_view_cost = check_permission(user_perms, "stock.view_cost")
 
-        return [
-            {
+        items = []
+        for r in rows:
+            base_cost = Decimal(str(r.get("cost_price") or 0))
+            branch_cost = Decimal(str(r.get("branch_avg_cost") or 0))
+            effective_cost = branch_cost if branch_cost > 0 else base_cost
+            display_cost = (effective_cost / display_rate).quantize(Decimal("0.0001"), ROUND_HALF_UP) if display_rate != 1 else effective_cost
+            items.append({
                 "id": r["id"],
                 "item_code": r.get("product_code"),
                 "item_name": r.get("product_name"),
@@ -109,8 +132,11 @@ def list_products(
                 "item_type": r.get("product_type"),
                 "unit": r.get("unit_of_measure") or "قطعة",
                 "selling_price": str(r.get("selling_price") or 0),
-                "buying_price": str(r.get("cost_price") or 0) if can_view_cost else "0",
-                "branch_avg_cost": str(r.get("branch_avg_cost") or r.get("cost_price") or 0) if can_view_cost else "0",
+                "buying_price": str(base_cost) if can_view_cost else "0",
+                "branch_avg_cost": str(branch_cost) if can_view_cost else "0",
+                "display_cost": str(display_cost) if can_view_cost else "0",
+                "display_cost_currency": display_currency,
+                "cost_source": "branch_avg" if branch_cost > 0 and branch_cost != base_cost else "product_cost",
                 "last_buying_price": str(r.get("last_purchase_price") or 0) if can_view_cost else "0",
                 "tax_rate": str(r.get("tax_rate") or 0),
                 "tax_rate_id": r.get("tax_rate_id"),
@@ -127,12 +153,11 @@ def list_products(
                 "shelf_life_days": r.get("shelf_life_days") or 0,
                 "expiry_alert_days": r.get("expiry_alert_days") or 30,
                 "created_at": r.get("created_at"),
-            }
-            for r in rows
-        ]
+            })
+        return items
 
 
-@products_router.get("/products/{product_id}/stock", response_model=float, dependencies=[Depends(require_permission("stock.view"))])
+@products_router.get("/products/{product_id}/stock", response_model=Decimal, dependencies=[Depends(require_permission("stock.view"))])
 def get_product_stock(
     product_id: int,
     warehouse_id: Optional[int] = None,
@@ -293,15 +318,6 @@ def get_branch_prices(
         
         display_cur = price_list.currency if price_list else base_cur
         
-        # Get exchange rate for conversion (SAR -> branch currency)
-        exchange_rate = 1.0
-        if display_cur != base_cur:
-            rate_val = db.execute(text(
-                "SELECT current_rate FROM currencies WHERE code = :c"
-            ), {"c": display_cur}).scalar()
-            if rate_val and rate_val > 0:
-                exchange_rate = float(rate_val)
-        
         if price_list:
             # Get prices from the branch's price list
             prices = db.execute(text("""
@@ -314,7 +330,7 @@ def get_branch_prices(
             result = {}
             for p in prices:
                 result[p.product_id] = {
-                    "price": float(p.price),
+                    "price": str(p.price),
                     "currency": price_list.currency,
                     "price_list_id": price_list.id
                 }
@@ -324,7 +340,7 @@ def get_branch_prices(
             result = {}
             for p in products:
                 result[p.id] = {
-                    "price": float(p.selling_price or 0),
+                    "price": str(p.selling_price or 0),
                     "currency": base_cur,
                     "price_list_id": None
                 }
@@ -332,7 +348,6 @@ def get_branch_prices(
         return {
             "prices": result, 
             "currency": display_cur,
-            "rate": exchange_rate,
             "base_currency": base_cur
         }
     finally:

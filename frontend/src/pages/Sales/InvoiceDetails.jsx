@@ -3,7 +3,7 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { salesAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
-import { formatShortDate } from '../../utils/dateUtils'
+import { formatDateTime, formatShortDate } from '../../utils/dateUtils'
 import { Printer, ArrowLeft, CreditCard, Clock, CheckCircle, AlertCircle, FileText, User, XCircle } from 'lucide-react'
 import { formatNumber } from '../../utils/format'
 import { useToast } from '../../context/ToastContext'
@@ -29,10 +29,8 @@ function InvoiceDetails() {
                 const response = await salesAPI.getInvoice(id)
                 setInvoice(response.data)
 
-                if (response.data.paid_amount > 0) {
-                    const historyRes = await salesAPI.getInvoicePaymentHistory(id)
-                    setPaymentHistory(historyRes.data)
-                }
+                const historyRes = await salesAPI.getInvoicePaymentHistory(id)
+                setPaymentHistory(historyRes.data)
             } catch (err) {
                 setError(t('sales.invoices.details.error_load'))
             } finally {
@@ -45,6 +43,7 @@ function InvoiceDetails() {
     if (loading) return <PageLoading />
     if (error) return <div className="workspace fade-in"><div className="alert alert-error">{error}</div></div>
     if (!invoice) return <div className="workspace fade-in"><div className="alert alert-warning">{t('sales.invoices.details.not_found')}</div></div>
+    const showPaidSection = invoice.status === 'paid' || invoice.status === 'partial' || paymentHistory.length > 0
 
     const getStatusBadge = (status) => {
         switch (status) {
@@ -209,31 +208,38 @@ function InvoiceDetails() {
                             <span>{formatNumber(invoice.total)} <small>{invoice.currency || currency}</small></span>
                         </div>
 
-                        {invoice.currency && invoice.currency !== currency && (
+                        {invoice.currency && invoice.currency !== currency && invoice.total_base && (
                             <div className="mt-2 text-end">
                                 <small className="text-muted">
-                                    ≈ {formatNumber(invoice.total * invoice.exchange_rate)} {currency}
+                                    ≈ {formatNumber(invoice.total_base)} {invoice.base_currency || currency}
                                 </small>
                             </div>
                         )}
 
-                        {invoice.paid_amount > 0 && (
+                        {showPaidSection && (
                             <>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '12px', color: 'var(--success)' }}>
                                     <span style={{ fontSize: '14px' }}>{t('sales.invoices.details.paid_amount')}</span>
                                     <span className="font-medium">-{formatNumber(invoice.paid_amount)} <small>{invoice.currency || currency}</small></span>
                                 </div>
-                                {invoice.currency && invoice.currency !== currency && (
+                                {invoice.currency && invoice.currency !== currency && invoice.paid_amount_base && (
                                     <div className="text-end">
                                         <small className="text-success" style={{ opacity: 0.8 }}>
-                                            ≈ {formatNumber(invoice.paid_amount * invoice.exchange_rate)} {currency}
+                                            ≈ {formatNumber(invoice.paid_amount_base)} {invoice.base_currency || currency}
                                         </small>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontWeight: 'bold' }}>
                                     <span style={{ fontSize: '14px' }}>{t('sales.invoices.details.remaining_debt')}</span>
-                                    <span>{formatNumber(invoice.total - invoice.paid_amount)} <small>{invoice.currency || currency}</small></span>
+                                    <span>{formatNumber(invoice.remaining_balance)} <small>{invoice.currency || currency}</small></span>
                                 </div>
+                                {invoice.currency && invoice.currency !== currency && invoice.remaining_balance_base && (
+                                    <div className="text-end">
+                                        <small className="text-muted">
+                                            ≈ {formatNumber(invoice.remaining_balance_base)} {invoice.base_currency || currency}
+                                        </small>
+                                    </div>
+                                )}
                             </>
                         )}
                     </div>
@@ -291,7 +297,7 @@ function InvoiceDetails() {
                                 </span>
                                 {invoice.zatca_cleared_at && (
                                     <small className="text-muted ms-2" style={{ fontSize: '11px' }}>
-                                        {new Date(invoice.zatca_cleared_at).toLocaleString('ar')}
+                                        {formatDateTime(invoice.zatca_cleared_at)}
                                     </small>
                                 )}
                             </div>

@@ -43,7 +43,7 @@ export default function KpiAdmin() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                     ...form,
-                    threshold_value: parseFloat(form.threshold_value),
+                    threshold_value: form.threshold_value,
                 }),
             });
             if (response.ok) {

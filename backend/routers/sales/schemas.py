@@ -1,6 +1,6 @@
 """Sales module Pydantic schemas."""
 from decimal import Decimal
-from pydantic import BaseModel, validator, field_validator
+from pydantic import BaseModel, Field, validator, field_validator
 from typing import List, Optional
 from datetime import date
 import re
@@ -133,7 +133,7 @@ class InvoiceCreate(BaseModel):
     warehouse_id: Optional[int] = None
     treasury_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
     cost_center_id: Optional[int] = None
     sales_order_id: Optional[int] = None
 
@@ -191,7 +191,7 @@ class SOCreate(BaseModel):
     warehouse_id: Optional[int] = None
     quotation_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
 
 
 # --- Quotation ---
@@ -227,6 +227,8 @@ class QuotationLineItem(BaseModel):
     @field_validator('tax_rate')
     @classmethod
     def quotation_tax_rate_valid(cls, v):
+        if v is None:
+            return v
         if v < 0 or v > 100:
             raise ValueError("نسبة الضريبة يجب أن تكون بين 0 و 100")
         return v
@@ -249,7 +251,7 @@ class QuotationCreate(BaseModel):
     terms_conditions: Optional[str] = None
     branch_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
 
     @field_validator('items')
     @classmethod
@@ -308,7 +310,7 @@ class SalesReturnCreate(BaseModel):
     branch_id: Optional[int] = None
     warehouse_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
 
     @validator("refund_amount")
     def refund_amount_must_be_non_negative(cls, v):
@@ -350,7 +352,7 @@ class CustomerReceiptCreate(BaseModel):
     branch_id: Optional[int] = None
     treasury_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
 
 
 class CustomerPaymentCreate(BaseModel):
@@ -367,4 +369,45 @@ class CustomerPaymentCreate(BaseModel):
     allocations: List[PaymentAllocation] = []
     branch_id: Optional[int] = None
     currency: Optional[str] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    exchange_rate: Optional[Decimal] = None
+
+
+# --- Sales Previews ---
+class SalesPreviewLineInput(BaseModel):
+    product_id: Optional[int] = None
+    description: Optional[str] = None
+    quantity: Decimal = Decimal("0")
+    unit_price: Decimal = Decimal("0")
+    tax_rate: Optional[Decimal] = None
+    discount: Decimal = Decimal("0")
+    reason: Optional[str] = None
+
+
+class SalesDocumentPreviewRequest(BaseModel):
+    lines: List[SalesPreviewLineInput] = Field(default_factory=list)
+    branch_id: Optional[int] = None
+    party_id: Optional[int] = None
+    customer_id: Optional[int] = None
+    related_invoice_id: Optional[int] = None
+    document_date: Optional[date] = None
+    currency: Optional[str] = None
+    paid_amount: Decimal = Decimal("0")
+    header_discount_pct: Decimal = Decimal("0")
+    markup_amount: Decimal = Decimal("0")
+
+
+class SalesReceiptAllocationPreviewRequest(BaseModel):
+    customer_id: Optional[int] = None
+    voucher_date: Optional[date] = None
+    amount: Decimal = Decimal("0")
+    branch_id: Optional[int] = None
+    voucher_type: Optional[str] = "receipt"
+    currency: Optional[str] = None
+    exchange_rate: Optional[Decimal] = None
+    treasury_account_id: Optional[int] = None
+    bank_account_id: Optional[int] = None
+    transaction_rate: Optional[Decimal] = None
+    allocations: List[PaymentAllocation] = Field(default_factory=list)
+    auto_allocate: bool = False
+    pay_all: bool = False
+    fill_invoice_id: Optional[int] = None

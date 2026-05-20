@@ -122,7 +122,7 @@ def create_advance(payload: AdvanceCreate, request: Request,
                      action="hr.advance.create", resource_type="salary_advance",
                      resource_id=str(row.id),
                      details={"employee_id": payload.employee_id,
-                              "amount": float(payload.amount)},
+                              "amount": Decimal(str(payload.amount))},
                      request=request, branch_id=branch_id)
         return dict(row._mapping)
     except HTTPException:

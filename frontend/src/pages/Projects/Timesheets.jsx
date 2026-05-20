@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
+import Decimal from 'decimal.js';
 import { format, startOfWeek, addDays, eachDayOfInterval } from 'date-fns';
 import { ar, enUS } from 'date-fns/locale';
 import { ChevronRight, ChevronLeft, Save, CheckCircle2 } from 'lucide-react';
@@ -90,26 +91,27 @@ export default function Timesheets({ projectId, tasks = [] }) {
             const promises = [];
             for (const taskId in gridData) {
                 for (const dateStr in gridData[taskId]) {
-                    const hours = parseFloat(gridData[taskId][dateStr]);
-                    if (isNaN(hours) && gridData[taskId][dateStr] !== '') continue;
+                    const rawValue = gridData[taskId][dateStr];
+                    const hours = rawValue !== '' ? rawValue : null;
+                    if (hours === null && rawValue !== '') continue;
 
                     // Find existing entry
                     const existing = timesheets.find(ts => ts.task_id == taskId && ts.date === dateStr);
 
                     if (existing) {
-                        if (gridData[taskId][dateStr] === '' || hours === 0) {
+                        if (rawValue === '' || rawValue === '0') {
                             // Delete if cleared
                             promises.push(projectsAPI.deleteTimesheet(existing.id));
-                        } else if (hours !== existing.hours) {
+                        } else if (rawValue !== String(existing.hours)) {
                             // Update
-                            promises.push(projectsAPI.updateTimesheet(existing.id, { hours }));
+                            promises.push(projectsAPI.updateTimesheet(existing.id, { hours: rawValue }));
                         }
-                    } else if (hours > 0) {
+                    } else if (hours && new Decimal(hours).gt(0)) {
                         // Create
                         promises.push(projectsAPI.createTimesheet(projectId, {
                             task_id: parseInt(taskId),
                             date: dateStr,
-                            hours: hours,
+                            hours: rawValue,
                             description: 'Logged via grid',
                             status: 'draft'
                         }));
@@ -236,7 +238,7 @@ export default function Timesheets({ projectId, tasks = [] }) {
                                 })}
                                 <td className="text-center align-middle fw-bold timesheet-total-cell">
                                     {/* Calculated Total for Row */}
-                                    {weekDays.reduce((acc, day) => acc + (parseFloat(getHours(task.id, day)) || 0), 0)}
+                                    {weekDays.reduce((acc, day) => acc.plus(new Decimal(getHours(task.id, day) || '0')), new Decimal('0')).toString()}
                                 </td>
                             </tr>
                         ))}

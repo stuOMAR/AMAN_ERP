@@ -45,8 +45,8 @@ def post_inventory_adjustment(
     Handles row locks, quantity changes, inventory transaction rows, GL posting,
     fiscal lock, and audit within the caller's transaction.
 
-    Each item dict must have: product_id, warehouse_id, quantity_delta (signed float).
-    Optional per-item keys: unit_cost (float), reason (str).
+    Each item dict must have: product_id, warehouse_id, quantity_delta (signed Decimal-compatible value).
+    Optional per-item keys: unit_cost (Decimal-compatible value), reason (str).
 
     Returns dict with reference, net_value_delta, and items_processed.
     """
@@ -222,28 +222,28 @@ def post_inventory_adjustment(
             if wh_delta_q > 0:
                 lines.append({
                     "account_id": wh_inv_acc,
-                    "debit": float(wh_delta_q),
+                    "debit": str(wh_delta_q),
                     "credit": 0,
                     "description": f"Inventory Adjustment Gain (WH#{wh_id}) - {reference}",
                 })
                 lines.append({
                     "account_id": adj_acc,
                     "debit": 0,
-                    "credit": float(wh_delta_q),
+                    "credit": str(wh_delta_q),
                     "description": f"Adjustment Gain (WH#{wh_id}) - {reference}",
                 })
             else:
-                abs_val = float(-wh_delta_q)
+                abs_val = -wh_delta_q
                 lines.append({
                     "account_id": adj_acc,
-                    "debit": abs_val,
+                    "debit": str(abs_val),
                     "credit": 0,
                     "description": f"Adjustment Loss (WH#{wh_id}) - {reference}",
                 })
                 lines.append({
                     "account_id": wh_inv_acc,
                     "debit": 0,
-                    "credit": abs_val,
+                    "credit": str(abs_val),
                     "description": f"Inventory Decrease (WH#{wh_id}) - {reference}",
                 })
 
@@ -272,7 +272,7 @@ def post_inventory_adjustment(
             details={
                 "reference": reference,
                 "items_count": len(items),
-                "net_value_delta": float(net_value_delta),
+                "net_value_delta": str(net_value_delta),
             },
             request=request,
             branch_id=branch_id,
@@ -282,7 +282,7 @@ def post_inventory_adjustment(
 
     return {
         "reference": reference,
-        "net_value_delta": float(net_value_delta),
+        "net_value_delta": str(net_value_delta),
         "items_processed": len(items),
     }
 

@@ -408,7 +408,7 @@ def submit_leave_request(
                 document_type="leave_request",
                 document_id=result.id,
                 document_number=f"LR-{result.id}",
-                amount=float(leave_days),
+                amount=Decimal(str(leave_days)),
                 submitted_by=uid,
                 description=f"طلب إجازة {body.leave_type} - {leave_days} يوم",
                 link="/hr/self-service/leave-requests",

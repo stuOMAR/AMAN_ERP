@@ -42,7 +42,8 @@ function ReceiptDetails() {
     if (error) return <div className="workspace fade-in"><div className="alert alert-error">{error}</div></div>;
     if (!voucher) return <div className="workspace fade-in"><div className="alert alert-warning">{t('sales.returns.empty')}</div></div>;
 
-    const totalAllocated = voucher.allocations ? voucher.allocations.reduce((sum, a) => sum + Number(a.allocated_amount), 0) : 0;
+    const totalAllocated = voucher.total_allocated ?? null;
+    const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—';
 
     return (
         <div className="workspace fade-in">
@@ -164,7 +165,7 @@ function ReceiptDetails() {
                                     <tr style={{ background: 'var(--bg-main)', fontWeight: 'bold' }}>
                                         <td>{t('sales.receipts.form.summary.allocated')}</td>
                                         <td style={{ textAlign: 'left' }} className={isRefund ? "text-danger" : "text-success"}>
-                                            {isRefund ? '-' : '+'}{formatNumber(totalAllocated)} <small>{currency}</small>
+                                            {isRefund ? '-' : '+'}{moneyOrDash(totalAllocated)} <small>{currency}</small>
                                         </td>
                                     </tr>
                                 </tbody>

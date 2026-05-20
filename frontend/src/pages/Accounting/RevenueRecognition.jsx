@@ -65,7 +65,7 @@ function RevenueRecognition() {
             await accountingAPI.createRevenueSchedule({
                 invoice_id: form.invoice_id ? parseInt(form.invoice_id) : null,
                 contract_id: form.contract_id ? parseInt(form.contract_id) : null,
-                total_amount: parseFloat(form.total_amount),
+                total_amount: form.total_amount,
                 start_date: form.start_date,
                 end_date: form.end_date,
                 method: form.method

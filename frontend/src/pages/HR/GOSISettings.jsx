@@ -4,6 +4,7 @@ import { hrAdvancedAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
 import { Save, Calculator, Shield } from 'lucide-react';
 import { formatNumber } from '../../utils/format';
+import Decimal from 'decimal.js';
 import '../../index.css';
 import '../../components/ModuleStyles.css';
 import BackButton from '../../components/common/BackButton';
@@ -109,7 +110,7 @@ const GOSISettings = () => {
                             <strong>{t('hr.gosi.total_employee')}</strong> {form.employee_share_percentage}%
                         </p>
                         <p style={{ margin: '0.25rem 0', fontSize: '0.9rem' }}>
-                            <strong>{t('hr.gosi.total_employer')}</strong> {(form.employer_share_percentage + form.occupational_hazard_percentage).toFixed(2)}%
+                            <strong>{t('hr.gosi.total_employer')}</strong> {new Decimal(form.employer_share_percentage || '0').plus(new Decimal(form.occupational_hazard_percentage || '0')).toFixed(2)}%
                         </p>
                     </div>
 

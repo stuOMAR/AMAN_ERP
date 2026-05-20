@@ -1,8 +1,8 @@
 """Customer receipts and payments (vouchers) endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import List, Optional
+from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
@@ -15,7 +15,9 @@ from utils.permissions import branch_scope_filter_from_scope, require_permission
 from utils.accounting import get_mapped_account_id
 from utils.party_balance import update_party_site_balance
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
-from .schemas import CustomerReceiptCreate, CustomerPaymentCreate
+from services.sales.preview import allocation_preview_rows, customer_voucher_invoice_types, fetch_customer_open_invoices, resolve_document_exchange_rate
+from utils.tax_precision import money_str, rate_str
+from .schemas import CustomerReceiptCreate, CustomerPaymentCreate, SalesReceiptAllocationPreviewRequest
 
 vouchers_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,14 +39,182 @@ def _username(user) -> str:
     return user.get("username") if isinstance(user, dict) else user.username
 
 
+def _allocation_reduction_in_invoice_currency(allocated_amount: Decimal, voucher_rate: Decimal, invoice_rate: Decimal) -> Decimal:
+    if invoice_rate <= 0:
+        raise HTTPException(status_code=400, detail="Invalid invoice exchange rate")
+    return (allocated_amount * (voucher_rate / invoice_rate)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+
+
+def _resolve_rate_or_400(db, request: Request, *, currency: str, base_currency: str, document_date, provided_rate) -> Decimal:
+    try:
+        return resolve_document_exchange_rate(
+            db,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=document_date,
+            provided_rate=provided_rate,
+        )
+    except ValueError as exc:
+        raise HTTPException(**http_error(400, str(exc) or "exchange_rate_must_be_positive", request))
+
+
 # --- Customer Receipts (Payment Vouchers) ---
 
+@vouchers_router.post("/receipts/preview", response_model=Dict[str, Any], dependencies=[Depends(require_permission("sales.view"))])
+def preview_customer_receipt_allocation(
+    request: Request,
+    data: SalesReceiptAllocationPreviewRequest,
+    current_user: dict = Depends(get_current_user),
+):
+    """Preview customer receipt/refund allocation and FX without changing state."""
+    db = get_db_connection(_company_id(current_user))
+    try:
+        from utils.accounting import get_base_currency
+
+        base_currency = get_base_currency(db)
+        voucher_type = data.voucher_type or "receipt"
+        voucher_currency = data.currency or base_currency
+        voucher_rate = _resolve_rate_or_400(
+            db,
+            request,
+            currency=voucher_currency,
+            base_currency=base_currency,
+            document_date=data.voucher_date,
+            provided_rate=data.exchange_rate,
+        )
+
+        branch_scope = resolve_branch_scope(current_user, data.branch_id)
+        branch_params: Dict[str, Any] = {}
+        branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", branch_params)
+
+        if not data.customer_id:
+            return {
+                "amount": money_str(data.amount or 0),
+                "currency": voucher_currency,
+                "exchange_rate": rate_str(voucher_rate),
+                "allocations": [],
+                "lines": [],
+                "total_allocated": money_str(0),
+                "unallocated_amount": money_str(data.amount or 0),
+                "over_allocated": False,
+                "treasury_amount": None,
+                "treasury_currency": None,
+                "transaction_rate": None,
+            }
+
+        customer_exists = db.execute(text("""
+            SELECT 1
+            FROM parties
+            WHERE id = :customer_id AND (party_type = 'customer' OR is_customer = TRUE)
+        """), {"customer_id": data.customer_id}).fetchone()
+        if not customer_exists:
+            raise HTTPException(**http_error(404, "customer_not_valid", request))
+
+        invoice_rows = fetch_customer_open_invoices(
+            db,
+            customer_id=data.customer_id,
+            branch_filter_sql=branch_filter,
+            params=branch_params,
+            voucher_type=voucher_type,
+        )
+        amount = _dec(data.amount or 0).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+        requested_allocations = [
+            {"invoice_id": int(a.invoice_id), "allocated_amount": _dec(a.allocated_amount)}
+            for a in data.allocations
+            if _dec(a.allocated_amount) > 0
+        ]
+
+        if data.pay_all:
+            requested_allocations = []
+            for inv in invoice_rows:
+                inv_rate = _dec(inv.exchange_rate or 1)
+                remaining_in_voucher = (_dec(inv.remaining_balance or 0) * (inv_rate / voucher_rate)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+                if remaining_in_voucher > 0:
+                    requested_allocations.append({"invoice_id": int(inv.id), "allocated_amount": remaining_in_voucher})
+            amount = sum((_dec(a["allocated_amount"]) for a in requested_allocations), Decimal("0")).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+        elif data.fill_invoice_id:
+            invoice = next((inv for inv in invoice_rows if int(inv.id) == int(data.fill_invoice_id)), None)
+            if invoice:
+                inv_rate = _dec(invoice.exchange_rate or 1)
+                amount_in_voucher = (_dec(invoice.remaining_balance or 0) * (inv_rate / voucher_rate)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+                requested_allocations = [a for a in requested_allocations if int(a["invoice_id"]) != int(data.fill_invoice_id)]
+                if amount_in_voucher > 0:
+                    requested_allocations.append({"invoice_id": int(invoice.id), "allocated_amount": amount_in_voucher})
+        elif data.auto_allocate and amount > 0:
+            requested_allocations = []
+            remaining_voucher = amount
+            for inv in invoice_rows:
+                if remaining_voucher <= 0:
+                    break
+                inv_rate = _dec(inv.exchange_rate or 1)
+                remaining_in_voucher = (_dec(inv.remaining_balance or 0) * (inv_rate / voucher_rate)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+                allocation = min(remaining_voucher, remaining_in_voucher).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+                if allocation > 0:
+                    requested_allocations.append({"invoice_id": int(inv.id), "allocated_amount": allocation})
+                    remaining_voucher = (remaining_voucher - allocation).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+
+        rows, total_allocated = allocation_preview_rows(invoice_rows, requested_allocations, voucher_rate)
+        if amount <= 0 and total_allocated > 0:
+            amount = total_allocated
+        unallocated = (amount - total_allocated).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+
+        selected_treasury_id = data.treasury_account_id or data.bank_account_id
+        treasury_amount = None
+        treasury_currency = None
+        transaction_rate = None
+        if selected_treasury_id:
+            treasury_branch = branch_scope.get("branch_id") if branch_scope else None
+            treasury = validate_treasury_account_access(db, current_user, selected_treasury_id, treasury_branch)
+            treasury_currency = treasury["currency"] or voucher_currency
+            treasury_rate = _resolve_rate_or_400(
+                db,
+                request,
+                currency=treasury_currency,
+                base_currency=base_currency,
+                document_date=data.voucher_date,
+                provided_rate=None,
+            )
+            transaction_rate = _dec(data.transaction_rate) if data.transaction_rate and _dec(data.transaction_rate) > 0 else (voucher_rate / treasury_rate).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            treasury_amount = (amount * transaction_rate).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+
+        return {
+            "amount": money_str(amount),
+            "currency": voucher_currency,
+            "exchange_rate": rate_str(voucher_rate),
+            "allocations": [
+                {"invoice_id": row["invoice_id"], "allocated_amount": row["allocated_amount"]}
+                for row in rows
+            ],
+            "lines": rows,
+            "total_allocated": money_str(total_allocated),
+            "unallocated_amount": money_str(unallocated),
+            "over_allocated": total_allocated > (amount + _D2) or any(row["exceeds_remaining"] for row in rows),
+            "treasury_amount": money_str(treasury_amount) if treasury_amount is not None else None,
+            "treasury_currency": treasury_currency,
+            "transaction_rate": rate_str(transaction_rate) if transaction_rate is not None else None,
+        }
+    finally:
+        db.close()
+
 @vouchers_router.post("/receipts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.receipt"))])
-def create_customer_receipt(request: Request, data: CustomerReceiptCreate, current_user: dict = Depends(get_current_user)):
+def create_customer_receipt(
+    request: Request,
+    data: CustomerReceiptCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user: dict = Depends(get_current_user)
+):
     """إنشاء سند قبض من عميل"""
     db = get_db_connection(_company_id(current_user))
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
+
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, voucher_number FROM payment_vouchers WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "voucher_number": existing.voucher_number, "idempotent_replay": True}
+
         base_currency = get_base_currency(db)
         branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
         selected_treasury_id = getattr(data, 'treasury_id', None) or data.bank_account_id
@@ -63,9 +233,14 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 
         # Currency & Exchange Rate
         currency = data.currency or base_currency
-        exchange_rate = _dec(data.exchange_rate or 1)
-        if exchange_rate <= 0:
-            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
+        exchange_rate = _resolve_rate_or_400(
+            db,
+            request,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=data.voucher_date,
+            provided_rate=data.exchange_rate,
+        )
         amount_base = (_dec(data.amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
         # 1. Insert Voucher Header
@@ -74,13 +249,16 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
                 voucher_number, voucher_type, voucher_date, party_type, party_id,
                 amount, payment_method, bank_account_id, treasury_account_id, check_number, check_date,
                 reference, notes, status, created_by, branch_id,
-                currency, exchange_rate
+                currency, exchange_rate, idempotency_key
             ) VALUES (
                 :vnum, 'receipt', :vdate, 'customer', :cust,
                 :amt, :method, :bank, :treasury, :check_num, :check_date,
                 :ref, :notes, 'posted', :user, :bid,
-                :curr, :rate
-            ) RETURNING id
+                :curr, :rate, :idem_key
+            )
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
+            RETURNING id
         """), {
             "vnum": voucher_num, "vdate": data.voucher_date, "cust": data.customer_id,
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
@@ -88,8 +266,16 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             "check_num": data.check_number, "check_date": data.check_date,
             "ref": data.reference, "notes": data.notes, "user": _user_id(current_user),
             "bid": branch_id,
-            "curr": currency, "rate": exchange_rate
+            "curr": currency, "rate": exchange_rate, "idem_key": idempotency_key
         }).fetchone()
+
+        if result is None and idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, voucher_number FROM payment_vouchers WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "voucher_number": existing.voucher_number, "idempotent_replay": True}
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
 
         voucher_id = result[0]
 
@@ -102,7 +288,8 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 
             # Lock invoice row to prevent concurrent over-allocation
             inv_info = db.execute(text("""
-                SELECT party_id, total, COALESCE(paid_amount, 0) AS paid_amount
+                SELECT party_id, invoice_type, total, COALESCE(paid_amount, 0) AS paid_amount,
+                       currency, COALESCE(exchange_rate, 1) AS exchange_rate, branch_id
                 FROM invoices
                 WHERE id = :iid
                 FOR UPDATE
@@ -110,10 +297,17 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             if not inv_info:
                 raise HTTPException(status_code=404, detail=i18n_message("allocation_invoice_not_found", request))
             if int(inv_info.party_id) != int(data.customer_id):
+                # لا تتبع العميل المحدد
                 raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_not_for_customer", request))
+            if inv_info.invoice_type not in customer_voucher_invoice_types("receipt"):
+                raise HTTPException(**http_error(400, "allocation_invoice_type_invalid", request))
+            if branch_id is not None and inv_info.branch_id is not None and int(inv_info.branch_id) != int(branch_id):
+                raise HTTPException(**http_error(403, "access_denied", request))
 
-            remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(_D2, ROUND_HALF_UP)
-            if alloc_amt > remaining + _D2:
+            invoice_rate = _dec(inv_info.exchange_rate or 1)
+            invoice_reduction = _allocation_reduction_in_invoice_currency(alloc_amt, exchange_rate, invoice_rate)
+            remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            if invoice_reduction > remaining + _D2:
                 raise HTTPException(status_code=400, detail=i18n_message("allocation_exceeds_remaining", request))
 
             total_allocated = (total_allocated + alloc_amt).quantize(_D2, ROUND_HALF_UP)
@@ -127,14 +321,14 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             # Update invoice paid_amount and status
             db.execute(text("""
                 UPDATE invoices
-                SET paid_amount = COALESCE(paid_amount, 0) + :amt,
+                SET paid_amount = LEAST(total, COALESCE(paid_amount, 0) + :amt),
                     status = CASE
-                        WHEN (COALESCE(paid_amount, 0) + :amt) >= total THEN 'paid'
-                        WHEN (COALESCE(paid_amount, 0) + :amt) > 0 THEN 'partial'
+                        WHEN LEAST(total, COALESCE(paid_amount, 0) + :amt) >= total - 0.01 THEN 'paid'
+                        WHEN LEAST(total, COALESCE(paid_amount, 0) + :amt) > 0.01 THEN 'partial'
                         ELSE status
                     END
                 WHERE id = :iid
-            """), {"amt": alloc_amt, "iid": alloc.invoice_id})
+            """), {"amt": invoice_reduction, "iid": alloc.invoice_id})
 
         if total_allocated > (_dec(data.amount) + _D2):
             raise HTTPException(**http_error(400, "allocations_exceed_voucher_amount"))
@@ -184,7 +378,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
             source="CustomerReceipt",
             source_id=voucher_id,
             username=getattr(current_user, "username", None),
-            idempotency_key=f"rcv-{voucher_num}",
+            idempotency_key=f"{idempotency_key}:je" if idempotency_key else None,
         )
 
         # 5. Update Treasury Balance — T1.3a idempotent recompute
@@ -242,11 +436,24 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
     finally:
         db.close()
 @vouchers_router.post("/payments", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
-def create_customer_payment(request: Request, data: CustomerPaymentCreate, current_user: dict = Depends(get_current_user)):
+def create_customer_payment(
+    request: Request,
+    data: CustomerPaymentCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user: dict = Depends(get_current_user)
+):
     """إنشاء سند صرف لعميل (رد مبلغ)"""
     db = get_db_connection(_company_id(current_user))
     try:
         from utils.accounting import generate_sequential_number, get_base_currency
+
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, voucher_number FROM payment_vouchers WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "voucher_number": existing.voucher_number, "idempotent_replay": True}
+
         base_currency = get_base_currency(db)
         branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
         selected_treasury_id = data.bank_account_id
@@ -265,9 +472,14 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
 
         # Currency & Exchange Rate
         currency = data.currency or base_currency
-        exchange_rate = _dec(data.exchange_rate or 1)
-        if exchange_rate <= 0:
-            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
+        exchange_rate = _resolve_rate_or_400(
+            db,
+            request,
+            currency=currency,
+            base_currency=base_currency,
+            document_date=data.voucher_date,
+            provided_rate=data.exchange_rate,
+        )
         amount_base = (_dec(data.amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
         # 1. Insert Voucher Header
@@ -276,13 +488,16 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
                 voucher_number, voucher_type, voucher_date, party_type, party_id,
                 amount, payment_method, bank_account_id, treasury_account_id, check_number, check_date,
                 reference, notes, status, created_by, branch_id,
-                currency, exchange_rate
+                currency, exchange_rate, idempotency_key
             ) VALUES (
                 :vnum, 'payment', :vdate, 'customer', :cust,
                 :amt, :method, :bank, :treasury, :check_num, :check_date,
                 :ref, :notes, 'posted', :user, :bid,
-                :curr, :rate
-            ) RETURNING id
+                :curr, :rate, :idem_key
+            )
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
+            RETURNING id
         """), {
             "vnum": voucher_num, "vdate": data.voucher_date, "cust": data.customer_id,
             "amt": data.amount, "method": data.payment_method, "bank": data.bank_account_id,
@@ -290,8 +505,16 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             "check_num": data.check_number, "check_date": data.check_date,
             "ref": data.reference, "notes": data.notes, "user": _user_id(current_user),
             "bid": branch_id,
-            "curr": currency, "rate": exchange_rate
+            "curr": currency, "rate": exchange_rate, "idem_key": idempotency_key
         }).fetchone()
+
+        if result is None and idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, voucher_number FROM payment_vouchers WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "voucher_number": existing.voucher_number, "idempotent_replay": True}
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
 
         voucher_id = result[0]
 
@@ -303,7 +526,8 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
                 raise HTTPException(**http_error(400, "voucher_allocation_must_be_positive", request))
 
             inv_info = db.execute(text("""
-                SELECT party_id, total, COALESCE(paid_amount, 0) AS paid_amount
+                SELECT party_id, invoice_type, total, COALESCE(paid_amount, 0) AS paid_amount,
+                       currency, COALESCE(exchange_rate, 1) AS exchange_rate, branch_id
                 FROM invoices
                 WHERE id = :iid
                 FOR UPDATE
@@ -311,10 +535,17 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             if not inv_info:
                 raise HTTPException(status_code=404, detail=i18n_message("allocation_invoice_not_found", request))
             if int(inv_info.party_id) != int(data.customer_id):
+                # لا تتبع العميل المحدد
                 raise HTTPException(status_code=400, detail=i18n_message("allocation_invoice_not_for_customer", request))
+            if inv_info.invoice_type not in customer_voucher_invoice_types("refund"):
+                raise HTTPException(**http_error(400, "allocation_invoice_type_invalid", request))
+            if branch_id is not None and inv_info.branch_id is not None and int(inv_info.branch_id) != int(branch_id):
+                raise HTTPException(**http_error(403, "access_denied", request))
 
-            remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(_D2, ROUND_HALF_UP)
-            if alloc_amt > remaining + _D2:
+            invoice_rate = _dec(inv_info.exchange_rate or 1)
+            invoice_reduction = _allocation_reduction_in_invoice_currency(alloc_amt, exchange_rate, invoice_rate)
+            remaining = (_dec(inv_info.total) - _dec(inv_info.paid_amount)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
+            if invoice_reduction > remaining + _D2:
                 raise HTTPException(status_code=400, detail=i18n_message("allocation_exceeds_remaining", request))
 
             total_allocated = (total_allocated + alloc_amt).quantize(_D2, ROUND_HALF_UP)
@@ -327,9 +558,9 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             # Update invoice paid_amount
             db.execute(text("""
                 UPDATE invoices
-                SET paid_amount = COALESCE(paid_amount, 0) + :amt
+                SET paid_amount = LEAST(total, COALESCE(paid_amount, 0) + :amt)
                 WHERE id = :iid
-            """), {"amt": alloc_amt, "iid": alloc.invoice_id})
+            """), {"amt": invoice_reduction, "iid": alloc.invoice_id})
 
             # Update status
             db.execute(text("""
@@ -390,7 +621,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
             source="CustomerPayment",
             source_id=voucher_id,
             username=getattr(current_user, "username", None),
-            idempotency_key=f"pay-{voucher_num}",
+            idempotency_key=f"{idempotency_key}:je" if idempotency_key else None,
         )
 
         if selected_treasury_id:
@@ -503,7 +734,22 @@ def get_payment_details(request: Request, voucher_id: int, current_user: dict = 
         if header.branch_id:
             validate_branch_access(current_user, header.branch_id)
 
-        return dict(header._mapping)
+        allocations = db.execute(text("""
+            SELECT pa.*, i.invoice_number, i.currency AS invoice_currency
+            FROM payment_allocations pa
+            JOIN invoices i ON pa.invoice_id = i.id
+            WHERE pa.voucher_id = :id
+        """), {"id": voucher_id}).fetchall()
+        total_allocated = db.execute(
+            text("SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE voucher_id = :id"),
+            {"id": voucher_id},
+        ).scalar()
+
+        return {
+            **dict(header._mapping),
+            "allocations": [dict(a._mapping) for a in allocations],
+            "total_allocated": money_str(total_allocated),
+        }
     except Exception as e:
         logger.error(f"Error getting payment details: {str(e)}")
         logger.exception("Internal error")
@@ -533,15 +779,20 @@ def get_receipt_details(request: Request, voucher_id: int, current_user: dict = 
 
         # Get Allocations
         allocations = db.execute(text("""
-            SELECT pa.*, i.invoice_number
+            SELECT pa.*, i.invoice_number, i.currency AS invoice_currency
             FROM payment_allocations pa
             JOIN invoices i ON pa.invoice_id = i.id
             WHERE pa.voucher_id = :id
         """), {"id": voucher_id}).fetchall()
+        total_allocated = db.execute(
+            text("SELECT COALESCE(SUM(allocated_amount), 0) FROM payment_allocations WHERE voucher_id = :id"),
+            {"id": voucher_id},
+        ).scalar()
 
         return {
             **dict(header._mapping),
-            "allocations": [dict(a._mapping) for a in allocations]
+            "allocations": [dict(a._mapping) for a in allocations],
+            "total_allocated": money_str(total_allocated),
         }
     except HTTPException:
         raise

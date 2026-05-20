@@ -151,8 +151,8 @@ const WorkflowEditor = () => {
             document_type: formData.document_type,
             description: formData.description,
             conditions: {
-                min_amount: formData.min_amount ? parseFloat(formData.min_amount) : null,
-                max_amount: formData.max_amount ? parseFloat(formData.max_amount) : null,
+                min_amount: formData.min_amount || null,
+                max_amount: formData.max_amount || null,
             },
             is_active: formData.is_active,
             steps: formData.steps

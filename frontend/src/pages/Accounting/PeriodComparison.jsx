@@ -4,6 +4,7 @@ import { reportsAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton'
 
 import DateInput from '../../components/common/DateInput';
@@ -140,8 +141,8 @@ export default function PeriodComparison() {
     }, [reportType, customPeriods, currentBranch])
 
     const formatNum = (n) => {
-        if (n === 0 || n === undefined) return '-'
-        return parseFloat(n).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+        if (n === 0 || n === undefined || n === null) return '-'
+        return formatNumber(n)
     }
 
     const changeColor = (val) => {

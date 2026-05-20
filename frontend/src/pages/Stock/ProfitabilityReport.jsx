@@ -194,7 +194,7 @@ const ProfitabilityReport = () => {
                             <tfoot>
                                 <tr style={{ fontWeight: '700', background: 'var(--bg-secondary)' }}>
                                     <td colSpan="2">{t('common.total', 'الإجمالي')}</td>
-                                    <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.revenue ? data.items.reduce((s, i) => s + i.sold_qty, 0) : 0)}</td>
+                                    <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.sold_qty || 0)}</td>
                                     <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.revenue)} {displayCurrency}</td>
                                     <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.cogs)} {displayCurrency}</td>
                                     <td style={{ textAlign: 'right', color: data.totals?.gross_profit >= 0 ? 'var(--success)' : 'var(--danger)' }}>

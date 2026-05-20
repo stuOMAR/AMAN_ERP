@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import Decimal from 'decimal.js';
 import { assetsAPI, branchesAPI } from '../../services';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
@@ -101,7 +102,7 @@ const AssetManagement = () => {
         try {
             await assetsAPI.createRevaluation({
                 asset_id: parseInt(revalForm.asset_id),
-                new_value: parseFloat(revalForm.new_value),
+                new_value: revalForm.new_value,
                 reason: revalForm.reason
             });
             showToast(t('assets.revaluation_recorded'), 'success');
@@ -220,14 +221,15 @@ const AssetManagement = () => {
                             </thead>
                             <tbody>
                                 {revaluations.map(r => {
-                                    const diff = (r.new_value || 0) - (r.old_value || 0);
+                                    const diff = new Decimal(r.new_value || '0').minus(new Decimal(r.old_value || '0'));
+                                    const isPositive = diff.gte(0);
                                     return (
                                         <tr key={r.id}>
                                             <td>{r.asset_name || `#${r.asset_id}`}</td>
                                             <td>{formatNumber(r.old_value)} {currency}</td>
                                             <td className="fw-bold">{formatNumber(r.new_value)} {currency}</td>
-                                            <td className={diff >= 0 ? 'text-success' : 'text-danger'}>
-                                                {diff >= 0 ? '+' : ''}{formatNumber(diff)} {currency}
+                                            <td className={isPositive ? 'text-success' : 'text-danger'}>
+                                                {isPositive ? '+' : ''}{formatNumber(diff.toString())} {currency}
                                             </td>
                                             <td>{r.reason || '—'}</td>
                                             <td className="small">{r.created_at?.split('T')[0]}</td>

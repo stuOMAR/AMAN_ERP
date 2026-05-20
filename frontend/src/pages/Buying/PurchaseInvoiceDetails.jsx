@@ -143,7 +143,7 @@ function PurchaseInvoiceDetails() {
                                         {formatNumber(item.unit_price)} <small>{invoice.currency || currency}</small>
                                         {invoice.currency && invoice.currency !== currency && (
                                             <div className="text-muted" style={{ fontSize: '11px' }}>
-                                                ≈ {formatNumber(item.unit_price * invoice.exchange_rate)} {currency}
+                                                ≈ {formatNumber(new Decimal(item.unit_price || 0).times(invoice.exchange_rate || 1).toString())} {currency}
                                             </div>
                                         )}
                                     </td>
@@ -200,7 +200,7 @@ function PurchaseInvoiceDetails() {
                         {invoice.currency && invoice.currency !== currency && (
                             <div className="mt-2 text-end">
                                 <small className="text-muted">
-                                    ≈ {formatNumber(invoice.total * invoice.exchange_rate)} {currency}
+                                    ≈ {formatNumber(new Decimal(invoice.total || 0).times(invoice.exchange_rate || 1).toString())} {currency}
                                 </small>
                             </div>
                         )}

@@ -2,8 +2,10 @@ import React, { useState, useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useNavigate } from 'react-router-dom';
 import { Plus } from 'lucide-react';
+import Decimal from 'decimal.js';
 import { assetsAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
+import { formatNumber } from '../../utils/format';
 import { useBranch } from '../../context/BranchContext';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
@@ -85,7 +87,7 @@ const AssetList = () => {
             label: t('assets.cost', 'Cost'),
             headerStyle: { textAlign: 'end' },
             style: { textAlign: 'end', fontWeight: 'bold', color: 'var(--text-dark)' },
-            render: (val, row) => <>{parseFloat(val).toLocaleString()} {row.currency || currency}</>,
+            render: (val, row) => <>{formatNumber(val)} {row.currency || currency}</>,
         },
         {
             key: 'status',
@@ -135,7 +137,7 @@ const AssetList = () => {
                 <div className="metric-card">
                     <div className="metric-label">{t('assets.total_value', 'Total Asset Value')}</div>
                     <div className="metric-value text-primary">
-                        {assets.reduce((sum, a) => sum + (parseFloat(a.cost) || 0), 0).toLocaleString()} <small>{currency}</small>
+                        {formatNumber(assets.reduce((sum, a) => sum.plus(new Decimal(a.cost || '0')), new Decimal('0')).toString())} <small>{currency}</small>
                     </div>
                 </div>
                 <div className="metric-card">

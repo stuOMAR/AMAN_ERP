@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import Decimal from 'decimal.js';
 import { resourceAPI } from '../../utils/api';
 import { AlertTriangle } from 'lucide-react';
 import '../../index.css';
@@ -140,18 +141,19 @@ const AvailabilityCalendar = () => {
                                         const weekAllocs = emp.allocations.filter(a =>
                                             isOverlapping(a.start_date, a.end_date, w)
                                         );
-                                        const weekPct = weekAllocs.reduce((s, a) => s + parseFloat(a.allocation_percent), 0);
+                                        const weekPct = weekAllocs.reduce((s, a) => s.plus(new Decimal(a.allocation_percent || '0')), new Decimal('0'));
+                                        const weekPctNum = weekPct.toNumber();
                                         return (
                                             <td key={w} style={{
-                                                background: allocColor(weekPct),
+                                                background: allocColor(weekPctNum),
                                                 textAlign: 'center',
                                                 fontWeight: 600,
                                                 fontSize: 12,
-                                                color: weekPct > 100 ? '#dc3545' : '#333',
+                                                color: weekPctNum > 100 ? '#dc3545' : '#333',
                                             }}
                                             title={weekAllocs.map(a => `${a.project_name}: ${a.allocation_percent}%`).join('\n')}
                                             >
-                                                {weekPct > 0 ? `${weekPct.toFixed(0)}%` : ''}
+                                                {weekPctNum > 0 ? `${weekPct.toFixed(0)}%` : ''}
                                             </td>
                                         );
                                     })}

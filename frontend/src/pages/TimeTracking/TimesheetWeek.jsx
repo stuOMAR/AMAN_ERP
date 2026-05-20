@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { timesheetAPI, projectsAPI } from '../../utils/api';
+import Decimal from 'decimal.js';
 import { toastEmitter } from '../../utils/toastEmitter';
 import { CheckCircle, Plus, Trash2, Send } from 'lucide-react';
 import '../../index.css';
@@ -100,14 +101,14 @@ const TimesheetWeek = () => {
             for (const row of rows) {
                 if (!row.project_id) continue;
                 for (const [date, hrs] of Object.entries(row.hours)) {
-                    if (!hrs || parseFloat(hrs) <= 0) continue;
+                    if (!hrs || Number(hrs) <= 0) continue;
                     entries.push({
                         project_id: parseInt(row.project_id),
                         task_id: row.task_id ? parseInt(row.task_id) : null,
                         date,
-                        hours: parseFloat(hrs),
+                        hours: hrs,
                         is_billable: row.is_billable,
-                        billing_rate: row.billing_rate ? parseFloat(row.billing_rate) : null,
+                        billing_rate: row.billing_rate || null,
                         description: row.description || null,
                         employee_id: currentUser?.employee_id || 1,
                     });
@@ -144,9 +145,9 @@ const TimesheetWeek = () => {
     };
 
     const totalHours = (date) =>
-        rows.reduce((sum, r) => sum + parseFloat(r.hours[date] || 0), 0);
+        rows.reduce((sum, r) => sum.plus(new Decimal(r.hours[date] || '0')), new Decimal('0'));
 
-    const grandTotal = weekDates.reduce((s, d) => s + totalHours(d), 0);
+    const grandTotal = weekDates.reduce((s, d) => s.plus(totalHours(d)), new Decimal('0'));
 
     const dayLabels = weekDates.map(d => {
         const dt = new Date(d + 'T00:00:00');
@@ -198,7 +199,7 @@ const TimesheetWeek = () => {
                     </thead>
                     <tbody>
                         {rows.map(row => {
-                            const rowTotal = weekDates.reduce((s, d) => s + parseFloat(row.hours[d] || 0), 0);
+                            const rowTotal = weekDates.reduce((s, d) => s.plus(new Decimal(row.hours[d] || '0')), new Decimal('0'));
                             return (
                                 <tr key={row._key}>
                                     <td>

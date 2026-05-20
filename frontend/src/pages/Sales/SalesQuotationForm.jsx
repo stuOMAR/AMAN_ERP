@@ -10,6 +10,7 @@ import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import useInvoiceCalc from '../../hooks/useInvoiceCalc'
+import Decimal from 'decimal.js'
 
 function SalesQuotationForm() {
     const { t } = useTranslation()
@@ -33,8 +34,24 @@ function SalesQuotationForm() {
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }
+        { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
     ])
+    const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—'
+    const previewLine = (index) => backendLines?.find(line => line.index === index) || backendLines?.[index]
+    const isPositiveDecimal = (value) => {
+        try {
+            return new Decimal(value || '0').gt(0)
+        } catch {
+            return false
+        }
+    }
+    const isNegativeDecimal = (value) => {
+        try {
+            return new Decimal(value || '0').lt(0)
+        } catch {
+            return false
+        }
+    }
 
     useEffect(() => {
         const fetchData = async () => {
@@ -59,7 +76,7 @@ function SalesQuotationForm() {
     const handleAddItem = () => {
         setItems([
             ...items,
-            { product_id: '', description: '', quantity: '1', unit_price: '0', tax_rate: null, discount: '0', discount_percent: '0' }
+            { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
         ])
     }
 
@@ -74,7 +91,6 @@ function SalesQuotationForm() {
                 if (product) {
                     updatedItem.description = product.product_name || product.item_name || ''
                     updatedItem.unit_price = String(product.selling_price || '0')
-                    updatedItem.tax_rate = null // Resolved by backend engine
                 }
             }
 
@@ -88,20 +104,21 @@ function SalesQuotationForm() {
 
     // Call backend for accurate calculations
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+        if (items.length > 0 && items.some(i => String(i.quantity || '').trim() && String(i.unit_price || '').trim())) {
             previewDebounced({
                 lines: items.map(i => ({
-                    product_id: i.product_id ? Number(i.product_id) : null,
-                    quantity: Number(i.quantity) || 0,
-                    unit_price: Number(i.unit_price) || 0,
-                    discount: Number(i.discount) || 0,
+                    product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    discount: String(i.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
-                customer_id: formData.customer_id ? Number(formData.customer_id) : null,
+                customer_id: formData.customer_id ? parseInt(formData.customer_id, 10) : null,
+                document_date: formData.quotation_date,
                 currency,
-            })
+            }, '/sales/quotations/preview')
         }
-    }, [items, formData.customer_id, currentBranch])
+    }, [items, formData.customer_id, formData.quotation_date, currentBranch, currency, previewDebounced])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -114,11 +131,11 @@ function SalesQuotationForm() {
             setError(t('sales.quotations.form.errors.product_required'))
             return
         }
-        if (items.some(item => Number(item.quantity) <= 0)) {
+        if (items.some(item => !isPositiveDecimal(item.quantity))) {
             setError(t('sales.quotations.form.errors.quantity_required', 'يجب أن تكون كمية كل صنف أكبر من صفر'))
             return
         }
-        if (items.some(item => Number(item.unit_price) < 0)) {
+        if (items.some(item => isNegativeDecimal(item.unit_price))) {
             setError(t('sales.quotations.form.errors.price_required', 'سعر الوحدة لا يمكن أن يكون سالباً'))
             return
         }
@@ -134,13 +151,13 @@ function SalesQuotationForm() {
                 notes: formData.notes,
                 terms_conditions: formData.terms_conditions,
                 branch_id: currentBranch?.id,
+                currency,
                 items: items.map(item => ({
                     product_id: parseInt(item.product_id),
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
                     discount: String(item.discount || 0),
-                    tax_rate: String(item.tax_rate || 0)
                 }))
             }
             await salesAPI.createQuotation(payload)
@@ -223,7 +240,7 @@ function SalesQuotationForm() {
                                 <th style={{ width: '35%' }}>{t('sales.quotations.form.items.product')} / {t('sales.quotations.form.items.description')}</th>
                                 <th style={{ width: '10%' }}>{t('sales.quotations.form.items.quantity')}</th>
                                 <th style={{ width: '15%' }}>{t('sales.quotations.form.items.price')}</th>
-                                <th style={{ width: '10%' }}>{t('sales.quotations.form.items.discount')} (%)</th>
+                                <th style={{ width: '10%' }}>{t('sales.quotations.form.items.discount')}</th>
                                 <th style={{ width: '10%' }}>{t('sales.invoices.form.items.tax')}</th>
                                 <th style={{ width: '15%' }}>{t('sales.quotations.form.items.total')}</th>
                                 <th style={{ width: '5%' }}></th>
@@ -273,18 +290,15 @@ function SalesQuotationForm() {
                                     <td>
                                         <input
                                             type="number" className="form-input" min="0" max="100" step="0.01"
-                                            value={item.discount_percent}
-                                            onChange={e => handleItemChange(index, 'discount_percent', e.target.value)}
+                                            value={item.discount}
+                                            onChange={e => handleItemChange(index, 'discount', e.target.value)}
                                         />
                                     </td>
                                     <td>
-                                        <input
-                                            type="number" className="form-input" value={item.tax_rate}
-                                            onChange={e => handleItemChange(index, 'tax_rate', e.target.value)}
-                                        />
+                                        {previewLine(index)?.tax_rate != null ? `${previewLine(index).tax_rate}%` : '—'}
                                     </td>
                                     <td className="font-bold">
-                                        {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+                                        {moneyOrDash(previewLine(index)?.line_total ?? previewLine(index)?.total)}
                                     </td>
                                     <td>
                                         <button
@@ -337,15 +351,15 @@ function SalesQuotationForm() {
                         {/* Totals — sourced exclusively from backend preview */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.subtotal')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.subtotal) : '—'} <small>{currency}</small></span>
+                            <span>{moneyOrDash(backendTotals?.subtotal)} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.discount')}</span>
-                            <span className="text-error">{backendTotals ? `-${formatNumber(backendTotals.totalDiscount)}` : '—'} <small>{currency}</small></span>
+                            <span className="text-error">{backendTotals?.totalDiscount != null ? `-${formatNumber(backendTotals.totalDiscount)}` : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.tax')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.totalTax) : '—'} <small>{currency}</small></span>
+                            <span>{moneyOrDash(backendTotals?.totalTax)} <small>{currency}</small></span>
                         </div>
 
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '16px 0' }}></div>
@@ -359,7 +373,7 @@ function SalesQuotationForm() {
                             marginBottom: '24px'
                         }}>
                             <span>{t('sales.quotations.details.grand_total')}</span>
-                            <span>{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
+                            <span>{moneyOrDash(backendTotals?.grandTotal)} <small>{currency}</small></span>
                         </div>
 
                         <div className="form-actions" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

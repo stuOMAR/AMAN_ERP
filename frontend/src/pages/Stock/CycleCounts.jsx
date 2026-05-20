@@ -411,7 +411,9 @@ function CycleCounts() {
                                 <tbody>
                                     {(countDetail.items || []).map(item => {
                                         const update = itemUpdates.find(u => u.item_id === item.id)
-                                        const variance = (Number(update?.counted_quantity || 0) - Number(item.system_quantity || 0))
+                                        const variance = item.variance ?? '0'
+                                        const hasVariance = String(variance) !== '0' && String(variance) !== '0.0000'
+                                        const isPositiveVariance = String(variance).trim().startsWith('-') === false && hasVariance
                                         return (
                                             <tr key={item.id}>
                                                 <td>{item.product_name}</td>
@@ -427,8 +429,8 @@ function CycleCounts() {
                                                     )}
                                                 </td>
                                                 <td>
-                                                    <span style={{ color: variance !== 0 ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
-                                                        {variance > 0 ? '+' : ''}{variance}
+                                                    <span style={{ color: hasVariance ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
+                                                        {selectedCount?.status === 'in_progress' ? '-' : `${isPositiveVariance ? '+' : ''}${variance}`}
                                                     </span>
                                                 </td>
                                                 <td>

@@ -41,6 +41,10 @@ class ProductResponse(ProductCreate):
     category_name: Optional[str] = None
     current_stock: Decimal
     reserved_quantity: Decimal = Decimal('0')
+    branch_avg_cost: Decimal = Decimal('0')
+    display_cost: Decimal = Decimal('0')
+    display_cost_currency: Optional[str] = None
+    cost_source: Optional[str] = None
     has_batch_tracking: bool = False
     has_serial_tracking: bool = False
     has_expiry_tracking: bool = False

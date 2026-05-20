@@ -125,7 +125,7 @@ export default function ProjectDetails() {
         try {
             await projectsAPI.createTask(id, {
                 ...taskForm,
-                planned_hours: parseFloat(taskForm.planned_hours) || 0,
+                planned_hours: taskForm.planned_hours || '0',
                 start_date: taskForm.start_date || null,
                 end_date: taskForm.end_date || null,
             });
@@ -318,7 +318,7 @@ export default function ProjectDetails() {
     if (!project) return null;
 
     const fs = project.financial_summary || {};
-    const progress = parseFloat(project.progress_percentage || 0);
+    const progress = project.progress_percentage || 0;
     const tasks = project.tasks || [];
     const expenses = project.expenses || [];
     const revenues = project.revenues || [];
@@ -504,7 +504,7 @@ export default function ProjectDetails() {
                                             <tr key={task.id}>
                                                 <td className="fw-medium">{task.task_name}</td>
                                                 <td>{getStatusBadge(task.status)}</td>
-                                                <td>{parseFloat(task.progress || 0).toFixed(0)}%</td>
+                                                <td>{task.progress || 0}%</td>
                                                 <td>{task.actual_hours || 0}/{task.planned_hours || 0}</td>
                                                 <td>{task.assigned_to_name || '-'}</td>
                                                 <td>

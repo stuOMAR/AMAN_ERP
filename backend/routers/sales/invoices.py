@@ -1026,14 +1026,35 @@ def get_invoice(
 ):
     """جلب تفاصيل فاتورة مبيعات محددة"""
     from utils.permissions import validate_branch_access
+    from utils.accounting import compute_line_amounts
 
     db = get_db_connection(_company_id(current_user))
     try:
         # 1. Fetch Header
         query = """
-            SELECT i.*, i.party_id as customer_id, p.name as customer_name
+            SELECT i.*, i.party_id as customer_id, p.name as customer_name,
+                   bc.base_currency,
+                   (COALESCE(i.total, 0) - COALESCE(i.paid_amount, 0)) AS remaining_balance,
+                   (COALESCE(i.total, 0) * fx.effective_rate) AS total_base,
+                   (COALESCE(i.total, 0) * fx.effective_rate) AS base_total,
+                   (COALESCE(i.paid_amount, 0) * fx.effective_rate) AS paid_amount_base,
+                   (COALESCE(i.paid_amount, 0) * fx.effective_rate) AS base_paid_amount,
+                   ((COALESCE(i.total, 0) - COALESCE(i.paid_amount, 0)) * fx.effective_rate) AS remaining_balance_base
             FROM invoices i
             JOIN parties p ON i.party_id = p.id
+            CROSS JOIN LATERAL (
+                SELECT COALESCE(
+                    (SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1),
+                    (SELECT setting_value FROM company_settings WHERE setting_key = 'default_currency' LIMIT 1),
+                    'SAR'
+                ) AS base_currency
+            ) bc
+            CROSS JOIN LATERAL (
+                SELECT CASE
+                    WHEN COALESCE(i.currency, bc.base_currency) = bc.base_currency THEN 1::numeric
+                    ELSE COALESCE(NULLIF(i.exchange_rate, 0), 1)
+                END AS effective_rate
+            ) fx
             WHERE i.id = :id AND i.invoice_type = 'sales'
         """
         row = db.execute(text(query), {"id": invoice_id}).fetchone()
@@ -1047,6 +1068,13 @@ def get_invoice(
              validate_branch_access(current_user, row.branch_id)
 
         header = dict(row._mapping)
+        header["remaining_balance"] = money_str(header.get("remaining_balance"))
+        header["total_base"] = money_str(header.get("total_base"))
+        header["base_total"] = header["total_base"]
+        header["paid_amount_base"] = money_str(header.get("paid_amount_base"))
+        header["base_paid_amount"] = header["paid_amount_base"]
+        header["remaining_balance_base"] = money_str(header.get("remaining_balance_base"))
+        header["taxable_amount"] = money_str(_dec(header.get("subtotal")) - _dec(header.get("discount")))
 
         # 2. Fetch Lines
         lines_query = """
@@ -1057,10 +1085,37 @@ def get_invoice(
             WHERE l.invoice_id = :id
         """
         lines_result = db.execute(text(lines_query), {"id": invoice_id}).fetchall()
+        raw_lines = [dict(r._mapping) for r in lines_result]
+        raw_line_tax_total = Decimal("0")
+        line_amounts = []
+        for item in raw_lines:
+            amounts = compute_line_amounts(
+                item.get("quantity"),
+                item.get("unit_price"),
+                item.get("tax_rate"),
+                item.get("discount"),
+                discount_is_percent=False,
+            )
+            raw_line_tax_total += amounts["tax_amount"]
+            line_amounts.append(amounts)
+
+        tax_factor = Decimal("1")
+        if raw_line_tax_total > 0:
+            tax_factor = (_dec(header.get("tax_amount")) / raw_line_tax_total)
+            tax_factor = max(Decimal("0"), min(Decimal("1"), tax_factor))
+
+        items = []
+        for item, amounts in zip(raw_lines, line_amounts):
+            adjusted_tax = (amounts["tax_amount"] * tax_factor).quantize(_D2, ROUND_HALF_UP)
+            item["taxable"] = money_str(amounts["taxable"])
+            item["tax_amount"] = money_str(adjusted_tax)
+            item["discount_amount"] = money_str(amounts["discount_amount"])
+            item["line_total"] = money_str(item.get("total"))
+            items.append(item)
 
         return {
             **header,
-            "items": [dict(r._mapping) for r in lines_result]
+            "items": items
         }
     finally:
         db.close()

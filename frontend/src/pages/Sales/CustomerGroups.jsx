@@ -84,7 +84,7 @@ function CustomerGroups() {
         try {
             const payload = {
                 ...formData,
-                discount_percentage: Number(formData.discount_percentage) || 0,
+                discount_percentage: String(formData.discount_percentage || '0'),
                 payment_days: parseInt(formData.payment_days) || 30,
                 branch_id: currentBranch?.id
             }

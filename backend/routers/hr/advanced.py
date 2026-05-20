@@ -234,7 +234,7 @@ def get_overtime_rates(
                 )
             ).fetchall()
             items = [
-                {"rate_key": r[0], "description": r[1], "multiplier": float(r[2])}
+                {"rate_key": r[0], "description": r[1], "multiplier": Decimal(str(r[2]))}
                 for r in rows
             ]
             return {"items": items or defaults, "source": "overtime_rates_config" if items else "defaults"}

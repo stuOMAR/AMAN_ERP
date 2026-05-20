@@ -1,9 +1,11 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
+import Decimal from 'decimal.js'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { getCurrency, hasPermission } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton'
 
 import DateInput from '../../components/common/DateInput';
@@ -116,8 +118,8 @@ export default function RecurringTemplates() {
                 max_runs: d.max_runs || '',
                 lines: d.lines.length ? d.lines.map(l => ({
                     account_id: l.account_id,
-                    debit: l.debit !== '' && l.debit != null ? parseFloat(l.debit) : '',
-                    credit: l.credit !== '' && l.credit != null ? parseFloat(l.credit) : '',
+                    debit: l.debit != null && l.debit !== '' ? String(l.debit) : '',
+                    credit: l.credit != null && l.credit !== '' ? String(l.credit) : '',
                     description: l.description || '', cost_center_id: l.cost_center_id || ''
                 })) : [
                     { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' },
@@ -155,8 +157,8 @@ export default function RecurringTemplates() {
             next_run_date: form.next_run_date || form.start_date,
             lines: form.lines.filter(l => l.account_id).map(l => ({
                 account_id: parseInt(l.account_id),
-                debit: parseFloat(l.debit) || 0,
-                credit: parseFloat(l.credit) || 0,
+                debit: l.debit || '0',
+                credit: l.credit || '0',
                 description: l.description,
                 cost_center_id: l.cost_center_id ? parseInt(l.cost_center_id) : null,
             })),
@@ -251,9 +253,9 @@ export default function RecurringTemplates() {
         })
     }
 
-    const totalDebit = form.lines.reduce((s, l) => s + (parseFloat(l.debit) || 0), 0)
-    const totalCredit = form.lines.reduce((s, l) => s + (parseFloat(l.credit) || 0), 0)
-    const isBalanced = Math.abs(totalDebit - totalCredit) < 0.01
+    const totalDebit = form.lines.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0'))
+    const totalCredit = form.lines.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0'))
+    const isBalanced = totalDebit.minus(totalCredit).abs().lt('0.01')
 
     const freqLabel = (f) => t(`recurring.freq_${f}`) || f
 
@@ -502,8 +504,8 @@ export default function RecurringTemplates() {
                                         <tfoot>
                                             <tr className="fw-bold">
                                                 <td className="text-end">{t('recurring.total')}</td>
-                                                <td className={!isBalanced ? 'text-danger' : ''}>{totalDebit.toFixed(2)}</td>
-                                                <td className={!isBalanced ? 'text-danger' : ''}>{totalCredit.toFixed(2)}</td>
+                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalDebit.toString())}</td>
+                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalCredit.toString())}</td>
                                                 <td colSpan="2">
                                                     <button type="button" className="btn btn-sm btn-outline-primary" onClick={addLine}>
                                                         + {t('recurring.add_line')}
@@ -516,7 +518,7 @@ export default function RecurringTemplates() {
                                 {!isBalanced && (
                                     <div className="alert alert-warning py-1 small">
                                         ⚠️ {t('recurring.not_balanced')} —
-                                        {` ${t('recurring.difference')}: `}{Math.abs(totalDebit - totalCredit).toFixed(2)}
+                                        {` ${t('recurring.difference')}: `}{formatNumber(totalDebit.minus(totalCredit).abs().toString())}
                                     </div>
                                 )}
                             </div>
@@ -524,7 +526,7 @@ export default function RecurringTemplates() {
                                 <button type="button" className="btn" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowModal(false)}>
                                     {t('recurring.cancel')}
                                 </button>
-                                <button type="submit" className="btn btn-primary" disabled={!isBalanced || totalDebit === 0}>
+                                <button type="submit" className="btn btn-primary" disabled={!isBalanced || totalDebit.eq('0')}>
                                     {editId ? (t('recurring.update')) : (t('recurring.create'))}
                                 </button>
                             </div>
@@ -593,8 +595,8 @@ export default function RecurringTemplates() {
                                         {detailData.lines.map((l, i) => (
                                             <tr key={i}>
                                                 <td>{l.account_code || l.account_number} - {l.account_name}</td>
-                                                <td>{parseFloat(l.debit || 0).toFixed(2)}</td>
-                                                <td>{parseFloat(l.credit || 0).toFixed(2)}</td>
+                                                <td>{formatNumber(l.debit || '0')}</td>
+                                                <td>{formatNumber(l.credit || '0')}</td>
                                                 <td>{l.description || '-'}</td>
                                             </tr>
                                         ))}
@@ -602,8 +604,8 @@ export default function RecurringTemplates() {
                                     <tfoot>
                                         <tr className="fw-bold">
                                             <td>{t('recurring.total')}</td>
-                                            <td>{detailData.lines.reduce((s, l) => s + parseFloat(l.debit || 0), 0).toFixed(2)}</td>
-                                            <td>{detailData.lines.reduce((s, l) => s + parseFloat(l.credit || 0), 0).toFixed(2)}</td>
+                                            <td>{formatNumber(detailData.lines.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0')).toString())}</td>
+                                            <td>{formatNumber(detailData.lines.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0')).toString())}</td>
                                             <td></td>
                                         </tr>
                                     </tfoot>

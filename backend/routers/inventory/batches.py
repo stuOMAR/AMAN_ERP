@@ -5,8 +5,8 @@ INV-102: Serial Numbers
 INV-103: Expiry Date tracking
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Query, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Query, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -25,6 +25,42 @@ batches_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 
+def _company_id(user) -> str:
+    return user.get("company_id") if isinstance(user, dict) else user.company_id
+
+
+def _user_id(user) -> int:
+    return user.get("id") if isinstance(user, dict) else user.id
+
+
+def _username(user) -> str | None:
+    return user.get("username") if isinstance(user, dict) else getattr(user, "username", None)
+
+
+def _permissions(user) -> list:
+    return user.get("permissions", []) if isinstance(user, dict) else (getattr(user, "permissions", []) or [])
+
+
+def _allowed_branches(user) -> list:
+    return user.get("allowed_branches", []) if isinstance(user, dict) else (getattr(user, "allowed_branches", []) or [])
+
+
+def _validate_warehouse_access(db, current_user, warehouse_id: int, request: Request):
+    wh = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).fetchone()
+    if not wh:
+        raise HTTPException(**http_error(404, "warehouse_not_found", request))
+    allowed = _allowed_branches(current_user)
+    if allowed and "*" not in _permissions(current_user) and wh.branch_id and wh.branch_id not in allowed:
+        raise HTTPException(**http_error(403, "warehouse_access_denied", request))
+    return wh
+
+
+def _require_idempotency_key(idempotency_key: Optional[str], request: Request) -> str:
+    if not idempotency_key:
+        raise HTTPException(**http_error(400, "idempotency_key_required", request))
+    return idempotency_key
+
+
 # ============ SCHEMAS ============
 
 class BatchCreate(BaseModel):
@@ -33,8 +69,8 @@ class BatchCreate(BaseModel):
     batch_number: str
     manufacturing_date: Optional[str] = None
     expiry_date: Optional[str] = None
-    quantity: float = Field(default=0, ge=0)
-    unit_cost: float = 0
+    quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    unit_cost: Decimal = Field(default=Decimal("0"), ge=0)
     supplier_id: Optional[int] = None
     notes: Optional[str] = None
 
@@ -51,7 +87,7 @@ class SerialCreate(BaseModel):
     warehouse_id: int
     serial_number: str
     batch_id: Optional[int] = None
-    purchase_price: float = 0
+    purchase_price: Decimal = Field(default=Decimal("0"), ge=0)
     warranty_start: Optional[str] = None
     warranty_end: Optional[str] = None
     notes: Optional[str] = None
@@ -64,7 +100,7 @@ class SerialBulkCreate(BaseModel):
     prefix: str = ""
     start_number: int = 1
     count: int = 1
-    purchase_price: float = 0
+    purchase_price: Decimal = Field(default=Decimal("0"), ge=0)
     notes: Optional[str] = None
 
 
@@ -86,10 +122,12 @@ def list_batches(
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الدفعات مع إمكانية الفلترة"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
+        allowed = _allowed_branches(current_user)
         query = """
             SELECT b.*, 
                    p.product_name, p.product_code,
@@ -107,8 +145,12 @@ def list_batches(
             query += " AND b.product_id = :pid"
             params["pid"] = product_id
         if warehouse_id:
+            _validate_warehouse_access(db, current_user, warehouse_id, request)
             query += " AND b.warehouse_id = :wid"
             params["wid"] = warehouse_id
+        elif allowed and "*" not in _permissions(current_user):
+            query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
+            params["allowed_branches"] = allowed
         if status:
             query += " AND b.status = :status"
             params["status"] = status
@@ -253,14 +295,28 @@ def get_batch(batch_id: int, current_user: dict = Depends(get_current_user)):
 def create_batch(
     batch: BatchCreate,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء دفعة جديدة"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
         try:
+            idempotency_key = _require_idempotency_key(idempotency_key, request)
+            existing = db.execute(text("""
+                SELECT id, batch_number FROM product_batches WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {
+                    "id": existing.id,
+                    "batch_number": existing.batch_number,
+                    "message": i18n_message("batch_created_success", request),
+                    "idempotent_replay": True,
+                }
+            _validate_warehouse_access(db, current_user, batch.warehouse_id, request)
+
             # Check product exists and has batch tracking
             product = db.execute(text("""
-                SELECT id, product_name, has_batch_tracking FROM products WHERE id = :id
+                SELECT id, product_name, has_batch_tracking, cost_price FROM products WHERE id = :id
             """), {"id": batch.product_id}).fetchone()
     
             if not product:
@@ -278,16 +334,23 @@ def create_batch(
     
             if exists:
                 raise HTTPException(**http_error(400, "batch_number_duplicate", request))
+
+            existing_cost = db.execute(text("""
+                SELECT average_cost
+                FROM inventory
+                WHERE product_id = :pid AND warehouse_id = :wid
+            """), {"pid": batch.product_id, "wid": batch.warehouse_id}).scalar()
+            derived_unit_cost = Decimal(str(existing_cost or product.cost_price or 0))
     
             result = db.execute(text("""
                 INSERT INTO product_batches (
                     product_id, warehouse_id, batch_number, manufacturing_date, expiry_date,
                     quantity, available_quantity, unit_cost, supplier_id, notes, 
-                    created_by, status
+                    created_by, idempotency_key, status
                 ) VALUES (
                     :pid, :wid, :bn, :mdate, :edate,
                     :qty, :qty, :cost, :sid, :notes,
-                    :uid, 'active'
+                    :uid, :idem_key, 'active'
                 ) RETURNING id, created_at
             """), {
                 "pid": batch.product_id,
@@ -295,35 +358,36 @@ def create_batch(
                 "bn": batch.batch_number,
                 "mdate": batch.manufacturing_date,
                 "edate": batch.expiry_date,
-                "qty": batch.quantity,
-                "cost": batch.unit_cost,
+                "qty": str(batch.quantity),
+                "cost": str(derived_unit_cost),
                 "sid": batch.supplier_id,
                 "notes": batch.notes,
-                "uid": current_user.id
+                "uid": _user_id(current_user),
+                "idem_key": idempotency_key,
             }).fetchone()
     
             # If quantity > 0, update inventory and log movement
             if batch.quantity > 0:
                 from services.costing_service import CostingService
-                unit_cost = Decimal(str(batch.unit_cost or 0))
+                unit_cost = derived_unit_cost
                 CostingService.update_cost(
                     db,
                     product_id=batch.product_id,
                     warehouse_id=batch.warehouse_id,
-                    new_qty=float(batch.quantity),
-                    new_price=float(unit_cost),
+                    new_qty=batch.quantity,
+                    new_price=unit_cost,
                 )
                 costing_method = CostingService._get_product_costing_method(db, batch.product_id, batch.warehouse_id)
                 if costing_method in ("fifo", "lifo"):
                     CostingService.create_cost_layer(
-                        db,
-                        product_id=batch.product_id,
-                        warehouse_id=batch.warehouse_id,
-                        quantity=float(batch.quantity),
-                        unit_cost=float(unit_cost),
-                        source_document_type="batch",
-                        source_document_id=result.id,
-                        costing_method=costing_method,
+                            db,
+                            product_id=batch.product_id,
+                            warehouse_id=batch.warehouse_id,
+                            quantity=batch.quantity,
+                            unit_cost=unit_cost,
+                            source_document_type="batch",
+                            source_document_id=result.id,
+                            costing_method=costing_method,
                     )
 
                 # Upsert inventory
@@ -353,11 +417,11 @@ def create_batch(
                     "pid": batch.product_id,
                     "wid": batch.warehouse_id,
                     "bid": result.id,
-                    "qty": batch.quantity,
-                    "cost": batch.unit_cost,
-                    "total": batch.quantity * batch.unit_cost,
+                    "qty": str(batch.quantity),
+                    "cost": str(batch.unit_cost),
+                    "total": str((batch.quantity * batch.unit_cost).quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                     "notes": f"إضافة دفعة {batch.batch_number}",
-                    "uid": current_user.id
+                    "uid": _user_id(current_user)
                 })
     
                 # Log batch movement
@@ -373,9 +437,9 @@ def create_batch(
                     "pid": batch.product_id,
                     "bid": result.id,
                     "wid": batch.warehouse_id,
-                    "qty": batch.quantity,
+                    "qty": str(batch.quantity),
                     "notes": f"إنشاء دفعة {batch.batch_number}",
-                    "uid": current_user.id
+                    "uid": _user_id(current_user)
                 })
     
             # Enable batch tracking on product if not already
@@ -386,10 +450,10 @@ def create_batch(
     
             # INV-L01: Audit log for batch creation
             log_activity(
-                db, user_id=current_user.id, username=current_user.username,
+                db, user_id=_user_id(current_user), username=_username(current_user),
                 action="batch.create", resource_type="product_batch",
                 resource_id=str(result.id),
-                details={"batch_number": batch.batch_number, "product_id": batch.product_id, "warehouse_id": batch.warehouse_id, "quantity": batch.quantity},
+                details={"batch_number": batch.batch_number, "product_id": batch.product_id, "warehouse_id": batch.warehouse_id, "quantity": str(batch.quantity)},
                 request=request
             )
     
@@ -953,14 +1017,14 @@ class QualityInspectionCreate(BaseModel):
     batch_id: Optional[int] = None
     reference_type: Optional[str] = None
     reference_id: Optional[int] = None
-    inspected_quantity: float = 0
+    inspected_quantity: Decimal = Field(default=Decimal("0"), ge=0)
     criteria: Optional[list] = []
     notes: Optional[str] = None
 
 
 class QualityInspectionComplete(BaseModel):
-    accepted_quantity: float = 0
-    rejected_quantity: float = 0
+    accepted_quantity: Decimal = Field(default=Decimal("0"), ge=0)
+    rejected_quantity: Decimal = Field(default=Decimal("0"), ge=0)
     status: str  # passed, failed, partial
     result_notes: Optional[str] = None
     rejection_reason: Optional[str] = None
@@ -1093,7 +1157,7 @@ class CycleCountCreate(BaseModel):
 
 class CycleCountItemUpdate(BaseModel):
     id: int
-    counted_quantity: float
+    counted_quantity: Decimal = Field(..., ge=0)
     notes: Optional[str] = None
 
 
@@ -1108,10 +1172,12 @@ def list_cycle_counts(
     status: Optional[str] = None,
     skip: int = 0,
     limit: int = 50,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الجرد الدوري"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
+        allowed = _allowed_branches(current_user)
         query = """
             SELECT cc.*, w.warehouse_name, cu.full_name as created_by_name
             FROM cycle_counts cc
@@ -1122,8 +1188,12 @@ def list_cycle_counts(
         params = {"limit": limit, "skip": skip}
 
         if warehouse_id:
+            _validate_warehouse_access(db, current_user, warehouse_id, request)
             query += " AND cc.warehouse_id = :wid"
             params["wid"] = warehouse_id
+        elif allowed and "*" not in _permissions(current_user):
+            query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
+            params["allowed_branches"] = allowed
         if status:
             query += " AND cc.status = :status"
             params["status"] = status
@@ -1131,15 +1201,26 @@ def list_cycle_counts(
         query += " ORDER BY cc.created_at DESC LIMIT :limit OFFSET :skip"
         rows = db.execute(text(query), params).fetchall()
 
-        total = db.execute(text("SELECT COUNT(*) FROM cycle_counts"), {}).scalar() or 0
+        total_query = "SELECT COUNT(*) FROM cycle_counts cc JOIN warehouses w ON cc.warehouse_id = w.id WHERE 1=1"
+        total_params = {}
+        if warehouse_id:
+            total_query += " AND cc.warehouse_id = :wid"
+            total_params["wid"] = warehouse_id
+        elif allowed and "*" not in _permissions(current_user):
+            total_query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
+            total_params["allowed_branches"] = allowed
+        if status:
+            total_query += " AND cc.status = :status"
+            total_params["status"] = status
+        total = db.execute(text(total_query), total_params).scalar() or 0
 
         return {"items": [dict(r._mapping) for r in rows], "total": total}
 
 
 @batches_router.get("/cycle-counts/{count_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
-def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user)):
+def get_cycle_count(count_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """تفاصيل الجرد الدوري"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
         cc = db.execute(text("""
             SELECT cc.*, w.warehouse_name, cu.full_name as created_by_name
             FROM cycle_counts cc
@@ -1150,6 +1231,7 @@ def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user
 
         if not cc:
             raise HTTPException(**http_error(404, "inventory_not_found"))
+        _validate_warehouse_access(db, current_user, cc.warehouse_id, request)
 
         result = dict(cc._mapping)
 
@@ -1171,11 +1253,26 @@ def get_cycle_count(count_id: int, current_user: dict = Depends(get_current_user
 @batches_router.post("/cycle-counts", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("stock.manage"))], response_model=Dict[str, Any])
 def create_cycle_count(request: Request, 
     data: CycleCountCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء جرد دوري جديد"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
         try:
+            idempotency_key = _require_idempotency_key(idempotency_key, request)
+            existing = db.execute(text("""
+                SELECT id, count_number, total_items FROM cycle_counts WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {
+                    "id": existing.id,
+                    "count_number": existing.count_number,
+                    "total_items": existing.total_items,
+                    "message": i18n_message("cycle_count_created_success", request),
+                    "idempotent_replay": True,
+                }
+            _validate_warehouse_access(db, current_user, data.warehouse_id, request)
+
             # Generate count number
             count = db.execute(text("SELECT COUNT(*) FROM cycle_counts")).scalar() or 0
             count_number = f"CC-{datetime.now().year}-{str(count + 1).zfill(5)}"
@@ -1202,10 +1299,10 @@ def create_cycle_count(request: Request,
             result = db.execute(text("""
                 INSERT INTO cycle_counts (
                     count_number, warehouse_id, count_type, status,
-                    scheduled_date, total_items, notes, created_by
+                    scheduled_date, total_items, notes, created_by, idempotency_key
                 ) VALUES (
                     :num, :wid, :type, 'draft',
-                    :sdate, :total, :notes, :uid
+                    :sdate, :total, :notes, :uid, :idem_key
                 ) RETURNING id
             """), {
                 "num": count_number,
@@ -1214,7 +1311,8 @@ def create_cycle_count(request: Request,
                 "sdate": data.scheduled_date,
                 "total": len(products),
                 "notes": data.notes,
-                "uid": current_user.id
+                "uid": _user_id(current_user),
+                "idem_key": idempotency_key,
             }).fetchone()
     
             # Create count items
@@ -1273,14 +1371,25 @@ def start_cycle_count(request: Request, count_id: int, current_user: dict = Depe
 def complete_cycle_count(request: Request, 
     count_id: int,
     data: CycleCountComplete,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """إكمال الجرد الدوري وحساب الفروقات"""
-    with transactional(current_user.company_id) as db:
+    with transactional(_company_id(current_user)) as db:
         try:
+            _require_idempotency_key(idempotency_key, request)
             cc = db.execute(text("SELECT * FROM cycle_counts WHERE id = :id"), {"id": count_id}).fetchone()
             if not cc:
                 raise HTTPException(**http_error(404, "inventory_not_found"))
+            _validate_warehouse_access(db, current_user, cc.warehouse_id, request)
+            if cc.status == "completed":
+                return {
+                    "message": i18n_message("cycle_count_completed_success", request),
+                    "counted_items": cc.counted_items or 0,
+                    "variance_items": cc.variance_items or 0,
+                    "auto_adjusted": False,
+                    "idempotent_replay": True,
+                }
     
             variance_count = 0
             counted_count = 0
@@ -1294,8 +1403,8 @@ def complete_cycle_count(request: Request,
                 if not cci:
                     continue
     
-                variance = item.counted_quantity - (cci.system_quantity or 0)
-                variance_value = variance * (cci.unit_cost or 0)
+                variance = item.counted_quantity - Decimal(str(cci.system_quantity or 0))
+                variance_value = variance * Decimal(str(cci.unit_cost or 0))
     
                 db.execute(text("""
                     UPDATE cycle_count_items SET
@@ -1308,10 +1417,10 @@ def complete_cycle_count(request: Request,
                         notes = :notes
                     WHERE id = :id
                 """), {
-                    "qty": item.counted_quantity,
-                    "var": variance,
-                    "vval": variance_value,
-                    "uid": current_user.id,
+                    "qty": str(item.counted_quantity),
+                    "var": str(variance),
+                    "vval": str(variance_value),
+                    "uid": _user_id(current_user),
                     "notes": item.notes,
                     "id": item.id
                 })
@@ -1329,7 +1438,7 @@ def complete_cycle_count(request: Request,
                             WHERE product_id = :pid AND warehouse_id = :wid
                             FOR UPDATE
                         """), {"pid": cci.product_id, "wid": cc.warehouse_id}).fetchone()
-                        reserved = (inv_row.reserved_quantity if inv_row else 0) or 0
+                        reserved = Decimal(str((inv_row.reserved_quantity if inv_row else 0) or 0))
                         new_available = item.counted_quantity - reserved
                         if new_available < 0:
                             prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": cci.product_id}).scalar() or cci.product_id
@@ -1348,16 +1457,16 @@ def complete_cycle_count(request: Request,
                                 db,
                                 product_id=cci.product_id,
                                 warehouse_id=cc.warehouse_id,
-                                new_qty=float(variance_dec),
-                                new_price=float(movement_unit_cost),
+                                new_qty=variance_dec,
+                                new_price=movement_unit_cost,
                             )
                             if costing_method in ("fifo", "lifo"):
                                 CostingService.create_cost_layer(
                                     db,
                                     product_id=cci.product_id,
                                     warehouse_id=cc.warehouse_id,
-                                    quantity=float(variance_dec),
-                                    unit_cost=float(movement_unit_cost),
+                                    quantity=variance_dec,
+                                    unit_cost=movement_unit_cost,
                                     source_document_type="cycle_count",
                                     source_document_id=count_id,
                                     costing_method=costing_method,
@@ -1368,7 +1477,7 @@ def complete_cycle_count(request: Request,
                                     db,
                                     product_id=cci.product_id,
                                     warehouse_id=cc.warehouse_id,
-                                    quantity=float(abs(variance_dec)),
+                                    quantity=abs(variance_dec),
                                     sale_document_type="cycle_count",
                                     sale_document_id=count_id,
                                     costing_method=costing_method,
@@ -1384,8 +1493,8 @@ def complete_cycle_count(request: Request,
                             SET unit_cost = :uc, variance_value = :vv
                             WHERE id = :id
                         """), {
-                            "uc": float(movement_unit_cost),
-                            "vv": float(variance_value),
+                            "uc": str(movement_unit_cost),
+                            "vv": str(variance_value),
                             "id": item.id,
                         })
 
@@ -1393,7 +1502,7 @@ def complete_cycle_count(request: Request,
                             UPDATE inventory SET quantity = :qty, updated_at = NOW()
                             WHERE product_id = :pid AND warehouse_id = :wid
                         """), {
-                            "qty": item.counted_quantity,
+                            "qty": str(item.counted_quantity),
                             "pid": cci.product_id,
                             "wid": cc.warehouse_id
                         })
@@ -1413,11 +1522,11 @@ def complete_cycle_count(request: Request,
                             "wid": cc.warehouse_id,
                             "type": adj_type,
                             "ccid": count_id,
-                            "qty": variance,
-                            "uc": float(movement_unit_cost),
-                            "tc": float(movement_total_abs),
+                            "qty": str(variance),
+                            "uc": str(movement_unit_cost),
+                            "tc": str(movement_total_abs),
                             "notes": f"تسوية جرد دوري {cc.count_number}",
-                            "uid": current_user.id
+                            "uid": _user_id(current_user)
                         })
     
             # T023: Post GL journal entries for cycle count variances
@@ -1447,33 +1556,34 @@ def complete_cycle_count(request: Request,
                     """), {"ccid": count_id}).fetchall()
     
                     for vi in variance_items:
-                        abs_value = abs(float(vi.variance_value or 0))
-                        if abs_value < 0.01:
+                        abs_value = abs(Decimal(str(vi.variance_value or 0)))
+                        if abs_value < Decimal("0.01"):
                             continue
     
                         if vi.variance > 0:
                             # Surplus: Dr. Inventory Asset / Cr. Inventory Variance
                             lines = [
-                                {"account_id": acc_inventory, "debit": abs_value, "credit": 0, "description": f"Cycle Count Surplus - {cc.count_number}"},
-                                {"account_id": acc_variance, "debit": 0, "credit": abs_value, "description": f"Inventory Variance - {cc.count_number}"},
+                                {"account_id": acc_inventory, "debit": str(abs_value), "credit": 0, "description": f"Cycle Count Surplus - {cc.count_number}"},
+                                {"account_id": acc_variance, "debit": 0, "credit": str(abs_value), "description": f"Inventory Variance - {cc.count_number}"},
                             ]
                         else:
                             # Shortage: Dr. Inventory Variance / Cr. Inventory Asset
                             lines = [
-                                {"account_id": acc_variance, "debit": abs_value, "credit": 0, "description": f"Inventory Variance - {cc.count_number}"},
-                                {"account_id": acc_inventory, "debit": 0, "credit": abs_value, "description": f"Cycle Count Shortage - {cc.count_number}"},
+                                {"account_id": acc_variance, "debit": str(abs_value), "credit": 0, "description": f"Inventory Variance - {cc.count_number}"},
+                                {"account_id": acc_inventory, "debit": 0, "credit": str(abs_value), "description": f"Cycle Count Shortage - {cc.count_number}"},
                             ]
     
                         gl_create_journal_entry(
                             db,
-                            company_id=current_user.company_id,
+                            company_id=_company_id(current_user),
                             date=datetime.now().strftime("%Y-%m-%d"),
                             description=f"Cycle Count Variance - {cc.count_number}",
                             lines=lines,
-                            user_id=current_user.id,
+                            user_id=_user_id(current_user),
                             branch_id=branch_id,
                             reference=cc.count_number,
                             currency=base_currency,
+                            idempotency_key=f"cycle_count:{count_id}:{idempotency_key}",
                         )
     
             # Update cycle count

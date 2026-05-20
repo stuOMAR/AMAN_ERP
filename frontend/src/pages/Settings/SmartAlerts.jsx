@@ -366,7 +366,7 @@ function SmartAlerts() {
                                             step="0.01"
                                             className="form-control"
                                             value={form.threshold}
-                                            onChange={(e) => setForm({ ...form, threshold: parseFloat(e.target.value) || 0 })}
+                                            onChange={(e) => setForm({ ...form, threshold: e.target.value })}
                                         />
                                         <small className="text-muted">{t('settings.smart_alerts.modal.threshold_help')}</small>
                                     </div>

@@ -31,6 +31,7 @@ class ContractBase(BaseModel):
     total_amount: Decimal = Decimal(0)
     currency: Optional[str] = None
     notes: Optional[str] = None
+    branch_id: Optional[int] = None
 
 class ContractCreate(ContractBase):
     items: List[ContractItemCreate]
@@ -45,6 +46,7 @@ class ContractUpdate(BaseModel):
     billing_interval: Optional[str] = None
     currency: Optional[str] = None
     notes: Optional[str] = None
+    branch_id: Optional[int] = None
     items: Optional[List[ContractItemCreate]] = None
 
 class ContractAmendmentCreate(BaseModel):
@@ -62,6 +64,8 @@ class ContractResponse(ContractBase):
     next_billing_date: Optional[date] = None
     created_by: Optional[int] = None
     created_at: datetime
+    subtotal: Optional[Decimal] = None
+    tax_amount: Optional[Decimal] = None
     items: List[ContractItemResponse]
     party_name: Optional[str] = None
 

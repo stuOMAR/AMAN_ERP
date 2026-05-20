@@ -549,6 +549,7 @@ def get_additional_base_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'pending', -- pending, shipped, received, cancelled
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         shipped_at TIMESTAMPTZ,
         received_at TIMESTAMPTZ,
@@ -561,6 +562,9 @@ def get_additional_base_tables_sql() -> str:
         product_id INTEGER REFERENCES products(id),
         quantity DECIMAL(18, 4) NOT NULL
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_shipments_idempotency_key
+        ON stock_shipments (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS stock_transfer_log (
         id SERIAL PRIMARY KEY,
@@ -1128,6 +1132,7 @@ def get_additional_dependent_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         sq_number VARCHAR(50) UNIQUE NOT NULL,
         party_id INTEGER REFERENCES parties(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
         customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL, -- Deprecated
         branch_id INTEGER REFERENCES branches(id),
         quotation_date DATE NOT NULL,
@@ -1140,7 +1145,8 @@ def get_additional_dependent_tables_sql() -> str:
         notes TEXT,
         terms_conditions TEXT,
         currency VARCHAR(3) DEFAULT 'SAR',
-        exchange_rate DECIMAL(18, 6) DEFAULT 1.0,
+        exchange_rate DECIMAL(18, 6),
+        idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1170,6 +1176,7 @@ def get_additional_dependent_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         so_number VARCHAR(50) UNIQUE NOT NULL,
         party_id INTEGER REFERENCES parties(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
         customer_id INTEGER REFERENCES customers(id) ON DELETE SET NULL, -- Deprecated
         branch_id INTEGER REFERENCES branches(id),
         warehouse_id INTEGER REFERENCES warehouses(id),
@@ -1183,7 +1190,8 @@ def get_additional_dependent_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'draft',
         notes TEXT,
         currency VARCHAR(3) DEFAULT 'SAR',
-        exchange_rate DECIMAL(18, 6) DEFAULT 1.0,
+        exchange_rate DECIMAL(18, 6),
+        idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -2860,6 +2868,8 @@ def get_contract_tables_sql() -> str:
         total_amount DECIMAL(18, 4) DEFAULT 0,
         currency VARCHAR(3) DEFAULT 'SAR',
         notes TEXT,
+        branch_id INTEGER REFERENCES branches(id),
+        idempotency_key VARCHAR(64) UNIQUE,
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -2978,10 +2988,14 @@ def get_advanced_inventory_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'active',
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         UNIQUE(product_id, warehouse_id, batch_number)
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_product_batches_idempotency_key
+        ON product_batches (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     -- ===== SERIAL NUMBERS (INV-102) =====
     CREATE TABLE IF NOT EXISTS product_serials (
@@ -3072,6 +3086,7 @@ def get_advanced_inventory_tables_sql() -> str:
         variance_items INTEGER DEFAULT 0,
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -3091,6 +3106,9 @@ def get_advanced_inventory_tables_sql() -> str:
         counted_at TIMESTAMPTZ,
         notes TEXT
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_cycle_counts_idempotency_key
+        ON cycle_counts (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
     """
 
 

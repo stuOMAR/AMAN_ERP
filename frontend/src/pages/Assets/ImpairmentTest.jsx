@@ -4,6 +4,7 @@ import { assetsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
+import { formatNumber } from '../../utils/format';
 import { AlertTriangle, Play, DollarSign, TrendingDown, FileText } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
 import '../../components/ModuleStyles.css';
@@ -59,17 +60,14 @@ const ImpairmentTest = () => {
         if (!selectedAsset) return;
         try {
             setTesting(true);
+            // Send raw string values — backend computes recoverable_amount = MAX(fv, viu) per IAS 36.18
             const payload = {
-                recoverable_amount: parseFloat(form.recoverable_amount) || null,
-                fair_value_less_costs: parseFloat(form.fair_value_less_costs) || null,
-                value_in_use: parseFloat(form.value_in_use) || null,
-                discount_rate: parseFloat(form.discount_rate) / 100,
+                recoverable_amount: form.recoverable_amount || null,
+                fair_value_less_costs: form.fair_value_less_costs || null,
+                value_in_use: form.value_in_use || null,
+                discount_rate: form.discount_rate || null,
                 notes: form.notes
             };
-            // Recoverable amount = MAX(fair value - costs to sell, value in use) per IAS 36.18
-            if (!payload.recoverable_amount && payload.fair_value_less_costs && payload.value_in_use) {
-                payload.recoverable_amount = Math.max(payload.fair_value_less_costs, payload.value_in_use);
-            }
             const res = await assetsAPI.runImpairmentTest(selectedAsset, payload);
             setTestResult(res.data);
             showToast(t('impairment_test.test_completed', 'تم إجراء اختبار الانخفاض'), 'success');
@@ -80,11 +78,11 @@ const ImpairmentTest = () => {
     };
 
     const selectedAssetData = assets.find(a => a.id == selectedAsset);
-    const carryingAmount = selectedAssetData?.net_book_value || selectedAssetData?.carrying_amount || 0;
+    const carryingAmount = selectedAssetData?.net_book_value || selectedAssetData?.carrying_amount || '0';
 
     const formatCurrency = (val) => {
         if (!val && val !== 0) return '—';
-        return new Intl.NumberFormat(i18n.language === 'ar' ? 'ar-SA' : 'en-SA', { style: 'currency', currency: currency, maximumFractionDigits: 0 }).format(val);
+        return `${formatNumber(val)} ${currency}`;
     };
 
     return (
@@ -166,10 +164,8 @@ const ImpairmentTest = () => {
                     <div className="col-md-4">
                         <div className="form-group">
                             <label className="form-label">{t('impairment_test.recoverable_auto', 'المبلغ القابل للاسترداد (تلقائي)')}</label>
-                            <input className="form-input" type="number" value={
-                                form.fair_value_less_costs && form.value_in_use
-                                    ? Math.max(parseFloat(form.fair_value_less_costs), parseFloat(form.value_in_use))
-                                    : form.recoverable_amount
+                            <input className="form-input" type="text" value={
+                                form.recoverable_amount || t('impairment_test.auto_calculated', 'يُحسب تلقائياً')
                             } readOnly style={{ background: '#f8f9fa', fontWeight: 700 }} />
                         </div>
                     </div>
@@ -185,33 +181,12 @@ const ImpairmentTest = () => {
                 {/* Live Preview */}
                 {(form.fair_value_less_costs || form.value_in_use) && (
                     <div className="mt-3 p-3 rounded" style={{
-                        background: carryingAmount > Math.max(parseFloat(form.fair_value_less_costs || 0), parseFloat(form.value_in_use || 0))
-                            ? '#fce4ec' : '#e8f5e9',
-                        border: '1px solid',
-                        borderColor: carryingAmount > Math.max(parseFloat(form.fair_value_less_costs || 0), parseFloat(form.value_in_use || 0))
-                            ? '#ef9a9a' : '#a5d6a7'
+                        background: '#e3f2fd',
+                        border: '1px solid #90caf9'
                     }}>
-                        {(() => {
-                            const recoverable = Math.max(parseFloat(form.fair_value_less_costs || 0), parseFloat(form.value_in_use || 0));
-                            const loss = Math.max(0, carryingAmount - recoverable);
-                            const isImpaired = loss > 0;
-                            return (
-                                <div>
-                                    <strong style={{ color: isImpaired ? '#c62828' : '#2e7d32', fontSize: '1.1rem' }}>
-                                        {isImpaired
-                                            ? (`⚠ ${t('impairment_test.impairment_detected', 'خسارة انخفاض')}: ${formatCurrency(loss)}`)
-                                            : ('✓ ' + t('impairment_test.no_impairment_detected', 'لا يوجد انخفاض في القيمة'))}
-                                    </strong>
-                                    {isImpaired && (
-                                        <div style={{ marginTop: 8, fontSize: '0.85rem', fontFamily: 'monospace', direction: 'ltr' }}>
-                                            <strong>{t('impairment_test.journal_entry', 'القيد المحاسبي')}:</strong><br />
-                                            {t('impairment_test.dr_impairment_loss', 'مدين: خسارة انخفاض القيمة (6800)')} .......... {formatCurrency(loss)}<br />
-                                            &nbsp;&nbsp;&nbsp;&nbsp;{t('impairment_test.cr_accumulated', 'دائن: انخفاض متراكم (1699)')} .......... {formatCurrency(loss)}
-                                        </div>
-                                    )}
-                                </div>
-                            );
-                        })()}
+                        <strong style={{ color: '#1565c0', fontSize: '1.0rem' }}>
+                            ℹ️ {t('impairment_test.preview_hint', 'سيتم حساب خسارة الانخفاض تلقائياً عند تنفيذ الاختبار')}
+                        </strong>
                     </div>
                 )}
 

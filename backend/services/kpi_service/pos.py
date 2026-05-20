@@ -76,7 +76,7 @@ def get_pos_kpis(db, start_date: date, end_date: date,
             WHERE DATE(o.order_date) = :today AND o.status = 'paid' {branch_sql}
             GROUP BY p.name ORDER BY total DESC LIMIT 5
         """), {"today": today, "base_currency": base_currency, **bp}).fetchall()
-        top_products = [{"name": r[0], "quantity": int(r[1]), "value": float(r[2])} for r in rows]
+        top_products = [{"name": r[0], "quantity": int(r[1]), "value": Decimal(str(r[2]))} for r in rows]
     except Exception:
         pass
 

@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
@@ -91,7 +92,7 @@ def get_inventory_summary(
         # Get base currency and convert to branch currency
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         display_cur = base_cur
-        convert_rate = 1.0
+        convert_rate = Decimal("1")
 
         if branch_id:
             branch_cur = db.execute(text(
@@ -101,17 +102,18 @@ def get_inventory_summary(
                 rate_val = db.execute(text(
                     "SELECT current_rate FROM currencies WHERE code = :c"
                 ), {"c": branch_cur}).scalar()
-                if rate_val and rate_val > 0:
+                if rate_val and Decimal(str(rate_val)) > 0:
                     display_cur = branch_cur
-                    convert_rate = float(rate_val)
+                    convert_rate = Decimal(str(rate_val))
 
         # Convert inventory value to display currency
-        if convert_rate != 1.0:
-            inventory_value = float(inventory_value) / convert_rate
+        inventory_value = Decimal(str(inventory_value or 0))
+        if convert_rate != 1:
+            inventory_value = inventory_value / convert_rate
 
         return {
             "product_count": product_count,
-            "inventory_value": round(inventory_value, 2),
+            "inventory_value": str(inventory_value.quantize(Decimal("0.01"))),
             "low_stock_count": low_stock_count,
             "reserved_stock": reserved_stock,
             "currency": display_cur
@@ -264,7 +266,7 @@ def get_stock_movements(
         db.close()
 
 
-@reports_router.get("/valuation-report", response_model=List[dict], dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
+@reports_router.get("/valuation-report", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["stock.view", "stock.reports"]))])
 def get_valuation_report(
     branch_id: Optional[int] = None,
     warehouse_id: Optional[int] = None,
@@ -276,6 +278,9 @@ def get_valuation_report(
     try:
         from services.costing_service import CostingService
         from utils.permissions import validate_branch_access
+
+        if branch_id:
+            validate_branch_access(current_user, branch_id)
 
         # T066: Validate branch access for explicit warehouse_id filters
         if warehouse_id:
@@ -327,17 +332,22 @@ def get_valuation_report(
             sell_map[r.id] = {
                 "code": r.code, "name": r.name, "unit": r.unit,
                 "category": r.category_name,
-                "selling_price": float(r.selling_price or 0),
-                "total_quantity": float(r.total_quantity or 0),
+                "selling_price": Decimal(str(r.selling_price or 0)),
+                "total_quantity": Decimal(str(r.total_quantity or 0)),
             }
 
         items = []
+        grand_total_value = Decimal("0")
+        grand_total_quantity = Decimal("0")
         for item in valuation.get("items", []):
             pid = item["product_id"]
             sell_info = sell_map.get(pid, {})
-            qty = item["total_quantity"]
-            cost_price = item["weighted_avg_cost"]
-            selling_price = sell_info.get("selling_price", 0)
+            qty = Decimal(str(item["total_quantity"]))
+            cost_price = Decimal(str(item["weighted_avg_cost"]))
+            selling_price = Decimal(str(sell_info.get("selling_price", 0)))
+            total_value = Decimal(str(item["total_value"]))
+            grand_total_value += total_value
+            grand_total_quantity += qty
             items.append({
                 "id": pid,
                 "code": sell_info.get("code", ""),
@@ -346,11 +356,20 @@ def get_valuation_report(
                 "category": sell_info.get("category", ""),
                 "quantity": str(qty),
                 "cost": str(cost_price),
-                "valuation": str(item["total_value"]),
+                "valuation": str(total_value),
                 "selling_price": str(selling_price),
                 "total_value_sell": str(qty * selling_price),
             })
 
-        return items
+        base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
+        return {
+            "items": items,
+            "totals": {
+                "grand_total_value": str(grand_total_value),
+                "grand_total_quantity": str(grand_total_quantity),
+                "item_count": len(items),
+            },
+            "currency": base_cur,
+        }
     finally:
         db.close()

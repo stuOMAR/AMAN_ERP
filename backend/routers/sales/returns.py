@@ -15,9 +15,11 @@ from utils.permissions import branch_scope_filter_from_scope, check_permission, 
 from utils.accounting import get_mapped_account_id
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
 from services.tax_engine import resolve_line_tax
+from services.sales.preview import preview_sales_totals
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
-from .schemas import SalesReturnCreate
+from utils.tax_precision import money_str, rate_str
+from .schemas import SalesDocumentPreviewRequest, SalesReturnCreate
 
 returns_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -276,6 +278,94 @@ def list_unified_returns(request: Request,
 
         rows = db.execute(text(query_str), params).fetchall()
         return [dict(r._mapping) for r in rows]
+    finally:
+        db.close()
+
+
+@returns_router.post("/returns/preview", response_model=Dict[str, Any], dependencies=[Depends(require_permission("sales.view"))])
+def preview_sales_return(data: SalesDocumentPreviewRequest, current_user: dict = Depends(get_current_user)):
+    """Preview sales return totals without saving, approving, posting GL, or moving stock."""
+    db = get_db_connection(_company_id(current_user))
+    try:
+        branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+        invoice_id = data.related_invoice_id
+
+        if not invoice_id:
+            # Standalone sales returns do not persist line discounts in the
+            # current return schema, so the preview mirrors that contract.
+            lines_without_discount = [
+                {**line.model_dump(), "discount": Decimal("0")}
+                for line in data.lines
+            ]
+            return preview_sales_totals(
+                db,
+                lines=lines_without_discount,
+                branch_id=branch_id,
+                party_id=data.customer_id or data.party_id,
+                document_date=data.document_date,
+                currency=data.currency,
+                paid_amount=data.paid_amount,
+                header_discount_pct=Decimal("0"),
+                markup_amount=Decimal("0"),
+            )
+
+        original_invoice, original_lines, already_reversed_qty, original_tax_factor = _load_original_sales_invoice_for_return(
+            db,
+            invoice_id,
+            data.customer_id or data.party_id,
+        )
+        if original_invoice.branch_id:
+            validate_branch_access(current_user, original_invoice.branch_id)
+
+        subtotal = Decimal("0")
+        total_tax = Decimal("0")
+        line_details = []
+        for index, line in enumerate(data.lines):
+            if not line.product_id:
+                continue
+            original_line = _original_line_for_return(original_lines, line.product_id, line.unit_price)
+            reverse_key = _line_key(original_line.product_id, original_line.unit_price, original_line.tax_rate)
+            already_qty = already_reversed_qty.get(reverse_key, Decimal("0"))
+            available_qty = _dec(original_line.quantity) - already_qty
+            quantity = _dec(line.quantity)
+            exceeds_available = quantity > available_qty
+            preview_qty = min(quantity, available_qty) if available_qty > 0 else Decimal("0")
+            taxable = _reversal_taxable_amount(original_line, preview_qty)
+            tax_rate = _dec(original_line.tax_rate)
+            line_tax = (taxable * tax_rate / Decimal("100") * original_tax_factor).quantize(_D2, ROUND_HALF_UP)
+            line_total = (taxable + line_tax).quantize(_D2, ROUND_HALF_UP)
+            already_reversed_qty[reverse_key] = already_qty + preview_qty
+            subtotal += taxable
+            total_tax += line_tax
+            line_details.append({
+                "index": index,
+                "product_id": line.product_id,
+                "description": line.description,
+                "quantity": money_str(preview_qty),
+                "available_quantity": money_str(available_qty),
+                "exceeds_available": exceeds_available,
+                "unit_price": money_str(original_line.unit_price),
+                "tax_rate": rate_str(tax_rate),
+                "tax_rate_id": original_line.tax_rate_id,
+                "applied_taxes": original_line.applied_taxes,
+                "discount": money_str(0),
+                "subtotal": money_str(taxable),
+                "tax_amount": money_str(line_tax),
+                "line_total": money_str(line_total),
+                "total": money_str(line_total),
+            })
+
+        grand_total = (subtotal + total_tax).quantize(_D2, ROUND_HALF_UP)
+        return {
+            "subtotal": money_str(subtotal),
+            "total_discount": money_str(0),
+            "total_tax": money_str(total_tax),
+            "grand_total": money_str(grand_total),
+            "paid_amount": money_str(data.paid_amount),
+            "remaining_balance": money_str(grand_total - _dec(data.paid_amount)),
+            "currency": data.currency,
+            "lines": line_details,
+        }
     finally:
         db.close()
 

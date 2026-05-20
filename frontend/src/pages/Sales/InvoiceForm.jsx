@@ -46,7 +46,7 @@ function InvoiceForm() {
         down_payment_method: 'cash',
         paid_amount: '',
         currency: currency || '',
-        exchange_rate: '1',
+        exchange_rate: '',
         treasury_id: ''
     })
 
@@ -144,7 +144,7 @@ function InvoiceForm() {
         let type = null;
         if (formData.payment_method && formData.payment_method !== 'credit') {
             type = formData.payment_method === 'bank' ? 'bank' : 'cash';
-        } else if (formData.payment_method === 'credit' && formData.paid_amount > 0) {
+        } else if (formData.payment_method === 'credit' && isPositiveDecimal(formData.paid_amount)) {
             type = formData.down_payment_method === 'bank' ? 'bank' : 'cash';
         }
 
@@ -344,7 +344,6 @@ function InvoiceForm() {
                 down_payment_method: formData.down_payment_method || 'cash',
                 paid_amount: String(formData.paid_amount || '0'),
                 currency: formData.currency,
-                exchange_rate: String(formData.exchange_rate || '1'),
                 treasury_id: formData.treasury_id ? parseInt(formData.treasury_id) : null,
                 effect_type: totals.globalEffectType,
                 effect_percentage: totals.globalEffectPercent,
@@ -356,6 +355,11 @@ function InvoiceForm() {
                     discount: String(item.discount || '0'),
                     markup: '0'
                 }))
+            }
+            if (formData.exchange_rate) {
+                payload.exchange_rate = String(formData.exchange_rate)
+            } else {
+                delete payload.exchange_rate
             }
             await salesAPI.createInvoice(payload)
             navigate('/sales/invoices')
@@ -556,17 +560,14 @@ function InvoiceForm() {
                                     value={formData.currency}
                                     onChange={async e => {
                                         const code = e.target.value;
-                                        const curr = currencies.find(c => c.code === code);
-                                        // T8.4: prefer the live rate from /accounting/currencies/current.
-                                        // Falls back to the legacy `current_rate` field, then 1.0.
-                                        let rate = String(curr?.current_rate || '1');
+                                        let rate = '';
                                         try {
                                             rate = await fetchCurrentRate(code);
-                                        } catch { /* keep fallback */ }
+                                        } catch { /* backend will resolve or reject on submit */ }
                                         setFormData(prev => ({
                                             ...prev,
                                             currency: code,
-                                            exchange_rate: String(rate || '1')
+                                            exchange_rate: String(rate || '')
                                         }));
                                     }}
                                 >

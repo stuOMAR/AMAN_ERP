@@ -1,5 +1,5 @@
 """Sales quotations endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import List, Optional
@@ -11,19 +11,36 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access
 from utils.tx import transactional
 from services.tax_engine import resolve_line_tax
-from .schemas import QuotationCreate
+from services.sales.preview import preview_sales_totals
+from .schemas import QuotationCreate, SalesDocumentPreviewRequest
 
 quotations_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
+_COLUMN_CACHE: dict[str, set[str]] = {}
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
+
+
+def _table_columns(db, table_name: str) -> set[str]:
+    cached = _COLUMN_CACHE.get(table_name)
+    if cached is not None:
+        return cached
+    cols = {
+        row.column_name
+        for row in db.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+            {"t": table_name},
+        ).fetchall()
+    }
+    _COLUMN_CACHE[table_name] = cols
+    return cols
 
 
 def _company_id(user) -> str:
@@ -67,6 +84,27 @@ def list_quotations(branch_id: Optional[int] = None, current_user: dict = Depend
         logger.error(f"Error listing quotations: {str(e)}")
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
+    finally:
+        db.close()
+
+
+@quotations_router.post("/quotations/preview", response_model=dict, dependencies=[Depends(require_permission("sales.view"))])
+def preview_quotation(data: SalesDocumentPreviewRequest, current_user: dict = Depends(get_current_user)):
+    """Preview sales quotation totals without saving a quotation."""
+    branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+    db = get_db_connection(_company_id(current_user))
+    try:
+        return preview_sales_totals(
+            db,
+            lines=data.lines,
+            branch_id=branch_id,
+            party_id=data.customer_id or data.party_id,
+            document_date=data.document_date,
+            currency=data.currency,
+            paid_amount=data.paid_amount,
+            header_discount_pct=data.header_discount_pct,
+            markup_amount=data.markup_amount,
+        )
     finally:
         db.close()
 
@@ -119,7 +157,12 @@ def get_quotation(request: Request, id: int, current_user: dict = Depends(get_cu
 
 
 @quotations_router.post("/quotations", response_model=dict, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))])
-def create_quotation(request: Request, quotation: QuotationCreate, current_user: dict = Depends(get_current_user)):
+def create_quotation(
+    request: Request,
+    quotation: QuotationCreate,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user: dict = Depends(get_current_user),
+):
     """Create a new sales quotation"""
     db = get_db_connection(_company_id(current_user))
     try:
@@ -130,6 +173,12 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
         """), {"id": quotation.customer_id}).fetchone()
         if not customer:
             raise HTTPException(**http_error(404, "customer_not_valid", request))
+
+        if idempotency_key:
+            db.execute(
+                text("SELECT pg_advisory_xact_lock(hashtext(:key))"),
+                {"key": f"sales_quotation:{idempotency_key}"},
+            )
 
         # Generate SQ Number (SQ-YYYY-XXXX)
         year = datetime.now().year
@@ -153,7 +202,9 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
         total_tax = Decimal('0')
         total_discount = Decimal('0')
         items_to_save = []
-        _branch_id = quotation.branch_id or customer.branch_id
+        _branch_id = validate_branch_access(current_user, quotation.branch_id or customer.branch_id, request)
+        if _branch_id is None:
+            raise HTTPException(**http_error(400, "branch_required", request))
 
         for item in quotation.items:
             product = db.execute(text("""
@@ -189,25 +240,50 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
         grand_total = (subtotal - total_discount + total_tax).quantize(_D2, ROUND_HALF_UP)
 
         # Save Header
-        res = db.execute(text("""
-            INSERT INTO sales_quotations (
-                sq_number, party_id, quotation_date, expiry_date,
-                subtotal, tax_amount, discount, total, status, notes, terms_conditions, created_by, branch_id,
-                currency, exchange_rate, party_site_id
-            ) VALUES (
-                :num, :cust, :qdate, :expdate,
-                :sub, :tax, :disc, :total, 'draft', :notes, :terms, :user, :bid,
-                :currency, :exchange_rate, :party_site_id
-            ) RETURNING id
-        """), {
+        cols = [
+            "sq_number", "party_id", "quotation_date", "expiry_date",
+            "subtotal", "tax_amount", "discount", "total", "status",
+            "notes", "terms_conditions", "created_by", "branch_id",
+            "currency", "exchange_rate",
+        ]
+        vals = [
+            ":num", ":cust", ":qdate", ":expdate",
+            ":sub", ":tax", ":disc", ":total", "'draft'",
+            ":notes", ":terms", ":user", ":bid",
+            ":currency", ":exchange_rate",
+        ]
+        quotation_cols = _table_columns(db, "sales_quotations")
+        if quotation.party_site_id and "party_site_id" in quotation_cols:
+            cols.append("party_site_id")
+            vals.append(":party_site_id")
+        if idempotency_key and "idempotency_key" in quotation_cols:
+            cols.append("idempotency_key")
+            vals.append(":idempotency_key")
+        insert_sql = f"INSERT INTO sales_quotations ({', '.join(cols)}) VALUES ({', '.join(vals)})"
+        if idempotency_key and "idempotency_key" in quotation_cols:
+            insert_sql += """
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                DO NOTHING
+            """
+        insert_sql += " RETURNING id"
+        res = db.execute(text(insert_sql), {
             "num": sq_num, "cust": quotation.customer_id, "qdate": quotation.quotation_date,
             "expdate": quotation.expiry_date, "sub": subtotal, "tax": total_tax,
             "disc": total_discount, "total": grand_total, "notes": quotation.notes,
             "terms": quotation.terms_conditions, "user": _user_id(current_user),
-            "bid": quotation.branch_id or customer.branch_id, "currency": quotation.currency,
+            "bid": _branch_id, "currency": quotation.currency,
             "exchange_rate": quotation.exchange_rate,
             "party_site_id": quotation.party_site_id,
+            "idempotency_key": idempotency_key,
         }).fetchone()
+        if res is None and idempotency_key and "idempotency_key" in quotation_cols:
+            existing = db.execute(text("""
+                SELECT id, sq_number FROM sales_quotations
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "sq_number": existing.sq_number, "idempotent_replay": True}
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
 
         sq_id = res[0]
 
@@ -238,7 +314,8 @@ def create_quotation(request: Request, quotation: QuotationCreate, current_user:
             resource_type="sales_quotation",
             resource_id=str(sq_id),
             details={"sq_number": sq_num, "total": str(grand_total or 0), "customer_id": quotation.customer_id, "customer_name": cust_name},
-            request=request
+            request=request,
+            branch_id=_branch_id,
         )
         return {"id": sq_id, "sq_number": sq_num}
     except HTTPException:

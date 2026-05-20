@@ -29,12 +29,12 @@ export default function useInvoiceCalc() {
    * Calculate invoice totals via backend.
    * @param {Object} data - { lines: [...], header_discount_pct, markup_amount, paid_amount, currency }
    */
-  const preview = useCallback(async (data) => {
+  const preview = useCallback(async (data, endpoint = '/calculate/invoice-totals') => {
     setLoading(true);
     setError(null);
 
     try {
-      const res = await api.post('/calculate/invoice-totals', data);
+      const res = await api.post(endpoint, data);
       const result = res.data;
 
       setTotals({
@@ -61,9 +61,9 @@ export default function useInvoiceCalc() {
    * Debounced preview — waits 300ms after last call.
    * Use this for live calculations while user types.
    */
-  const previewDebounced = useCallback((data) => {
+  const previewDebounced = useCallback((data, endpoint = '/calculate/invoice-totals') => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => preview(data), 300);
+    debounceRef.current = setTimeout(() => preview(data, endpoint), 300);
   }, [preview]);
 
   /**

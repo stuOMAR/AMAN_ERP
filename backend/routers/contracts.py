@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import List, Optional
@@ -10,7 +10,7 @@ from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
 from utils.tx import transactional
 from schemas.contracts import ContractCreate, ContractUpdate, ContractAmendmentCreate, ContractResponse
-from utils.permissions import branch_scope_filter, require_permission
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 from utils.accounting import get_base_currency, compute_line_amounts, compute_invoice_totals
 from utils.audit import log_activity
 from utils.tax_precision import money_str
@@ -29,6 +29,7 @@ router = APIRouter(prefix="/contracts", tags=["Contracts"])
 def create_contract(
     contract: ContractCreate,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Create Contract."""
@@ -46,6 +47,17 @@ def create_contract(
                 ).fetchone()
                 if existing:
                     raise HTTPException(**http_error(400, "contract_number_duplicate"))
+            
+            # Idempotency pre-check
+            if idempotency_key:
+                existing_idem = db.execute(text("""
+                    SELECT id FROM contracts WHERE idempotency_key = :key LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if existing_idem:
+                    return get_contract(existing_idem.id, current_user)
+            
+            # Validate branch access
+            branch_id = validate_branch_access(current_user, getattr(contract, 'branch_id', None))
     
             # Recalculate total_amount from items to prevent client manipulation
             calculated_total = Decimal('0')
@@ -62,10 +74,12 @@ def create_contract(
                     INSERT INTO contracts (
                         contract_number, party_id, contract_type, status, 
                         start_date, end_date, billing_interval, total_amount, 
-                        currency, notes, created_by, created_at
+                        currency, notes, created_by, created_at,
+                        branch_id, idempotency_key
                     ) VALUES (
                         :num, :pid, :ctype, 'active', :start, :end, :interval, :total,
-                        :cur, :notes, :uid, CURRENT_TIMESTAMP
+                        :cur, :notes, :uid, CURRENT_TIMESTAMP,
+                        :bid, :idem_key
                     ) RETURNING id
                 """),
                 {
@@ -78,7 +92,9 @@ def create_contract(
                     "total": final_total,
                     "cur": contract.currency,
                     "notes": contract.notes,
-                    "uid": current_user.id
+                    "uid": current_user.id,
+                    "bid": branch_id,
+                    "idem_key": idempotency_key
                 }
             ).scalar()
     
@@ -183,9 +199,14 @@ def list_contracts(
 
         result = []
         for c in contracts:
+            c_items = items_by_contract.get(c.id, [])
+            line_dicts = [{"quantity": i["quantity"], "unit_price": i["unit_price"], "tax_rate": i.get("tax_rate") or 0} for i in c_items]
+            totals = compute_invoice_totals(line_dicts)
             result.append({
                 **c._mapping,
-                "items": items_by_contract.get(c.id, [])
+                "items": c_items,
+                "subtotal": totals["subtotal"],
+                "tax_amount": totals["total_tax"]
             })
         return result
 
@@ -293,9 +314,14 @@ def get_contract(
             {"id": contract_id}
         ).fetchall()
         
+        line_dicts = [{"quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": i.tax_rate or 0} for i in items]
+        totals = compute_invoice_totals(line_dicts)
+        
         return {
             **contract._mapping,
-            "items": [dict(row._mapping) for row in items]
+            "items": [dict(row._mapping) for row in items],
+            "subtotal": totals["subtotal"],
+            "tax_amount": totals["total_tax"]
         }
 
 
@@ -314,12 +340,20 @@ def update_contract(
         if not existing:
             raise HTTPException(**http_error(404, "contract_not_found"))
 
+        # Validate branch access if attempting to change branch
+        if data.branch_id is not None:
+            validate_branch_access(current_user, data.branch_id)
+        
+        if existing.branch_id is not None:
+            validate_branch_access(current_user, existing.branch_id)
+
         # Build dynamic SET clause from non-None fields (partial update)
         updatable_fields = {
             "party_id": data.party_id, "contract_type": data.contract_type,
             "start_date": data.start_date, "end_date": data.end_date,
             "billing_interval": data.billing_interval,
-            "currency": data.currency, "notes": data.notes
+            "currency": data.currency, "notes": data.notes,
+            "branch_id": data.branch_id
         }
         set_parts = []
         params = {"id": contract_id}

@@ -2,6 +2,8 @@ import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detailedReportsAPI } from '../../services/reports';
 import { api } from '../../utils/api';
+import Decimal from 'decimal.js';
+import { formatNumber } from '../../utils/format';
 import { useBranch } from '../../context/BranchContext';
 import { useToast } from '../../context/ToastContext';
 import {
@@ -52,13 +54,13 @@ const DetailedProfitLoss = () => {
 
     const totals = data.reduce(
         (acc, row) => ({
-            revenue: acc.revenue + (row.revenue || 0),
-            cogs: acc.cogs + (row.cogs || 0),
-            gross_profit: acc.gross_profit + (row.gross_profit || 0),
+            revenue: acc.revenue.plus(new Decimal(row.revenue || '0')),
+            cogs: acc.cogs.plus(new Decimal(row.cogs || '0')),
+            gross_profit: acc.gross_profit.plus(new Decimal(row.gross_profit || '0')),
         }),
-        { revenue: 0, cogs: 0, gross_profit: 0 }
+        { revenue: new Decimal('0'), cogs: new Decimal('0'), gross_profit: new Decimal('0') }
     );
-    const overallMargin = totals.revenue ? ((totals.gross_profit / totals.revenue) * 100).toFixed(1) : '0.0';
+    const overallMargin = !totals.revenue.isZero() ? totals.gross_profit.div(totals.revenue).times(100).toFixed(1) : '0.0';
 
     const chartData = data.slice(0, 10).map(row => ({
         name: row.name || row.customer || row.product || row.category || '-',
@@ -90,9 +92,7 @@ const DetailedProfitLoss = () => {
         }
     };
 
-    const fmt = (n) => Number(n || 0).toLocaleString(isRTL ? 'ar-SA' : 'en-US', {
-        minimumFractionDigits: 2, maximumFractionDigits: 2,
-    });
+    const fmt = (n) => formatNumber(n);
 
     return (
         <div className="workspace fade-in">
@@ -209,7 +209,7 @@ const DetailedProfitLoss = () => {
                             <tr><td colSpan="6" className="text-center">{t('common.no_data')}</td></tr>
                         ) : (
                             data.map((row, idx) => {
-                                const margin = row.revenue ? ((row.gross_profit / row.revenue) * 100).toFixed(1) : '0.0';
+                                const margin = row.revenue ? new Decimal(row.gross_profit || '0').div(new Decimal(row.revenue)).times(100).toFixed(1) : '0.0';
                                 return (
                                     <tr key={idx}>
                                         <td>{idx + 1}</td>

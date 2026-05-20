@@ -89,8 +89,7 @@ function BatchList() {
                 ...form,
                 product_id: parseInt(form.product_id),
                 warehouse_id: parseInt(form.warehouse_id),
-                quantity: String(form.quantity || 0),
-                unit_cost: String(form.unit_cost || 0)
+                quantity: String(form.quantity || 0)
             })
             setShowCreateModal(false)
             setForm({ product_id: '', warehouse_id: '', batch_number: '', manufacturing_date: '', expiry_date: '', quantity: '', unit_cost: '', notes: '' })

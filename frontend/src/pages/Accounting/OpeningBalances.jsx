@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
+import Decimal from 'decimal.js'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import { Calendar, TrendingUp, TrendingDown, CheckCircle, AlertTriangle } from 'lucide-react'
 import BackButton from '../../components/common/BackButton'
 
@@ -57,7 +59,7 @@ export default function OpeningBalances() {
 
     const updateAccount = (id, field, value) => {
         setAccounts(prev => prev.map(a =>
-            a.id === id ? { ...a, [field]: parseFloat(value) || 0 } : a
+            a.id === id ? { ...a, [field]: value } : a
         ))
     }
 
@@ -83,10 +85,10 @@ export default function OpeningBalances() {
         }
     }
 
-    const totalDebit = accounts.reduce((s, a) => s + (a.debit || 0), 0)
-    const totalCredit = accounts.reduce((s, a) => s + (a.credit || 0), 0)
-    const difference = totalDebit - totalCredit
-    const isBalanced = Math.abs(difference) < 0.01
+    const totalDebit = accounts.reduce((s, a) => s.plus(new Decimal(a.debit || '0')), new Decimal('0'))
+    const totalCredit = accounts.reduce((s, a) => s.plus(new Decimal(a.credit || '0')), new Decimal('0'))
+    const difference = totalDebit.minus(totalCredit)
+    const isBalanced = difference.abs().lt('0.01')
 
     const filteredAccounts = accounts.filter(a => {
         if (filterType && a.account_type !== filterType) return false
@@ -99,7 +101,7 @@ export default function OpeningBalances() {
         return true
     })
 
-    const formatNum = (n) => n ? parseFloat(n).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 }) : '-'
+    const formatNum = (n) => n ? formatNumber(n) : '-'
 
     const TYPE_LABELS = {
         asset: { label: t('comparison.type_asset'), color: 'primary' },
@@ -144,18 +146,18 @@ export default function OpeningBalances() {
                 <div className="card p-3 text-center">
                     <TrendingUp size={24} className="text-primary mb-2" />
                     <div className="small text-muted">{t('opening.total_debit')}</div>
-                    <div className="fw-bold fs-4 text-primary">{formatNum(totalDebit)} <small>{currency}</small></div>
+                    <div className="fw-bold fs-4 text-primary">{formatNum(totalDebit.toString())} <small>{currency}</small></div>
                 </div>
                 <div className="card p-3 text-center">
                     <TrendingDown size={24} className="text-success mb-2" />
                     <div className="small text-muted">{t('opening.total_credit')}</div>
-                    <div className="fw-bold fs-4 text-success">{formatNum(totalCredit)} <small>{currency}</small></div>
+                    <div className="fw-bold fs-4 text-success">{formatNum(totalCredit.toString())} <small>{currency}</small></div>
                 </div>
                 <div className={`card p-3 text-center ${!isBalanced ? 'border-danger' : 'border-success'}`}>
                     {isBalanced ? <CheckCircle size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-danger mb-2" />}
                     <div className="small text-muted">{t('opening.difference')}</div>
                     <div className={`fw-bold fs-4 ${isBalanced ? 'text-success' : 'text-danger'}`}>
-                        {isBalanced ? '✅ 0.00' : formatNum(Math.abs(difference))} <small>{currency}</small>
+                        {isBalanced ? '✅ 0.00' : formatNum(difference.abs().toString())} <small>{currency}</small>
                     </div>
                 </div>
             </div>
@@ -182,7 +184,7 @@ export default function OpeningBalances() {
                 </div>
                 <div className="col-md-3 text-end">
                     <span className="badge bg-secondary">
-                        {filteredAccounts.filter(a => a.debit > 0 || a.credit > 0).length} / {filteredAccounts.length} {t('opening.accounts')}
+                        {filteredAccounts.filter(a => new Decimal(a.debit || '0').gt(0) || new Decimal(a.credit || '0').gt(0)).length} / {filteredAccounts.length} {t('opening.accounts')}
                     </span>
                 </div>
             </div>
@@ -206,7 +208,7 @@ export default function OpeningBalances() {
                             {filteredAccounts.map(a => {
                                 const tl = TYPE_LABELS[a.account_type] || {}
                                 return (
-                                    <tr key={a.id} className={(a.debit > 0 || a.credit > 0) ? 'table-light' : ''}>
+                                    <tr key={a.id} className={(new Decimal(a.debit || '0').gt(0) || new Decimal(a.credit || '0').gt(0)) ? 'table-light' : ''}>
                                         <td className="text-muted small">{a.account_number}</td>
                                         <td>{i18n.language === 'ar' ? a.name : (a.name_en || a.name)}</td>
                                         <td><span className={`badge bg-${tl.color || 'secondary'}`}>{tl.label || a.account_type}</span></td>

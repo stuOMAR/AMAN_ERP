@@ -130,7 +130,7 @@ def get_party_site(request: Request,
                     "branch_name": b.branch_name,
                     "account_type": b.account_type,
                     "currency": b.currency,
-                    "balance": float(b.balance)
+                    "balance": Decimal(str(b.balance))
                 }
                 for b in balances
             ]

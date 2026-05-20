@@ -44,7 +44,7 @@ export default function CampaignForm() {
                 subject: form.subject || null,
                 content: form.content || null,
                 scheduled_date: form.scheduled_date || null,
-                estimated_cost: form.estimated_cost ? parseFloat(form.estimated_cost) : null,
+                estimated_cost: form.estimated_cost || null,
                 description: form.description || null,
                 status: form.scheduled_date ? 'scheduled' : 'draft',
             };

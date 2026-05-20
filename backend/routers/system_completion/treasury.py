@@ -119,13 +119,13 @@ async def import_bank_statement(
                     credit = 0
                     if 'debit' in col_map and col_map['debit'] < len(row):
                         val = row[col_map['debit']].strip().replace(',', '')
-                        debit = float(val) if val else 0
+                        debit = Decimal(str(val)) if val else Decimal('0')
                     if 'credit' in col_map and col_map['credit'] < len(row):
                         val = row[col_map['credit']].strip().replace(',', '')
-                        credit = float(val) if val else 0
+                        credit = Decimal(str(val)) if val else Decimal('0')
                     if 'amount' in col_map and col_map['amount'] < len(row) and debit == 0 and credit == 0:
                         val = row[col_map['amount']].strip().replace(',', '')
-                        amount = float(val) if val else 0
+                        amount = Decimal(str(val)) if val else Decimal('0')
                         if amount > 0:
                             credit = amount
                         else:
@@ -134,7 +134,7 @@ async def import_bank_statement(
                     balance = 0
                     if 'balance' in col_map and col_map['balance'] < len(row):
                         val = row[col_map['balance']].strip().replace(',', '')
-                        balance = float(val) if val else 0
+                        balance = Decimal(str(val)) if val else Decimal('0')
     
                     # Parse date (try multiple formats)
                     parsed_date = None
@@ -238,7 +238,7 @@ def auto_match_bank_lines(request: Request, batch_id: int, current_user: dict = 
     
             matched = 0
             for line in lines:
-                amount = float(line.debit or 0) or float(line.credit or 0)
+                amount = Decimal(str(line.debit or 0)) or Decimal(str(line.credit or 0))
                 ref = line.reference or ''
     
                 # Try matching by reference number and amount

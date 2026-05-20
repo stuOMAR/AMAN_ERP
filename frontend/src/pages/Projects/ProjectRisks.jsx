@@ -1,7 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import Decimal from 'decimal.js';
 import { projectsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
+import { formatNumber } from '../../utils/format';
 import { AlertTriangle, Plus, Trash2, Edit3, Save, X, GitBranch, Link2 } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
 import '../../components/ModuleStyles.css';
@@ -141,7 +143,7 @@ const ProjectRisks = () => {
                 <div className="metric-card">
                     <div className="metric-icon" style={{ background: '#fce4ec' }}><AlertTriangle size={22} color="#c62828" /></div>
                     <div className="metric-info">
-                        <span className="metric-value">{risks.filter(r => parseFloat(r.risk_score || 0) >= 0.6).length}</span>
+                        <span className="metric-value">{risks.filter(r => new Decimal(r.risk_score || '0').gte('0.6')).length}</span>
                         <span className="metric-label">{t('project_risks.high_risks', 'مخاطر عالية')}</span>
                     </div>
                 </div>
@@ -219,8 +221,8 @@ const ProjectRisks = () => {
                                     <div className="col-md-3">
                                         <div className="form-group">
                                             <label className="form-label">{t('project_risks.risk_score', 'درجة الخطر')}</label>
-                                            <div className="form-input" style={{ background: riskColor(form.probability * form.impact), color: '#fff', textAlign: 'center', fontWeight: 700 }}>
-                                                {(form.probability * form.impact).toFixed(2)}
+                                            <div className="form-input" style={{ background: riskColor(new Decimal(form.probability || '0').times(new Decimal(form.impact || '0')).toNumber()), color: '#fff', textAlign: 'center', fontWeight: 700 }}>
+                                                {formatNumber(new Decimal(form.probability || '0').times(new Decimal(form.impact || '0')).toString())}
                                             </div>
                                         </div>
                                     </div>
@@ -334,11 +336,11 @@ const ProjectRisks = () => {
                                 ) : risks.map(r => (
                                     <tr key={r.id}>
                                         <td><strong>{r.title}</strong><br /><small className="text-muted">{r.description}</small></td>
-                                        <td>{parseFloat(r.probability || 0).toFixed(1)}</td>
-                                        <td>{parseFloat(r.impact || 0).toFixed(1)}</td>
+                                        <td>{formatNumber(r.probability || '0')}</td>
+                                        <td>{formatNumber(r.impact || '0')}</td>
                                         <td>
-                                            <span className="badge" style={{ background: riskColor(parseFloat(r.risk_score || 0)), color: '#fff', fontSize: '0.85rem' }}>
-                                                {parseFloat(r.risk_score || 0).toFixed(2)}
+                                            <span className="badge" style={{ background: riskColor(new Decimal(r.risk_score || '0').toNumber()), color: '#fff', fontSize: '0.85rem' }}>
+                                                {formatNumber(r.risk_score || '0')}
                                             </span>
                                         </td>
                                         <td><span className="badge bg-secondary">{riskStatuses[r.status] || r.status}</span></td>

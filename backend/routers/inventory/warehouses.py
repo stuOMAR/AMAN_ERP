@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
@@ -247,7 +248,7 @@ def delete_warehouse(id: int, request: Request, current_user: dict = Depends(get
         stock = db.execute(text(
             "SELECT COALESCE(SUM(quantity), 0) FROM inventory WHERE warehouse_id = :id"
         ), {"id": id}).scalar()
-        if stock and abs(float(stock)) > 0.01:
+        if stock and abs(Decimal(str(stock))) > Decimal("0.01"):
             raise HTTPException(**http_error(400, "cannot_delete_warehouse_with_stock", request))
 
         # INV-001: Check pending transactions

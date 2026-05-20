@@ -78,7 +78,7 @@ const AllocationForm = () => {
                 employee_id: parseInt(form.employee_id),
                 project_id: parseInt(form.project_id),
                 role: form.role || null,
-                allocation_percent: parseFloat(form.allocation_percent),
+                allocation_percent: form.allocation_percent,
                 start_date: form.start_date,
                 end_date: form.end_date,
             };

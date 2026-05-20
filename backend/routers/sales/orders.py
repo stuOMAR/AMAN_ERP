@@ -11,17 +11,34 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
-from .schemas import SOCreate
+from .schemas import SOCreate, SalesDocumentPreviewRequest
 from services.tax_engine import resolve_line_tax
+from services.sales.preview import preview_sales_totals
 
 orders_router = APIRouter()
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal('0.01')
+_COLUMN_CACHE: dict[str, set[str]] = {}
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
+
+
+def _table_columns(db, table_name: str) -> set[str]:
+    cached = _COLUMN_CACHE.get(table_name)
+    if cached is not None:
+        return cached
+    cols = {
+        row.column_name
+        for row in db.execute(
+            text("SELECT column_name FROM information_schema.columns WHERE table_name = :t"),
+            {"t": table_name},
+        ).fetchall()
+    }
+    _COLUMN_CACHE[table_name] = cols
+    return cols
 
 
 def _company_id(user) -> str:
@@ -56,6 +73,27 @@ def list_sales_orders(branch_id: Optional[int] = None, current_user: dict = Depe
 
         result = db.execute(text(query_str), params).fetchall()
         return [dict(row._mapping) for row in result]
+    finally:
+        db.close()
+
+
+@orders_router.post("/orders/preview", response_model=Dict[str, Any], dependencies=[Depends(require_permission("sales.view"))])
+def preview_sales_order(data: SalesDocumentPreviewRequest, current_user: dict = Depends(get_current_user)):
+    """Preview sales-order totals without reserving inventory or writing state."""
+    branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+    db = get_db_connection(_company_id(current_user))
+    try:
+        return preview_sales_totals(
+            db,
+            lines=data.lines,
+            branch_id=branch_id,
+            party_id=data.customer_id or data.party_id,
+            document_date=data.document_date,
+            currency=data.currency,
+            paid_amount=data.paid_amount,
+            header_discount_pct=data.header_discount_pct,
+            markup_amount=data.markup_amount,
+        )
     finally:
         db.close()
 
@@ -261,18 +299,26 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         grand_total = totals["grand_total"]
 
         # 3. Save Header
-        res = db.execute(text("""
-            INSERT INTO sales_orders (
-                so_number, party_id, order_date, expected_delivery_date,
-                subtotal, tax_amount, discount, total, status, notes, created_by, branch_id,
-                warehouse_id, quotation_id,
-                currency, exchange_rate, party_site_id
-            ) VALUES (
-                :num, :cust, :odate, :edate,
-                :sub, :tax, :disc, :total, 'draft', :notes, :user, :bid,
-                :whid, :qid,
-                :currency, :exchange_rate, :party_site_id
-            ) RETURNING id
+        cols = [
+            "so_number", "party_id", "order_date", "expected_delivery_date",
+            "subtotal", "tax_amount", "discount", "total", "status", "notes",
+            "created_by", "branch_id", "warehouse_id", "quotation_id",
+            "currency", "exchange_rate",
+        ]
+        vals = [
+            ":num", ":cust", ":odate", ":edate",
+            ":sub", ":tax", ":disc", ":total", "'draft'", ":notes",
+            ":user", ":bid", ":whid", ":qid",
+            ":currency", ":exchange_rate",
+        ]
+        order_cols = _table_columns(db, "sales_orders")
+        if data.party_site_id and "party_site_id" in order_cols:
+            cols.append("party_site_id")
+            vals.append(":party_site_id")
+        res = db.execute(text(f"""
+            INSERT INTO sales_orders ({', '.join(cols)})
+            VALUES ({', '.join(vals)})
+            RETURNING id
         """), {
             "num": so_num, "cust": data.customer_id, "odate": data.order_date,
             "edate": data.expected_delivery_date, "sub": subtotal, "tax": total_tax,

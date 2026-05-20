@@ -8,6 +8,7 @@ import { useBranch } from '../../context/BranchContext'
 import BackButton from '../../components/common/BackButton'
 import DateInput from '../../components/common/DateInput';
 import FormField from '../../components/common/FormField';
+import Decimal from 'decimal.js';
 
 function DeliveryOrderForm() {
     const { t } = useTranslation()
@@ -41,11 +42,16 @@ function DeliveryOrderForm() {
             const so = res.data
             setForm(f => ({
                 ...f, so_id: soId, party_id: so.customer_id || so.party_id,
-                lines: (so.items || so.lines || []).map(l => ({
-                    product_id: l.product_id, quantity: l.quantity - (l.delivered_quantity || 0),
-                    unit_price: l.unit_price, tax_rate: l.tax_rate || 0,
-                    product_name: l.product_name
-                })).filter(l => l.quantity > 0)
+                lines: (so.items || so.lines || []).map(l => {
+                    const remaining = new Decimal(l.quantity || '0').minus(l.delivered_quantity || '0');
+                    return {
+                        product_id: l.product_id,
+                        quantity: remaining.toString(),
+                        unit_price: String(l.unit_price || '0'),
+                        tax_rate: String(l.tax_rate || '0'),
+                        product_name: l.product_name
+                    };
+                }).filter(l => { try { return new Decimal(l.quantity).gt(0) } catch { return false } })
             }))
         } catch (err) { showToast(t('common.error'), 'error') }
     }
@@ -134,9 +140,9 @@ function DeliveryOrderForm() {
                             {form.lines.map((line, i) => (
                                 <tr key={i}>
                                     <td>{line.product_name || <input type="number" className="form-input" value={line.product_id} onChange={e => updateLine(i, 'product_id', e.target.value)} placeholder={t('common.product_id')} />}</td>
-                                    <td><input type="number" className="form-input" min="1" value={line.quantity} onChange={e => updateLine(i, 'quantity', Number(e.target.value))} style={{ width: 80 }} /></td>
-                                     <td><input type="number" className="form-input" step="0.01" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', Number(e.target.value))} style={{ width: 120 }} /> <small>{currency}</small></td>
-                                    <td><input type="number" className="form-input" step="0.01" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', Number(e.target.value))} style={{ width: 80 }} /></td>
+                                    <td><input type="text" inputMode="decimal" className="form-input" min="1" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} style={{ width: 80 }} /></td>
+                                     <td><input type="text" inputMode="decimal" className="form-input" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} style={{ width: 120 }} /> <small>{currency}</small></td>
+                                    <td><input type="text" inputMode="decimal" className="form-input" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', e.target.value)} style={{ width: 80 }} /></td>
                                     {!form.so_id && <td><button type="button" className="btn-icon text-danger" onClick={() => removeLine(i)}>🗑️</button></td>}
                                 </tr>
                             ))}

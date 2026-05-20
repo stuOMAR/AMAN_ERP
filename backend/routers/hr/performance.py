@@ -493,7 +493,7 @@ def finalize_review(
             "SELECT id, weight FROM performance_goals WHERE review_id = :rid"
         ), {"rid": review_id}).fetchall()
 
-        goal_weights = {g[0]: float(g[1]) for g in goals}
+        goal_weights = {g[0]: Decimal(str(g[1])) for g in goals}
         total_weight = sum(goal_weights.values())
 
         if total_weight == 0:
@@ -509,7 +509,7 @@ def finalize_review(
                 w = Decimal(str(goal_weights.get(gid, 0)))
                 if total_weight > 0:
                     composite += sc * w / Decimal(str(total_weight))
-            composite = float(composite.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
+            composite = Decimal(str(composite.quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)))
 
         conn.execute(text("""
             UPDATE performance_reviews

@@ -42,7 +42,7 @@ def record_scrap(
         RETURNING id
     """), {
         "tid": tenant_id, "item": item_id, "wid": warehouse_id,
-        "qty": float(qty), "cost": float(unit_cost),
+        "qty": Decimal(str(qty)), "cost": Decimal(str(unit_cost)),
         "reason": reason, "mo": mo_id, "je": je_id,
     })
 
@@ -54,7 +54,7 @@ def record_scrap(
         log_activity(
             db, action="inventory.scrap.recorded",
             entity_type="scrap_movement", entity_id=scrap_id,
-            details={"item_id": item_id, "qty": float(qty), "reason": reason},
+            details={"item_id": item_id, "qty": Decimal(str(qty)), "reason": reason},
         )
     except Exception:
         pass

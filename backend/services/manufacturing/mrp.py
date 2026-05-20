@@ -119,7 +119,7 @@ def run_mrp(db: Any, *, tenant_id: int, actor: dict | None = None, horizon_days:
             """),
             {
                 "tid": tenant_id, "run_id": run_id, "item": item_id,
-                "wid": warehouse_id, "qty": float(qty),
+                "wid": warehouse_id, "qty": Decimal(str(qty)),
             },
         )
         recommendations_created += 1

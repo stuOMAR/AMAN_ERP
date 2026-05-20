@@ -317,5 +317,5 @@ def generate_cashflow_forecast(
     return {
         "forecast_id": forecast_id,
         "line_count": len(lines),
-        "opening_balance": float(opening_balance),
+        "opening_balance": Decimal(str(opening_balance)),
     }

@@ -10,6 +10,7 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+import Decimal from 'decimal.js';
 
 
 function ReceiptForm() {
@@ -24,11 +25,12 @@ function ReceiptForm() {
     const [customers, setCustomers] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
     const [outstandingInvoices, setOutstandingInvoices] = useState([]);
+    const [allocationPreview, setAllocationPreview] = useState(null);
     const [formData, setFormData] = useState({
         customer_id: '',
         party_site_id: '',
         voucher_date: new Date().toISOString().split('T')[0],
-        amount: 0,
+        amount: '',
         voucher_type: isPaymentsRoute ? 'refund' : 'receipt',
         payment_method: '',
         bank_account_id: null,
@@ -38,6 +40,20 @@ function ReceiptForm() {
         notes: '',
         allocations: []
     });
+
+    const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—';
+    const toDecimal = (value) => {
+        try {
+            return new Decimal(value || '0');
+        } catch {
+            return new Decimal('0');
+        }
+    };
+    const isPositiveDecimal = (value) => toDecimal(value).gt(0);
+    const isNegativeDecimal = (value) => toDecimal(value).lt(0);
+    const previewTotalAllocated = allocationPreview?.total_allocated ?? null;
+    const previewUnallocated = allocationPreview?.unallocated_amount ?? null;
+    const isOverAllocated = allocationPreview?.over_allocated === true;
 
     useEffect(() => {
         fetchInitialData();
@@ -60,7 +76,7 @@ function ReceiptForm() {
                     ...prev,
                     customer_id: inv.customer_id,
                     voucher_type: isReturn ? 'refund' : 'receipt',
-                    amount: inv.remaining_balance || (inv.total - (inv.paid_amount || 0)),
+                    amount: '',
                     notes: `${t('sales.receipts.form.notes_auto')} ${inv.invoice_number}`
                 }));
 
@@ -68,10 +84,22 @@ function ReceiptForm() {
                 const outstandingRes = await salesAPI.getOutstandingInvoices(inv.customer_id, { branch_id: currentBranch?.id });
                 setOutstandingInvoices(outstandingRes.data);
 
-                // Automatically allocate to this specific invoice
+                const previewRes = await salesAPI.previewReceiptAllocation({
+                    customer_id: inv.customer_id ? parseInt(inv.customer_id, 10) : null,
+                    voucher_date: new Date().toISOString().split('T')[0],
+                    amount: '0',
+                    branch_id: currentBranch?.id || null,
+                    voucher_type: isReturn ? 'refund' : 'receipt',
+                    currency,
+                    allocations: [],
+                    fill_invoice_id: inv.id,
+                });
+                const preview = previewRes.data;
+                setAllocationPreview(preview);
                 setFormData(prev => ({
                     ...prev,
-                    allocations: [{ invoice_id: inv.id, allocated_amount: inv.remaining_balance || (inv.total - (inv.paid_amount || 0)) }]
+                    amount: preview.amount ?? '',
+                    allocations: preview.allocations || [],
                 }));
             }
         } catch (error) {
@@ -79,38 +107,44 @@ function ReceiptForm() {
         }
     };
 
-    // ... (autoAllocate helper remains the same) ...
-    const autoAllocate = (amount, invoices) => {
-        let remainingBase = Number(amount) || 0;
-        const newAllocations = [];
-        const targetType = formData.voucher_type === 'receipt' ? 'sales' : 'sales_return';
-        const filteredInvoices = invoices.filter(inv => inv.invoice_type === targetType);
-
-        // Sort invoices by date (FIFO)
-        const sortedInvoices = [...filteredInvoices].sort((a, b) =>
-            new Date(a.invoice_date) - new Date(b.invoice_date)
-        );
-
-        for (const inv of sortedInvoices) {
-            if (remainingBase <= 0.01) break;
-
-            const rate = inv.exchange_rate || 1;
-            const invoiceRemainingInv = Number(inv.remaining_balance);
-            const invoiceRemainingBase = invoiceRemainingInv * rate;
-
-            const toAllocateBase = Math.min(remainingBase, invoiceRemainingBase);
-            const toAllocateInv = toAllocateBase / rate;
-
-            if (toAllocateInv > 0) {
-                // Round to ensure precision
-                const cleanAlloc = Math.floor(toAllocateInv * 100) / 100;
-                if (cleanAlloc > 0) {
-                    newAllocations.push({ invoice_id: inv.id, allocated_amount: cleanAlloc });
-                    remainingBase -= (cleanAlloc * rate);
-                }
-            }
+    const buildPreviewPayload = (data = formData, options = {}) => {
+        const payload = {
+            customer_id: data.customer_id ? parseInt(data.customer_id, 10) : null,
+            voucher_date: data.voucher_date,
+            amount: String(data.amount || '0'),
+            branch_id: currentBranch?.id || null,
+            voucher_type: data.voucher_type,
+            currency,
+            allocations: (data.allocations || []).map(a => ({
+                invoice_id: parseInt(a.invoice_id, 10),
+                allocated_amount: String(a.allocated_amount || '0'),
+            })),
+            auto_allocate: options.auto_allocate === true,
+            pay_all: options.pay_all === true,
+            fill_invoice_id: options.fill_invoice_id || null,
+        };
+        if (data.exchange_rate) {
+            payload.exchange_rate = String(data.exchange_rate);
         }
-        return newAllocations;
+        return payload;
+    };
+
+    const requestAllocationPreview = async (data = formData, options = {}, applyResult = false) => {
+        if (!data.customer_id) {
+            setAllocationPreview(null);
+            return null;
+        }
+        const res = await salesAPI.previewReceiptAllocation(buildPreviewPayload(data, options));
+        const preview = res.data;
+        setAllocationPreview(preview);
+        if (applyResult) {
+            setFormData(prev => ({
+                ...prev,
+                amount: preview.amount ?? prev.amount,
+                allocations: preview.allocations || [],
+            }));
+        }
+        return preview;
     };
 
     const handleCustomerChange = async (e) => {
@@ -119,25 +153,12 @@ function ReceiptForm() {
         setSelectedCustomer(customer);
 
         setFormData({ ...formData, customer_id: customerId, allocations: [] });
+        setAllocationPreview(null);
 
         if (customerId) {
             try {
-                // Fetch invoices and specifically ask for backend calculation if possible, 
-                // but here we just sum them up on frontend
                 const res = await salesAPI.getOutstandingInvoices(customerId, { branch_id: currentBranch?.id });
                 setOutstandingInvoices(res.data);
-
-                // For Refund type, if customer has credit balance, auto-fill it
-                if (formData.voucher_type === 'refund' && customer?.current_balance < 0) {
-                    const creditAmount = Math.abs(customer.current_balance);
-                    setFormData(prev => ({ ...prev, amount: creditAmount }));
-                }
-
-                // Auto-allocate if amount is already set
-                if (formData.amount > 0) {
-                    const allocations = autoAllocate(formData.amount, res.data);
-                    setFormData(prev => ({ ...prev, allocations }));
-                }
             } catch (error) {
                 showToast(t('common.error'), 'error');
             }
@@ -146,39 +167,38 @@ function ReceiptForm() {
         }
     };
 
-    // ... (handleAllocationChange, handleAmountChange, handleAutoAllocate, handleReceiveAll, handleQuickFill remain similar but adapted for type) ...
-
     const handleAllocationChange = (invoiceId, amount) => {
-        const val = Number(amount) || 0;
         const existing = formData.allocations.find(a => a.invoice_id === invoiceId);
         if (existing) {
             setFormData({
                 ...formData,
                 allocations: formData.allocations.map(a =>
-                    a.invoice_id === invoiceId ? { ...a, allocated_amount: val } : a
+                    a.invoice_id === invoiceId ? { ...a, allocated_amount: amount } : a
                 )
             });
         } else {
             setFormData({
                 ...formData,
-                allocations: [...formData.allocations, { invoice_id: invoiceId, allocated_amount: val }]
+                allocations: [...formData.allocations, { invoice_id: invoiceId, allocated_amount: amount }]
             });
         }
     };
 
     const handleAmountChange = (e) => {
-        const newAmount = Number(e.target.value) || 0;
-        setFormData({ ...formData, amount: newAmount });
+        const nextForm = { ...formData, amount: e.target.value };
+        setFormData(nextForm);
         if (outstandingInvoices.length > 0) {
-            const allocations = autoAllocate(newAmount, outstandingInvoices);
-            setFormData(prev => ({ ...prev, amount: newAmount, allocations }));
+            requestAllocationPreview(nextForm, { auto_allocate: true }, true).catch(() => {
+                showToast(t('common.error'), 'error');
+            });
         }
     };
 
     const handleAutoAllocate = () => {
-        if (formData.amount > 0 && outstandingInvoices.length > 0) {
-            const allocations = autoAllocate(formData.amount, outstandingInvoices);
-            setFormData({ ...formData, allocations });
+        if (isPositiveDecimal(formData.amount) && outstandingInvoices.length > 0) {
+            requestAllocationPreview(formData, { auto_allocate: true }, true).catch(() => {
+                showToast(t('common.error'), 'error');
+            });
         }
     };
 
@@ -188,36 +208,30 @@ function ReceiptForm() {
         const relevantInvoices = outstandingInvoices.filter(inv => inv.invoice_type === targetType);
 
         if (relevantInvoices.length > 0) {
-            const allocations = relevantInvoices.map(inv => ({
-                invoice_id: inv.id,
-                allocated_amount: Number(inv.remaining_balance)
-            }));
-
-            const totalBase = allocations.reduce((sum, a) => {
-                const inv = relevantInvoices.find(i => i.id === a.invoice_id);
-                const rate = inv?.exchange_rate || 1;
-                return sum + (a.allocated_amount * rate);
-            }, 0);
-
-            // Round to 2 decimals to avoid floating point errors
-            const roundedTotal = Math.round((totalBase + Number.EPSILON) * 100) / 100;
-            setFormData({ ...formData, allocations, amount: roundedTotal });
+            requestAllocationPreview(formData, { pay_all: true }, true).catch(() => {
+                showToast(t('common.error'), 'error');
+            });
         }
     };
 
-    const handleQuickFill = (invoiceId, remainingBalance) => {
-        const existing = formData.allocations.find(a => a.invoice_id === invoiceId);
-        const newAllocations = existing
-            ? formData.allocations.map(a => a.invoice_id === invoiceId ? { ...a, allocated_amount: remainingBalance } : a)
-            : [...formData.allocations, { invoice_id: invoiceId, allocated_amount: remainingBalance }];
-        setFormData({ ...formData, allocations: newAllocations });
+    const handleQuickFill = (invoiceId) => {
+        requestAllocationPreview(formData, { fill_invoice_id: invoiceId }, true).catch(() => {
+            showToast(t('common.error'), 'error');
+        });
     };
 
-    const totalAllocated = formData.allocations.reduce((sum, alloc) => {
-        const inv = outstandingInvoices.find(i => i.id === alloc.invoice_id);
-        const rate = inv?.exchange_rate || 1;
-        return sum + (alloc.allocated_amount * rate);
-    }, 0);
+    useEffect(() => {
+        if (!formData.customer_id) {
+            setAllocationPreview(null);
+            return undefined;
+        }
+        const timer = setTimeout(() => {
+            requestAllocationPreview(formData).catch(() => {
+                setAllocationPreview(null);
+            });
+        }, 300);
+        return () => clearTimeout(timer);
+    }, [formData.customer_id, formData.amount, formData.allocations, formData.voucher_type, formData.voucher_date, currentBranch, currency]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -226,11 +240,11 @@ function ReceiptForm() {
             showToast(t('sales.receipts.form.errors.customer_required'), 'error');
             return;
         }
-        if (formData.amount <= 0) {
+        if (!isPositiveDecimal(formData.amount)) {
             showToast(t('sales.receipts.form.errors.amount_required'), 'error');
             return;
         }
-        if (totalAllocated > formData.amount) {
+        if (isOverAllocated) {
             showToast(t('sales.receipts.form.errors.allocation_error'), 'error');
             return;
         }
@@ -241,10 +255,15 @@ function ReceiptForm() {
 
         setLoading(true);
         try {
-            const actualAmount = totalAllocated > 0 ? totalAllocated : formData.amount;
+            const preview = await requestAllocationPreview(formData);
+            if (preview?.over_allocated) {
+                showToast(t('sales.receipts.form.errors.allocation_error'), 'error');
+                setLoading(false);
+                return;
+            }
             const sanitizedData = {
                 ...formData,
-                amount: actualAmount,
+                amount: String(preview?.amount || formData.amount || '0'),
                 customer_id: parseInt(formData.customer_id),
                 branch_id: currentBranch?.id,
                 party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
@@ -253,7 +272,7 @@ function ReceiptForm() {
                 check_number: formData.check_number || null,
                 reference: formData.reference || null,
                 notes: formData.notes || null,
-                allocations: formData.allocations.filter(a => a.allocated_amount > 0).map(a => ({
+                allocations: (preview?.allocations || formData.allocations).filter(a => isPositiveDecimal(a.allocated_amount)).map(a => ({
                     invoice_id: parseInt(a.invoice_id),
                     allocated_amount: String(a.allocated_amount)
                 }))
@@ -355,9 +374,9 @@ function ReceiptForm() {
                                     </div>
                                     <div>
                                         <span className="text-sm text-gray-600">{t('sales.payments.form.customer_info.current_balance')}: </span>
-                                        <span className={`font-bold ${selectedCustomer.current_balance < 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                        <span className={`font-bold ${isNegativeDecimal(selectedCustomer.current_balance) ? 'text-green-600' : 'text-red-600'}`}>
                                             {formatNumber(selectedCustomer.current_balance)} {currency}
-                                            {selectedCustomer.current_balance < 0 && ` (${t('sales.payments.form.customer_info.credit_label')})`}
+                                            {isNegativeDecimal(selectedCustomer.current_balance) && ` (${t('sales.payments.form.customer_info.credit_label')})`}
                                         </span>
                                     </div>
                                 </div>
@@ -372,7 +391,7 @@ function ReceiptForm() {
                             <h3 className="section-title">{t('sales.receipts.form.allocation_title')}</h3>
                             <div className="flex items-center gap-4">
                                 <div className="text-sm text-gray-500">
-                                    {t('sales.receipts.form.total_allocated')}: <span className="font-bold text-primary">{formatNumber(totalAllocated)} {currency}</span>
+                                    {t('sales.receipts.form.total_allocated')}: <span className="font-bold text-primary">{moneyOrDash(previewTotalAllocated)} {currency}</span>
                                 </div>
                                 {outstandingInvoices.length > 0 && (
                                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -383,7 +402,7 @@ function ReceiptForm() {
                                         >
                                             💰 {t('sales.receipts.form.receive_all')}
                                         </button>
-                                        {formData.amount > 0 && (
+                                        {isPositiveDecimal(formData.amount) && (
                                             <button
                                                 type="button"
                                                 onClick={handleAutoAllocate}
@@ -434,9 +453,8 @@ function ReceiptForm() {
                                                 <td>
                                                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                                                         <input
-                                                            type="number"
-                                                            step="0.01"
-                                                            min="0"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             max={inv.remaining_balance}
                                                             placeholder="0.00"
                                                             value={formData.allocations.find(a => a.invoice_id === inv.id)?.allocated_amount || ''}
@@ -446,7 +464,7 @@ function ReceiptForm() {
                                                         />
                                                         <button
                                                             type="button"
-                                                            onClick={() => handleQuickFill(inv.id, Number(inv.remaining_balance))}
+                                                            onClick={() => handleQuickFill(inv.id)}
                                                             className="btn btn-sm bg-green-100 text-green-700 hover:bg-green-200 border border-green-300"
                                                             title={t('sales.receipts.form.table.quick_fill')}
                                                             style={{ padding: '4px 8px', fontSize: '11px', whiteSpace: 'nowrap', flexShrink: 0 }}
@@ -473,10 +491,9 @@ function ReceiptForm() {
                                     <label className="form-label">{formData.voucher_type === 'receipt' ? t('sales.receipts.form.received_amount') : t('sales.payments.form.amount_paid')} *</label>
                                     <div className="relative">
                                         <input
-                                            type="number"
+                                            type="text"
+                                            inputMode="decimal"
                                             required
-                                            step="0.01"
-                                            min="0.01"
                                             value={formData.amount}
                                             onChange={handleAmountChange}
                                             className="form-input"
@@ -555,26 +572,19 @@ function ReceiptForm() {
                         <div style={{ width: '300px', padding: '24px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{formData.voucher_type === 'receipt' ? t('sales.receipts.form.summary.received') : t('sales.payments.form.summary.amount_paid')}</span>
-                                <span>{currency} {formatNumber(formData.amount)}</span>
+                                <span>{currency} {moneyOrDash(formData.amount)}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{t('sales.receipts.form.summary.allocated')}</span>
-                                <span>{currency} {formatNumber(totalAllocated)}</span>
+                                <span>{currency} {moneyOrDash(previewTotalAllocated)}</span>
                             </div>
 
-                            {formData.voucher_type === 'refund' && selectedCustomer && selectedCustomer.current_balance < 0 && (
+                            {formData.voucher_type === 'refund' && selectedCustomer && isNegativeDecimal(selectedCustomer.current_balance) && (
                                 <>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                         <span>{t('sales.payments.form.summary.credit_balance')}</span>
                                         <span className="text-green-600">
-                                            {currency} {formatNumber(Math.abs(selectedCustomer.current_balance))}
-                                        </span>
-                                    </div>
-                                    <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
-                                        <span style={{ fontWeight: 'bold' }}>{t('sales.payments.form.summary.balance_after')}</span>
-                                        <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>
-                                            {currency} {formatNumber(selectedCustomer.current_balance + formData.amount)}
+                                            {currency} {formatNumber(selectedCustomer.current_balance)}
                                         </span>
                                     </div>
                                 </>
@@ -582,8 +592,8 @@ function ReceiptForm() {
                             <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span style={{ fontWeight: 'bold' }}>{t('sales.receipts.form.summary.remaining')}</span>
-                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={formData.amount - totalAllocated > 0.01 ? 'text-orange-600' : ''}>
-                                    {currency} {formatNumber(formData.amount - totalAllocated)}
+                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={isPositiveDecimal(previewUnallocated) ? 'text-orange-600' : ''}>
+                                    {currency} {moneyOrDash(previewUnallocated)}
                                 </span>
                             </div>
 
@@ -604,7 +614,7 @@ function ReceiptForm() {
                                 {t('sales.receipts.form.cancel')}
                             </button>
 
-                            {formData.amount - totalAllocated > 0.01 && (
+                            {isPositiveDecimal(previewUnallocated) && (
                                 <div className="mt-4 p-3 bg-orange-50 border border-orange-200 rounded text-[10px] text-orange-800">
                                     <span className="font-bold">{t('sales.receipts.form.summary.advance_payment_note')}</span>
                                 </div>

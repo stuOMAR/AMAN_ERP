@@ -113,7 +113,7 @@ export default function ProjectList() {
             label: t('projects.fields.progress'),
             width: 140,
             render: (val) => {
-                const progress = parseFloat(val || 0);
+                const progress = val || 0;
                 return (
                     <div className="d-flex align-items-center gap-2">
                         <div style={{

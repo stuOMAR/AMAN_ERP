@@ -2,7 +2,7 @@
 Inventory Module - Shipments Lifecycle
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 def create_shipment(
     shipment: ShipmentCreate,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء شحنة جديدة بين المستودعات"""
@@ -36,6 +37,14 @@ def create_shipment(
     username = current_user.get("username") if isinstance(current_user, dict) else getattr(current_user, "username", None)
     db = get_db_connection(company_id)
     try:
+        if not idempotency_key:
+            raise HTTPException(**http_error(400, "idempotency_key_required", request))
+        existing = db.execute(text("""
+            SELECT id, shipment_ref FROM stock_shipments WHERE idempotency_key = :key LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing:
+            return {"id": existing.id, "shipment_ref": existing.shipment_ref, "message": i18n_message("shipment_created_success", request), "idempotent_replay": True}
+
         if shipment.source_warehouse_id == shipment.destination_warehouse_id:
             raise HTTPException(**http_error(400, "same_warehouse_shipment", request))
 
@@ -89,15 +98,16 @@ def create_shipment(
         # Create shipment
         result = db.execute(text("""
             INSERT INTO stock_shipments (shipment_ref, source_warehouse_id, destination_warehouse_id, 
-                                        status, notes, created_by, created_at)
-            VALUES (:ref, :src, :dst, 'pending', :notes, :user, NOW())
+                                        status, notes, created_by, idempotency_key, created_at)
+            VALUES (:ref, :src, :dst, 'pending', :notes, :user, :idem_key, NOW())
             RETURNING id
         """), {
             "ref": shipment_ref,
             "src": shipment.source_warehouse_id,
             "dst": shipment.destination_warehouse_id,
             "notes": shipment.notes,
-            "user": user_id
+            "user": user_id,
+            "idem_key": idempotency_key,
         })
         shipment_id = result.fetchone()[0]
 
@@ -443,7 +453,7 @@ def dispatch_shipment(
 
         # T053: Post GL — Dr In-Transit / Cr Source Inventory
         if total_transit_value > Decimal("0"):
-            value_f = total_transit_value  # Decimal — no float cast needed
+            value_f = total_transit_value  # Decimal
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),
@@ -693,7 +703,7 @@ def confirm_shipment(
 
         # T056: Post GL — Dr Destination Inventory / Cr In-Transit
         if total_transit_value > Decimal("0"):
-            value_f = total_transit_value  # Decimal — no float cast needed
+            value_f = total_transit_value  # Decimal
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),
@@ -954,7 +964,7 @@ def recall_shipment(
 
         # Post GL reversal: Dr Source Inventory / Cr In-Transit
         if total_recall_value > Decimal("0"):
-            value_f = total_recall_value  # Decimal — no float cast needed
+            value_f = total_recall_value  # Decimal
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),

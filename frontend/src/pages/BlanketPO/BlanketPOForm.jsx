@@ -4,6 +4,8 @@ import { useTranslation } from 'react-i18next';
 import { purchasesAPI } from '../../utils/api';
 import { getCurrency } from '../../utils/auth';
 import { useToast } from '../../context/ToastContext';
+import Decimal from 'decimal.js';
+import { formatNumber } from '../../utils/format';
 import DateInput from '../../components/common/DateInput';
 import BackButton from '../../components/common/BackButton';
 import '../../components/ModuleStyles.css';
@@ -37,7 +39,9 @@ const BlanketPOForm = () => {
         fetchSuppliers();
     }, []);
 
-    const totalAmount = (Number(form.total_quantity) || 0) * (Number(form.unit_price) || 0);
+    const totalAmount = (form.total_quantity && form.unit_price)
+        ? new Decimal(form.total_quantity || '0').times(new Decimal(form.unit_price || '0'))
+        : null;
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -115,7 +119,7 @@ const BlanketPOForm = () => {
                         <div className="form-group">
                             <label className="form-label">{t('blanket_po.total_amount')}</label>
                             <input type="text" className="form-input" disabled
-                                value={totalAmount > 0 ? totalAmount.toFixed(2) : '—'} />
+                                value={totalAmount && !totalAmount.isZero() ? formatNumber(totalAmount.toString()) : '—'} />
                         </div>
                     </div>
 

@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react'
 import { manufacturingCostingAPI, manufacturingAPI } from '../../utils/api'
+import Decimal from 'decimal.js'
 import { toastEmitter } from '../../utils/toastEmitter'
 import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
@@ -91,8 +92,10 @@ function ManufacturingCosting() {
                         </thead>
                         <tbody>
                             {(report.orders || report).map((o, i) => {
-                                const variance = (o.actual_cost || 0) - (o.estimated_cost || 0)
-                                const pct = o.estimated_cost ? ((variance / o.estimated_cost) * 100).toFixed(1) : '-'
+                                const estimated = new Decimal(o.estimated_cost || '0')
+                                const actual = new Decimal(o.actual_cost || '0')
+                                const variance = actual.minus(estimated)
+                                const pct = !estimated.isZero() ? variance.div(estimated).times(100).toFixed(1) : '-'
                                 return (
                                     <tr key={i}>
                                         <td className="font-medium">{o.order_number || `#${o.id}`}</td>

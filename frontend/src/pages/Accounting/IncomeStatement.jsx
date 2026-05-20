@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { reportsAPI, api } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
+import Decimal from 'decimal.js'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
@@ -86,9 +87,9 @@ function IncomeStatement() {
     const expenseRoots = allAccounts.filter(a => a.account_type === 'expense')
     const flatRevenue = flattenTree(revenueRoots)
     const flatExpense = flattenTree(expenseRoots)
-    const totalRevenue = revenueRoots.reduce((sum, a) => sum + (parseFloat(a.balance) || 0), 0)
-    const totalExpense = expenseRoots.reduce((sum, a) => sum + (parseFloat(a.balance) || 0), 0)
-    const netIncome = data?.total !== undefined ? parseFloat(data.total) : (totalRevenue - totalExpense)
+    const totalRevenue = revenueRoots.reduce((sum, a) => sum.plus(new Decimal(a.balance || '0')), new Decimal('0'))
+    const totalExpense = expenseRoots.reduce((sum, a) => sum.plus(new Decimal(a.balance || '0')), new Decimal('0'))
+    const netIncome = data?.total !== undefined ? new Decimal(data.total) : totalRevenue.minus(totalExpense)
 
     return (
         <div className="workspace fade-in">

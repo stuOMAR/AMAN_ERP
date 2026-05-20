@@ -84,12 +84,12 @@ def create_return(
         log_activity(
             db, action=f"{source}.return.created",
             entity_type="return", entity_id=return_id,
-            details={"source": source, "total": float(total)},
+            details={"source": source, "total": Decimal(str(total))},
         )
     except Exception:
         pass
 
-    return {"id": return_id, "state": "draft", "total_amount": float(total)}
+    return {"id": return_id, "state": "draft", "total_amount": Decimal(str(total))}
 
 
 def post_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None = None) -> dict:

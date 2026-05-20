@@ -111,7 +111,7 @@ const PriceLists = () => {
             } else {
                 const dataToSubmit = {
                     ...formData,
-                    branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
+                    branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : parseInt(formData.branch_id, 10)
                 };
                 await inventoryAPI.createPriceList(dataToSubmit);
             }
@@ -139,7 +139,7 @@ const PriceLists = () => {
         try {
             const dataToSubmit = {
                 ...formData,
-                branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : Number(formData.branch_id)
+                branch_id: formData.branch_id === 'all' || formData.branch_id === '' ? null : parseInt(formData.branch_id, 10)
             };
             await inventoryAPI.updatePriceList(selectedList.id, dataToSubmit);
             setShowEditModal(false);

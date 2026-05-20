@@ -374,8 +374,15 @@ def commission_summary(current_user=Depends(get_current_user)):
         db.close()
 
 
+from fastapi import Header
+
 @sales_improvements_router.post("/commissions/pay", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def pay_commission(request: Request, data: dict, current_user=Depends(get_current_user)):
+def pay_commission(
+    request: Request,
+    data: dict,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user=Depends(get_current_user)
+):
     """
     صرف العمولات وإنشاء قيد محاسبي.
     Pay commissions and create GL entry:
@@ -391,6 +398,20 @@ def pay_commission(request: Request, data: dict, current_user=Depends(get_curren
         
         if not commission_ids:
             raise HTTPException(**http_error(400, "no_commissions_to_pay", request))
+            
+        if idempotency_key:
+            existing_je = db.execute(text("""
+                SELECT id, je_number FROM journal_entries WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing_je:
+                return {
+                    "success": True,
+                    "paid_count": len(commission_ids),
+                    "total_amount": 0, # Cannot reconstruct exactly without joining lines, but sufficient for replay
+                    "journal_entry_id": existing_je.id,
+                    "idempotent_replay": True,
+                    "message": i18n_message("commissions_paid_details", request)
+                }
         
         # Fetch pending commissions
         normalized_ids = [int(cid) for cid in commission_ids]
@@ -438,7 +459,7 @@ def pay_commission(request: Request, data: dict, current_user=Depends(get_curren
                 source="CommissionPayment",
                 source_id=int(sorted(normalized_ids)[0]) if normalized_ids else None,
                 username=getattr(current_user, "username", None),
-                idempotency_key=f"commpay-{'-'.join(str(i) for i in sorted(normalized_ids))}",
+                idempotency_key=idempotency_key or f"commpay-{'-'.join(str(i) for i in sorted(normalized_ids))}",
             )
         
         # Update commission status

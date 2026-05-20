@@ -59,10 +59,10 @@ function CostLayerList() {
             <span className={`badge ${val === 'fifo' ? 'badge-primary' : 'badge-purple'}`}>{val?.toUpperCase()}</span>
         )},
         { key: 'purchase_date', label: t('costing.purchase_date') },
-        { key: 'original_quantity', label: t('costing.original_qty'), render: (val) => formatNumber(parseFloat(val)) },
-        { key: 'remaining_quantity', label: t('costing.remaining_qty'), render: (val) => formatNumber(parseFloat(val)) },
-        { key: 'unit_cost', label: t('costing.unit_cost'), render: (val) => formatNumber(parseFloat(val), 2) },
-        { key: 'total_value', label: t('costing.total_value'), render: (_, row) => formatNumber(parseFloat(row.remaining_quantity) * parseFloat(row.unit_cost), 2) },
+        { key: 'original_quantity', label: t('costing.original_qty'), render: (val) => formatNumber(val) },
+        { key: 'remaining_quantity', label: t('costing.remaining_qty'), render: (val) => formatNumber(val) },
+        { key: 'unit_cost', label: t('costing.unit_cost'), render: (val) => formatNumber(val, 2) },
+        { key: 'total_value', label: t('costing.total_value'), render: (_, row) => formatNumber(row.total_value != null ? row.total_value : '', 2) },
         { key: 'source_document_type', label: t('costing.source') },
         { key: 'is_exhausted', label: t('costing.exhausted'), render: (val) => val ? '✓' : '' },
     ]

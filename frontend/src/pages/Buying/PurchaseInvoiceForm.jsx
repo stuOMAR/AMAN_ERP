@@ -699,7 +699,7 @@ function PurchaseInvoiceForm() {
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--primary)', fontWeight: 'bold', marginTop: '4px' }}>
                                     <span>{t('accounting.currencies.total_base') || 'Total in Base'}:</span>
-                                    <span>{totals.total != null && formData.exchange_rate ? formatNumber((parseFloat(totals.total) * parseFloat(formData.exchange_rate || 1)).toFixed(2)) : '—'} <small>{currency}</small></span>
+                                    <span>{totals.total != null && formData.exchange_rate ? formatNumber(backendTotals.totalBase || backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
                                 </div>
                             </div>
                         )}

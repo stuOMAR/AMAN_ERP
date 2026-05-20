@@ -91,7 +91,7 @@ const ManagerReview = () => {
             await hrAdvancedAPI.addGoal(id, {
                 title: goalForm.title,
                 description: goalForm.description || null,
-                weight: parseFloat(goalForm.weight),
+                weight: goalForm.weight,
                 target: goalForm.target || null,
             });
             setGoalForm({ title: '', description: '', weight: '', target: '' });

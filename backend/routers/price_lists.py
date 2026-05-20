@@ -153,7 +153,7 @@ async def import_prices_from_excel(
         
         for _, row in df.iterrows():
             product_code = str(row['product_code']).strip()
-            price = float(row['price'])
+            price = Decimal(str(row['price']))
             
             # Get product ID
             product = db.execute(text("SELECT id FROM products WHERE product_code = :code"), {"code": product_code}).fetchone()

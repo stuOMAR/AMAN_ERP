@@ -27,7 +27,7 @@ export default function BulkSalaryIncrement() {
       if (cols.length >= 2) {
         parsed.push({
           employee_id: parseInt(cols[0], 10),
-          new_salary: parseFloat(cols[1]),
+          new_salary: cols[1],
         });
       }
     }
@@ -113,7 +113,7 @@ export default function BulkSalaryIncrement() {
               {rows.slice(0, 10).map((r, i) => (
                 <tr key={i}>
                   <td>{r.employee_id}</td>
-                  <td>{r.new_salary.toLocaleString()}</td>
+                  <td>{r.new_salary}</td>
                 </tr>
               ))}
               {rows.length > 10 && (

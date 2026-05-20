@@ -212,7 +212,7 @@ def list_payment_retry_queue(
         return [
             {
                 "id": r[0], "payment_id": r[1], "provider": r[2],
-                "amount": float(r[3]) if r[3] is not None else None,
+                "amount": Decimal(str(r[3])) if r[3] is not None else None,
                 "currency": r[4], "idempotency_key": r[5],
                 "retry_count": r[6], "max_retries": r[7], "status": r[8],
                 "last_attempt_at": r[9].isoformat() if r[9] else None,

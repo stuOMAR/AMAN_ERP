@@ -123,9 +123,9 @@ const RoutingForm = () => {
                 operations: form.operations.map(op => ({
                     ...op,
                     work_center_id: op.work_center_id || null,
-                    setup_time: parseFloat(op.setup_time) || 0,
-                    cycle_time: parseFloat(op.cycle_time) || 0,
-                    labor_rate_per_hour: parseFloat(op.labor_rate_per_hour) || 0,
+                    setup_time: op.setup_time || '0',
+                    cycle_time: op.cycle_time || '0',
+                    labor_rate_per_hour: op.labor_rate_per_hour || '0',
                 })),
             };
             if (isEdit) {

@@ -535,7 +535,7 @@ const ApprovalsPage = () => {
                     <div className="form-input">
                         <label className="label"><span className="label-text font-medium">{t('approvals.auto_approve_below_label', 'موافقة تلقائية تحت')}</span></label>
                         <input type="number" className="input input-bordered w-full" min="0" step="100" value={slaForm.auto_approve_below}
-                            onChange={e => setSlaForm(prev => ({ ...prev, auto_approve_below: parseFloat(e.target.value) || 0 }))}
+                            onChange={e => setSlaForm(prev => ({ ...prev, auto_approve_below: e.target.value }))}
                         />
                         <p className="text-xs opacity-60 mt-1">{t('approvals.auto_approve_hint', 'المبالغ أقل من هذا الحد تُوافَق تلقائياً عند تشغيل الموافقة التلقائية. 0 = معطّل')}</p>
                     </div>

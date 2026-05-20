@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { reportsAPI } from '../../utils/api';
+import Decimal from 'decimal.js';
 import { getCurrency } from '../../utils/auth';
 import { useToast } from '../../context/ToastContext';
 import { BarChart3, TrendingUp, TrendingDown, DollarSign, Package, Users, Wallet, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
@@ -114,13 +115,22 @@ const KPIDashboard = () => {
     ] : [];
 
     // Calculate key financial ratios
-    const ratios = kpiData ? {
-        netIncome: (kpiData.revenue || 0) - (kpiData.expenses || 0),
-        profitMargin: kpiData.revenue ? (((kpiData.revenue - kpiData.expenses) / kpiData.revenue) * 100) : 0,
-        currentRatio: kpiData.accounts_payable ? (((kpiData.cash_balance || 0) + (kpiData.accounts_receivable || 0) + (kpiData.inventory_value || 0)) / kpiData.accounts_payable) : 0,
-        cashRatio: kpiData.accounts_payable ? ((kpiData.cash_balance || 0) / kpiData.accounts_payable) : 0,
-        arTurnover: kpiData.accounts_receivable ? ((kpiData.revenue || 0) / kpiData.accounts_receivable) : 0,
-    } : null;
+    const ratios = kpiData ? (() => {
+        const revenue = new Decimal(kpiData.revenue || '0');
+        const expenses = new Decimal(kpiData.expenses || '0');
+        const ar = new Decimal(kpiData.accounts_receivable || '0');
+        const ap = new Decimal(kpiData.accounts_payable || '0');
+        const cash = new Decimal(kpiData.cash_balance || '0');
+        const inv = new Decimal(kpiData.inventory_value || '0');
+        const netIncome = revenue.minus(expenses);
+        return {
+            netIncome: netIncome.toNumber(),
+            profitMargin: !revenue.isZero() ? netIncome.div(revenue).times(100).toFixed(1) : '0.0',
+            currentRatio: !ap.isZero() ? cash.plus(ar).plus(inv).div(ap).toFixed(2) : '0.00',
+            cashRatio: !ap.isZero() ? cash.div(ap).toFixed(2) : '0.00',
+            arTurnover: !ar.isZero() ? revenue.div(ar).toFixed(1) : '0.0',
+        };
+    })() : null;
 
     return (
         <div className="workspace fade-in">
@@ -185,7 +195,7 @@ const KPIDashboard = () => {
                                 <div className="col-md-3">
                                     <div className="p-3 rounded" style={{ background: '#f3f4f6', textAlign: 'center' }}>
                                         <div style={{ fontSize: '1.4rem', fontWeight: 700, color: ratios.profitMargin >= 0 ? '#2e7d32' : '#c62828' }}>
-                                            {ratios.profitMargin.toFixed(1)}%
+                                            {ratios.profitMargin}%
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.profit_margin')}</div>
                                         <small className="text-muted">{t('reports.net_income_revenue')}</small>
@@ -194,7 +204,7 @@ const KPIDashboard = () => {
                                 <div className="col-md-3">
                                     <div className="p-3 rounded" style={{ background: ratios.currentRatio >= 1 ? '#e8f5e9' : '#fff3e0', textAlign: 'center' }}>
                                         <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                                            {ratios.currentRatio.toFixed(2)}x
+                                            {ratios.currentRatio}x
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.current_ratio')}</div>
                                         <small className="text-muted">{t('reports.current_assets_current_liabilities')}</small>
@@ -203,7 +213,7 @@ const KPIDashboard = () => {
                                 <div className="col-md-3">
                                     <div className="p-3 rounded" style={{ background: '#f3f4f6', textAlign: 'center' }}>
                                         <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                                            {ratios.arTurnover.toFixed(1)}x
+                                            {ratios.arTurnover}x
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.ar_turnover')}</div>
                                         <small className="text-muted">{t('reports.sales_avg_ar')}</small>

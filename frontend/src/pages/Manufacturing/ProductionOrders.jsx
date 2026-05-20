@@ -100,7 +100,7 @@ const ProductionOrders = () => {
                 product_id: parseInt(formData.product_id),
                 bom_id: parseInt(formData.bom_id),
                 route_id: formData.route_id ? parseInt(formData.route_id) : null,
-                quantity: parseFloat(formData.quantity),
+                quantity: formData.quantity,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 destination_warehouse_id: formData.destination_warehouse_id ? parseInt(formData.destination_warehouse_id) : null,
             };

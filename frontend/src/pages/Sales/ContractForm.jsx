@@ -11,6 +11,7 @@ import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import { PageLoading } from '../../components/common/LoadingStates'
 import useInvoiceCalc from '../../hooks/useInvoiceCalc'
+import Decimal from 'decimal.js'
 
 function ContractForm() {
     const { t } = useTranslation()
@@ -103,55 +104,60 @@ function ContractForm() {
     }
 
     // Backend-powered calculations
-    const { totals: backendTotals, previewContract, previewDebounced } = useInvoiceCalc()
+    const { totals: backendTotals, previewDebounced, loading: calcLoading } = useInvoiceCalc()
 
     const getTotals = () => {
-        // Use backend totals if available
+        // Use backend totals only
         if (backendTotals) {
             return { subtotal: backendTotals.subtotal, tax: backendTotals.totalTax, total: backendTotals.grandTotal }
         }
-        // Fallback to local calculation
-        let subtotal = 0
-        let tax = 0
-        items.forEach(item => {
-            const lineSub = item.quantity * item.unit_price
-            subtotal += lineSub
-            tax += lineSub * (item.tax_rate / 100)
-        })
-        return { subtotal, tax, total: subtotal + tax }
+        return { subtotal: null, tax: null, total: null }
     }
 
     // Call backend for accurate calculations
+    const isPositiveDecimal = (v) => { try { return new Decimal(v || '0').gt(0) } catch { return false } }
+
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+        if (items.length > 0 && items.some(i => isPositiveDecimal(i.quantity) && isPositiveDecimal(i.unit_price))) {
             previewDebounced({
                 lines: items.map(i => ({
-                    quantity: Number(i.quantity) || 0,
-                    unit_price: Number(i.unit_price) || 0,
-                    tax_rate: Number(i.tax_rate) || 0,
-                    discount: 0,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    tax_rate: String(i.tax_rate || '0'),
+                    discount: '0',
                 })),
                 currency,
-            })
+            }, '/calculate/contract-totals')
         }
-    }, [items])
+    }, [items, currency, previewDebounced])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
         if (!formData.party_id) return setError(t("sales.contracts.form.select_customer_error"))
         setLoading(true)
         try {
+            if (calcLoading) {
+                setError(t("sales.contracts.form.wait_for_calculation"))
+                setLoading(false)
+                return
+            }
             const totals = getTotals()
+            if (!totals.total || !isPositiveDecimal(totals.total)) {
+                setError(t("sales.contracts.form.wait_for_calculation"))
+                setLoading(false)
+                return
+            }
             const payload = {
                 ...formData,
-                party_id: parseInt(formData.party_id),
-                total_amount: totals.total,
+                branch_id: currentBranch?.id || null,
+                party_id: parseInt(formData.party_id, 10),
+                total_amount: String(totals.total),
                 items: items.map(item => ({
                     ...item,
-                    product_id: parseInt(item.product_id),
-                    quantity: Number(item.quantity),
-                    unit_price: Number(item.unit_price),
-                    tax_rate: Number(item.tax_rate)
+                    product_id: parseInt(item.product_id, 10),
+                    quantity: String(item.quantity || '0'),
+                    unit_price: String(item.unit_price || '0'),
+                    tax_rate: String(item.tax_rate || '0')
                 }))
             }
             if (id) {
@@ -252,7 +258,8 @@ function ContractForm() {
                         </thead>
                         <tbody>
                             {items.map((item, index) => {
-                                const lineTotal = item.quantity * item.unit_price * (1 + item.tax_rate / 100)
+                                const backendLine = backendTotals?.lines?.[index]
+                                const lineTotalStr = backendLine ? backendLine.line_total : '—'
                                 return (
                                     <tr key={index}>
                                         <td>
@@ -266,15 +273,15 @@ function ContractForm() {
                                             </select>
                                         </td>
                                         <td>
-                                            <input type="number" className="form-input" value={item.quantity} onChange={e => handleItemChange(index, 'quantity', Number(e.target.value) || 0)} />
+                                            <input type="text" inputMode="decimal" className="form-input" value={item.quantity} onChange={e => handleItemChange(index, 'quantity', e.target.value)} />
                                         </td>
                                         <td>
-                                            <input type="number" className="form-input" value={item.unit_price} onChange={e => handleItemChange(index, 'unit_price', Number(e.target.value) || 0)} />
+                                            <input type="text" inputMode="decimal" className="form-input" value={item.unit_price} onChange={e => handleItemChange(index, 'unit_price', e.target.value)} />
                                         </td>
                                         <td>
-                                            <input type="number" className="form-input" value={item.tax_rate} onChange={e => handleItemChange(index, 'tax_rate', Number(e.target.value) || 0)} />
+                                            <input type="text" inputMode="decimal" className="form-input" value={item.tax_rate} onChange={e => handleItemChange(index, 'tax_rate', e.target.value)} />
                                         </td>
-                                        <td style={{ fontWeight: 'bold' }}>{formatNumber(lineTotal)}</td>
+                                        <td style={{ fontWeight: 'bold' }}>{lineTotalStr !== '—' ? formatNumber(lineTotalStr) : '—'}</td>
                                         <td>
                                             <button type="button" className="btn-icon text-danger" onClick={() => removeItem(index)}>🗑️</button>
                                         </td>
@@ -296,16 +303,16 @@ function ContractForm() {
                         <div style={{ width: '300px', marginLeft: '32px', textAlign: 'left' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{t("sales.contracts.form.subtotal")}:</span>
-                                <span>{formatNumber(getTotals().subtotal)} {formData.currency}</span>
+                                <span>{formatNumber(getTotals().subtotal || '0')} {formData.currency}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{t("sales.contracts.form.tax")}:</span>
-                                <span>{formatNumber(getTotals().tax)} {formData.currency}</span>
+                                <span>{formatNumber(getTotals().tax || '0')} {formData.currency}</span>
                             </div>
                             <div style={{ borderTop: '1px solid #ddd', margin: '8px 0' }}></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.2rem' }}>
                                 <span>{t("sales.contracts.form.grand_total")}:</span>
-                                <span>{formatNumber(getTotals().total)} {formData.currency}</span>
+                                <span>{formatNumber(getTotals().total || '0')} {formData.currency}</span>
                             </div>
                             <button type="submit" className="btn btn-primary mt-4 w-full" disabled={loading}>
                                 {loading ? t("common.saving") : t("sales.contracts.form.save")}

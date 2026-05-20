@@ -7,6 +7,7 @@ import { useBranch } from '../../context/BranchContext';
 import { Trash2, Calendar, DollarSign, RefreshCw, ArrowRightLeft } from 'lucide-react';
 import { getCurrency } from '../../utils/auth';
 import { formatShortDate } from '../../utils/dateUtils';
+import { formatNumber } from '../../utils/format';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading, Spinner } from '../../components/common/LoadingStates'
 
@@ -88,7 +89,7 @@ const AssetDetails = () => {
         setRevaluing(true);
         try {
             await assetsAPI.revalueAsset(id, {
-                new_value: parseFloat(revalueData.new_value),
+                new_value: revalueData.new_value,
                 reason: revalueData.reason
             });
             toastEmitter.emit(t('assets.asset_revalued_successfully'), 'success');
@@ -191,14 +192,14 @@ const AssetDetails = () => {
                             <label className="text-muted d-block small mb-1">{t('assets.cost', 'Initial Cost')}</label>
                             <div className="fw-bold fs-5 text-dark d-flex align-items-center">
                                 <DollarSign size={18} className="me-2 text-success" />
-                                {parseFloat(asset.cost).toLocaleString()} <span className="text-muted fs-6 ms-1">{asset.currency || currency}</span>
+                                {formatNumber(asset.cost)} <span className="text-muted fs-6 ms-1">{asset.currency || currency}</span>
                             </div>
                         </div>
 
                         <div className="detail-row mb-3">
                             <label className="text-muted d-block small mb-1">{t('assets.residual_value', 'Residual Value')}</label>
                             <div className="fw-medium">
-                                {parseFloat(asset.residual_value).toLocaleString()} {asset.currency || currency}
+                                {formatNumber(asset.residual_value)} {asset.currency || currency}
                             </div>
                         </div>
 
@@ -231,9 +232,9 @@ const AssetDetails = () => {
                                     {schedule.map((item, index) => (
                                         <tr key={item.id}>
                                             <td className="fw-medium">{item.fiscal_year}</td>
-                                            <td className="text-end">{parseFloat(item.amount).toLocaleString()} <small>{asset.currency || currency}</small></td>
-                                            <td className="text-end text-muted">{parseFloat(item.accumulated_amount).toLocaleString()} <small>{asset.currency || currency}</small></td>
-                                            <td className="text-end fw-bold text-primary">{parseFloat(item.book_value).toLocaleString()} <small>{asset.currency || currency}</small></td>
+                                            <td className="text-end">{formatNumber(item.amount)} <small>{asset.currency || currency}</small></td>
+                                            <td className="text-end text-muted">{formatNumber(item.accumulated_amount)} <small>{asset.currency || currency}</small></td>
+                                            <td className="text-end fw-bold text-primary">{formatNumber(item.book_value)} <small>{asset.currency || currency}</small></td>
                                             <td className="text-center">
                                                 {item.posted ? (
                                                     <span className="badge bg-success-subtle text-success">{t('status.posted', 'Posted')}</span>

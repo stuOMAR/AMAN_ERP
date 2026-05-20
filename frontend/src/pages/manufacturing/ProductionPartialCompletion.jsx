@@ -30,8 +30,8 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const qtyNum = parseFloat(qty);
-        if (!qtyNum || qtyNum <= 0 || qtyNum > remainingQty) return;
+        const qtyNum = qty;
+        if (!qtyNum || Number(qtyNum) <= 0 || Number(qtyNum) > remainingQty) return;
 
         setLoading(true);
         setError(null);
@@ -43,13 +43,13 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
                 warehouse_id: warehouseId,
                 scrap_lines: scrapLines.filter(s => s.item_id && s.qty).map(s => ({
                     item_id: parseInt(s.item_id),
-                    qty: parseFloat(s.qty),
+                    qty: s.qty,
                     reason: s.reason,
                 })),
                 byproduct_lines: byproductLines.filter(b => b.item_id && b.qty).map(b => ({
                     item_id: parseInt(b.item_id),
-                    qty: parseFloat(b.qty),
-                    sales_value: b.sales_value ? parseFloat(b.sales_value) : undefined,
+                    qty: b.qty,
+                    sales_value: b.sales_value || undefined,
                 })),
             };
             const res = await api.post(`/manufacturing/orders/${moId}/complete`, payload);

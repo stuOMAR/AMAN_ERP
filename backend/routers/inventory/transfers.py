@@ -94,6 +94,8 @@ def create_stock_transfer(
         user_id = _user_id(current_user)
 
         # INV-16: Idempotency check at document level
+        if not idempotency_key:
+            raise HTTPException(**http_error(400, "idempotency_key_required", request))
         if idempotency_key:
             existing = db.execute(text("""
                 SELECT id FROM stock_transfer_log WHERE idempotency_key = :key LIMIT 1
@@ -315,8 +317,8 @@ def create_stock_transfer(
         db.execute(text("""
             INSERT INTO stock_transfer_log 
             (product_id, from_warehouse_id, to_warehouse_id, quantity, transfer_cost, 
-             from_avg_cost_before, to_avg_cost_before, to_avg_cost_after)
-            VALUES (:pid, :fwh, :twh, :qty, :tcost, :fcast, :tcast_b, :tcast_a)
+             from_avg_cost_before, to_avg_cost_before, to_avg_cost_after, idempotency_key)
+            VALUES (:pid, :fwh, :twh, :qty, :tcost, :fcast, :tcast_b, :tcast_a, :idem_key)
         """), {
             "pid": transfer.product_id,
             "fwh": transfer.source_warehouse_id,
@@ -325,7 +327,8 @@ def create_stock_transfer(
             "tcost": str(source_cost),
             "fcast": str(source_cost),
             "tcast_b": str(dest_cost_before),
-            "tcast_a": str(new_avg_cost)
+            "tcast_a": str(new_avg_cost),
+            "idem_key": idempotency_key,
         })
 
         # 9b. Create GL Journal Entry for warehouse transfer via GL service.
@@ -337,7 +340,7 @@ def create_stock_transfer(
         src_branch = src_wh.branch_id
         dst_branch = dst_wh.branch_id
 
-        gl_transfer_value = transfer_value  # keep as Decimal — no float cast
+        gl_transfer_value = transfer_value  # keep as Decimal
         if gl_transfer_value > Decimal("0.01"):
             src_inv_acc = _resolve_inventory_account_for_wh(db, src_wh)
             dst_inv_acc = _resolve_inventory_account_for_wh(db, dst_wh)
@@ -418,6 +421,7 @@ def create_stock_transfer(
 def transfer_stock(
     transfer: StockTransferCreate,
     request: Request,
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """نقل مخزون بين المستودعات (متعدد الأصناف).
@@ -433,6 +437,13 @@ def transfer_stock(
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
         user_id = _user_id(current_user)
+        if not idempotency_key:
+            raise HTTPException(**http_error(400, "idempotency_key_required", request))
+        existing = db.execute(text("""
+            SELECT id FROM stock_transfer_log WHERE idempotency_key = :key LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing:
+            return {"message": i18n_message("stock_transfer_success", request), "reference": f"TRF-{existing.id}", "idempotent_replay": True}
         if transfer.source_warehouse_id == transfer.destination_warehouse_id:
             raise HTTPException(**http_error(400, "cannot_transfer_same_warehouse", request))
 
@@ -703,6 +714,23 @@ def transfer_stock(
                     source_id=transfer_doc_id,
                     idempotency_key=f"inventory_transfer:{transfer_doc_id}",
                 )
+
+        db.execute(text("""
+            INSERT INTO stock_transfer_log (
+                id, product_id, from_warehouse_id, to_warehouse_id, quantity,
+                transfer_cost, from_avg_cost_before, to_avg_cost_before,
+                to_avg_cost_after, idempotency_key
+            ) VALUES (
+                :id, NULL, :fwh, :twh, :qty, :tcost, 0, 0, 0, :idem_key
+            )
+        """), {
+            "id": transfer_doc_id,
+            "fwh": transfer.source_warehouse_id,
+            "twh": transfer.destination_warehouse_id,
+            "qty": str(sum(Decimal(str(item.quantity)) for item in transfer.items)),
+            "tcost": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
+            "idem_key": idempotency_key,
+        })
 
         # AUDIT LOG
         log_activity(

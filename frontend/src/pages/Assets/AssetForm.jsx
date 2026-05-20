@@ -56,8 +56,8 @@ const AssetForm = () => {
         try {
             const payload = {
                 ...data,
-                cost: parseFloat(data.cost),
-                residual_value: parseFloat(data.residual_value || 0),
+                cost: data.cost,
+                residual_value: data.residual_value || '0',
                 life_years: parseInt(data.life_years),
                 branch_id: data.branch_id ? parseInt(data.branch_id) : null,
                 depreciation_method: 'straight_line',

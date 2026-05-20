@@ -59,7 +59,7 @@ def get_party_balance_detail(request: Request,
                     "balances": []
                 }
             if r.balance is not None:
-                bal = float(r.balance)
+                bal = Decimal(str(r.balance))
                 sites[r.site_id]["balances"].append({
                     "branch_id": r.company_branch_id,
                     "branch_name": r.branch_name,
@@ -70,7 +70,7 @@ def get_party_balance_detail(request: Request,
                 # Convert to SAR for total
                 if r.currency and r.currency != base_cur:
                     rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": r.currency}).scalar()
-                    total_sar += bal * float(rate or 1)
+                    total_sar += bal * Decimal(str(rate or 1))
                 else:
                     total_sar += bal
 
@@ -131,7 +131,7 @@ def get_customers_balance_summary(
                     "branch_id": r.company_branch_id,
                     "branch_name": r.branch_name,
                     "currency": r.balance_currency or r.site_currency,
-                    "balance": float(r.balance or 0)
+                    "balance": Decimal(str(r.balance or 0))
                 }
                 for r in rows
             ]
@@ -186,7 +186,7 @@ def get_suppliers_balance_summary(
                     "branch_id": r.company_branch_id,
                     "branch_name": r.branch_name,
                     "currency": r.balance_currency or r.site_currency,
-                    "balance": float(r.balance or 0)
+                    "balance": Decimal(str(r.balance or 0))
                 }
                 for r in rows
             ]

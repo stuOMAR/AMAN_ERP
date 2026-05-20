@@ -29,10 +29,9 @@ const formatApiError = (detail, fallback) => {
     return fallback
 }
 
-const normalizeOptionalNumber = (value, defaultValue = 0) => {
+const normalizeOptionalDecimalString = (value, defaultValue = '0') => {
     if (value === '' || value === null || value === undefined) return defaultValue
-    const parsed = Number(value)
-    return Number.isFinite(parsed) ? parsed : defaultValue
+    return String(value)
 }
 
 const normalizeOptionalInteger = (value, defaultValue = 0) => {
@@ -88,9 +87,9 @@ function ProductForm() {
             item_name_en: formData.item_name_en?.trim() || null,
             item_type: formData.item_type,
             unit: formData.unit || t('stock.products.unit_piece'),
-            selling_price: normalizeOptionalNumber(formData.selling_price, 0),
-            buying_price: normalizeOptionalNumber(formData.buying_price, 0),
-            last_buying_price: normalizeOptionalNumber(formData.last_buying_price ?? formData.buying_price, 0),
+            selling_price: normalizeOptionalDecimalString(formData.selling_price, '0'),
+            buying_price: normalizeOptionalDecimalString(formData.buying_price, '0'),
+            last_buying_price: normalizeOptionalDecimalString(formData.last_buying_price ?? formData.buying_price, '0'),
             tax_rate: null, // Resolved by tax engine
             tax_rate_id: taxMode.tax_rate_id,
             tax_group_id: taxMode.tax_group_id,
@@ -225,11 +224,10 @@ function ProductForm() {
     const handleChange = (e) => {
         let value = e.target.value
 
-        // Convert number types and category_id to proper types
-        if (e.target.type === 'number') {
-            value = value === '' ? '' : Number(value)
-        } else if (e.target.name === 'category_id' && value !== '') {
+        if (e.target.name === 'category_id' && value !== '') {
             value = parseInt(value)
+        } else if ((e.target.name === 'shelf_life_days' || e.target.name === 'expiry_alert_days') && value !== '') {
+            value = parseInt(value, 10)
         }
 
         setFormData({ ...formData, [e.target.name]: value })

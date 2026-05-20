@@ -66,9 +66,9 @@ const OperationEntry = () => {
         try {
             const res = await shopFloorAPI.completeOperation({
                 log_id: logId,
-                output_quantity: parseFloat(outputQty) || 0,
-                scrap_quantity: parseFloat(scrapQty) || 0,
-                downtime_minutes: parseFloat(downtimeMin) || 0,
+                output_quantity: outputQty || '0',
+                scrap_quantity: scrapQty || '0',
+                downtime_minutes: downtimeMin || '0',
                 notes: notes || null,
             });
             const msg = res.data?.is_delayed

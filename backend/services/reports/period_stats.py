@@ -47,12 +47,12 @@ def read_period_stats(db: Any, tenant_id: str, company_id: str,
                 "period_id": row[2],
                 "period_start": row[3].isoformat() if row[3] else None,
                 "period_end": row[4].isoformat() if row[4] else None,
-                "revenue": float(row[5]) if row[5] else 0,
-                "expense": float(row[6]) if row[6] else 0,
-                "gross_profit": float(row[7]) if row[7] else 0,
-                "operating_margin": float(row[8]) if row[8] else 0,
-                "cash_in": float(row[9]) if row[9] else 0,
-                "cash_out": float(row[10]) if row[10] else 0,
+                "revenue": Decimal(str(row[5])) if row[5] else Decimal("0"),
+                "expense": Decimal(str(row[6])) if row[6] else Decimal("0"),
+                "gross_profit": Decimal(str(row[7])) if row[7] else Decimal("0"),
+                "operating_margin": Decimal(str(row[8])) if row[8] else Decimal("0"),
+                "cash_in": Decimal(str(row[9])) if row[9] else Decimal("0"),
+                "cash_out": Decimal(str(row[10])) if row[10] else Decimal("0"),
                 "source": "mv",
             }
     except Exception as exc:
@@ -108,8 +108,8 @@ def _compute_period_stats_live(db: Any, tenant_id: str, company_id: str,
         if not row:
             return None
 
-        revenue = float(row[3]) if row[3] else 0
-        expense = float(row[4]) if row[4] else 0
+        revenue = Decimal(str(row[3])) if row[3] else Decimal("0")
+        expense = Decimal(str(row[4])) if row[4] else Decimal("0")
         return {
             "tenant_id": tenant_id,
             "company_id": company_id,

@@ -11,6 +11,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
+from decimal import Decimal
 from pydantic import BaseModel
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -34,14 +35,14 @@ class ProductVariantCreate(BaseModel):
     variant_sku: str
     variant_name: Optional[str] = None
     options: List[VariantOptionCreate]
-    additional_cost: Optional[float] = 0
-    additional_price: Optional[float] = 0
+    additional_cost: Optional[Decimal] = Decimal("0")
+    additional_price: Optional[Decimal] = Decimal("0")
 
 class ProductVariantUpdate(BaseModel):
     variant_sku: Optional[str] = None
     variant_name: Optional[str] = None
-    additional_cost: Optional[float] = None
-    additional_price: Optional[float] = None
+    additional_cost: Optional[Decimal] = None
+    additional_price: Optional[Decimal] = None
     is_active: Optional[bool] = None
 
 
@@ -53,7 +54,7 @@ class BinLocationCreate(BaseModel):
     shelf: str
     bin: str
     location_type: Optional[str] = 'storage'
-    capacity: Optional[float] = None
+    capacity: Optional[Decimal] = None
     is_active: Optional[bool] = True
 
 class BinLocationUpdate(BaseModel):
@@ -62,23 +63,23 @@ class BinLocationUpdate(BaseModel):
     shelf: Optional[str] = None
     bin: Optional[str] = None
     location_type: Optional[str] = None
-    capacity: Optional[float] = None
+    capacity: Optional[Decimal] = None
     is_active: Optional[bool] = None
 
 
 # Product Kits (INV-108)
 class KitComponentCreate(BaseModel):
     component_product_id: int
-    quantity: float
+    quantity: Decimal
 
 class ProductKitCreate(BaseModel):
     kit_product_id: int
     components: List[KitComponentCreate]
-    assembly_cost: Optional[float] = 0
+    assembly_cost: Optional[Decimal] = Decimal("0")
     notes: Optional[str] = None
 
 class ProductKitUpdate(BaseModel):
-    assembly_cost: Optional[float] = None
+    assembly_cost: Optional[Decimal] = None
     is_active: Optional[bool] = None
     notes: Optional[str] = None
 
@@ -479,21 +480,23 @@ async def get_product_ledger(
         rows = [dict(r._mapping) for r in result]
         
         # Calculate running balance
-        running_balance = 0
+        running_balance = Decimal("0")
         for row in rows:
-            qty = abs(float(row.get("quantity", 0)))
+            qty = abs(Decimal(str(row.get("quantity", 0))))
             tx_type = row.get("transaction_type", "")
             
             if tx_type in ("receipt", "initial", "adjustment_in", "return_in", "transfer_in", "stock_in", "production_in"):
                 running_balance += qty
                 row["qty_in"] = qty
-                row["qty_out"] = 0
+                row["qty_out"] = "0"
             else:
                 running_balance -= qty
-                row["qty_in"] = 0
+                row["qty_in"] = "0"
                 row["qty_out"] = qty
             
-            row["running_balance"] = running_balance
+            row["qty_in"] = str(row["qty_in"])
+            row["qty_out"] = str(row["qty_out"])
+            row["running_balance"] = str(running_balance)
 
         count_result = db.execute(text(f"SELECT COUNT(*) FROM inventory_transactions it {where}"), params)
         total = count_result.scalar()

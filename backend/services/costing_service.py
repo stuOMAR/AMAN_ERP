@@ -12,12 +12,9 @@ logger = logging.getLogger(__name__)
 _D4 = Decimal('0.0001')
 _dec = lambda v: Decimal(str(v or 0))
 
-# F-NEW-003: monetary/quantity inputs may arrive as Decimal, str, int, or
-# float (e.g. from Pydantic-coerced JSON payloads). All numeric helpers in
-# this module funnel them through ``_dec(...)`` immediately, so the type
-# annotation describes the acceptable input domain rather than the
-# arithmetic precision (which is always Decimal internally).
-Numeric = Union[Decimal, float, int, str]
+# F-NEW-003: monetary/quantity inputs arrive as Decimal, str, or int.
+# All numeric helpers in this module funnel them through ``_dec(...)``.
+Numeric = Union[Decimal, int, str]
 
 class CostingService:
     @staticmethod
@@ -35,7 +32,7 @@ class CostingService:
     ) -> Decimal:
         """Standard WAC Formula using Decimal for precision.
 
-        F-NEW-003: inputs may be ``Decimal``, ``float``, ``int`` or ``str``;
+        F-NEW-003: inputs may be ``Decimal``, ``int`` or ``str``;
         all four are normalised through ``_dec(...)`` so the arithmetic is
         always Decimal-precise even though the call site can be loose.
         """
@@ -69,7 +66,7 @@ class CostingService:
         Updates product cost based on the active policy.
         CALLED BEFORE INVENTORY QUANTITY UPDATE (to use current stock stats).
 
-        F-NEW-003: ``new_qty`` / ``new_price`` accept Decimal/float/int/str
+        F-NEW-003: ``new_qty`` / ``new_price`` accept Decimal/int/str
         and are coerced to Decimal at every arithmetic boundary.
         """
         if hasattr(db, "in_transaction") and hasattr(db, "begin") and hasattr(db, "begin_nested"):

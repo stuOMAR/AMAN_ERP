@@ -1,5 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import Decimal from 'decimal.js';
 import { assetsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
@@ -80,8 +81,8 @@ const LeaseContracts = () => {
         }
     };
 
-    const totalROU = leases.reduce((s, l) => s + parseFloat(l.right_of_use_value || 0), 0);
-    const totalLiability = leases.reduce((s, l) => s + parseFloat(l.lease_liability || 0), 0);
+    const totalROU = leases.reduce((s, l) => s.plus(new Decimal(l.right_of_use_value || '0')), new Decimal('0')).toString();
+    const totalLiability = leases.reduce((s, l) => s.plus(new Decimal(l.lease_liability || '0')), new Decimal('0')).toString();
     const activeLeases = leases.filter(l => l.status === 'active');
 
     const formatDate = (d) => d ? new Date(d).toLocaleDateString(i18n.language === 'ar' ? 'ar-SA' : 'en-US') : '—';

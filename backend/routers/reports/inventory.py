@@ -50,6 +50,8 @@ def inventory_valuation_report(
         from utils.permissions import validate_branch_access
 
         # T067: Validate branch access
+        if branch_id:
+            validate_branch_access(current_user, branch_id)
         if warehouse_id:
             wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()
             if wh_branch:
@@ -251,6 +253,7 @@ def cogs_report(
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         branch_rate = Decimal('1')
         if branch_id:
+            validate_branch_access(current_user, branch_id)
             branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
             if branch_cur != base_cur:
                 rate_val = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": branch_cur}).scalar()
@@ -339,6 +342,7 @@ def product_profitability_report(
         params = {"start": s, "end": e}
 
         if branch_id:
+            validate_branch_access(current_user, branch_id)
             # Specific branch: show in branch's local currency
             branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
             branch_rate = Decimal('1')
@@ -466,6 +470,7 @@ def product_profitability_report(
             display_currency = base_cur
 
         overall_margin = _pct(total_profit, total_revenue) if total_revenue > 0 else Decimal("0")
+        total_sold_qty = sum((Decimal(str(item.get("sold_qty", 0))) for item in items), Decimal("0"))
 
         # Sort by gross_profit descending
         items.sort(key=lambda x: x["gross_profit"], reverse=True)
@@ -478,6 +483,7 @@ def product_profitability_report(
             "currency": display_currency,
             "items": items,
             "totals": {
+                "sold_qty": str(_dec(total_sold_qty)),
                 "revenue": str(_dec(total_revenue)),
                 "cogs": str(_dec(total_cogs)),
                 "gross_profit": str(_dec(total_profit)),
@@ -504,6 +510,7 @@ def profitability_summary(
         params = {"start": s, "end": e}
 
         if branch_id:
+            validate_branch_access(current_user, branch_id)
             branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
             branch_rate = Decimal('1')
             if branch_cur != base_cur:
