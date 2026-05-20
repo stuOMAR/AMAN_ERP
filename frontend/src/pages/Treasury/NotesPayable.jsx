@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
 import { notesAPI, treasuryAPI, inventoryAPI } from '../../utils/api';
 import { Plus, Eye, CheckCircle, XCircle, AlertTriangle, Clock } from 'lucide-react';
@@ -10,11 +10,14 @@ import DateInput from '../../components/common/DateInput';
 import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format';
 const NotesPayable = () => {
     const { t } = useTranslation();
     const { currentBranch } = useBranch();
     const [notes, setNotes] = useState([]);
     const currency = getCurrency() || '';
+    const canCreateTreasury = hasPermission('treasury.create');
+    const permissionDenied = () => toastEmitter.emit(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error');
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
@@ -67,11 +70,14 @@ const NotesPayable = () => {
     };
 
     const handleCreate = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         if (!form.note_number || !form.amount || !form.due_date) {
             toastEmitter.emit(t('treasury.notes.fill_required'), 'error'); return;
         }
         try {
-            await notesAPI.createPayable({ ...form, amount: parseFloat(form.amount), branch_id: currentBranch?.id });
+            await notesAPI.createPayable({ ...form, amount: form.amount, branch_id: currentBranch?.id });
             toastEmitter.emit(t('treasury.notes_payable.created'), 'success');
             setShowCreate(false);
             setForm({ note_number: '', beneficiary_name: '', bank_name: '', amount: '', currency: getCurrency(),
@@ -82,6 +88,9 @@ const NotesPayable = () => {
     };
 
     const handlePay = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         try {
             await notesAPI.payPayable(showPay.id, payForm);
             toastEmitter.emit(t('treasury.notes_payable.paid'), 'success');
@@ -91,6 +100,9 @@ const NotesPayable = () => {
     };
 
     const handleProtest = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         try {
             await notesAPI.protestPayable(showProtest.id, protestForm);
             toastEmitter.emit(t('treasury.notes_payable.rejected'), 'success');
@@ -99,7 +111,7 @@ const NotesPayable = () => {
         } catch (e) { toastEmitter.emit(e.response?.data?.detail || t('common.error'), 'error'); }
     };
 
-    const fmt = (n) => Number(n || 0).toLocaleString('en', { minimumFractionDigits: 2 });
+    const fmt = (n) => formatNumber(n || '0');
     const isOverdue = (note) => note.status === 'issued' && new Date(note.due_date) < new Date();
     const statusBadge = (s) => {
         const map = { issued: 'badge-warning', paid: 'badge-success', protested: 'badge-danger' };
@@ -118,9 +130,11 @@ const NotesPayable = () => {
                     <h1 className="workspace-title">📜 {t('notesPayable.title')}</h1>
                     <p className="workspace-subtitle">{t('notesPayable.subtitle')}</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => { setShowCreate(true); loadCreateData(); }}>
-                    <Plus size={16} /> {t('notesPayable.create')}
-                </button>
+                {canCreateTreasury && (
+                    <button className="btn btn-primary" onClick={() => { setShowCreate(true); loadCreateData(); }}>
+                        <Plus size={16} /> {t('notesPayable.create')}
+                    </button>
+                )}
             </div>
 
             {/* Stats */}
@@ -201,7 +215,7 @@ const NotesPayable = () => {
                                         <button className="btn btn-sm btn-light" onClick={() => setShowDetail(note)} title={t('notesPayable.view')}>
                                             <Eye size={14} />
                                         </button>
-                                        {note.status === 'issued' && (
+                                        {note.status === 'issued' && canCreateTreasury && (
                                             <>
                                                 <button className="btn btn-sm btn-success" onClick={() => { setShowPay(note); loadCreateData(); }} title={t('notesPayable.pay')}>
                                                     <CheckCircle size={14} />
@@ -220,7 +234,7 @@ const NotesPayable = () => {
             </div>
 
             {/* Create Modal */}
-            {showCreate && (
+            {showCreate && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCreate(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
                         <div className="modal-header">
@@ -317,7 +331,7 @@ const NotesPayable = () => {
             )}
 
             {/* Pay Modal */}
-            {showPay && (
+            {showPay && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowPay(null)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
                         <div className="modal-header">
@@ -349,7 +363,7 @@ const NotesPayable = () => {
             )}
 
             {/* Protest Modal */}
-            {showProtest && (
+            {showProtest && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowProtest(null)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
                         <div className="modal-header">

@@ -1,5 +1,5 @@
 import { useState, useEffect } from 'react';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
 import { notesAPI, treasuryAPI, salesAPI } from '../../utils/api';
 import { Plus, Eye, CheckCircle, XCircle, AlertTriangle, Clock } from 'lucide-react';
@@ -10,11 +10,14 @@ import DateInput from '../../components/common/DateInput';
 import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format';
 const NotesReceivable = () => {
     const { t } = useTranslation();
     const { currentBranch } = useBranch();
     const [notes, setNotes] = useState([]);
     const currency = getCurrency() || '';
+    const canCreateTreasury = hasPermission('treasury.create');
+    const permissionDenied = () => toastEmitter.emit(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error');
     const [stats, setStats] = useState(null);
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
@@ -67,11 +70,14 @@ const NotesReceivable = () => {
     };
 
     const handleCreate = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         if (!form.note_number || !form.amount || !form.due_date) {
             toastEmitter.emit(t('treasury.notes.fill_required'), 'error'); return;
         }
         try {
-            await notesAPI.createReceivable({ ...form, amount: parseFloat(form.amount), branch_id: currentBranch?.id });
+            await notesAPI.createReceivable({ ...form, amount: form.amount, branch_id: currentBranch?.id });
             toastEmitter.emit(t('treasury.notes_receivable.created'), 'success');
             setShowCreate(false);
             setForm({ note_number: '', drawer_name: '', bank_name: '', amount: '', currency: getCurrency(),
@@ -82,6 +88,9 @@ const NotesReceivable = () => {
     };
 
     const handleCollect = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         try {
             await notesAPI.collectReceivable(showCollect.id, collectForm);
             toastEmitter.emit(t('treasury.notes_receivable.collected'), 'success');
@@ -91,6 +100,9 @@ const NotesReceivable = () => {
     };
 
     const handleProtest = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied(); return;
+        }
         try {
             await notesAPI.protestReceivable(showProtest.id, protestForm);
             toastEmitter.emit(t('treasury.notes_receivable.rejected'), 'success');
@@ -99,7 +111,7 @@ const NotesReceivable = () => {
         } catch (e) { toastEmitter.emit(e.response?.data?.detail || t('common.error'), 'error'); }
     };
 
-    const fmt = (n) => Number(n || 0).toLocaleString('en', { minimumFractionDigits: 2 });
+    const fmt = (n) => formatNumber(n || '0');
     const isOverdue = (note) => note.status === 'pending' && new Date(note.due_date) < new Date();
     const statusBadge = (s) => {
         const map = { pending: 'badge-warning', collected: 'badge-success', protested: 'badge-danger' };
@@ -118,9 +130,11 @@ const NotesReceivable = () => {
                     <h1 className="workspace-title">📜 {t('notesReceivable.title')}</h1>
                     <p className="workspace-subtitle">{t('notesReceivable.subtitle')}</p>
                 </div>
-                <button className="btn btn-primary" onClick={() => { setShowCreate(true); loadCreateData(); }}>
-                    <Plus size={16} /> {t('notesReceivable.create')}
-                </button>
+                {canCreateTreasury && (
+                    <button className="btn btn-primary" onClick={() => { setShowCreate(true); loadCreateData(); }}>
+                        <Plus size={16} /> {t('notesReceivable.create')}
+                    </button>
+                )}
             </div>
 
             {/* Stats */}
@@ -201,7 +215,7 @@ const NotesReceivable = () => {
                                         <button className="btn btn-sm btn-light" onClick={() => setShowDetail(note)} title={t('notesReceivable.view')}>
                                             <Eye size={14} />
                                         </button>
-                                        {note.status === 'pending' && (
+                                        {note.status === 'pending' && canCreateTreasury && (
                                             <>
                                                 <button className="btn btn-sm btn-success" onClick={() => { setShowCollect(note); loadCreateData(); }} title={t('notesReceivable.collect')}>
                                                     <CheckCircle size={14} />
@@ -220,7 +234,7 @@ const NotesReceivable = () => {
             </div>
 
             {/* Create Modal */}
-            {showCreate && (
+            {showCreate && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCreate(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '600px' }}>
                         <div className="modal-header">
@@ -317,7 +331,7 @@ const NotesReceivable = () => {
             )}
 
             {/* Collect Modal */}
-            {showCollect && (
+            {showCollect && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCollect(null)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
                         <div className="modal-header">
@@ -349,7 +363,7 @@ const NotesReceivable = () => {
             )}
 
             {/* Protest Modal */}
-            {showProtest && (
+            {showProtest && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowProtest(null)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: '400px' }}>
                         <div className="modal-header">

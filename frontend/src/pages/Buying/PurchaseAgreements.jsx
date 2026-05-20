@@ -48,7 +48,7 @@ const PurchaseAgreements = () => {
         const qty = prompt(t('buying.quantity_prompt'));
         if (!qty) return;
         try {
-            await purchasesAPI.callOffAgreement(id, { quantity: Number(qty) });
+            await purchasesAPI.callOffAgreement(id, { quantity: String(qty) });
             showToast(t('buying.calloff_created'), 'success'); fetchAgreements();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }
     };

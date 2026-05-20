@@ -60,9 +60,20 @@ export default function ApiKeys() {
     e.preventDefault();
     try {
       setSubmitting(true);
+      let expiresInDays = null;
+      if (form.expires_at) {
+        const selected = new Date(`${form.expires_at}T00:00:00`);
+        const today = new Date();
+        today.setHours(0, 0, 0, 0);
+        if (!Number.isNaN(selected.getTime())) {
+          expiresInDays = Math.max(1, Math.ceil((selected - today) / (1000 * 60 * 60 * 24)));
+        }
+      }
       const payload = {
-        ...form,
-        expires_at: form.expires_at || null,
+        name: form.name.trim(),
+        permissions: form.permissions,
+        rate_limit_per_minute: Number(form.rate_limit_per_minute) || 60,
+        expires_in_days: expiresInDays,
       };
       const res = await externalAPI.createApiKey(payload);
       const result = res.data ?? res;

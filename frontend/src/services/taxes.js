@@ -75,6 +75,7 @@ export const taxComplianceAPI = {
     getSyrianIncomeReport: (params) => api.get('/tax-compliance/reports/sy-income', { params }),
     getUAEVATReport: (params) => api.get('/tax-compliance/reports/ae-vat', { params }),
     getEgyptVATReport: (params) => api.get('/tax-compliance/reports/eg-vat', { params }),
+    getTurkeyKDVReport: (params) => api.get('/tax-compliance/reports/tr-kdv', { params }),
     getGenericIncomeReport: (params) => api.get('/tax-compliance/reports/generic-income', { params }),
 
     // Compliance overview

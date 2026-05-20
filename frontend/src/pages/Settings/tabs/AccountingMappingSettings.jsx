@@ -3,7 +3,6 @@ import { useTranslation } from 'react-i18next';
 import { GitMerge, Landmark, ShoppingCart, Receipt, Factory, Users, Briefcase, CreditCard, ArrowLeftRight, RefreshCw } from 'lucide-react';
 import api, { accountingAPI } from '../../../utils/api';
 import { toastEmitter } from '../../../utils/toastEmitter';
-import DateInput from '../../../components/common/DateInput';
 import { Spinner } from '../../../components/common/LoadingStates'
 
 const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
@@ -13,9 +12,10 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
 
     // Advanced Tools State
     const [fxProcessing, setFxProcessing] = useState(false);
-    const [fxDate, setFxDate] = useState(new Date().toISOString().split('T')[0]);
+    const [fxCurrencyCode, setFxCurrencyCode] = useState('');
+    const [fxNewRate, setFxNewRate] = useState('');
     const [badDebtProcessing, setBadDebtProcessing] = useState(false);
-    const [badDebtDays, setBadDebtDays] = useState(90);
+    const [badDebtAmount, setBadDebtAmount] = useState('');
     const [leaveProvProcessing, setLeaveProvProcessing] = useState(false);
 
     useEffect(() => {
@@ -56,10 +56,17 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
 
     // --- Advanced Tools Handlers ---
     const handleFxRevaluation = async () => {
+        if (!fxCurrencyCode.trim() || !fxNewRate || Number(fxNewRate) <= 0) {
+            toastEmitter.emit(t('common.fill_required', 'Please fill required fields'), 'error');
+            return;
+        }
         if (!window.confirm(m('confirm_fx_revaluation'))) return;
         setFxProcessing(true);
         try {
-            await accountingAPI.fxRevaluation({ valuation_date: fxDate });
+            await accountingAPI.fxRevaluation({
+                currency_code: fxCurrencyCode.trim().toUpperCase(),
+                new_rate: String(fxNewRate),
+            });
             toastEmitter.emit(m('fx_revaluation_success'), 'success');
         } catch (err) {
             console.error("FX Revaluation failed", err);
@@ -69,10 +76,14 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
     };
 
     const handleBadDebtProvision = async () => {
+        if (!badDebtAmount || Number(badDebtAmount) <= 0) {
+            toastEmitter.emit(t('common.fill_required', 'Please fill required fields'), 'error');
+            return;
+        }
         if (!window.confirm(m('confirm_bad_debt'))) return;
         setBadDebtProcessing(true);
         try {
-            await accountingAPI.createBadDebtProvision({ overdue_days: badDebtDays });
+            await accountingAPI.createBadDebtProvision({ amount: String(badDebtAmount) });
             toastEmitter.emit(m('bad_debt_success'), 'success');
         } catch (err) {
             console.error("Bad debt provision failed", err);
@@ -223,7 +234,29 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
                         <p style={{ fontSize: 12, color: 'var(--text-secondary)', marginBottom: 12 }}>
                             {m('fx_revaluation_desc')}
                         </p>
-                        <DateInput className="form-input mb-2" value={fxDate} onChange={e => setFxDate(e.target.value)} style={{ fontSize: 13 }} />
+                        <div className="mb-2">
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('common.currency', 'Currency')}</label>
+                            <input
+                                type="text"
+                                className="form-input"
+                                value={fxCurrencyCode}
+                                onChange={e => setFxCurrencyCode(e.target.value.toUpperCase())}
+                                maxLength={10}
+                                style={{ fontSize: 13 }}
+                            />
+                        </div>
+                        <div className="mb-2">
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('common.exchange_rate', 'Exchange rate')}</label>
+                            <input
+                                type="number"
+                                className="form-input"
+                                value={fxNewRate}
+                                onChange={e => setFxNewRate(e.target.value)}
+                                min="0"
+                                step="0.000001"
+                                style={{ fontSize: 13 }}
+                            />
+                        </div>
                         <button className="btn btn-primary btn-sm btn-block" onClick={handleFxRevaluation} disabled={fxProcessing}>
                             {fxProcessing ? <Spinner size="sm"/> : m('run')}
                         </button>
@@ -238,8 +271,16 @@ const AccountingMappingSettings = ({ settings, handleSettingChange }) => {
                             {m('bad_debt_provision_desc')}
                         </p>
                         <div className="mb-2">
-                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{m('overdue_days')}</label>
-                            <input type="number" className="form-input" value={badDebtDays} onChange={e => setBadDebtDays(e.target.value)} style={{ fontSize: 13 }} />
+                            <label style={{ fontSize: 12, color: 'var(--text-secondary)' }}>{t('common.amount', 'Amount')}</label>
+                            <input
+                                type="number"
+                                className="form-input"
+                                value={badDebtAmount}
+                                onChange={e => setBadDebtAmount(e.target.value)}
+                                min="0"
+                                step="0.01"
+                                style={{ fontSize: 13 }}
+                            />
                         </div>
                         <button className="btn btn-warning btn-sm btn-block" onClick={handleBadDebtProvision} disabled={badDebtProcessing}>
                             {badDebtProcessing ? <Spinner size="sm"/> : m('create_provision')}

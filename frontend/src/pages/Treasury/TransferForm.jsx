@@ -28,7 +28,7 @@ function TransferForm() {
         target_treasury_id: '',
         notes: '',
         reference_number: '',
-        exchange_rate: 1
+        exchange_rate: '1'
     })
 
     useEffect(() => {
@@ -59,13 +59,15 @@ function TransferForm() {
         setError(null)
         try {
             await treasuryAPI.createTransfer({
-                ...form,
-                amount: Number(form.amount),
-                treasury_id: Number(form.treasury_id),
-                target_treasury_id: Number(form.target_treasury_id),
+                transaction_date: form.transaction_date,
                 transaction_type: 'transfer',
+                amount: form.amount,
+                treasury_id: form.treasury_id ? parseInt(form.treasury_id, 10) : null,
+                target_treasury_id: form.target_treasury_id ? parseInt(form.target_treasury_id, 10) : null,
                 branch_id: currentBranch?.id || null,
-                description: form.notes || form.reference_number || t('treasury.menu.transfer')
+                description: form.notes || form.reference_number || t('treasury.menu.transfer'),
+                reference_number: form.reference_number || null,
+                exchange_rate: form.exchange_rate || '1'
             })
             toastEmitter.emit(t('treasury.success_create_transfer'), 'success')
             navigate('/treasury')
@@ -128,7 +130,7 @@ function TransferForm() {
                                 step="0.000001"
                                 min="0"
                                 value={form.exchange_rate}
-                                onChange={e => setForm({ ...form, exchange_rate: parseFloat(e.target.value) || 1 })}
+                                onChange={e => setForm({ ...form, exchange_rate: e.target.value || '1' })}
                             />
                         </FormField>
                     </div>

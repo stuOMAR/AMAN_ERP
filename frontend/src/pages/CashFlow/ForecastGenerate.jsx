@@ -26,8 +26,9 @@ function ForecastGenerate() {
             setLoading(true)
             setError(null)
             const response = await cashflowAPI.generate({
-                ...formData,
+                name: formData.name.trim(),
                 horizon_days: parseInt(formData.horizon_days, 10),
+                mode: formData.mode,
             })
             navigate(`/finance/cashflow/${response.data.id}`)
         } catch (err) {

@@ -1,7 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { salesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
-import { taxesAPI } from '../../services/taxes'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
 import { formatNumber, getStep } from '../../utils/format'
@@ -12,6 +11,7 @@ import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import useInvoiceCalc from '../../hooks/useInvoiceCalc';
+import Decimal from 'decimal.js';
 
 function InvoiceForm() {
     const { t } = useTranslation()
@@ -31,11 +31,9 @@ function InvoiceForm() {
     const [error, setError] = useState(null)
     const [currencies, setCurrencies] = useState([])
     const [treasuryAccounts, setTreasuryAccounts] = useState([])
-    const [branchTax, setBranchTax] = useState(null) // { tax_rate_id, tax_rate, tax_name, country_code }
 
     // Backend-powered calculations
-    const { totals: calcTotals, preview, previewDebounced, quickCalc } = useInvoiceCalc()
-    const [localTotals, setLocalTotals] = useState({ subtotal: 0, discount: 0, tax: 0, total: 0 })
+    const { totals: calcTotals, lines: backendLines, preview, previewDebounced } = useInvoiceCalc()
 
     const [formData, setFormData] = useState({
         customer_id: '',
@@ -46,15 +44,25 @@ function InvoiceForm() {
         notes: '',
         payment_method: '',
         down_payment_method: 'cash',
-        paid_amount: 0,
+        paid_amount: '',
         currency: currency || '',
-        exchange_rate: 1.0,
+        exchange_rate: '1',
         treasury_id: ''
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, discount: 0, discount_percent: 0 }
+        { product_id: '', description: '', quantity: '1', unit_price: '', discount: '', unit: '' }
     ])
+
+    const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—'
+
+    const isPositiveDecimal = (value) => {
+        try {
+            return new Decimal(value || '0').gt(0)
+        } catch {
+            return false
+        }
+    }
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -77,22 +85,13 @@ function InvoiceForm() {
                     setCurrencies(curRes.data)
                     setTreasuryAccounts(treasRes.data)
                     
-                    // Store branch prices for auto-fill
+                    // Store branch prices for auto-fill. The server remains
+                    // authoritative for totals, taxes, and discounts.
                     window.__branchPrices = priceRes.data?.prices || {}
                     window.__branchCurrency = priceRes.data?.currency || formData.currency
 
                     const base = curRes.data.find(c => c.is_base)
                     if (base && !formData.currency) {
-
-                    // Fetch branch tax
-                    if (currentBranch?.id) {
-                        try {
-                            const taxRes = await taxesAPI.getBranchTax(currentBranch.id)
-                            setBranchTax(taxRes.data)
-                        } catch (err) {
-                            console.warn('Failed to fetch branch tax', err)
-                        }
-                    }
                         setFormData(prev => ({ ...prev, currency: base.code }))
                     }
 
@@ -105,22 +104,15 @@ function InvoiceForm() {
                             notes: order.notes || '',
                             due_date: order.expected_delivery_date ? new Date(order.expected_delivery_date).toISOString().split('T')[0] : ''
                         }))
-                        setItems(order.items.map(item => {
-                            const quantity = Number(item.quantity) || 0
-                            const unitPrice = Number(item.unit_price) || 0
-                            const discount = Number(item.discount) || 0
-                            const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0
-
-                            return {
-                                product_id: item.product_id,
-                                description: item.description || '',
-                                quantity: quantity,
-                                unit_price: unitPrice,
-                                tax_rate: Number(item.tax_rate) || 0,
-                                discount: discount,
-                                discount_percent: discountPercent
-                            }
-                        }))
+                        setItems(order.items.map(item => ({
+                            product_id: item.product_id,
+                            description: item.description || '',
+                            quantity: String(item.quantity || ''),
+                            unit_price: String(item.unit_price || ''),
+                            tax_rate: null,
+                            discount: String(item.discount || ''),
+                            unit: item.unit || ''
+                        })))
                     }
                 } catch (err) {
                     showToast(t('common.error'), 'error')
@@ -173,26 +165,11 @@ function InvoiceForm() {
                     const product = products.find(p => p.id === parseInt(value))
                     if (product) {
                         updatedItem.description = product.item_name
-                        // Use branch price if available, otherwise use product default
                         const branchPrices = window.__branchPrices || {}
                         const priceInfo = branchPrices[parseInt(value)]
-                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0)
+                        updatedItem.unit_price = String(priceInfo ? priceInfo.price : (product.selling_price || ''))
                         updatedItem.unit = product.unit || 'قطعة'
                         updatedItem.tax_rate = null // Resolved by backend engine
-                        // Try applying item-level effect from group
-                        const customer = customers.find(c => c.id === parseInt(formData.customer_id));
-                        if (customer && customer.group_id) {
-                            const group = customerGroups.find(g => g.id === customer.group_id);
-                            if (group && group.application_scope === 'line' && group.discount_percentage > 0) {
-                                if (group.effect_type === 'discount') {
-                                    updatedItem.discount_percent = group.discount_percentage;
-                                } else if (group.effect_type === 'markup') {
-                                    // Markup applied by increasing unit_price
-                                    const basePrice = priceInfo ? priceInfo.price : (product.selling_price || 0)
-                                    updatedItem.unit_price = basePrice * (1 + (group.discount_percentage / 100));
-                                }
-                            }
-                        }
 
                         // Fetch stock for this product
                         fetchProductStock(parseInt(value), formData.warehouse_id)
@@ -202,33 +179,20 @@ function InvoiceForm() {
                 // Validate quantity against available stock
                 if (field === 'quantity' && item.product_id) {
                     const productId = parseInt(item.product_id)
-                    const availableStock = productStocks[productId] || 0
-                    const enteredQty = Number(value) || 0
+                    const availableStock = productStocks[productId] || '0'
+                    let exceedsStock = false
+                    try {
+                        exceedsStock = new Decimal(value || '0').gt(availableStock || '0')
+                    } catch {
+                        exceedsStock = false
+                    }
 
-                    if (enteredQty > availableStock) {
+                    if (exceedsStock) {
                         showToast(t('sales.invoices.form.error_stock', { stock: availableStock }), 'error')
-                        updatedItem.quantity = 0
+                        updatedItem.quantity = ''
                         return updatedItem
                     }
                 }
-
-                // Calculate discount based on percentage if needed
-                const qty = Number(updatedItem.quantity) || 0
-                const price = Number(updatedItem.unit_price) || 0
-                let discount = Number(updatedItem.discount) || 0
-                let discountPercent = Number(updatedItem.discount_percent) || 0
-
-                if (field === 'discount_percent') {
-                    discountPercent = Number(value) || 0
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                } else if (field === 'quantity' || field === 'unit_price') {
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                }
-
-                updatedItem.discount_percent = discountPercent
-                updatedItem.discount = discount
 
                 return updatedItem
             }
@@ -256,7 +220,7 @@ function InvoiceForm() {
     const isDiscreteUnit = (unit) => DISCRETE_UNITS.includes((unit || '').trim().toLowerCase()) || DISCRETE_UNITS.includes((unit || '').trim());
 
     const addItem = () => {
-        setItems([...items, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, unit: '' }])
+        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '', unit: '' }])
     }
 
     const removeItem = (index) => {
@@ -266,58 +230,53 @@ function InvoiceForm() {
     }
 
     const getTotals = () => {
-        // Use backend-calculated totals if available, otherwise use local quick calc
         if (calcTotals) {
             return {
                 subtotal: calcTotals.subtotal,
                 discount: calcTotals.totalDiscount,
-                markup: 0,
+                markup: null,
                 tax: calcTotals.totalTax,
                 total: calcTotals.grandTotal,
+                remainingBalance: calcTotals.remainingBalance,
                 globalEffectType: 'discount',
-                globalEffectPercent: 0,
-                globalMakeupAmount: 0,
+                globalEffectPercent: '0',
+                globalMakeupAmount: '0',
                 globalDiscountAmount: calcTotals.totalDiscount,
             }
         }
-        // Fallback to local quick calculation
-        return localTotals
+        return {
+            subtotal: null,
+            discount: null,
+            markup: null,
+            tax: null,
+            total: null,
+            remainingBalance: null,
+            globalEffectType: 'discount',
+            globalEffectPercent: '0',
+            globalMakeupAmount: '0',
+            globalDiscountAmount: null,
+        }
     }
 
     const buildCalculationPayload = () => ({
         lines: items.map(i => ({
-            product_id: i.product_id ? Number(i.product_id) : null,
-            quantity: Number(i.quantity) || 0,
-            unit_price: Number(i.unit_price) || 0,
-            discount: Number(i.discount) || 0,
+            product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+            quantity: String(i.quantity || '0'),
+            unit_price: String(i.unit_price || '0'),
+            discount: String(i.discount || '0'),
         })),
         branch_id: currentBranch?.id || null,
-        customer_id: formData.customer_id ? Number(formData.customer_id) : null,
+        customer_id: formData.customer_id ? parseInt(formData.customer_id, 10) : null,
         document_date: formData.invoice_date,
         currency: formData.currency || currency,
-        paid_amount: Number(formData.paid_amount) || 0,
+        paid_amount: String(formData.paid_amount || '0'),
     })
 
     // Call backend for accurate calculations when items change
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
-            const calculationPayload = buildCalculationPayload()
-
-            // Quick local calc for instant feedback
-            const quick = quickCalc(calculationPayload.lines)
-            setLocalTotals({
-                subtotal: quick.subtotal,
-                discount: items.reduce((s, i) => s + (Number(i.discount) || 0), 0),
-                tax: quick.totalTax,
-                total: quick.grandTotal,
-                globalEffectType: 'discount',
-                globalEffectPercent: 0,
-                globalMakeupAmount: 0,
-                globalDiscountAmount: 0,
-            })
-
-            // Debounced backend calc for accurate totals
-            previewDebounced(calculationPayload)
+        const hasPreviewableLine = items.some(i => isPositiveDecimal(i.quantity) && isPositiveDecimal(i.unit_price))
+        if (hasPreviewableLine) {
+            previewDebounced(buildCalculationPayload())
         }
     }, [items, formData.currency, formData.customer_id, formData.invoice_date, formData.paid_amount, currentBranch])
 
@@ -344,7 +303,7 @@ function InvoiceForm() {
             window.scrollTo(0, 0)
             return
         }
-        if (items.some(i => i.product_id && (!i.quantity || Number(i.quantity) <= 0))) {
+        if (items.some(i => i.product_id && !isPositiveDecimal(i.quantity))) {
             setError(t('sales.invoices.form.error_quantity'))
             window.scrollTo(0, 0)
             return
@@ -364,37 +323,38 @@ function InvoiceForm() {
                 return
             }
             const totals = {
-                subtotal: previewResult.subtotal || 0,
-                discount: previewResult.total_discount || 0,
-                markup: 0,
-                tax: previewResult.total_tax || 0,
-                total: previewResult.grand_total || 0,
+                subtotal: previewResult.subtotal ?? null,
+                discount: previewResult.total_discount ?? null,
+                markup: null,
+                tax: previewResult.total_tax ?? null,
+                total: previewResult.grand_total ?? null,
                 globalEffectType: 'discount',
-                globalEffectPercent: 0,
-                globalMakeupAmount: 0,
-                globalDiscountAmount: previewResult.total_discount || 0,
+                globalEffectPercent: '0',
+                globalMakeupAmount: '0',
+                globalDiscountAmount: previewResult.total_discount ?? null,
             };
             const payload = {
                 ...formData,
+                status: 'draft',
                 branch_id: currentBranch ? currentBranch.id : null,
                 warehouse_id: formData.warehouse_id ? parseInt(formData.warehouse_id) : null,
                 customer_id: parseInt(formData.customer_id),
                 party_site_id: formData.party_site_id ? parseInt(formData.party_site_id) : null,
                 due_date: formData.due_date || null,
                 down_payment_method: formData.down_payment_method || 'cash',
-                paid_amount: String(formData.paid_amount || 0),
+                paid_amount: String(formData.paid_amount || '0'),
                 currency: formData.currency,
-                exchange_rate: String(formData.exchange_rate || 1.0),
+                exchange_rate: String(formData.exchange_rate || '1'),
                 treasury_id: formData.treasury_id ? parseInt(formData.treasury_id) : null,
                 effect_type: totals.globalEffectType,
                 effect_percentage: totals.globalEffectPercent,
                 markup_amount: totals.globalMakeupAmount,
                 items: items.map(item => ({
                     product_id: item.product_id ? parseInt(item.product_id) : null,
-                    quantity: String(item.quantity || 0),
-                    unit_price: String(item.unit_price || 0),
-                    discount: String(item.discount || 0),
-                    markup: 0
+                    quantity: String(item.quantity || '0'),
+                    unit_price: String(item.unit_price || '0'),
+                    discount: String(item.discount || '0'),
+                    markup: '0'
                 }))
             }
             await salesAPI.createInvoice(payload)
@@ -445,28 +405,12 @@ function InvoiceForm() {
                                 value={formData.customer_id || ''}
                                 onChange={(e) => {
                                     setFormData({ ...formData, customer_id: e.target.value });
-                                    // Reset items discount when customer changes
                                     setItems(prevItems => prevItems.map(item => {
                                         let updated = { ...item };
                                         if (item.product_id) {
                                             const product = products.find(p => p.id === parseInt(item.product_id));
                                             if (product) {
-                                                updated.unit_price = product.selling_price;
-                                                updated.discount_percent = 0;
-                                                updated.discount = 0;
-                                            }
-
-                                            const customer = customers.find(c => c.id === parseInt(e.target.value));
-                                            if (customer && customer.group_id) {
-                                                const group = customerGroups.find(g => g.id === customer.group_id);
-                                                if (group && group.application_scope === 'line' && group.discount_percentage > 0) {
-                                                    if (group.effect_type === 'discount') {
-                                                        updated.discount_percent = group.discount_percentage;
-                                                        updated.discount = (updated.quantity * updated.unit_price) * (group.discount_percentage / 100);
-                                                    } else if (group.effect_type === 'markup') {
-                                                        updated.unit_price = product.selling_price * (1 + (group.discount_percentage / 100));
-                                                    }
-                                                }
+                                                updated.unit_price = String(product.selling_price || '');
                                             }
                                         }
                                         return updated;
@@ -511,7 +455,7 @@ function InvoiceForm() {
                                 <th style={{ width: '30%' }}>{t('sales.invoices.form.items.product')}</th>
                                 <th style={{ width: '10%' }}>{t('sales.invoices.form.items.quantity')}</th>
                                 <th style={{ width: '15%' }}>{t('sales.invoices.form.items.price')}</th>
-                                <th style={{ width: '10%' }}>{t('sales.invoices.form.items.discount')} (%)</th>
+                                <th style={{ width: '10%' }}>{t('sales.invoices.form.items.discount')}</th>
                                 <th style={{ width: '10%' }}>{t('sales.invoices.form.items.tax')}</th>
                                 <th style={{ width: '15%' }}>{t('sales.invoices.form.items.total')}</th>
                                 <th style={{ width: '5%' }}></th>
@@ -519,9 +463,7 @@ function InvoiceForm() {
                         </thead>
                         <tbody>
                             {items.map((item, index) => {
-                                const taxRate = branchTax?.tax_rate || 0
-                                const taxable = (item.quantity * item.unit_price) - item.discount
-                                const lineTotal = taxable + (taxable * (taxRate / 100))
+                                const backendLine = backendLines?.[index] || null
                                 return (
                                     <tr key={index}>
                                         <td>
@@ -544,14 +486,10 @@ function InvoiceForm() {
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" min={isDiscreteUnit(item.unit) ? "1" : "0.01"}
+                                                type="text" inputMode="decimal" className="form-input"
                                                 step={isDiscreteUnit(item.unit) ? "1" : getStep()}
                                                 value={item.quantity}
-                                                onChange={(e) => {
-                                                    let val = Number(e.target.value) || 0;
-                                                    if (isDiscreteUnit(item.unit)) val = Math.round(val);
-                                                    handleItemChange(index, 'quantity', val);
-                                                }}
+                                                onChange={(e) => handleItemChange(index, 'quantity', e.target.value)}
                                             />
                                             {item.product_id && productStocks[item.product_id] !== undefined && (
                                                 <small style={{ display: 'block', color: '#666', marginTop: '2px' }}>
@@ -561,31 +499,31 @@ function InvoiceForm() {
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" min="0" step={getStep()}
+                                                type="text" inputMode="decimal" className="form-input"
                                                 value={item.unit_price}
-                                                onChange={(e) => handleItemChange(index, 'unit_price', Number(e.target.value) || 0)}
+                                                onChange={(e) => handleItemChange(index, 'unit_price', e.target.value)}
                                             />
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" min="0" max="100" step="0.01"
-                                                value={item.discount_percent}
-                                                onChange={(e) => handleItemChange(index, 'discount_percent', Number(e.target.value) || 0)}
+                                                type="text" inputMode="decimal" className="form-input"
+                                                value={item.discount}
+                                                onChange={(e) => handleItemChange(index, 'discount', e.target.value)}
                                             />
                                         </td>
                                         <td>
                                             <div style={{ padding: '6px 4px', fontSize: '13px', textAlign: 'center' }}>
                                                 <div style={{ fontWeight: '600', color: 'var(--primary)' }}>
-                                                    {branchTax ? `${branchTax.tax_rate}%` : '—'}
+                                                    {backendLine?.tax_rate != null ? `${backendLine.tax_rate}%` : '—'}
                                                 </div>
-                                                {branchTax?.tax_name && (
+                                                {backendLine?.applied_taxes?.length ? (
                                                     <div style={{ fontSize: '10px', color: 'var(--text-secondary)' }}>
-                                                        {branchTax.tax_name}
+                                                        {backendLine.applied_taxes.map(tax => tax.tax_name).filter(Boolean).join(', ')}
                                                     </div>
-                                                )}
+                                                ) : null}
                                             </div>
                                         </td>
-                                        <td style={{ fontWeight: 'bold' }}>{formatNumber(lineTotal)}</td>
+                                        <td style={{ fontWeight: 'bold' }}>{moneyOrDash(backendLine?.line_total)}</td>
                                         <td>
                                             {items.length > 1 && (
                                                 <button type="button" className="btn-icon text-danger" onClick={() => removeItem(index)}>
@@ -621,14 +559,14 @@ function InvoiceForm() {
                                         const curr = currencies.find(c => c.code === code);
                                         // T8.4: prefer the live rate from /accounting/currencies/current.
                                         // Falls back to the legacy `current_rate` field, then 1.0.
-                                        let rate = curr?.current_rate || 1.0;
+                                        let rate = String(curr?.current_rate || '1');
                                         try {
                                             rate = await fetchCurrentRate(code);
                                         } catch { /* keep fallback */ }
                                         setFormData(prev => ({
                                             ...prev,
                                             currency: code,
-                                            exchange_rate: rate || 1.0
+                                            exchange_rate: String(rate || '1')
                                         }));
                                     }}
                                 >
@@ -640,11 +578,12 @@ function InvoiceForm() {
                             {formData.currency !== currency && (
                                 <FormField label={t('accounting.currencies.table.rate')} style={{ flex: 1 }}>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         step="0.000001"
                                         className="form-input form-input-sm font-mono"
                                         value={formData.exchange_rate}
-                                        onChange={e => setFormData({ ...formData, exchange_rate: Math.max(Number(e.target.value) || 1, 0.0001) })}
+                                        onChange={e => setFormData({ ...formData, exchange_rate: e.target.value })}
                                     />
                                 </FormField>
                             )}
@@ -656,7 +595,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="cash"
                                         checked={formData.payment_method === 'cash'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total || '', treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.cash')}
                                 </label>
@@ -664,7 +603,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="bank"
                                         checked={formData.payment_method === 'bank'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: getTotals().total || '', treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.bank')}
                                 </label>
@@ -672,7 +611,7 @@ function InvoiceForm() {
                                     <input
                                         type="radio" name="payment_method" value="credit"
                                         checked={formData.payment_method === 'credit'}
-                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: 0, treasury_id: '' })}
+                                        onChange={e => setFormData({ ...formData, payment_method: e.target.value, paid_amount: '', treasury_id: '' })}
                                     />
                                     {t('sales.invoices.form.payment.credit')}
                                 </label>
@@ -684,13 +623,13 @@ function InvoiceForm() {
                                 <label className="form-label">{t('sales.invoices.form.payment.paid_amount')}</label>
                                 <div className="input-with-suffix" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         className="form-input"
                                         step={getStep()}
                                         min="0"
-                                        max={getTotals().total}
                                         value={formData.paid_amount}
-                                        onChange={e => setFormData({ ...formData, paid_amount: Math.min(Number(e.target.value) || 0, getTotals().total) })}
+                                        onChange={e => setFormData({ ...formData, paid_amount: e.target.value })}
                                     />
                                     <span className="input-suffix">{formData.currency}</span>
                                 </div>
@@ -728,16 +667,15 @@ function InvoiceForm() {
                                 <label className="form-label">{t('sales.invoices.form.payment.paid_amount')}</label>
                                 <div className="input-with-suffix" style={{ display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
                                     <input
-                                        type="number" className="form-input" step={getStep()}
+                                        type="text" inputMode="decimal" className="form-input" step={getStep()}
                                         min="0"
-                                        max={getTotals().total}
                                         value={formData.paid_amount}
-                                        onChange={e => setFormData({ ...formData, paid_amount: Math.min(Number(e.target.value) || 0, getTotals().total) })}
+                                        onChange={e => setFormData({ ...formData, paid_amount: e.target.value })}
                                     />
                                     <span className="input-suffix">{formData.currency}</span>
                                 </div>
 
-                                {formData.paid_amount > 0 && (
+                                {isPositiveDecimal(formData.paid_amount) && (
                                     <div className="form-group mb-2 animate-fade-in">
                                         <label className="form-label" style={{ fontSize: '0.85rem' }}>{t('sales.invoices.form.payment.down_payment_method')}</label>
                                         <div style={{ display: 'flex', gap: '16px' }}>
@@ -790,7 +728,7 @@ function InvoiceForm() {
                                 )}
 
                                 <small style={{ color: 'var(--text-secondary)' }}>
-                                    {t('sales.invoices.form.payment.remaining_msg', { amount: formatNumber(getTotals().total - formData.paid_amount) + ' ' + formData.currency })}
+                                    {t('sales.invoices.form.payment.remaining_msg', { amount: moneyOrDash(getTotals().remainingBalance) + ' ' + formData.currency })}
                                 </small>
                             </div>
                         )}
@@ -808,27 +746,27 @@ function InvoiceForm() {
                     <div style={{ width: '300px', padding: '24px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('sales.invoices.form.totals.subtotal')}</span>
-                            <span>{formData.currency} {formatNumber(getTotals().subtotal)}</span>
+                            <span>{formData.currency} {moneyOrDash(getTotals().subtotal)}</span>
                         </div>
-                        {getTotals().globalEffectPercent > 0 && getTotals().globalEffectType === 'markup' && (
+                        {isPositiveDecimal(getTotals().globalEffectPercent) && getTotals().globalEffectType === 'markup' && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--text-success)' }}>
                                 <span>زيادة (مجموعة) ({getTotals().globalEffectPercent}%)</span>
-                                <span>{formData.currency} {formatNumber(getTotals().markup)}</span>
+                                <span>{formData.currency} {moneyOrDash(getTotals().markup)}</span>
                             </div>
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('sales.invoices.form.totals.discount')}</span>
-                            <span>{formData.currency} {formatNumber(getTotals().discount)}</span>
+                            <span>{formData.currency} {moneyOrDash(getTotals().discount)}</span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('sales.invoices.form.totals.tax')}</span>
-                            <span>{formData.currency} {formatNumber(getTotals().tax)}</span>
+                            <span>{formData.currency} {moneyOrDash(getTotals().tax)}</span>
                         </div>
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span style={{ fontWeight: 'bold' }}>{t('sales.invoices.form.totals.grand_total')}</span>
                             <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }}>
-                                {formData.currency} {formatNumber(getTotals().total)}
+                                {formData.currency} {moneyOrDash(getTotals().total)}
                             </span>
                         </div>
 

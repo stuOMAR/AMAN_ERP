@@ -6,6 +6,7 @@ import { Star, Plus } from 'lucide-react';
 import '../../components/ModuleStyles.css';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format';
 
 const SupplierRatings = () => {
     const { t } = useTranslation();
@@ -74,7 +75,7 @@ const SupplierRatings = () => {
                                         <td><div className="d-flex">{renderStars(r.quality_rating)}</div></td>
                                         <td><div className="d-flex">{renderStars(r.price_rating)}</div></td>
                                         <td><div className="d-flex">{renderStars(r.delivery_rating)}</div></td>
-                                        <td><span className="font-bold text-lg">{r.overall_rating?.toFixed(1) || '—'}</span></td>
+                                        <td><span className="font-bold text-lg">{r.overall_rating != null ? formatNumber(r.overall_rating, 1) : '—'}</span></td>
                                         <td className="text-sm">{r.comments || '—'}</td>
                                         <td className="text-sm">{r.created_at?.split('T')[0]}</td>
                                     </tr>

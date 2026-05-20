@@ -24,7 +24,7 @@ export default function TaxClassifications() {
     // Modal state
     const [showModal, setShowModal] = useState(false)
     const [editingItem, setEditingItem] = useState(null)
-    const [form, setForm] = useState({ code: '', name_ar: '', name_en: '', description: '' })
+    const [form, setForm] = useState({ code: '', name_ar: '', name_en: '', description: '', is_active: true })
     const [saving, setSaving] = useState(false)
 
     // Rates modal state
@@ -76,7 +76,7 @@ export default function TaxClassifications() {
 
     const openCreateModal = () => {
         setEditingItem(null)
-        setForm({ code: '', name_ar: '', name_en: '', description: '' })
+        setForm({ code: '', name_ar: '', name_en: '', description: '', is_active: true })
         setShowModal(true)
     }
 
@@ -86,7 +86,8 @@ export default function TaxClassifications() {
             code: item.code,
             name_ar: item.name_ar,
             name_en: item.name_en || '',
-            description: item.description || ''
+            description: item.description || '',
+            is_active: item.is_active ?? true
         })
         setShowModal(true)
     }
@@ -102,7 +103,13 @@ export default function TaxClassifications() {
                 await taxesAPI.updateClassification(editingItem.id, form)
                 showToast(t('common.saved', 'تم الحفظ'), 'success')
             } else {
-                await taxesAPI.createClassification(form)
+                const createPayload = {
+                    code: form.code,
+                    name_ar: form.name_ar,
+                    name_en: form.name_en,
+                    description: form.description,
+                }
+                await taxesAPI.createClassification(createPayload)
                 showToast(t('common.created', 'تم الإنشاء'), 'success')
             }
             setShowModal(false)

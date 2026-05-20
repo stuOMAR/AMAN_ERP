@@ -10,6 +10,7 @@ import { getCurrency } from '../../utils/auth'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
 import BackButton from '../../components/common/BackButton'
+import Decimal from 'decimal.js'
 
 function PurchaseInvoiceList() {
     const { t } = useTranslation()
@@ -81,7 +82,7 @@ function PurchaseInvoiceList() {
             render: (val, row) => {
                 const invoiceCurrency = row.currency || row.base_currency || fallbackBaseCurrency
                 const baseCurrency = row.base_currency || fallbackBaseCurrency
-                const baseValue = Number(row.total_base ?? (Number(val || 0) * Number(row.exchange_rate || 1)))
+                const baseValue = row.total_base ?? new Decimal(val || 0).times(row.exchange_rate || 1).toString()
                 const isSameCurrency = invoiceCurrency === baseCurrency
 
                 return (

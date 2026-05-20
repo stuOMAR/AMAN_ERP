@@ -6,6 +6,7 @@ import { formatShortDate } from '../../utils/dateUtils';
 import { useTranslation } from 'react-i18next';
 import BackButton from '../../components/common/BackButton';
 import { useToast } from '../../context/ToastContext'
+import { hasPermission } from '../../utils/auth';
 
 const EVENT_LABELS = {
   'invoice.created': 'settings.webhooks.evt_invoice_created',
@@ -32,6 +33,7 @@ const EVENT_LABELS = {
 const EMPTY_FORM = {
   name: '',
   url: '',
+  secret: '',
   events: [],
   retry_count: 3,
   timeout_seconds: 30,
@@ -50,6 +52,7 @@ export default function Webhooks() {
   const [logsWebhook, setLogsWebhook] = useState(null);
   const [logs, setLogs] = useState([]);
   const [logsLoading, setLogsLoading] = useState(false);
+  const canManageWebhooks = hasPermission(['settings.manage', 'admin']);
 
   const fetchWebhooks = useCallback(async () => {
     try {
@@ -172,11 +175,13 @@ export default function Webhooks() {
           <h1 className="workspace-title">{t('settings.webhooks.title')}</h1>
           <p className="workspace-subtitle">{t('settings.webhooks.subtitle')}</p>
         </div>
-        <div className="header-actions">
-          <button className="btn btn-primary" onClick={openCreate}>
-            + {t('settings.webhooks.create_new')}
-          </button>
-        </div>
+        {canManageWebhooks && (
+          <div className="header-actions">
+            <button className="btn btn-primary" onClick={openCreate}>
+              + {t('settings.webhooks.create_new')}
+            </button>
+          </div>
+        )}
       </div>
 
       {loading ? (
@@ -220,21 +225,27 @@ export default function Webhooks() {
                   )}
                 </td>
                 <td style={{ display: 'flex', gap: 4, flexWrap: 'wrap' }}>
-                  <button className="btn btn-secondary" onClick={() => openEdit(wh)}>
-                    {t('common.edit')}
-                  </button>
+                  {canManageWebhooks && (
+                    <button className="btn btn-secondary" onClick={() => openEdit(wh)}>
+                      {t('common.edit')}
+                    </button>
+                  )}
                   <button className="btn btn-secondary" onClick={() => openLogs(wh)}>
                     {t('settings.webhooks.logs')}
                   </button>
-                  <button
-                    className="btn btn-secondary"
-                    onClick={() => handleToggleActive(wh)}
-                  >
-                    {wh.is_active ? t('settings.webhooks.deactivate') : t('settings.webhooks.activate')}
-                  </button>
-                  <button className="btn btn-danger" onClick={() => handleDelete(wh.id)}>
-                    {t('common.delete')}
-                  </button>
+                  {canManageWebhooks && (
+                    <button
+                      className="btn btn-secondary"
+                      onClick={() => handleToggleActive(wh)}
+                    >
+                      {wh.is_active ? t('settings.webhooks.deactivate') : t('settings.webhooks.activate')}
+                    </button>
+                  )}
+                  {canManageWebhooks && (
+                    <button className="btn btn-danger" onClick={() => handleDelete(wh.id)}>
+                      {t('common.delete')}
+                    </button>
+                  )}
                 </td>
               </tr>
             ))}

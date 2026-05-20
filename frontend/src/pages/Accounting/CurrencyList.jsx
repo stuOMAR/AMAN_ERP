@@ -2,7 +2,7 @@ import React, { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { currenciesAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { Plus, Edit2, Trash2, History, RefreshCw, DollarSign, X } from 'lucide-react'
 
 import BackButton from '../../components/common/BackButton';
@@ -29,13 +29,16 @@ export default function CurrencyList() {
         name_en: '',
         symbol: '',
         is_base: false,
-        current_rate: 1.0
+        current_rate: 1.0,
+        is_active: true
     })
 
     const [rateData, setRateData] = useState({
         rate: '',
         rate_date: new Date().toISOString().split('T')[0]
     })
+    const canManageCurrencies = hasPermission(['accounting.manage', 'currencies.manage'])
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     useEffect(() => {
         fetchCurrencies()
@@ -67,6 +70,10 @@ export default function CurrencyList() {
     }
 
     const openModal = (curr = null) => {
+        if (!canManageCurrencies) {
+            permissionDenied()
+            return
+        }
         if (curr) {
             setEditingCurrency(curr)
             setFormData({
@@ -75,7 +82,8 @@ export default function CurrencyList() {
                 name_en: curr.name_en || '',
                 symbol: curr.symbol || '',
                 is_base: !!curr.is_base,
-                current_rate: curr.current_rate || 1.0
+                current_rate: curr.current_rate || 1.0,
+                is_active: curr.is_active ?? true
             })
         } else {
             setEditingCurrency(null)
@@ -85,13 +93,18 @@ export default function CurrencyList() {
                 name_en: '',
                 symbol: '',
                 is_base: false,
-                current_rate: 1.0
+                current_rate: 1.0,
+                is_active: true
             })
         }
         setShowModal(true)
     }
 
     const openRateModal = (curr) => {
+        if (!canManageCurrencies) {
+            permissionDenied()
+            return
+        }
         setSelectedCurrency(curr)
         setRateData({
             rate: curr.current_rate || '',
@@ -103,6 +116,10 @@ export default function CurrencyList() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canManageCurrencies) {
+            permissionDenied()
+            return
+        }
         try {
             if (editingCurrency) {
                 await currenciesAPI.update(editingCurrency.id, formData)
@@ -120,10 +137,15 @@ export default function CurrencyList() {
 
     const handleRateSubmit = async (e) => {
         e.preventDefault()
+        if (!canManageCurrencies) {
+            permissionDenied()
+            return
+        }
         try {
             await currenciesAPI.addRate({
                 currency_id: selectedCurrency.id,
-                ...rateData
+                rate: Number(rateData.rate),
+                rate_date: rateData.rate_date || null
             })
             showToast(t('accounting.currencies.rate_updated'), 'success')
             setShowRateModal(false)
@@ -134,6 +156,10 @@ export default function CurrencyList() {
     }
 
     const handleDelete = async (id) => {
+        if (!canManageCurrencies) {
+            permissionDenied()
+            return
+        }
         if (window.confirm(t('common.confirm_delete'))) {
             try {
                 await currenciesAPI.delete(id)
@@ -193,14 +219,16 @@ export default function CurrencyList() {
             render: (val, row) => (
                 <span className="font-mono">
                     {parseFloat(val).toFixed(4)}
-                    <button
-                        onClick={(e) => { e.stopPropagation(); openRateModal(row); }}
-                        className="btn-icon ms-2"
-                        style={{ width: '28px', height: '28px' }}
-                        title={t('accounting.currencies.update_rate')}
-                    >
-                        <History size={14} />
-                    </button>
+                    {canManageCurrencies && (
+                        <button
+                            onClick={(e) => { e.stopPropagation(); openRateModal(row); }}
+                            className="btn-icon ms-2"
+                            style={{ width: '28px', height: '28px' }}
+                            title={t('accounting.currencies.update_rate')}
+                        >
+                            <History size={14} />
+                        </button>
+                    )}
                 </span>
             ),
         },
@@ -210,7 +238,7 @@ export default function CurrencyList() {
             width: '120px',
             style: { textAlign: 'center' },
             headerStyle: { textAlign: 'center' },
-            render: (_, row) => (
+            render: (_, row) => canManageCurrencies ? (
                 <div className="d-flex justify-content-center gap-2">
                     <button
                         onClick={(e) => { e.stopPropagation(); openModal(row); }}
@@ -229,9 +257,9 @@ export default function CurrencyList() {
                         </button>
                     )}
                 </div>
-            ),
+            ) : null,
         },
-    ], [t])
+    ], [t, canManageCurrencies])
 
     return (
         <div className="workspace fade-in">
@@ -245,10 +273,12 @@ export default function CurrencyList() {
                         </h1>
                         <p className="workspace-subtitle">{t('accounting.currencies.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary shadow-sm" onClick={() => openModal()}>
-                        <Plus size={18} />
-                        {t('common.add_new')}
-                    </button>
+                    {canManageCurrencies && (
+                        <button className="btn btn-primary shadow-sm" onClick={() => openModal()}>
+                            <Plus size={18} />
+                            {t('common.add_new')}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -282,7 +312,7 @@ export default function CurrencyList() {
             />
 
             {/* Edit/Create Modal */}
-            {showModal && (
+            {showModal && canManageCurrencies && (
                 <div className="modal-overlay fade-in">
                     <div className="modal-content" style={{ maxWidth: '480px' }}>
                         <div className="modal-header">
@@ -376,7 +406,7 @@ export default function CurrencyList() {
             )}
 
             {/* Rate History Modal */}
-            {showRateModal && selectedCurrency && (
+            {showRateModal && selectedCurrency && canManageCurrencies && (
                 <div className="modal-overlay fade-in">
                     <div className="modal-content" style={{ maxWidth: '550px' }}>
                         <div className="modal-header">

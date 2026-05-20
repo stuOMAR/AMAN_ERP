@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 
 import DateInput from '../../components/common/DateInput';
@@ -16,6 +16,8 @@ export default function RecurringTemplates() {
     const { showToast } = useToast()
     const { currentBranch } = useBranch()
     const currency = getCurrency()
+    const canEditRecurring = hasPermission('accounting.edit')
+    const canManageRecurring = hasPermission('accounting.manage')
 
     const [templates, setTemplates] = useState([])
     const [loading, setLoading] = useState(true)
@@ -84,9 +86,22 @@ export default function RecurringTemplates() {
         setEditId(null)
     }
 
-    const openCreate = () => { resetForm(); setShowModal(true) }
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
+
+    const openCreate = () => {
+        if (!canEditRecurring) {
+            permissionDenied()
+            return
+        }
+        resetForm()
+        setShowModal(true)
+    }
 
     const openEdit = async (id) => {
+        if (!canEditRecurring) {
+            permissionDenied()
+            return
+        }
         try {
             const res = await accountingAPI.getRecurringTemplate(id)
             const d = res.data
@@ -128,6 +143,10 @@ export default function RecurringTemplates() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canEditRecurring) {
+            permissionDenied()
+            return
+        }
         const payload = {
             ...form,
             branch_id: currentBranch?.id || null,
@@ -160,6 +179,10 @@ export default function RecurringTemplates() {
     }
 
     const handleDelete = async (id, name) => {
+        if (!canManageRecurring) {
+            permissionDenied()
+            return
+        }
         if (!confirm(`${t('recurring.delete_confirm')} "${name}"?`)) return
         try {
             await accountingAPI.deleteRecurringTemplate(id)
@@ -171,6 +194,10 @@ export default function RecurringTemplates() {
     }
 
     const handleGenerate = async (id) => {
+        if (!canEditRecurring) {
+            permissionDenied()
+            return
+        }
         setGenerating(id)
         try {
             const res = await accountingAPI.generateFromTemplate(id)
@@ -187,6 +214,10 @@ export default function RecurringTemplates() {
     }
 
     const handleGenerateAll = async () => {
+        if (!canManageRecurring) {
+            permissionDenied()
+            return
+        }
         try {
             const res = await accountingAPI.generateDueTemplates()
             const d = res.data
@@ -243,12 +274,16 @@ export default function RecurringTemplates() {
                             <option value="true">{t('recurring.filter_active')}</option>
                             <option value="false">{t('recurring.filter_inactive')}</option>
                         </select>
-                        <button className="btn btn-outline-primary btn-sm" onClick={handleGenerateAll}>
-                            ⚡ {t('recurring.generate_due')}
-                        </button>
-                        <button className="btn btn-primary btn-sm" onClick={openCreate}>
-                            + {t('recurring.new_template')}
-                        </button>
+                        {canManageRecurring && (
+                            <button className="btn btn-outline-primary btn-sm" onClick={handleGenerateAll}>
+                                ⚡ {t('recurring.generate_due')}
+                            </button>
+                        )}
+                        {canEditRecurring && (
+                            <button className="btn btn-primary btn-sm" onClick={openCreate}>
+                                + {t('recurring.new_template')}
+                            </button>
+                        )}
                     </div>
                 </div>
             </div>
@@ -302,12 +337,18 @@ export default function RecurringTemplates() {
                                     </td>
                                     <td>
                                         <div className="btn-group btn-group-sm">
-                                            <button className="btn btn-outline-success" title={t('recurring.generate_now')}
-                                                disabled={generating === tmpl.id} onClick={() => handleGenerate(tmpl.id)}>
-                                                {generating === tmpl.id ? '⏳' : '⚡'}
-                                            </button>
-                                            <button className="btn btn-outline-primary" onClick={() => openEdit(tmpl.id)}>✏️</button>
-                                            <button className="btn btn-outline-danger" onClick={() => handleDelete(tmpl.id, tmpl.name)}>🗑</button>
+                                            {canEditRecurring && (
+                                                <>
+                                                    <button className="btn btn-outline-success" title={t('recurring.generate_now')}
+                                                        disabled={generating === tmpl.id} onClick={() => handleGenerate(tmpl.id)}>
+                                                        {generating === tmpl.id ? '⏳' : '⚡'}
+                                                    </button>
+                                                    <button className="btn btn-outline-primary" onClick={() => openEdit(tmpl.id)}>✏️</button>
+                                                </>
+                                            )}
+                                            {canManageRecurring && (
+                                                <button className="btn btn-outline-danger" onClick={() => handleDelete(tmpl.id, tmpl.name)}>🗑</button>
+                                            )}
                                         </div>
                                     </td>
                                 </tr>
@@ -318,7 +359,7 @@ export default function RecurringTemplates() {
             )}
 
             {/* Create / Edit Modal */}
-            {showModal && (
+            {showModal && canEditRecurring && (
                 <div className="modal-overlay">
                     <div className="modal-content" style={{ maxWidth: '900px' }}>
                         <form onSubmit={handleSubmit}>
@@ -569,12 +610,16 @@ export default function RecurringTemplates() {
                                 </table>
                             </div>
                             <div className="modal-footer">
-                                <button className="btn btn-outline-success btn-sm" onClick={() => { setShowDetailModal(false); handleGenerate(detailData.id) }}>
-                                    ⚡ {t('recurring.generate_now')}
-                                </button>
-                                <button className="btn btn-outline-primary btn-sm" onClick={() => { setShowDetailModal(false); openEdit(detailData.id) }}>
-                                    ✏️ {t('recurring.edit')}
-                                </button>
+                                {canEditRecurring && (
+                                    <>
+                                        <button className="btn btn-outline-success btn-sm" onClick={() => { setShowDetailModal(false); handleGenerate(detailData.id) }}>
+                                            ⚡ {t('recurring.generate_now')}
+                                        </button>
+                                        <button className="btn btn-outline-primary btn-sm" onClick={() => { setShowDetailModal(false); openEdit(detailData.id) }}>
+                                            ✏️ {t('recurring.edit')}
+                                        </button>
+                                    </>
+                                )}
                                 <button className="btn btn-sm" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowDetailModal(false)}>
                                     {t('recurring.close')}
                                 </button>

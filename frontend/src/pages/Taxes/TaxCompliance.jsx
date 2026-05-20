@@ -120,6 +120,9 @@ function TaxCompliance() {
                 case 'eg-vat':
                     res = await taxComplianceAPI.getEgyptVATReport(params)
                     break
+                case 'tr-kdv':
+                    res = await taxComplianceAPI.getTurkeyKDVReport(params)
+                    break
                 default:
                     res = await taxComplianceAPI.getGenericIncomeReport(params)
             }
@@ -319,6 +322,7 @@ function TaxCompliance() {
                                     <option value="sy-income">🇸🇾 {t('tax_compliance.report_sy_income')}</option>
                                     <option value="ae-vat">🇦🇪 {t('tax_compliance.report_ae_vat')}</option>
                                     <option value="eg-vat">🇪🇬 {t('tax_compliance.report_eg_vat')}</option>
+                                    <option value="tr-kdv">🇹🇷 {t('tax_compliance.report_tr_kdv', 'VAT Return — Turkey (KDV)')}</option>
                                     <option value="generic-income">🌐 {t('tax_compliance.report_generic_income')}</option>
                                 </select>
                             </div>

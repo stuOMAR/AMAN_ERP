@@ -4,39 +4,39 @@
 
 import { getCurrency, getUser } from './auth';
 
+const normalizeDecimalString = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    const raw = String(value).trim();
+    if (!/^-?\d+(\.\d+)?$/.test(raw)) return raw || null;
+
+    const negative = raw.startsWith('-');
+    const unsigned = negative ? raw.slice(1) : raw;
+    const [intPart, fracPart = ''] = unsigned.split('.');
+    const cleanedInt = intPart.replace(/^0+(?=\d)/, '') || '0';
+    return `${negative ? '-' : ''}${cleanedInt}${fracPart ? `.${fracPart}` : ''}`;
+};
+
 /**
- * Formats a number according to the company's decimal precision setting.
- * @param {number|string} value - The number to format.
- * @param {number} [overridePrecision] - Optional override for precision.
+ * Formats a decimal string according to the company's decimal precision.
+ * Backend calculations are already rounded; this helper only pads/trims and
+ * groups digits without converting money to a JavaScript number.
+ * @param {number|string} value - Decimal value to format.
+ * @param {number} [overridePrecision] - Optional display precision.
  * @returns {string} Formatted number.
  */
 export const formatNumber = (value, overridePrecision = null) => {
     const user = getUser();
     const precision = overridePrecision !== null ? overridePrecision : (user?.decimal_places !== undefined ? user.decimal_places : 2);
+    const normalized = normalizeDecimalString(value);
+    if (normalized === null) return '0';
+    if (!/^-?\d+(\.\d+)?$/.test(normalized)) return normalized;
 
-    // T10.2 #256: ``parseFloat`` silently truncates precision for values
-    // beyond ~15 significant digits (Number.MAX_SAFE_INTEGER = 2^53-1).
-    // Backend can emit BigInt-shaped strings for monetary fields with
-    // many digits; in that case render via ``Intl.NumberFormat`` on the
-    // BigInt path so we don't drop digits.
-    if (typeof value === "string" && /^-?\d{16,}(\.\d+)?$/.test(value.trim())) {
-        try {
-            const [intPart, fracPart = ""] = value.trim().split(".");
-            const formattedInt = new Intl.NumberFormat().format(BigInt(intPart));
-            const frac = (fracPart + "0".repeat(precision)).slice(0, precision);
-            return precision > 0 ? `${formattedInt}.${frac}` : formattedInt;
-        } catch {
-            // fall through to parseFloat path
-        }
-    }
-
-    const num = parseFloat(value);
-    if (isNaN(num)) return '0';
-
-    return num.toLocaleString(undefined, {
-        minimumFractionDigits: precision,
-        maximumFractionDigits: precision,
-    });
+    const negative = normalized.startsWith('-');
+    const unsigned = negative ? normalized.slice(1) : normalized;
+    const [intPart, fracPart = ''] = unsigned.split('.');
+    const groupedInt = intPart.replace(/\B(?=(\d{3})+(?!\d))/g, ',');
+    const fraction = precision > 0 ? `.${(fracPart + '0'.repeat(precision)).slice(0, precision)}` : '';
+    return `${negative ? '-' : ''}${groupedInt}${fraction}`;
 };
 
 /**
@@ -58,5 +58,5 @@ export const getStep = () => {
     const user = getUser();
     const precision = user?.decimal_places !== undefined ? user.decimal_places : 2;
     if (precision <= 0) return "1";
-    return (1 / Math.pow(10, precision)).toFixed(precision);
+    return `0.${'0'.repeat(Math.max(precision - 1, 0))}1`;
 };

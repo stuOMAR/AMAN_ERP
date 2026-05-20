@@ -1,9 +1,29 @@
 import api from './apiClient'
+import { hasPermission } from '../utils/auth'
+
+const requireFrontendPermission = (permission) => {
+    if (hasPermission(permission)) return
+    const error = new Error('Permission denied')
+    error.response = { status: 403, data: { detail: 'Permission denied' } }
+    throw error
+}
+
+const withPermission = (permission, request) => {
+    requireFrontendPermission(permission)
+    return request()
+}
+
+const withoutCurrentRate = (data) => {
+    if (!data || typeof data !== 'object') return data
+    const payload = { ...data }
+    delete payload.current_rate
+    return payload
+}
 
 export const accountingAPI = {
     list: (params, config = {}) => api.get('/accounting/accounts', { params, ...config }),
-    create: (data) => api.post('/accounting/accounts', data),
-    update: (id, data) => api.put(`/accounting/accounts/${id}`, data),
+    create: (data) => withPermission('accounting.edit', () => api.post('/accounting/accounts', withoutCurrentRate(data))),
+    update: (id, data) => withPermission('accounting.edit', () => api.put(`/accounting/accounts/${id}`, withoutCurrentRate(data))),
     delete: (id) => api.delete(`/accounting/accounts/${id}`),
     createJournalEntry: (data, config) => api.post('/accounting/journal-entries', data, config),
     voidJournalEntry: (id) => api.post(`/accounting/journal-entries/${id}/void`),
@@ -27,10 +47,10 @@ export const accountingAPI = {
     // Recurring Templates (ACC-003)
     listRecurringTemplates: (params) => api.get('/accounting/recurring-templates', { params }),
     getRecurringTemplate: (id) => api.get(`/accounting/recurring-templates/${id}`),
-    createRecurringTemplate: (data) => api.post('/accounting/recurring-templates', data),
-    updateRecurringTemplate: (id, data) => api.put(`/accounting/recurring-templates/${id}`, data),
+    createRecurringTemplate: (data) => withPermission('accounting.edit', () => api.post('/accounting/recurring-templates', data)),
+    updateRecurringTemplate: (id, data) => withPermission('accounting.edit', () => api.put(`/accounting/recurring-templates/${id}`, data)),
     deleteRecurringTemplate: (id) => api.delete(`/accounting/recurring-templates/${id}`),
-    generateFromTemplate: (id) => api.post(`/accounting/recurring-templates/${id}/generate`),
+    generateFromTemplate: (id) => withPermission('accounting.edit', () => api.post(`/accounting/recurring-templates/${id}/generate`)),
     generateDueTemplates: () => api.post('/accounting/recurring-templates/generate-due'),
 
     // Opening Balances (ACC-005)
@@ -56,59 +76,67 @@ export const accountingAPI = {
 
     // Intercompany v2 — Entity Groups, Transactions, Consolidation, Mappings
     listEntityGroups: () => api.get('/accounting/intercompany/entities'),
-    createEntityGroup: (data) => api.post('/accounting/intercompany/entities', data),
-    updateEntityGroup: (id, data) => api.patch(`/accounting/intercompany/entities/${id}`, data),
+    createEntityGroup: (data) => withPermission(['intercompany.manage', 'accounting.edit'], () => api.post('/accounting/intercompany/entities', data)),
+    updateEntityGroup: (id, data) => withPermission(['intercompany.manage', 'accounting.edit'], () => api.patch(`/accounting/intercompany/entities/${id}`, data)),
     listICTransactionsV2: (params) => api.get('/accounting/intercompany/transactions', { params }),
     createICTransactionV2: (data) => api.post('/accounting/intercompany/transactions', data),
     getICTransactionV2: (id) => api.get(`/accounting/intercompany/transactions/${id}`),
-    runConsolidation: (data) => api.post('/accounting/intercompany/consolidate', data),
+    runConsolidation: (data) => withPermission(['intercompany.manage', 'accounting.edit'], () => api.post('/accounting/intercompany/consolidate', data)),
     getICBalances: () => api.get('/accounting/intercompany/balances'),
     listAccountMappings: () => api.get('/accounting/intercompany/mappings'),
-    createAccountMapping: (data) => api.post('/accounting/intercompany/mappings', data),
+    createAccountMapping: (data) => withPermission(['intercompany.manage', 'accounting.edit'], () => api.post('/accounting/intercompany/mappings', data)),
 
     // Revenue Recognition (REV-001)
     listRevenueSchedules: (params) => api.get('/accounting/revenue-recognition/schedules', { params }),
-    createRevenueSchedule: (data) => api.post('/accounting/revenue-recognition/schedules', data),
+    createRevenueSchedule: (data) => withPermission('accounting.edit', () => api.post('/accounting/revenue-recognition/schedules', data)),
     getRevenueSchedule: (id) => api.get(`/accounting/revenue-recognition/schedules/${id}`),
-    recognizeRevenue: (id, periodIndex) => api.post(`/accounting/revenue-recognition/schedules/${id}/recognize?period_index=${periodIndex}`),
+    recognizeRevenue: (id, periodIndex) => withPermission('accounting.edit', () => api.post(`/accounting/revenue-recognition/schedules/${id}/recognize?period_index=${periodIndex}`)),
     getRevenueSummary: () => api.get('/accounting/revenue-recognition/summary'),
 }
 
 export const costCentersAPI = {
     list: (params) => api.get('/cost-centers/', { params }),
-    create: (data) => api.post('/cost-centers/', data),
-    update: (id, data) => api.put(`/cost-centers/${id}`, data),
+    create: (data) => api.post('/cost-centers/', withoutCurrentRate(data)),
+    update: (id, data) => api.put(`/cost-centers/${id}`, withoutCurrentRate(data)),
     delete: (id) => api.delete(`/cost-centers/${id}`)
 }
 
 export const budgetsAPI = {
-    list: (params) => api.get('/accounting/budgets/', { params }),
-    create: (data) => api.post('/accounting/budgets/', data),
-    get: (id) => api.get(`/accounting/budgets/${id}`),
-    update: (id, data) => api.put(`/accounting/budgets/${id}`, data),
-    setItems: (id, items) => api.post(`/accounting/budgets/${id}/items`, items),
-    getItems: (id) => api.get(`/accounting/budgets/${id}/items`),
-    getReport: (id, params) => api.get(`/accounting/budgets/${id}/report`, { params }),
-    delete: (id) => api.delete(`/accounting/budgets/${id}`),
-    activate: (id) => api.post(`/accounting/budgets/${id}/activate`),
-    close: (id) => api.post(`/accounting/budgets/${id}/close`),
-    getOverrunAlerts: (params) => api.get('/accounting/budgets/alerts/overruns', { params }),
-    getStats: (params) => api.get('/accounting/budgets/stats/summary', { params })
+    list: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/', { params })),
+    create: (data) => withPermission('accounting.budgets.manage', () => api.post('/accounting/budgets/', withoutCurrentRate(data))),
+    createByCostCenter: (data) => withPermission('accounting.budgets.manage', () => api.post('/accounting/budgets/by-cost-center', withoutCurrentRate(data))),
+    listByCostCenter: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/by-cost-center', { params })),
+    getByCostCenter: (costCenterId, params) => withPermission('accounting.budgets.view', () => api.get(`/accounting/budgets/by-cost-center/${costCenterId}`, { params })),
+    listMultiYear: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/multi-year', { params })),
+    compare: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/comparison', { params })),
+    get: (id) => withPermission('accounting.budgets.view', () => api.get(`/accounting/budgets/${id}`)),
+    update: (id, data) => withPermission('accounting.budgets.manage', () => api.put(`/accounting/budgets/${id}`, withoutCurrentRate(data))),
+    setItems: (id, items) => withPermission('accounting.budgets.manage', () => api.post(`/accounting/budgets/${id}/items`, items)),
+    getItems: (id) => withPermission('accounting.budgets.view', () => api.get(`/accounting/budgets/${id}/items`)),
+    getReport: (id, params) => withPermission('accounting.budgets.view', () => api.get(`/accounting/budgets/${id}/report`, { params })),
+    delete: (id) => withPermission('accounting.budgets.manage', () => api.delete(`/accounting/budgets/${id}`)),
+    activate: (id) => withPermission('accounting.budgets.manage', () => api.post(`/accounting/budgets/${id}/activate`)),
+    close: (id) => withPermission('accounting.budgets.manage', () => api.post(`/accounting/budgets/${id}/close`)),
+    getOverrunAlerts: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/alerts/overruns', { params })),
+    getStats: (params) => withPermission('accounting.budgets.view', () => api.get('/accounting/budgets/stats/summary', { params }))
 }
 
 export const currenciesAPI = {
     list: () => api.get('/accounting/currencies/'),
-    create: (data) => api.post('/accounting/currencies/', data),
-    update: (id, data) => api.put(`/accounting/currencies/${id}`, data),
-    delete: (id) => api.delete(`/accounting/currencies/${id}`),
-    addRate: (data) => api.post('/accounting/currencies/rates', data),
+    create: (data) => withPermission(['accounting.manage', 'currencies.manage'], () => api.post('/accounting/currencies/', data)),
+    update: (id, data) => withPermission(['accounting.manage', 'currencies.manage'], () => api.put(`/accounting/currencies/${id}`, data)),
+    delete: (id) => withPermission(['accounting.manage', 'currencies.manage'], () => api.delete(`/accounting/currencies/${id}`)),
+    addRate: (data) => withPermission(['accounting.manage', 'currencies.manage'], () => api.post('/accounting/currencies/rates', data)),
     getHistory: (id, limit = 30) => api.get(`/accounting/currencies/${id}/rates`, { params: { limit } }),
-    revaluate: (data) => api.post('/accounting/currencies/revaluate', data),
+    revaluate: (data) => withPermission(['accounting.manage', 'currencies.manage'], () => api.post('/accounting/currencies/revaluate', data)),
     // T8.4: dynamic rate lookup — replaces hard-coded `exchange_rate: 1.0`
     // in journal/invoice/transfer/recurring forms. Backend resolves to the
     // latest exchange_rates row dated on/before today, with graceful fallback.
     getCurrentRate: (code) => api.get('/accounting/currencies/current', {
         params: { code },
+        skipGlobalToast: true,
+    }),
+    previewFx: (data) => api.post('/accounting/currencies/preview', data, {
         skipGlobalToast: true,
     }),
 }
@@ -139,5 +167,5 @@ export const consolidationAPI = {
 
 // FX Gain/Loss Report
 export const fxReportAPI = {
-    getGainLoss: (params) => api.get('/reports/fx-gain-loss', { params }),
+    getGainLoss: (params) => api.get('/reports/accounting/fx-gain-loss', { params }),
 }

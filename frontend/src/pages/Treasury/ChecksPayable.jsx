@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { FileText, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import '../../components/ModuleStyles.css'
 
@@ -17,6 +17,8 @@ function ChecksPayable() {
   const { showToast } = useToast()
     const { currentBranch } = useBranch()
     const currency = getCurrency()
+    const canCreateTreasury = hasPermission('treasury.create')
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
@@ -87,6 +89,10 @@ function ChecksPayable() {
     }
 
     const openCreate = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setForm({
             check_number: '', beneficiary_name: '', bank_name: '', branch_name: '',
             amount: '', currency: getCurrency(), issue_date: new Date().toISOString().split('T')[0],
@@ -97,14 +103,18 @@ function ChecksPayable() {
     }
 
     const handleCreate = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         if (!form.check_number || !form.amount || !form.due_date || !form.issue_date) return showToast(t('checks.payable.requiredFields', 'warning'))
         try {
             setSaving(true)
             await checksAPI.createPayable({
                 ...form,
-                amount: parseFloat(form.amount),
-                party_id: form.party_id ? parseInt(form.party_id) : null,
-                treasury_account_id: form.treasury_account_id ? parseInt(form.treasury_account_id) : null,
+                amount: form.amount,
+                party_id: form.party_id ? parseInt(form.party_id, 10) : null,
+                treasury_account_id: form.treasury_account_id ? parseInt(form.treasury_account_id, 10) : null,
                 branch_id: currentBranch?.id,
             })
             setShowCreate(false)
@@ -123,6 +133,10 @@ function ChecksPayable() {
     }
 
     const handleClear = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.clearPayable(detailItem.id, {
@@ -137,6 +151,10 @@ function ChecksPayable() {
     }
 
     const handleBounce = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.bouncePayable(detailItem.id, {
@@ -151,22 +169,38 @@ function ChecksPayable() {
     }
 
     const openClear = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         loadCreateData()
         setActionForm({ clearance_date: new Date().toISOString().split('T')[0], treasury_account_id: detailItem.treasury_account_id || '' })
         setShowClear(true)
     }
 
     const openBounce = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setActionForm({ bounce_date: new Date().toISOString().split('T')[0], bounce_reason: '' })
         setShowBounce(true)
     }
 
     const openRepresent = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setActionForm({ represent_date: new Date().toISOString().split('T')[0] })
         setShowRepresent(true)
     }
 
     const handleRepresent = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.representPayable(detailItem.id, {
@@ -202,7 +236,9 @@ function ChecksPayable() {
                         <h1 className="workspace-title">📤 {t('checks.payable.title')}</h1>
                         <p className="workspace-subtitle">{t('checks.payable.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={openCreate}>+ {t('checks.payable.create')}</button>
+                    {canCreateTreasury && (
+                        <button className="btn btn-primary" onClick={openCreate}>+ {t('checks.payable.create')}</button>
+                    )}
                 </div>
             </div>
 
@@ -284,7 +320,7 @@ function ChecksPayable() {
             </div>
 
             {/* Create Modal */}
-            {showCreate && (
+            {showCreate && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCreate(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 780, maxHeight: '90vh', overflow: 'auto' }}>
                         <div className="modal-header">
@@ -376,13 +412,13 @@ function ChecksPayable() {
                             {detailItem.notes && <p style={{ color: '#666', marginBottom: 16 }}>📝 {detailItem.notes}</p>}
 
                             {/* Actions */}
-                            {detailItem.status === 'issued' && (
+                            {detailItem.status === 'issued' && canCreateTreasury && (
                                 <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
                                     <button className="btn btn-primary" onClick={openClear}>✅ {t('checks.payable.clear')}</button>
                                     <button className="btn" style={{ background: '#dc3545', color: '#fff' }} onClick={openBounce}>❌ {t('checks.payable.bounce')}</button>
                                 </div>
                             )}
-                            {detailItem.status === 'bounced' && (
+                            {detailItem.status === 'bounced' && canCreateTreasury && (
                                 <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
                                     <button className="btn btn-warning" onClick={openRepresent}>🔄 {t('checks.payable.represent', 'إعادة تقديم')}</button>
                                 </div>
@@ -393,7 +429,7 @@ function ChecksPayable() {
             )}
 
             {/* Clear Modal */}
-            {showClear && (
+            {showClear && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowClear(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">
@@ -426,7 +462,7 @@ function ChecksPayable() {
             )}
 
             {/* Bounce Modal */}
-            {showBounce && (
+            {showBounce && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowBounce(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">
@@ -457,7 +493,7 @@ function ChecksPayable() {
             )}
 
             {/* Represent Modal */}
-            {showRepresent && (
+            {showRepresent && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowRepresent(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">

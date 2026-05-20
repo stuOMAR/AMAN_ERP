@@ -7,6 +7,7 @@ import { useBranch } from '../../context/BranchContext'
 import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function BankImport() {
     const { t } = useTranslation()
@@ -138,8 +139,8 @@ function BankImport() {
                                     <td>{l.transaction_date ? formatShortDate(l.transaction_date) : '-'}</td>
                                     <td>{l.description}</td>
                                     <td>{l.reference || '-'}</td>
-                                    <td className="text-danger">{l.debit ? Number(l.debit).toLocaleString() : '-'}</td>
-                                    <td className="text-success">{l.credit ? Number(l.credit).toLocaleString() : '-'}</td>
+                                    <td className="text-danger">{l.debit ? formatNumber(l.debit) : '-'}</td>
+                                    <td className="text-success">{l.credit ? formatNumber(l.credit) : '-'}</td>
                                     <td>
                                         <span className={`status-badge ${l.matched ? 'success' : 'draft'}`}>
                                             {l.matched ? t('bank_import.matched_label') : t('bank_import.unmatched')}

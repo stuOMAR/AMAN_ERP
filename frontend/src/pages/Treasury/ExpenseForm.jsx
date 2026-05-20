@@ -61,7 +61,7 @@ function ExpenseForm() {
                 return
             }
             try {
-                const accs = await treasuryAPI.listAccounts(Number(form.branch_id))
+                const accs = await treasuryAPI.listAccounts(parseInt(form.branch_id, 10))
                 setAccounts(accs.data)
                 // Reset treasury selection if current selection is not in the new list
                 if (form.treasury_id && !accs.data.some(a => a.id.toString() === form.treasury_id.toString())) {
@@ -80,13 +80,15 @@ function ExpenseForm() {
         setError(null)
         try {
             await treasuryAPI.createExpense({
-                ...form,
-                amount: Number(form.amount),
-                treasury_id: Number(form.treasury_id),
-                target_account_id: Number(form.target_account_id),
+                transaction_date: form.transaction_date,
                 transaction_type: 'expense',
-                branch_id: form.branch_id ? Number(form.branch_id) : null,
-                description: form.notes || form.reference_number || t('treasury.menu.expense')
+                amount: form.amount,
+                treasury_id: parseInt(form.treasury_id, 10),
+                target_account_id: parseInt(form.target_account_id, 10),
+                branch_id: form.branch_id ? parseInt(form.branch_id, 10) : null,
+                description: form.notes || form.reference_number || t('treasury.menu.expense'),
+                reference_number: form.reference_number || null,
+                exchange_rate: form.exchange_rate || '1'
             })
             toastEmitter.emit(t('treasury.success_create_expense'), 'success')
             navigate('/treasury')
@@ -149,7 +151,10 @@ function ExpenseForm() {
                                 step="0.000001"
                                 min="0"
                                 value={form.exchange_rate}
-                                onChange={e => setForm({ ...form, exchange_rate: parseFloat(e.target.value) || 1 })}
+                                onChange={e => {
+                                    const val = e.target.value;
+                                    setForm({ ...form, exchange_rate: val || '1' })
+                                }}
                             />
                         </FormField>
                     </div>

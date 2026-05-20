@@ -4,7 +4,7 @@ import api, { expensesAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
 import { Save, FileText, CreditCard, FolderOpen } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
@@ -19,6 +19,8 @@ export default function ExpenseForm() {
   const { currentBranch } = useBranch();
   const isEdit = Boolean(id);
   const currency = getCurrency() || '';
+  const canSubmitExpense = isEdit ? hasPermission('expenses.edit') : hasPermission('expenses.create');
+  const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error');
 
   const [loading, setLoading] = useState(false);
   const [initialLoad, setInitialLoad] = useState(true);
@@ -104,6 +106,10 @@ export default function ExpenseForm() {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!canSubmitExpense) {
+      permissionDenied();
+      return;
+    }
 
     if (!formData.amount || formData.amount <= 0) {
       showToast(t('expenses.errors.invalidAmount'), 'error');
@@ -114,12 +120,19 @@ export default function ExpenseForm() {
       setLoading(true);
       
       const payload = {
-        ...formData,
+        expense_date: formData.expense_date,
+        expense_type: formData.expense_type,
         amount: formData.amount,
+        description: formData.description,
+        category: formData.category,
+        payment_method: formData.payment_method,
         treasury_id: formData.treasury_id ? parseInt(formData.treasury_id) : null,
         expense_account_id: formData.expense_account_id ? parseInt(formData.expense_account_id) : null,
         cost_center_id: formData.cost_center_id ? parseInt(formData.cost_center_id) : null,
-        project_id: formData.project_id ? parseInt(formData.project_id) : null
+        project_id: formData.project_id ? parseInt(formData.project_id) : null,
+        requires_approval: formData.requires_approval,
+        receipt_number: formData.receipt_number,
+        vendor_name: formData.vendor_name
       };
 
       if (isEdit) {
@@ -424,7 +437,7 @@ export default function ExpenseForm() {
             <button
               type="submit"
               className="btn btn-primary d-flex align-items-center gap-2"
-              disabled={loading}
+              disabled={loading || !canSubmitExpense}
             >
               {loading ? (
                 <>

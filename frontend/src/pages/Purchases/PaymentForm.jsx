@@ -9,7 +9,8 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
-
+import { Decimal } from 'decimal.js';
+import { formatNumber } from '../../utils/format';
 
 function PaymentForm() {
     const { t } = useTranslation();
@@ -19,19 +20,21 @@ function PaymentForm() {
     const { currentBranch } = useBranch();
     const { showToast } = useToast();
     const [recordCurrency, setRecordCurrency] = useState(baseCurrency);
-    const [exchangeRate, setExchangeRate] = useState(1.0);
-    const [transactionRate, setTransactionRate] = useState(1.0); // Rate between Record and Treasury
+    const [exchangeRate, setExchangeRate] = useState('1');
+    const [transactionRate, setTransactionRate] = useState(''); // Rate between Record and Treasury
     const [loading, setLoading] = useState(false);
     const [initialLoad, setInitialLoad] = useState(true);
     const [suppliers, setSuppliers] = useState([]);
     const [currenciesList, setCurrenciesList] = useState([]);
     const [outstandingInvoices, setOutstandingInvoices] = useState([]);
     const [treasuryAccounts, setTreasuryAccounts] = useState([]);
+    const [paymentPreview, setPaymentPreview] = useState(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
     const [formData, setFormData] = useState({
         supplier_id: '',
         party_site_id: '',
         voucher_date: new Date().toISOString().split('T')[0],
-        amount: 0,
+        amount: '',
         voucher_type: 'payment', // 'payment' or 'refund'
         payment_method: '',
         bank_account_id: null,
@@ -41,6 +44,76 @@ function PaymentForm() {
         notes: '',
         allocations: []
     });
+
+    const isPositiveDecimal = (value) => {
+        try {
+            return new Decimal(value || '0').gt(0);
+        } catch {
+            return false;
+        }
+    };
+
+    const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—';
+
+    const selectedTreasury = formData.bank_account_id
+        ? treasuryAccounts.find(acc => String(acc.id) === String(formData.bank_account_id))
+        : null;
+    const previewLineByInvoiceId = new Map((paymentPreview?.lines || []).map(line => [line.invoice_id, line]));
+    const totalAllocated = paymentPreview?.total_allocated ?? null;
+    const unallocatedAmount = paymentPreview?.unallocated_amount ?? null;
+
+    const buildPreviewPayload = (nextForm = formData, options = {}) => ({
+        supplier_id: nextForm.supplier_id ? parseInt(nextForm.supplier_id, 10) : null,
+        voucher_date: nextForm.voucher_date,
+        amount: String(nextForm.amount || '0'),
+        branch_id: currentBranch?.id || null,
+        voucher_type: nextForm.voucher_type || 'payment',
+        currency: recordCurrency,
+        exchange_rate: String(exchangeRate || '1'),
+        treasury_account_id: nextForm.bank_account_id ? parseInt(nextForm.bank_account_id, 10) : null,
+        bank_account_id: nextForm.bank_account_id ? parseInt(nextForm.bank_account_id, 10) : null,
+        transaction_rate: transactionRate ? String(transactionRate) : null,
+        allocations: (nextForm.allocations || [])
+            .filter(a => isPositiveDecimal(a.allocated_amount))
+            .map(a => ({
+                invoice_id: parseInt(a.invoice_id, 10),
+                allocated_amount: String(a.allocated_amount),
+            })),
+        ...options,
+    });
+
+    const refreshPaymentPreview = async (nextForm = formData, options = {}) => {
+        if (!currentBranch?.id) return null;
+        setPreviewLoading(true);
+        try {
+            const res = await purchasesAPI.previewPayment(buildPreviewPayload(nextForm, options));
+            const result = res.data;
+            setPaymentPreview(result);
+            if (result?.transaction_rate) setTransactionRate(result.transaction_rate);
+            return result;
+        } catch (error) {
+            setPaymentPreview(null);
+            showToast(t('common.error'), 'error');
+            return null;
+        } finally {
+            setPreviewLoading(false);
+        }
+    };
+
+    const handleVoucherDateChange = async (dateStr) => {
+        const nextForm = { ...formData, voucher_date: dateStr };
+        setFormData(nextForm);
+        await refreshPaymentPreview(nextForm);
+    };
+
+    const handleVoucherTypeChange = async (voucherType) => {
+        const nextForm = { ...formData, voucher_type: voucherType, allocations: [] };
+        setFormData(nextForm);
+        const result = await refreshPaymentPreview(nextForm);
+        if (result) {
+            setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
+        }
+    };
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -63,22 +136,26 @@ function PaymentForm() {
             // Check if we have a prefilled invoice from state
             if (location.state?.fromInvoice) {
                 const inv = location.state.fromInvoice;
-                setFormData(prev => ({
-                    ...prev,
+                const nextForm = {
+                    ...formData,
                     supplier_id: inv.supplier_id,
-                    amount: inv.remaining_balance || (inv.total - (inv.paid_amount || 0)),
+                    amount: String(inv.remaining_balance || ''),
                     notes: t('buying.payments.form.prefilled_note', { number: inv.invoice_number }) || `سداد فاتورة مشتريات رقم ${inv.invoice_number}`
-                }));
+                };
+                setFormData(nextForm);
 
                 // Fetch outstanding invoices for this supplier to show the grid
                 const outstandingRes = await purchasesAPI.getOutstandingInvoices(inv.supplier_id, { branch_id: currentBranch?.id });
                 setOutstandingInvoices(outstandingRes.data);
 
-                // Automatically allocate to this specific invoice
-                setFormData(prev => ({
-                    ...prev,
-                    allocations: [{ invoice_id: inv.id, allocated_amount: inv.remaining_balance || (inv.total - (inv.paid_amount || 0)) }]
-                }));
+                const result = await refreshPaymentPreview(nextForm, { fill_invoice_id: inv.id });
+                if (result) {
+                    setFormData(prev => ({
+                        ...prev,
+                        amount: result.amount || prev.amount,
+                        allocations: result.allocations || [],
+                    }));
+                }
             }
         } catch (error) {
             showToast(t('common.error'), 'error');
@@ -87,49 +164,11 @@ function PaymentForm() {
         }
     };
 
-    const autoAllocate = (amount, invoices) => {
-        let remaining = Number(amount) || 0;
-        const newAllocations = [];
-
-        // Filter invoices by type
-        const filteredInvoices = invoices.filter(inv => (
-            formData.voucher_type === 'payment'
-                ? ['purchase', 'purchase_debit_note'].includes(inv.invoice_type)
-                : ['purchase_return', 'purchase_credit_note'].includes(inv.invoice_type)
-        ));
-
-        // Sort invoices by date (FIFO)
-        const sortedInvoices = [...filteredInvoices].sort((a, b) =>
-            new Date(a.invoice_date) - new Date(b.invoice_date)
-        );
-
-        for (const inv of sortedInvoices) {
-            if (remaining <= 0) break;
-
-            const invRate = Number(inv.exchange_rate) || 1.0;
-            const vRate = Number(exchangeRate) || 1.0;
-
-            // Calculate remaining balance in VOUCHER currency
-            // balance_v = balance_i * (invRate / vRate)
-            const remainingInVoucher = Number(inv.remaining_balance) * (invRate / vRate);
-
-            const toAllocate = Math.min(remaining, remainingInVoucher);
-
-            if (toAllocate > 0.001) {
-                newAllocations.push({
-                    invoice_id: inv.id,
-                    allocated_amount: toAllocate
-                });
-                remaining -= toAllocate;
-            }
-        }
-
-        return newAllocations;
-    };
-
     const handleSupplierChange = async (e) => {
         const supplierId = e.target.value;
-        setFormData({ ...formData, supplier_id: supplierId, allocations: [] });
+        const nextForm = { ...formData, supplier_id: supplierId, allocations: [] };
+        setFormData(nextForm);
+        setPaymentPreview(null);
 
         if (supplierId) {
             try {
@@ -138,39 +177,36 @@ function PaymentForm() {
 
                 // Set currency from supplier data
                 const selectedSupp = suppliers.find(s => s.id == supplierId);
-                if (selectedSupp && selectedSupp.currency) {
-                    setRecordCurrency(selectedSupp.currency);
-                } else {
-                    setRecordCurrency(baseCurrency);
-                }
+                const nextCurrency = selectedSupp?.currency || baseCurrency;
+                const currencyData = currenciesList.find(c => c.code === nextCurrency);
+                const nextRate = currencyData ? String(currencyData.current_rate || '1') : '1';
+                setRecordCurrency(nextCurrency);
+                setExchangeRate(nextRate);
+                setTransactionRate('');
 
-                // Auto-allocate if amount is already set
-                if (formData.amount > 0) {
-                    const allocations = autoAllocate(formData.amount, res.data);
-                    setFormData(prev => ({ ...prev, allocations }));
+                if (isPositiveDecimal(nextForm.amount)) {
+                    const result = await refreshPaymentPreview(nextForm, { auto_allocate: true, currency: nextCurrency, exchange_rate: nextRate, transaction_rate: null });
+                    if (result) {
+                        setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
+                    }
+                } else {
+                    await refreshPaymentPreview(nextForm, { currency: nextCurrency, exchange_rate: nextRate, transaction_rate: null });
                 }
             } catch (error) {
                 showToast(t('common.error'), 'error');
             }
         } else {
             setOutstandingInvoices([]);
+            setPaymentPreview(null);
         }
     };
 
-    const handleTreasuryChange = (e) => {
+    const handleTreasuryChange = async (e) => {
         const treasuryId = e.target.value;
-        setFormData(prev => ({ ...prev, bank_account_id: treasuryId }));
-
-        if (treasuryId) {
-            const selectedTreasury = treasuryAccounts.find(acc => acc.id == treasuryId);
-            if (selectedTreasury) {
-                const tRate = Number(selectedTreasury.exchange_rate) || 1.0;
-                const vRate = Number(exchangeRate) || 1.0;
-                setTransactionRate(vRate / tRate);
-            }
-        } else {
-            setTransactionRate(1.0);
-        }
+        const nextForm = { ...formData, bank_account_id: treasuryId };
+        setFormData(nextForm);
+        setTransactionRate('');
+        await refreshPaymentPreview(nextForm, { transaction_rate: null });
     };
 
     const handleRecordCurrencyChange = async (newCurrency) => {
@@ -183,67 +219,70 @@ function PaymentForm() {
         }
 
         setRecordCurrency(newCurrency);
-        if (shouldClear) setFormData(prev => ({ ...prev, allocations: [] }));
+        setTransactionRate('');
+        const nextForm = { ...formData, allocations: shouldClear ? [] : formData.allocations };
+        if (shouldClear) setFormData(nextForm);
 
         // Fetch exchange rate for the new currency
         try {
             const currencyData = currenciesList.find(c => c.code === newCurrency);
-            const newVRate = currencyData ? (currencyData.current_rate || 1.0) : 1.0;
+            const newVRate = currencyData ? String(currencyData.current_rate || '1') : '1';
             setExchangeRate(newVRate);
-
-            // Update transaction rate if treasury is selected
-            if (formData.bank_account_id) {
-                const treasury = treasuryAccounts.find(acc => acc.id == formData.bank_account_id);
-                if (treasury) {
-                    const tRate = Number(treasury.exchange_rate) || 1.0;
-                    setTransactionRate(newVRate / tRate);
-                }
-            }
+            await refreshPaymentPreview(nextForm, { currency: newCurrency, exchange_rate: newVRate, transaction_rate: null });
         } catch (error) {
             showToast(t('common.error'), 'error');
-            setExchangeRate(1.0);
+            setExchangeRate('1');
         }
     };
 
-    const handleAllocationChange = (invoiceId, amount) => {
-        const val = Number(amount) || 0;
+    const handleAllocationChange = async (invoiceId, amount) => {
+        const val = amount;
 
         const existing = formData.allocations.find(a => a.invoice_id === invoiceId);
+        let nextForm;
         if (existing) {
-            setFormData({
+            nextForm = {
                 ...formData,
                 allocations: formData.allocations.map(a =>
                     a.invoice_id === invoiceId ? { ...a, allocated_amount: val } : a
                 )
-            });
+            };
         } else {
-            setFormData({
+            nextForm = {
                 ...formData,
                 allocations: [...formData.allocations, { invoice_id: invoiceId, allocated_amount: val }]
-            });
+            };
+        }
+        setFormData(nextForm);
+        await refreshPaymentPreview(nextForm);
+    };
+
+    const handleAmountChange = async (e) => {
+        const newAmount = e.target.value;
+        const nextForm = { ...formData, amount: newAmount };
+        setFormData(nextForm);
+
+        if (outstandingInvoices.length > 0 && isPositiveDecimal(newAmount)) {
+            const result = await refreshPaymentPreview(nextForm, { auto_allocate: true });
+            if (result) {
+                setFormData(prev => ({ ...prev, amount: newAmount, allocations: result.allocations || [] }));
+            }
+        } else {
+            await refreshPaymentPreview(nextForm);
         }
     };
 
-    const handleAmountChange = (e) => {
-        const newAmount = Number(e.target.value) || 0;
-        setFormData({ ...formData, amount: newAmount });
-
-        // Auto-allocate when amount changes and we have invoices
-        if (outstandingInvoices.length > 0) {
-            const allocations = autoAllocate(newAmount, outstandingInvoices);
-            setFormData(prev => ({ ...prev, amount: newAmount, allocations }));
-        }
-    };
-
-    const handleAutoAllocate = () => {
-        if (formData.amount > 0 && outstandingInvoices.length > 0) {
-            const allocations = autoAllocate(formData.amount, outstandingInvoices);
-            setFormData({ ...formData, allocations });
+    const handleAutoAllocate = async () => {
+        if (isPositiveDecimal(formData.amount) && outstandingInvoices.length > 0) {
+            const result = await refreshPaymentPreview(formData, { auto_allocate: true });
+            if (result) {
+                setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
+            }
         }
     };
 
     // Pay all outstanding invoices in full (filtered by currency)
-    const handlePayAll = () => {
+    const handlePayAll = async () => {
         if (outstandingInvoices.length > 0) {
             const filteredInvoices = outstandingInvoices.filter(inv =>
                 (inv.invoice_type === (formData.voucher_type === 'payment' ? 'purchase' : 'purchase_return'))
@@ -254,32 +293,24 @@ function PaymentForm() {
                 return;
             }
 
-            const allocations = filteredInvoices.map(inv => ({
-                invoice_id: inv.id,
-                allocated_amount: Number(inv.remaining_balance)
-            }));
-            const total = allocations.reduce((sum, a) => sum + a.allocated_amount, 0);
-            setFormData({ ...formData, allocations, amount: total });
+            const result = await refreshPaymentPreview(formData, { pay_all: true });
+            if (result) {
+                setFormData(prev => ({
+                    ...prev,
+                    amount: result.amount || prev.amount,
+                    allocations: result.allocations || [],
+                }));
+            }
         }
     };
 
     // Quick fill a single invoice with its full remaining balance
-    const handleQuickFill = (invoiceId, remainingBalance) => {
-        const invoice = outstandingInvoices.find(inv => inv.id === invoiceId);
-        const invRate = Number(invoice?.exchange_rate) || 1.0;
-        const vRate = Number(exchangeRate) || 1.0;
-
-        // Convert invoice remaining balance to voucher currency
-        const amountInVoucher = remainingBalance * (invRate / vRate);
-
-        const existing = formData.allocations.find(a => a.invoice_id === invoiceId);
-        const newAllocations = existing
-            ? formData.allocations.map(a => a.invoice_id === invoiceId ? { ...a, allocated_amount: amountInVoucher } : a)
-            : [...formData.allocations, { invoice_id: invoiceId, allocated_amount: amountInVoucher }];
-        setFormData({ ...formData, allocations: newAllocations });
+    const handleQuickFill = async (invoiceId) => {
+        const result = await refreshPaymentPreview(formData, { fill_invoice_id: invoiceId });
+        if (result) {
+            setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
+        }
     };
-
-    const totalAllocated = formData.allocations.reduce((sum, alloc) => sum + alloc.allocated_amount, 0);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -289,12 +320,12 @@ function PaymentForm() {
             return;
         }
 
-        if (formData.amount <= 0) {
+        if (!isPositiveDecimal(formData.amount)) {
             showToast(t('buying.payments.form.validation.invalid_amount'), 'error');
             return;
         }
 
-        if (totalAllocated > formData.amount) {
+        if (paymentPreview?.over_allocated) {
             showToast(t('buying.payments.form.validation.allocation_exceeded'), 'error');
             return;
         }
@@ -306,12 +337,9 @@ function PaymentForm() {
 
         setLoading(true);
         try {
-            // Use the actual total allocated as the payment amount
-            const actualAmount = totalAllocated > 0 ? totalAllocated : formData.amount;
-
             const sanitizedData = {
                 ...formData,
-                amount: actualAmount,  // Use calculated total instead of input
+                amount: String(formData.amount || '0'),
                 supplier_id: parseInt(formData.supplier_id),
                 branch_id: currentBranch?.id,
                 bank_account_id: formData.bank_account_id ? parseInt(formData.bank_account_id) : null,
@@ -319,14 +347,14 @@ function PaymentForm() {
                 check_number: formData.check_number || null,
                 reference: formData.reference || null,
                 notes: formData.notes || null,
-                allocations: formData.allocations.filter(a => a.allocated_amount > 0).map(a => ({
+                allocations: formData.allocations.filter(a => isPositiveDecimal(a.allocated_amount)).map(a => ({
                     invoice_id: parseInt(a.invoice_id),
                     allocated_amount: String(a.allocated_amount)
                 })),
                 currency: recordCurrency,
-                exchange_rate: String(exchangeRate || 1.0),
+                exchange_rate: String(exchangeRate || '1'),
                 treasury_account_id: formData.bank_account_id ? parseInt(formData.bank_account_id) : null,
-                transaction_rate: String(transactionRate || 1.0)
+                transaction_rate: transactionRate ? String(transactionRate) : null
             };
 
             await purchasesAPI.createPayment(sanitizedData);
@@ -374,7 +402,7 @@ function PaymentForm() {
                                     <CustomDatePicker
                                         label={t('buying.payments.form.date')}
                                         selected={formData.voucher_date}
-                                        onChange={(dateStr) => setFormData({ ...formData, voucher_date: dateStr })}
+                                        onChange={handleVoucherDateChange}
                                         required
                                     />
                                 </div>
@@ -404,7 +432,7 @@ function PaymentForm() {
                                     name="voucher_type"
                                     value="payment"
                                     checked={formData.voucher_type === 'payment'}
-                                    onChange={() => setFormData(prev => ({ ...prev, voucher_type: 'payment', allocations: [] }))}
+                                    onChange={() => handleVoucherTypeChange('payment')}
                                 />
                                 <span style={{ fontWeight: formData.voucher_type === 'payment' ? 'bold' : 'normal', color: '#dc2626' }}>{t('buying.payments.form.type_payment')}</span>
                             </label>
@@ -414,7 +442,7 @@ function PaymentForm() {
                                     name="voucher_type"
                                     value="refund"
                                     checked={formData.voucher_type === 'refund'}
-                                    onChange={() => setFormData(prev => ({ ...prev, voucher_type: 'refund', allocations: [] }))}
+                                    onChange={() => handleVoucherTypeChange('refund')}
                                 />
                                 <span style={{ fontWeight: formData.voucher_type === 'refund' ? 'bold' : 'normal', color: '#059669' }}>{t('buying.payments.form.type_refund')}</span>
                             </label>
@@ -427,7 +455,7 @@ function PaymentForm() {
                             <h3 className="section-title text-purple-700">{t('buying.payments.form.allocation_title')}</h3>
                             <div className="flex items-center gap-4">
                                 <div className="text-sm text-gray-500">
-                                    {t('buying.payments.form.allocated_total')} <span className="font-bold text-purple-700">{totalAllocated.toLocaleString()} {recordCurrency}</span>
+                                    {t('buying.payments.form.allocated_total')} <span className="font-bold text-purple-700">{moneyOrDash(totalAllocated)} {recordCurrency}</span>
                                 </div>
                                 {outstandingInvoices.length > 0 && (
                                     <div style={{ display: 'flex', gap: '8px' }}>
@@ -438,7 +466,7 @@ function PaymentForm() {
                                         >
                                             {t('buying.payments.form.pay_all')}
                                         </button>
-                                        {formData.amount > 0 && (
+                                        {isPositiveDecimal(formData.amount) && (
                                             <button
                                                 type="button"
                                                 onClick={handleAutoAllocate}
@@ -479,12 +507,13 @@ function PaymentForm() {
                                                         {inv.currency || baseCurrency}
                                                     </span>
                                                 </td>
-                                                <td>{Number(inv.total).toLocaleString()}</td>
-                                                <td className="font-bold text-red-600">{Number(inv.remaining_balance).toLocaleString()}</td>
+                                                <td>{formatNumber(inv.total)}</td>
+                                                <td className="font-bold text-red-600">{formatNumber(inv.remaining_balance)}</td>
                                                 <td>
                                                     <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
                                                         <input
-                                                            type="number"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             step="0.01"
                                                             min="0"
                                                             placeholder="0.00"
@@ -495,7 +524,7 @@ function PaymentForm() {
                                                         />
                                                         <button
                                                             type="button"
-                                                            onClick={() => handleQuickFill(inv.id, Number(inv.remaining_balance))}
+                                                            onClick={() => handleQuickFill(inv.id)}
                                                             className="btn btn-sm bg-green-100 text-green-700 hover:bg-green-200 border border-green-300"
                                                             title={t('buying.payments.table.quick_fill')}
                                                             style={{ padding: '4px 8px', fontSize: '12px' }}
@@ -503,9 +532,9 @@ function PaymentForm() {
                                                             {t('buying.payments.table.all')}
                                                         </button>
                                                     </div>
-                                                    {recordCurrency !== (inv.currency || baseCurrency) && formData.allocations.find(a => a.invoice_id === inv.id)?.allocated_amount > 0 && (
+                                                    {recordCurrency !== (inv.currency || baseCurrency) && previewLineByInvoiceId.get(inv.id)?.invoice_currency_amount && (
                                                         <div className="text-[10px] text-gray-500 mt-1">
-                                                            {t('common.equivalent')}: {((formData.allocations.find(a => a.invoice_id === inv.id)?.allocated_amount || 0) * (exchangeRate / (inv.exchange_rate || 1))).toFixed(2)} {inv.currency || baseCurrency}
+                                                            {t('common.equivalent')}: {formatNumber(previewLineByInvoiceId.get(inv.id).invoice_currency_amount)} {inv.currency || baseCurrency}
                                                         </div>
                                                     )}
                                                 </td>
@@ -526,12 +555,13 @@ function PaymentForm() {
                                 <FormField label={formData.voucher_type === 'payment' ? t('buying.payments.form.amount_paid') : t('buying.payments.form.amount_received')}>
                                     <div className="relative">
                                         <input
-                                            type="number"
+                                            type="text"
+                                            inputMode="decimal"
                                             required
                                             step="0.01"
                                             min="0.01"
                                             value={formData.amount}
-                                            onChange={(e) => setFormData({ ...formData, amount: Number(e.target.value) || 0 })}
+                                            onChange={handleAmountChange}
                                             className="form-input border-purple-200"
                                         />
                                         <span className="absolute left-3 top-2 text-gray-400">{recordCurrency}</span>
@@ -608,18 +638,14 @@ function PaymentForm() {
                                                     </label>
                                                     <div className="relative">
                                                         <input
-                                                            type="number"
+                                                            type="text"
+                                                            inputMode="decimal"
                                                             step="0.000001"
                                                             value={transactionRate}
                                                             onChange={(e) => {
                                                                 const newTRate = e.target.value;
                                                                 setTransactionRate(newTRate);
-
-                                                                // If treasury is base currency, update the main exchange rate too
-                                                                const selectedTreasury = treasuryAccounts.find(acc => acc.id == formData.bank_account_id);
-                                                                if (selectedTreasury && selectedTreasury.currency === baseCurrency) {
-                                                                    setExchangeRate(newTRate);
-                                                                }
+                                                                refreshPaymentPreview(formData, { transaction_rate: newTRate ? newTRate : null });
                                                             }}
                                                             className="form-input form-input-sm w-full font-mono text-center border-purple-300 focus:border-purple-500 pr-16"
                                                             style={{ paddingRight: '4rem' }}
@@ -643,10 +669,15 @@ function PaymentForm() {
                                                         </label>
                                                         <div className="relative">
                                                             <input
-                                                                type="number"
+                                                                type="text"
+                                                                inputMode="decimal"
                                                                 step="0.000001"
                                                                 value={exchangeRate}
-                                                                onChange={(e) => setExchangeRate(e.target.value)}
+                                                                onChange={(e) => {
+                                                                    setExchangeRate(e.target.value);
+                                                                    setTransactionRate('');
+                                                                    refreshPaymentPreview(formData, { exchange_rate: e.target.value, transaction_rate: null });
+                                                                }}
                                                                 className="form-input form-input-sm w-full font-mono text-center border-gray-300 pr-12"
                                                                 style={{ paddingRight: '3rem' }}
                                                             />
@@ -656,13 +687,13 @@ function PaymentForm() {
                                                 )}
 
                                             {/* ROW 4: Equivalent Display - Conditional */}
-                                            {formData.bank_account_id && treasuryAccounts.find(acc => acc.id == formData.bank_account_id)?.currency !== recordCurrency && (
+                                            {formData.bank_account_id && selectedTreasury?.currency !== recordCurrency && (
                                                 <>
                                                     <label className="text-xs text-purple-800">
                                                         {t('common.equivalent')}:
                                                     </label>
                                                     <div className="font-bold font-mono text-sm text-purple-800 bg-purple-50 p-2 rounded border border-purple-100 text-center">
-                                                        {(formData.amount * transactionRate).toLocaleString()} {treasuryAccounts.find(acc => acc.id == formData.bank_account_id)?.currency}
+                                                        {moneyOrDash(paymentPreview?.treasury_amount)} {paymentPreview?.treasury_currency || selectedTreasury?.currency}
                                                     </div>
                                                 </>
                                             )}
@@ -705,17 +736,17 @@ function PaymentForm() {
                         <div style={{ width: '300px', padding: '24px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{t('buying.payments.form.summary.total_amount')}</span>
-                                <span>{recordCurrency} {formData.amount.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                <span>{recordCurrency} {moneyOrDash(paymentPreview?.amount)}</span>
                             </div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span>{t('buying.payments.form.summary.total_allocated')}</span>
-                                <span>{recordCurrency} {totalAllocated.toLocaleString(undefined, { minimumFractionDigits: 2 })}</span>
+                                <span>{recordCurrency} {moneyOrDash(totalAllocated)}</span>
                             </div>
                             <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span style={{ fontWeight: 'bold' }}>{t('buying.payments.form.summary.remaining')}</span>
-                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={formData.amount - totalAllocated > 0.01 ? 'text-orange-600' : ''}>
-                                    {recordCurrency} {(formData.amount - totalAllocated).toLocaleString(undefined, { minimumFractionDigits: 2 })}
+                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={isPositiveDecimal(unallocatedAmount) ? 'text-orange-600' : ''}>
+                                    {recordCurrency} {moneyOrDash(unallocatedAmount)}
                                 </span>
                             </div>
 
@@ -736,7 +767,7 @@ function PaymentForm() {
                                 {t('buying.payments.form.cancel')}
                             </button>
 
-                            {formData.amount - totalAllocated > 0.01 && (
+                            {isPositiveDecimal(unallocatedAmount) && (
                                 <div className="mt-4 p-3 bg-orange-50 border border-orange-100 rounded text-[10px] text-orange-800">
                                     {t('buying.payments.form.accounting_note')}
                                 </div>

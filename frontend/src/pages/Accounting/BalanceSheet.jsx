@@ -7,6 +7,7 @@ import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import Decimal from 'decimal.js'
 
 function BalanceSheet() {
     const { t, i18n } = useTranslation()
@@ -20,6 +21,13 @@ function BalanceSheet() {
     const [error, setError] = useState(null)
     const [showExport, setShowExport] = useState(false)
     const currency = getCurrency()
+    const money = (value) => {
+        try {
+            return new Decimal(value || 0)
+        } catch {
+            return new Decimal(0)
+        }
+    }
 
     const fetchData = async () => {
         try {
@@ -86,19 +94,19 @@ function BalanceSheet() {
     const leafRevenue = revenueAccounts.filter(a => !a.is_header)
     const leafExpenses = expenseAccounts.filter(a => !a.is_header)
 
-    const totalAssets = leafAssets.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalLiabilities = leafLiabilities.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalEquity = leafEquity.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalRevenue = leafRevenue.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const totalExpenses = leafExpenses.reduce((sum, a) => sum + parseFloat(a.balance || 0), 0)
-    const netRevenue = totalRevenue + totalExpenses
-    const totalLiabAndEquity = totalLiabilities + totalEquity
+    const totalAssets = leafAssets.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
+    const totalLiabilities = leafLiabilities.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
+    const totalEquity = leafEquity.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
+    const totalRevenue = leafRevenue.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
+    const totalExpenses = leafExpenses.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
+    const netRevenue = totalRevenue.plus(totalExpenses)
+    const totalLiabAndEquity = totalLiabilities.plus(totalEquity)
 
     const flatAssets = flattenTree(assetAccounts)
     const flatLiabilities = flattenTree(liabilityAccounts)
     const flatEquity = flattenTree(equityAccounts)
 
-    const isBalanced = Math.abs(totalAssets - totalLiabAndEquity) < 0.01
+    const isBalanced = totalAssets.minus(totalLiabAndEquity).abs().lt('0.01')
 
     const getName = (item) => {
         if (i18n.language === 'en' && item.name_en) return item.name_en
@@ -136,7 +144,7 @@ function BalanceSheet() {
                                         <span className="font-mono" style={{ marginLeft: '8px' }}>{acc.account_number}</span>
                                         {' '}{getName(acc)}
                                     </td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(Math.abs(acc.balance))}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(money(acc.balance).abs().toString())}</td>
                                 </tr>
                             ))
                         )}
@@ -458,7 +466,7 @@ function BalanceSheet() {
                                             {t('accounting.balance_sheet.difference')}
                                         </td>
                                         <td style={{ padding: '12px', textAlign: 'left' }}>
-                                            {formatNumber(Math.abs(totalAssets - totalLiabAndEquity))} {currency}
+                                            {formatNumber(totalAssets.minus(totalLiabAndEquity).abs().toString())} {currency}
                                             {isBalanced && ' ✅'}
                                         </td>
                                     </tr>

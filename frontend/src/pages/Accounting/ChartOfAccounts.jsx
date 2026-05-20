@@ -41,6 +41,9 @@ function ChartOfAccounts() {
         parent_id: null,
         currency: ''
     })
+    const canEditAccounts = hasPermission('accounting.edit')
+    const canManageAccounts = hasPermission('accounting.manage')
+    const permissionDenied = () => toastEmitter.emit(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     const fetchAccounts = async () => {
         if (branchLoading) return
@@ -98,6 +101,10 @@ function ChartOfAccounts() {
     }
 
     const handleOpenModal = (type, node = null) => {
+        if ((type === 'create' || type === 'edit') && !canEditAccounts) {
+            permissionDenied()
+            return
+        }
         const defaultCurrency = node?.currency || node?.display_currency || currency || displayCurrency?.currency || ''
         if (type === 'create') {
             setForm({
@@ -125,6 +132,10 @@ function ChartOfAccounts() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canEditAccounts) {
+            permissionDenied()
+            return
+        }
         try {
             if (modal.type === 'create') {
                 await accountingAPI.create(form)
@@ -225,7 +236,7 @@ function ChartOfAccounts() {
                     </div>
 
                     <div className="row-actions">
-                        {hasPermission('accounting.edit') && (
+                        {canEditAccounts && (
                             <>
                                 <button className="action-btn add" title={t("accounting.coa.add_sub")} onClick={(e) => { e.stopPropagation(); handleOpenModal('create', node); }}>
                                     <Plus size={14} />
@@ -235,7 +246,7 @@ function ChartOfAccounts() {
                                 </button>
                             </>
                         )}
-                        {hasPermission('accounting.manage') && !hasChildren && (
+                        {canManageAccounts && !hasChildren && (
                             <button className="action-btn delete" title={t("common.delete")} onClick={(e) => { e.stopPropagation(); handleOpenModal('delete', node); }}>
                                 <Trash2 size={14} />
                             </button>
@@ -283,7 +294,7 @@ function ChartOfAccounts() {
                     <p className="workspace-subtitle">{t('accounting.coa.subtitle')}</p>
                 </div>
                 <div className="header-actions">
-                    {hasPermission('accounting.edit') && (
+                    {canEditAccounts && (
                         <button className="btn btn-primary" onClick={() => handleOpenModal('create')}>
                             <Plus size={18} style={{ marginLeft: '8px' }} />
                             {t('accounting.coa.add_main_account')}
@@ -317,7 +328,7 @@ function ChartOfAccounts() {
             </div>
 
             {/* Account Modal */}
-            {modal.open && (
+            {modal.open && (modal.type === 'delete' ? canManageAccounts : canEditAccounts) && (
                 <div className="modal-overlay">
                     <div className="modal-content card slide-up" style={{ maxWidth: '500px' }}>
                         <div className="modal-header">

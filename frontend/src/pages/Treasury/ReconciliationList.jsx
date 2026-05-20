@@ -9,6 +9,7 @@ import { toastEmitter } from '../../utils/toastEmitter';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
 import SearchFilter from '../../components/common/SearchFilter';
+import { formatNumber } from '../../utils/format';
 
 const ReconciliationList = () => {
     const { t } = useTranslation();
@@ -138,12 +139,12 @@ const ReconciliationList = () => {
         {
             key: 'start_balance',
             label: t('treasury.reconciliation.start_bal'),
-            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })} <small>{currency}</small></span>,
+            render: (val) => <span className="font-monospace fw-bold">{formatNumber(val || '0')} <small>{currency}</small></span>,
         },
         {
             key: 'end_balance',
             label: t('treasury.reconciliation.end_bal'),
-            render: (val) => <span className="font-monospace fw-bold">{Number(val).toLocaleString('en', { minimumFractionDigits: 2 })} <small>{currency}</small></span>,
+            render: (val) => <span className="font-monospace fw-bold">{formatNumber(val || '0')} <small>{currency}</small></span>,
         },
         {
             key: 'matched_count',

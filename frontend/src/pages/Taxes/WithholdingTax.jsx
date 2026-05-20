@@ -3,7 +3,7 @@ import { useTranslation } from 'react-i18next'
 import DOMPurify from 'dompurify'
 import { externalAPI } from '../../utils/api'
 import { formatNumber } from '../../utils/format'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import '../../components/ModuleStyles.css'
 
 import { formatShortDate } from '../../utils/dateUtils';
@@ -24,6 +24,9 @@ export default function WithholdingTax() {
     const isRTL = i18n.language === 'ar'
     const { currentBranch } = useBranch()
     const currency = getCurrency()
+    const canManageRates = hasPermission(['accounting.manage', 'taxes.manage'])
+    const canCalculateWht = hasPermission(['accounting.view', 'buying.view'])
+    const canCreateTransactions = hasPermission(['accounting.edit', 'taxes.manage'])
     const [activeTab, setActiveTab] = useState('rates')
     const [loading, setLoading] = useState(true)
     const certRef = useRef(null)
@@ -102,8 +105,10 @@ export default function WithholdingTax() {
         try {
             setRateSubmitting(true)
             await externalAPI.createWhtRate({
-                ...rateForm,
+                name: rateForm.name.trim(),
+                name_ar: rateForm.name_ar || null,
                 rate: String(rateForm.rate),
+                category: rateForm.category || 'services',
             })
             setShowRateModal(false)
             setRateForm({ name: '', name_ar: '', rate: '', category: 'services' })
@@ -143,6 +148,8 @@ export default function WithholdingTax() {
         try {
             setTxSubmitting(true)
             await externalAPI.createWhtTransaction({
+                invoice_id: null,
+                payment_id: null,
                 supplier_id: parseInt(calcSupplierId),
                 wht_rate_id: parseInt(calcRateId),
                 gross_amount: String(calcGross),
@@ -257,7 +264,7 @@ export default function WithholdingTax() {
                     <h1 className="workspace-title">{t('wht.title')}</h1>
                     <p className="workspace-subtitle">{t('wht.subtitle')}</p>
                 </div>
-                {activeTab === 'rates' && (
+                {activeTab === 'rates' && canManageRates && (
                     <div className="header-actions">
                         <button className="btn btn-primary" onClick={() => setShowRateModal(true)}>
                             + {t('wht.add_rate')}
@@ -320,6 +327,7 @@ export default function WithholdingTax() {
             {activeTab === 'transactions' && (
                 <>
                     {/* WHT Calculator */}
+                    {canCalculateWht && (
                     <div className="section-card" style={{ marginBottom: '24px' }}>
                         <h3 className="section-title">{t('wht.calculator_title')}</h3>
                         <div style={{ display: 'flex', gap: '16px', alignItems: 'flex-end', flexWrap: 'wrap' }}>
@@ -395,17 +403,20 @@ export default function WithholdingTax() {
                                         {formatNumber(calcResult.net_amount)} <small>{displayCurrency}</small>
                                     </div>
                                 </div>
-                                <button
-                                    className="btn btn-success"
-                                    onClick={handleCreateTransaction}
-                                    disabled={txSubmitting || !currentBranch?.id || !calcSupplierId}
-                                    style={{ marginRight: 'auto' }}
-                                >
-                                    {txSubmitting ? t('wht.saving') : t('wht.create_transaction')}
-                                </button>
+                                {canCreateTransactions && (
+                                    <button
+                                        className="btn btn-success"
+                                        onClick={handleCreateTransaction}
+                                        disabled={txSubmitting || !currentBranch?.id || !calcSupplierId}
+                                        style={{ marginRight: 'auto' }}
+                                    >
+                                        {txSubmitting ? t('wht.saving') : t('wht.create_transaction')}
+                                    </button>
+                                )}
                             </div>
                         )}
                     </div>
+                    )}
 
                     {/* Transactions Table */}
                     <div className="section-card">

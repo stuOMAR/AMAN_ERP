@@ -8,7 +8,7 @@ import { budgetsAPI, costCentersAPI } from '../../utils/api';
 import { useBranch } from '../../context/BranchContext';
 import { useTheme } from '../../context/ThemeContext';
 import { formatNumber } from '../../utils/format';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import CustomDatePicker from '../../components/common/CustomDatePicker';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates';
@@ -36,6 +36,8 @@ const Budgets = () => {
     const [selectedCC, setSelectedCC] = useState('');
     const currency = getCurrency() || '';
     const { currentBranch } = useBranch();
+    const canManageBudgets = hasPermission('accounting.budgets.manage');
+    const permissionDenied = () => toast.error(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'));
 
     const [formData, setFormData] = useState({
         name: '',
@@ -92,13 +94,17 @@ const Budgets = () => {
 
     const handleCreate = async (e) => {
         e.preventDefault();
+        if (!canManageBudgets) {
+            permissionDenied();
+            return;
+        }
         setActionLoading(true);
         try {
             const payload = { ...formData };
             if (currentBranch?.id) payload.branch_id = currentBranch.id;
             if (payload.cost_center_id) payload.cost_center_id = parseInt(payload.cost_center_id);
             else delete payload.cost_center_id;
-            await budgetsAPI.create(payload);
+            await (payload.cost_center_id ? budgetsAPI.createByCostCenter(payload) : budgetsAPI.create(payload));
             toast.success(t('common.success'));
             setIsModalOpen(false);
             setFormData({ name: '', start_date: new Date().toISOString().split('T')[0], end_date: new Date(Date.now() + 365 * 24 * 60 * 60 * 1000).toISOString().split('T')[0], description: '', cost_center_id: '' });
@@ -112,6 +118,10 @@ const Budgets = () => {
     };
 
     const handleDelete = async (id) => {
+        if (!canManageBudgets) {
+            permissionDenied();
+            return;
+        }
         if (!window.confirm(t('common.confirm_delete'))) return;
         try {
             await budgetsAPI.delete(id);
@@ -123,6 +133,10 @@ const Budgets = () => {
     };
 
     const handleActivate = async (id) => {
+        if (!canManageBudgets) {
+            permissionDenied();
+            return;
+        }
         try {
             await budgetsAPI.activate(id);
             toast.success(t('accounting.budgets.activated'));
@@ -133,6 +147,10 @@ const Budgets = () => {
     };
 
     const handleClose = async (id) => {
+        if (!canManageBudgets) {
+            permissionDenied();
+            return;
+        }
         if (!window.confirm(t('accounting.budgets.confirm_close'))) return;
         try {
             await budgetsAPI.close(id);
@@ -155,10 +173,12 @@ const Budgets = () => {
                             <p className="text-muted small mb-0">{t('accounting.budgets.subtitle')}</p>
                         </div>
                     </div>
-                    <button onClick={() => setIsModalOpen(true)} className="btn btn-primary">
-                        <span style={{ marginLeft: '8px' }}>+</span>
-                        {t('accounting.budgets.new')}
-                    </button>
+                    {canManageBudgets && (
+                        <button onClick={() => setIsModalOpen(true)} className="btn btn-primary">
+                            <span style={{ marginLeft: '8px' }}>+</span>
+                            {t('accounting.budgets.new')}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -320,6 +340,7 @@ const Budgets = () => {
                                             {t(`accounting.budgets.status_${status}`, status)}
                                         </span>
                                     </div>
+                                    {canManageBudgets && (
                                     <div style={{ position: 'relative' }}>
                                         <button
                                             onClick={() => setOpenMenu(openMenu === budget.id ? null : budget.id)}
@@ -356,6 +377,7 @@ const Budgets = () => {
                                             </div>
                                         )}
                                     </div>
+                                    )}
                                 </div>
 
                                 {/* Description */}
@@ -405,7 +427,7 @@ const Budgets = () => {
             </div>
 
             {/* Create Modal */}
-            {isModalOpen && (
+            {isModalOpen && canManageBudgets && (
                 <div className="modal-overlay">
                     <div className="modal-content" style={{ maxWidth: '500px' }}>
                         <div className="modal-header">

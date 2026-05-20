@@ -8,6 +8,8 @@ import { formatShortDate } from '../../utils/dateUtils'
 import { Printer, ArrowLeft, CreditCard, Calendar, User, FileText, CheckCircle, Info } from 'lucide-react'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
+import { Decimal } from 'decimal.js'
 
 function PaymentDetails() {
     const { t } = useTranslation()
@@ -38,7 +40,9 @@ function PaymentDetails() {
     if (error) return <div className="workspace fade-in"><div className="alert alert-error">{error}</div></div>
     if (!payment) return <div className="workspace fade-in"><div className="alert alert-warning">{t('buying.payments.details.not_found')}</div></div>
 
-    const totalAllocated = payment.allocations ? payment.allocations.reduce((sum, a) => sum + Number(a.allocated_amount), 0) : 0
+    const totalAllocated = payment.allocations
+        ? payment.allocations.reduce((sum, a) => sum.plus(a.allocated_amount || 0), new Decimal(0)).toString()
+        : '0'
 
     return (
         <div className="workspace fade-in">
@@ -101,7 +105,7 @@ function PaymentDetails() {
                         <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                             <span className="text-secondary">{t('buying.payments.details.amount')}</span>
                             <span style={{ fontSize: '1.4rem', fontWeight: '800', color: 'var(--danger)' }}>
-                                -{Number(payment.amount).toLocaleString()} <small>{payment.currency || currency}</small>
+                                -{formatNumber(payment.amount)} <small>{payment.currency || currency}</small>
                             </span>
                         </div>
                     </div>
@@ -149,14 +153,14 @@ function PaymentDetails() {
                                         <tr key={index} onClick={() => navigate(`/buying/invoices/${alloc.invoice_id}`)} className="hover-row" style={{ cursor: 'pointer' }}>
                                             <td className="font-medium text-primary">{alloc.invoice_number}</td>
                                             <td style={{ textAlign: 'left' }} className="font-bold text-danger">
-                                                -{Number(alloc.allocated_amount).toLocaleString()} <small>{payment.currency || currency}</small>
+                                                -{formatNumber(alloc.allocated_amount)} <small>{payment.currency || currency}</small>
                                             </td>
                                         </tr>
                                     ))}
                                     <tr style={{ background: 'var(--bg-main)', fontWeight: 'bold' }}>
                                         <td>{t('buying.payments.details.total_allocated')}</td>
                                         <td style={{ textAlign: 'left' }} className="text-danger">
-                                            -{totalAllocated.toLocaleString()} <small>{payment.currency || currency}</small>
+                                            -{formatNumber(totalAllocated)} <small>{payment.currency || currency}</small>
                                         </td>
                                     </tr>
                                 </tbody>

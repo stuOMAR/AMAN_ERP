@@ -7,6 +7,7 @@ import { formatShortDate } from '../../utils/dateUtils'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
+import Decimal from 'decimal.js'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
@@ -39,12 +40,12 @@ function BuyingReturnForm() {
         invoice_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
         currency: currency || '',
-        exchange_rate: 1,
+        exchange_rate: '1',
         notes: ''
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }
+        { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
     ])
 
     useEffect(() => {
@@ -93,32 +94,23 @@ function BuyingReturnForm() {
             setFormData(prev => ({
                 ...prev,
                 currency: invoice.currency || prev.currency,
-                exchange_rate: invoice.exchange_rate || prev.exchange_rate || 1,
+                exchange_rate: String(invoice.exchange_rate || prev.exchange_rate || '1'),
             }))
 
             // Map items with max_quantity
             const returnItems = invoice.items.map(item => {
-                const remaining = item.remaining_quantity !== undefined ? Number(item.remaining_quantity) : Number(item.quantity)
-                const unitPrice = Number(item.unit_price)
-                const discount = Number(item.discount)
-                // Calculate percentage from original invoice data if possible, or usually it's just value. 
-                // In invoice items we store discount amount. 
-                const discountPercent = (Number(item.quantity) * unitPrice) > 0 ? (discount / (Number(item.quantity) * unitPrice)) * 100 : 0
+                const remaining = item.remaining_quantity !== undefined
+                    ? new Decimal(item.remaining_quantity || 0).toString()
+                    : new Decimal(item.quantity || 0).toString()
 
                 return {
                     product_id: item.product_id,
                     description: item.description || item.product_name,
                     quantity: remaining,
-                    max_quantity: remaining, // Limit
-                    unit_price: unitPrice,
-                    tax_rate: Number(item.tax_rate),
-                    discount: discount, // This is total discount for the line in invoice? 
-                    // If returning partial quantity, discount should probably be proportional?
-                    // But here we set initial quantity to remaining. 
-                    // Let's recalculate discount based on percentage and current quantity?
-                    // Actually, if we import from invoice, we should probably keep the percentage fixed.
-                    discount_percent: discountPercent,
-                    total: 0
+                    max_quantity: remaining,
+                    unit_price: String(item.unit_price || '0'),
+                    tax_rate: null,
+                    discount: String(item.discount || '0')
                 }
             })
 
@@ -130,10 +122,9 @@ function BuyingReturnForm() {
     }
 
     // Calculations
-    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc()
 
     const calculateTotals = () => {
-        // Use backend totals if available
         if (backendTotals) {
             return {
                 subtotal: backendTotals.subtotal,
@@ -142,43 +133,27 @@ function BuyingReturnForm() {
                 total: backendTotals.grandTotal,
             }
         }
-        // Fallback to local calculation
-        let subtotal = 0
-        let totalTax = 0
-        let totalDiscount = 0
-
-        items.forEach(item => {
-            const lineTotal = (Number(item.quantity) || 0) * (Number(item.unit_price) || 0)
-            const taxable = lineTotal - (Number(item.discount) || 0)
-            const tax = taxable * ((Number(item.tax_rate) || 0) / 100)
-
-            subtotal += lineTotal
-            totalDiscount += (Number(item.discount) || 0)
-            totalTax += tax
-        })
-
-        const total = subtotal - totalDiscount + totalTax
-        return { subtotal, totalTax, totalDiscount, total }
+        return { subtotal: null, totalTax: null, totalDiscount: null, total: null }
     }
 
     const totals = calculateTotals()
 
     // Call backend for accurate calculations
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+        if (items.length > 0 && items.some(i => String(i.quantity || '').trim() && String(i.unit_price || '').trim())) {
             previewDebounced({
                 lines: items.map(i => ({
-                    product_id: i.product_id ? Number(i.product_id) : null,
-                    quantity: Number(i.quantity) || 0,
-                    unit_price: Number(i.unit_price) || 0,
-                    discount: Number(i.discount) || 0,
+                    product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    discount: String(i.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
-                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
+                supplier_id: formData.supplier_id ? parseInt(formData.supplier_id, 10) : null,
                 currency,
             })
         }
-    }, [items, formData.supplier_id, currentBranch])
+    }, [items, formData.supplier_id, currentBranch, currency, previewDebounced])
 
     // Handlers
     const handleItemChange = (index, field, value) => {
@@ -191,41 +166,21 @@ function BuyingReturnForm() {
                     if (product) {
                         updatedItem.description = product.item_name || ''
                         // Use buying price or last purchase price
-                        updatedItem.unit_price = product.last_buying_price || product.buying_price || 0
-                        updatedItem.tax_rate = null // Resolved by backend engine
+                        updatedItem.unit_price = String(product.last_buying_price || product.buying_price || '')
+                        updatedItem.tax_rate = null
                     }
                 }
 
                 if (field === 'quantity') {
                     // Validation against max_quantity if linked
-                    if (item.max_quantity && Number(value) > item.max_quantity) {
+                    if (item.max_quantity && new Decimal(value || 0).gt(item.max_quantity)) {
                         showToast(`Cannot return more than purchased: ${item.max_quantity}`, 'error')
                         updatedItem[field] = item.max_quantity
-                        // Don't return here, proceed to calc discount
-                        // return updatedItem 
                         value = item.max_quantity
                     }
                 }
 
                 updatedItem[field] = value
-
-                // Calculate discount logic
-                const qty = Number(field === 'quantity' ? value : updatedItem.quantity) || 0
-                const price = Number(field === 'unit_price' ? value : updatedItem.unit_price) || 0
-                let discount = Number(updatedItem.discount) || 0
-                let discountPercent = Number(updatedItem.discount_percent) || 0
-
-                if (field === 'discount_percent') {
-                    discountPercent = Number(value) || 0
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                } else if (field === 'quantity' || field === 'unit_price') {
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                }
-
-                updatedItem.discount_percent = discountPercent
-                updatedItem.discount = discount
 
                 return updatedItem
             }
@@ -235,7 +190,7 @@ function BuyingReturnForm() {
     }
 
     const addItem = () => {
-        setItems([...items, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }])
+        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }])
     }
 
     const removeItem = (index) => {
@@ -268,7 +223,7 @@ function BuyingReturnForm() {
                 invoice_date: formData.invoice_date,
                 due_date: formData.due_date,
                 payment_method: receiveRefund ? paymentMethod : null,
-	                paid_amount: receiveRefund ? totals.total : 0,
+	                paid_amount: receiveRefund ? String(totals.total || '0') : '0',
 	                currency: formData.currency || currency,
 	                exchange_rate: String(formData.exchange_rate || 1),
 	                original_invoice_id: formData.invoice_id ? parseInt(formData.invoice_id) : null,
@@ -278,7 +233,7 @@ function BuyingReturnForm() {
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: String(item.tax_rate || 0),
+                    tax_rate: null,
                     discount: String(item.discount || 0)
                 }))
             }
@@ -398,17 +353,14 @@ function BuyingReturnForm() {
                                 <th style={{ width: '30%' }}>{t('buying.returns.form.items.product')}</th>
                                 <th style={{ width: '10%' }}>{t('buying.returns.form.items.return_qty')}</th>
                                 <th style={{ width: '15%' }}>{t('buying.returns.form.items.return_price')}</th>
-                                <th style={{ width: '10%' }}>{t('buying.returns.form.items.discount')} (%)</th>
+                                <th style={{ width: '10%' }}>{t('buying.returns.form.items.discount')}</th>
                                 <th style={{ width: '10%' }}>{t('buying.returns.form.items.tax_rate')}</th>
                                 <th style={{ width: '15%' }}>{t('buying.returns.form.items.total')}</th>
                                 <th style={{ width: '5%' }}></th>
                             </tr>
                         </thead>
                         <tbody>
-                            {items.map((item, index) => {
-                                const lineTotal = (item.quantity || 0) * (item.unit_price || 0) - (item.discount || 0);
-                                const withTax = lineTotal * (1 + (item.tax_rate || 0) / 100);
-                                return (
+                            {items.map((item, index) => (
                                     <tr key={index}>
                                         <td>
                                             <select
@@ -432,17 +384,17 @@ function BuyingReturnForm() {
                                         <td>
                                             <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
                                                 <input
-                                                    type="number" className="form-input" min="1"
+                                                    type="text" inputMode="decimal" className="form-input"
                                                     value={item.quantity || ''}
                                                     onChange={e => handleItemChange(index, 'quantity', e.target.value)}
                                                     max={item.max_quantity}
                                                 />
-                                                {item.max_quantity && <small style={{ color: 'grey', whiteSpace: 'nowrap' }}>/{Number(item.max_quantity)}</small>}
+                                                {item.max_quantity && <small style={{ color: 'grey', whiteSpace: 'nowrap' }}>/{formatNumber(item.max_quantity || 0)}</small>}
                                             </div>
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input"
+                                                type="text" inputMode="decimal" className="form-input"
                                                 value={item.unit_price || ''}
                                                 onChange={e => handleItemChange(index, 'unit_price', e.target.value)}
                                                 disabled={!!formData.invoice_id} // Lock price if linked
@@ -450,24 +402,18 @@ function BuyingReturnForm() {
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input"
-                                                min="0" max="100" step="0.01"
-                                                value={item.discount_percent}
-                                                onChange={e => handleItemChange(index, 'discount_percent', e.target.value)}
+                                                type="text" inputMode="decimal" className="form-input"
+                                                value={item.discount}
+                                                onChange={e => handleItemChange(index, 'discount', e.target.value)}
                                                 disabled={!!formData.invoice_id}
                                             />
                                         </td>
                                         <td>
-                                            <input
-                                                type="number" className="form-input"
-                                                value={item.tax_rate || ''}
-                                                onChange={e => handleItemChange(index, 'tax_rate', e.target.value)}
-                                                disabled={!!formData.invoice_id}
-                                            />
+                                            <span>—</span>
                                         </td>
                                         <td>
                                             <div style={{ fontWeight: 'bold' }}>
-                                                {formatNumber(withTax)}
+                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
                                             </div>
                                         </td>
                                         <td>
@@ -481,8 +427,7 @@ function BuyingReturnForm() {
                                             </button>
                                         </td>
                                     </tr>
-                                )
-                            })}
+                            ))}
                         </tbody>
                     </table>
                     <div style={{ padding: '8px', background: '#fff' }}>
@@ -507,16 +452,16 @@ function BuyingReturnForm() {
                     <div style={{ width: '300px', padding: '24px', background: '#fef2f2', borderRadius: '8px', border: '1px solid #fee2e2' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.returns.form.summary.subtotal')}</span>
-                            <span>{formatNumber(totals.subtotal)} <small>{currency}</small></span>
+                            <span>{totals.subtotal != null ? formatNumber(totals.subtotal) : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.returns.form.summary.tax')}</span>
-                            <span>{formatNumber(totals.totalTax)} <small>{currency}</small></span>
+                            <span>{totals.totalTax != null ? formatNumber(totals.totalTax) : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ borderTop: '1px solid #fecaca', margin: '12px 0' }}></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '18px', color: 'var(--error)' }}>
                             <span>{t('buying.returns.form.summary.total_return')}</span>
-                            <span>{formatNumber(totals.total)} <small>{currency}</small></span>
+                            <span>{totals.total != null ? formatNumber(totals.total) : '—'} <small>{currency}</small></span>
                         </div>
 
                         {/* Instant Refund Option */}

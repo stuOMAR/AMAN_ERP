@@ -8,6 +8,7 @@ import {
 } from 'lucide-react';
 import { projectsAPI, treasuryAPI } from '../../utils/api';
 import { formatNumber } from '../../utils/format';
+import Decimal from 'decimal.js';
 import { toastEmitter } from '../../utils/toastEmitter';
 import SimpleModal from '../../components/common/SimpleModal';
 import GanttChart from './GanttChart';
@@ -159,7 +160,7 @@ export default function ProjectDetails() {
 
     // Expense handler
     const handleAddExpense = async () => {
-        if (!expenseForm.amount || parseFloat(expenseForm.amount) <= 0) {
+        if (!expenseForm.amount || new Decimal(expenseForm.amount || 0).lte(0)) {
             toastEmitter.emit(t('projects.errors.amount_required'), 'error');
             return;
         }
@@ -167,8 +168,8 @@ export default function ProjectDetails() {
         try {
             await projectsAPI.createExpense(id, {
                 ...expenseForm,
-                amount: parseFloat(expenseForm.amount),
-                treasury_id: expenseForm.treasury_id ? parseInt(expenseForm.treasury_id) : null,
+                amount: expenseForm.amount,
+                treasury_id: expenseForm.treasury_id ? parseInt(expenseForm.treasury_id, 10) : null,
             });
             toastEmitter.emit(t('projects.messages.expense_added'), 'success');
             setShowExpenseModal(false);
@@ -183,7 +184,7 @@ export default function ProjectDetails() {
 
     // Revenue handler
     const handleAddRevenue = async () => {
-        if (!revenueForm.amount || parseFloat(revenueForm.amount) <= 0) {
+        if (!revenueForm.amount || new Decimal(revenueForm.amount || 0).lte(0)) {
             toastEmitter.emit(t('projects.errors.amount_required'), 'error');
             return;
         }
@@ -191,7 +192,7 @@ export default function ProjectDetails() {
         try {
             await projectsAPI.createRevenue(id, {
                 ...revenueForm,
-                amount: parseFloat(revenueForm.amount),
+                amount: revenueForm.amount,
             });
             toastEmitter.emit(t('projects.messages.revenue_added'), 'success');
             setShowRevenueModal(false);
@@ -206,7 +207,7 @@ export default function ProjectDetails() {
 
     // Invoice Handler
     const handleCreateInvoice = async () => {
-        if (!invoiceForm.amount || parseFloat(invoiceForm.amount) <= 0) {
+        if (!invoiceForm.amount || new Decimal(invoiceForm.amount || 0).lte(0)) {
             toastEmitter.emit(t('projects.errors.amount_required'), 'error');
             return;
         }
@@ -222,7 +223,7 @@ export default function ProjectDetails() {
                 items: [{
                     description: invoiceForm.description, // Corrected field name
                     quantity: 1,
-                    unit_price: parseFloat(invoiceForm.amount),
+                    unit_price: invoiceForm.amount,
                     discount: 0
                 }]
             };

@@ -4,6 +4,7 @@ import { useTranslation } from 'react-i18next';
 import { Plus, FolderKanban, TrendingUp, Clock, CheckCircle2, BarChart3, Users, DollarSign } from 'lucide-react';
 import { projectsAPI } from '../../utils/api';
 import { formatNumber } from '../../utils/format';
+import Decimal from 'decimal.js';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
 import SearchFilter from '../../components/common/SearchFilter';
@@ -139,7 +140,7 @@ export default function ProjectList() {
             key: 'total_expenses',
             label: t('projects.fields.expenses'),
             render: (val, row) => (
-                <span className={parseFloat(val || 0) > parseFloat(row.planned_budget || 0) ? 'text-danger fw-bold' : ''}>
+                <span className={new Decimal(val || 0).gt(row.planned_budget || 0) ? 'text-danger fw-bold' : ''}>
                     {formatNumber(val || 0)}
                 </span>
             ),

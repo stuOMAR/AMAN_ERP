@@ -7,6 +7,7 @@ import { useToast } from '../../context/ToastContext'
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function BuyingReturnDetails() {
     const { t } = useTranslation()
@@ -95,11 +96,11 @@ function BuyingReturnDetails() {
                                         <div className="font-medium">{item.product_name}</div>
                                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>{item.product_code}</div>
                                     </td>
-                                    <td style={{ textAlign: 'center' }}>{Number(item.quantity).toLocaleString()}</td>
-                                    <td style={{ textAlign: 'left' }}>{Number(item.unit_price).toLocaleString()} <small>{invoice.currency || currency}</small></td>
+                                    <td style={{ textAlign: 'center' }}>{formatNumber(item.quantity)}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(item.unit_price)} <small>{invoice.currency || currency}</small></td>
                                     <td style={{ textAlign: 'left' }}>{item.tax_rate}%</td>
                                     <td style={{ textAlign: 'left' }} className="font-bold">
-                                        {(item.quantity * item.unit_price * (1 + item.tax_rate / 100)).toLocaleString()} <small>{invoice.currency || currency}</small>
+                                        {formatNumber(item.total ?? item.line_total ?? 0)} <small>{invoice.currency || currency}</small>
                                     </td>
                                 </tr>
                             ))}
@@ -116,16 +117,16 @@ function BuyingReturnDetails() {
                     <div style={{ width: '300px', padding: '20px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.returns.form.summary.subtotal')}:</span>
-                            <span>{Number(invoice.subtotal).toLocaleString()} <small>{invoice.currency || currency}</small></span>
+                            <span>{formatNumber(invoice.subtotal)} <small>{invoice.currency || currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.returns.form.summary.tax')}:</span>
-                            <span>{Number(invoice.tax_amount).toLocaleString()} <small>{invoice.currency || currency}</small></span>
+                            <span>{formatNumber(invoice.tax_amount)} <small>{invoice.currency || currency}</small></span>
                         </div>
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '1.2rem', color: 'var(--primary)' }}>
                             <span>{t('buying.returns.form.summary.grand_total')}:</span>
-                            <span>{Number(invoice.total).toLocaleString()} <small>{invoice.currency || currency}</small></span>
+                            <span>{formatNumber(invoice.total)} <small>{invoice.currency || currency}</small></span>
                         </div>
                     </div>
                 </div>

@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton'
 import '../../components/ModuleStyles.css'
@@ -26,6 +26,8 @@ function RevenueRecognition() {
         invoice_id: '', contract_id: '', total_amount: '',
         start_date: '', end_date: '', method: 'straight_line'
     })
+    const canEditAccounting = hasPermission('accounting.edit')
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -55,6 +57,10 @@ function RevenueRecognition() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canEditAccounting) {
+            permissionDenied()
+            return
+        }
         try {
             await accountingAPI.createRevenueSchedule({
                 invoice_id: form.invoice_id ? parseInt(form.invoice_id) : null,
@@ -83,6 +89,10 @@ function RevenueRecognition() {
     }
 
     const handleRecognize = async (scheduleId, periodIndex) => {
+        if (!canEditAccounting) {
+            permissionDenied()
+            return
+        }
         if (!confirm(t('accounting.confirm_recognize'))) return
         try {
             const res = await accountingAPI.recognizeRevenue(scheduleId, periodIndex)
@@ -164,13 +174,15 @@ function RevenueRecognition() {
                         </button>
                     )}
                 </div>
-                <button className="btn btn-primary btn-sm" onClick={() => setShowForm(!showForm)}>
-                    {showForm ? t('common.cancel') : t('accounting.add_schedule')}
-                </button>
+                {canEditAccounting && (
+                    <button className="btn btn-primary btn-sm" onClick={() => setShowForm(!showForm)}>
+                        {showForm ? t('common.cancel') : t('accounting.add_schedule')}
+                    </button>
+                )}
             </div>
 
             {/* Create Form */}
-            {showForm && (
+            {showForm && canEditAccounting && (
                 <div className="section-card" style={{ marginBottom: 16 }}>
                     <h3 className="section-title">{t('accounting.new_schedule')}</h3>
                     <form onSubmit={handleSubmit}>
@@ -286,7 +298,7 @@ function RevenueRecognition() {
                                                 )}
                                             </td>
                                             <td>
-                                                {!line.recognized && selectedSchedule.status === 'active' && (
+                                                {!line.recognized && selectedSchedule.status === 'active' && canEditAccounting && (
                                                     <button className="btn btn-success btn-sm"
                                                         onClick={() => handleRecognize(selectedSchedule.id, i)}>
                                                         {t('accounting.recognize', 'اعتراف')}

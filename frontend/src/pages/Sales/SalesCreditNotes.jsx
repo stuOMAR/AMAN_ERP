@@ -116,34 +116,23 @@ function SalesCreditNotes() {
         })
     }
 
-    const calcLineTotal = (l) => {
-        const gross = l.quantity * l.unit_price
-        const net = gross - (l.discount || 0)
-        const tax = net * (l.tax_rate || 0) / 100
-        return net + tax
-    }
-    const calcSubtotal = () => form.lines.reduce((s, l) => s + l.quantity * l.unit_price - (l.discount || 0), 0)
-    const calcTax = () => form.lines.reduce((s, l) => {
-        const net = l.quantity * l.unit_price - (l.discount || 0)
-        return s + net * (l.tax_rate || 0) / 100
-    }, 0)
-    const calcTotal = () => calcSubtotal() + calcTax()
-
-    // Backend-powered calculations (for accurate totals)
-    const { totals: backendTotals, previewDebounced } = useInvoiceCalc()
+    // Backend-powered calculations — no local arithmetic
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc()
     useEffect(() => {
-        if (form.lines?.length > 0 && form.lines.some(l => l.quantity > 0 && l.unit_price > 0)) {
+        if (form.lines?.length > 0 && form.lines.some(l => String(l.quantity || '').trim() && String(l.unit_price || '').trim())) {
             previewDebounced({
                 lines: form.lines.map(l => ({
-                    quantity: Number(l.quantity) || 0,
-                    unit_price: Number(l.unit_price) || 0,
-                    tax_rate: Number(l.tax_rate) || 0,
-                    discount: Number(l.discount) || 0,
+                    product_id: l.product_id ? parseInt(l.product_id, 10) : null,
+                    quantity: String(l.quantity || '0'),
+                    unit_price: String(l.unit_price || '0'),
+                    tax_rate: l.tax_rate != null ? String(l.tax_rate) : null,
+                    discount: String(l.discount || '0'),
                 })),
+                branch_id: currentBranch?.id || null,
                 currency,
             })
         }
-    }, [form.lines])
+    }, [form.lines, currentBranch, currency, previewDebounced])
 
     const handleCreate = async () => {
         if (!form.party_id) return showToast(t('sales.credit_notes.customer_required', 'warning'))
@@ -302,11 +291,11 @@ function SalesCreditNotes() {
                                                     </select>
                                                 </td>
                                                 <td><input className="form-input" value={line.description} onChange={e => updateLine(i, 'description', e.target.value)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.quantity} onChange={e => updateLine(i, 'quantity', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.discount} onChange={e => updateLine(i, 'discount', Number(e.target.value) || 0)} /></td>
-                                                <td style={{ fontWeight: 'bold', textAlign: 'center' }}>{formatNumber(calcLineTotal(line))}</td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} /></td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} /></td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.tax_rate ?? ''} onChange={e => updateLine(i, 'tax_rate', e.target.value)} /></td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.discount} onChange={e => updateLine(i, 'discount', e.target.value)} /></td>
+                                                <td style={{ fontWeight: 'bold', textAlign: 'center' }}>{backendLines?.[i]?.total != null ? formatNumber(backendLines[i].total) : '—'}</td>
                                                 <td><button className="btn btn-sm" style={{ color: 'red', background: 'none', border: 'none' }} onClick={() => removeLine(i)}>✕</button></td>
                                             </tr>
                                         ))}
@@ -315,18 +304,18 @@ function SalesCreditNotes() {
                             </div>
                             <button className="btn btn-secondary" style={{ marginTop: 8 }} onClick={addLine}>+ {t('sales.credit_notes.add_item')}</button>
 
-                            {/* Totals */}
+                            {/* Totals — sourced exclusively from backend preview */}
                             <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
                                 <div style={{ minWidth: 250, background: 'var(--card-bg)', padding: 16, borderRadius: 8 }}>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                        <span>{t('common.amount')}:</span><strong>{formatNumber(calcSubtotal())} {currency}</strong>
+                                        <span>{t('common.amount')}:</span><strong>{backendTotals ? formatNumber(backendTotals.subtotal) : '—'} {currency}</strong>
                                     </div>
                                     <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}>
-                                        <span>{t('sales.credit_notes.tax')}:</span><strong>{formatNumber(calcTax())} {currency}</strong>
+                                        <span>{t('sales.credit_notes.tax')}:</span><strong>{backendTotals ? formatNumber(backendTotals.totalTax) : '—'} {currency}</strong>
                                     </div>
                                     <hr />
                                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 'bold' }}>
-                                        <span>{t('common.total')}:</span><span>{formatNumber(calcTotal())} {currency}</span>
+                                        <span>{t('common.total')}:</span><span>{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} {currency}</span>
                                     </div>
                                 </div>
                             </div>

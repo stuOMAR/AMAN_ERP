@@ -12,6 +12,7 @@ import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format';
 const ReconciliationForm = () => {
     const { t } = useTranslation();
 
@@ -102,8 +103,8 @@ const ReconciliationForm = () => {
                 transaction_date: newLine.transaction_date,
                 description: newLine.description,
                 reference: newLine.reference || null,
-                debit: parseFloat(newLine.debit) || 0,
-                credit: parseFloat(newLine.credit) || 0
+                debit: newLine.debit || '0',
+                credit: newLine.credit || '0'
             }]);
             toastEmitter.emit(t('common.success'), 'success');
             setNewLine({ transaction_date: new Date().toISOString().split('T')[0], description: '', reference: '', debit: '', credit: '' });
@@ -210,7 +211,7 @@ const ReconciliationForm = () => {
         }
     };
 
-    const fmt = (n) => Number(n || 0).toLocaleString('en', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt = (n) => formatNumber(n || '0');
 
     if (initialLoad) return (
         <PageLoading />

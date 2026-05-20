@@ -9,9 +9,9 @@
  *   preview({
  *     branch_id: 1,
  *     customer_id: 25,
- *     lines: [{ product_id: 7, quantity: 10, unit_price: 1200, discount: 500 }],
+ *     lines: [{ product_id: 7, quantity: '10', unit_price: '1200', discount: '500' }],
  *     currency: 'SAR',
- *     paid_amount: 5000,
+ *     paid_amount: '5000',
  *   });
  */
 
@@ -38,12 +38,12 @@ export default function useInvoiceCalc() {
       const result = res.data;
 
       setTotals({
-        subtotal: result.subtotal || 0,
-        totalDiscount: result.total_discount || 0,
-        totalTax: result.total_tax || 0,
-        grandTotal: result.grand_total || 0,
-        paidAmount: result.paid_amount || 0,
-        remainingBalance: result.remaining_balance || 0,
+        subtotal: result.subtotal ?? null,
+        totalDiscount: result.total_discount ?? null,
+        totalTax: result.total_tax ?? null,
+        grandTotal: result.grand_total ?? null,
+        paidAmount: result.paid_amount ?? null,
+        remainingBalance: result.remaining_balance ?? null,
         currency: result.currency || 'SAR',
       });
 
@@ -79,9 +79,9 @@ export default function useInvoiceCalc() {
       const result = res.data;
 
       setTotals({
-        subtotal: result.subtotal || 0,
-        totalTax: result.total_tax || 0,
-        grandTotal: result.grand_total || 0,
+        subtotal: result.subtotal ?? null,
+        totalTax: result.total_tax ?? null,
+        grandTotal: result.grand_total ?? null,
         currency: result.currency || 'SAR',
       });
 
@@ -95,30 +95,11 @@ export default function useInvoiceCalc() {
     }
   }, []);
 
-  /**
-   * Quick local calculation for immediate display (approximate).
-   * Use this for instant feedback, then call preview() for accurate totals.
-   */
-  const quickCalc = useCallback((linesData) => {
-    let subtotal = 0;
-    let totalTax = 0;
-
-    for (const ln of linesData) {
-      const qty = Number(ln.quantity) || 0;
-      const price = Number(ln.unit_price) || 0;
-      const taxRate = Number(ln.tax_rate) || 0;
-      const disc = Number(ln.discount) || 0;
-
-      const lineSubtotal = qty * price;
-      const taxable = lineSubtotal - disc;
-      const lineTax = taxable * taxRate / 100;
-
-      subtotal += lineSubtotal;
-      totalTax += lineTax;
-    }
-
-    return { subtotal, totalTax, grandTotal: subtotal + totalTax };
-  }, []);
+  const quickCalc = useCallback(() => ({
+    subtotal: null,
+    totalTax: null,
+    grandTotal: null,
+  }), []);
 
   const reset = useCallback(() => {
     setTotals(null);

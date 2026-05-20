@@ -103,106 +103,52 @@ function SalesOrderForm() {
     const handleAddItem = () => {
         setItems([
             ...items,
-            { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }
+            { product_id: '', description: '', quantity: '1', unit_price: '0', tax_rate: null, discount: '0', discount_percent: '0' }
         ])
     }
 
+    // Dumb-terminal item handler — stores raw strings, no arithmetic
     const handleItemChange = (index, field, value) => {
         const newItems = items.map((item, i) => {
-            if (i === index) {
-                const updatedItem = { ...item, [field]: value }
+            if (i !== index) return item
+            const updatedItem = { ...item, [field]: value }
 
-                if (field === 'product_id') {
-                    const product = products.find(p => p.id === parseInt(value))
-                    if (product) {
-                        updatedItem.description = product.product_name || product.item_name || ''
-                        // Use branch price if available, otherwise use product default
-                        const branchPrices = window.__branchPrices || {}
-                        const priceInfo = branchPrices[parseInt(value)]
-                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0)
-                        updatedItem.tax_rate = null // Resolved by backend engine
-                    }
+            if (field === 'product_id') {
+                const product = products.find(p => p.id === parseInt(value, 10))
+                if (product) {
+                    updatedItem.description = product.product_name || product.item_name || ''
+                    const branchPrices = window.__branchPrices || {}
+                    const priceInfo = branchPrices[parseInt(value, 10)]
+                    updatedItem.unit_price = String(priceInfo ? priceInfo.price : (product.selling_price || '0'))
+                    updatedItem.tax_rate = null // Resolved by backend engine
                 }
-
-                const qty = Number(updatedItem.quantity) || 0
-                const price = Number(updatedItem.unit_price) || 0
-                let discount = Number(updatedItem.discount) || 0
-                let discountPercent = Number(updatedItem.discount_percent) || 0
-
-                // If updating percent, recalculate amount
-                if (field === 'discount_percent') {
-                    discountPercent = Number(value) || 0
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                }
-                // If updating quantity/price, recalculate amount from percent
-                else if (field === 'quantity' || field === 'unit_price') {
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                }
-
-                updatedItem.discount_percent = discountPercent
-                updatedItem.discount = discount // Ensure amount is up to date
-
-                const taxRate = Number(updatedItem.tax_rate) || 0
-                const subtotal = qty * price
-                const taxable = subtotal - discount
-                const tax = taxable * (taxRate / 100)
-                updatedItem.total = taxable + tax
-
-                return updatedItem
             }
-            return item
+
+            return updatedItem
         })
         setItems(newItems)
     }
 
-    // Backend-powered calculations
-    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
-
-    const calculateTotals = () => {
-        // Use backend totals if available
-        if (backendTotals) {
-            return {
-                subtotal: backendTotals.subtotal,
-                discount: backendTotals.totalDiscount,
-                tax: backendTotals.totalTax,
-                total: backendTotals.grandTotal,
-            }
-        }
-        // Fallback to local calculation
-        return items.reduce((acc, item) => {
-            const qty = Number(item.quantity) || 0
-            const price = Number(item.unit_price) || 0
-            const discount = Number(item.discount) || 0
-            const taxRate = Number(item.tax_rate) || 0
-            const lineSubtotal = qty * price
-            const taxable = lineSubtotal - discount
-            const lineTax = taxable * (taxRate / 100)
-            acc.subtotal += lineSubtotal
-            acc.discount += discount
-            acc.tax += lineTax
-            acc.total += (taxable + lineTax)
-            return acc
-        }, { subtotal: 0, discount: 0, tax: 0, total: 0 })
-    }
+    // Backend-powered calculations — no local arithmetic
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc()
 
     // Call backend for accurate calculations
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+        if (items.length > 0 && items.some(i => String(i.quantity || '').trim() && String(i.unit_price || '').trim())) {
             previewDebounced({
                 lines: items.map(i => ({
-                    product_id: i.product_id ? Number(i.product_id) : null,
-                    quantity: Number(i.quantity) || 0,
-                    unit_price: Number(i.unit_price) || 0,
-                    discount: Number(i.discount) || 0,
+                    product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    tax_rate: i.tax_rate != null ? String(i.tax_rate) : null,
+                    discount: String(i.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
-                customer_id: formData.customer_id ? Number(formData.customer_id) : null,
+                customer_id: formData.customer_id ? parseInt(formData.customer_id, 10) : null,
                 currency,
             })
         }
-    }, [items, formData.customer_id, currentBranch])
+    }, [items, formData.customer_id, currentBranch, currency, previewDebounced])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -266,8 +212,6 @@ function SalesOrderForm() {
             setLoading(false)
         }
     }
-
-    const totals = calculateTotals()
 
     return (
         <div className="workspace fade-in">
@@ -398,7 +342,7 @@ function SalesOrderForm() {
                                         />
                                     </td>
                                     <td className="font-bold">
-                                        {formatNumber(item.total)}
+                                        {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
                                     </td>
                                     <td>
                                         <button
@@ -440,17 +384,18 @@ function SalesOrderForm() {
                         borderRadius: '12px',
                         border: '1px solid var(--border-color)'
                     }}>
+                        {/* Totals — sourced exclusively from backend preview */}
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.orders.details.subtotal')}</span>
-                            <span>{formatNumber(totals.subtotal)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.subtotal) : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.orders.details.discount')}</span>
-                            <span className="text-error">-{formatNumber(totals.discount)} <small>{currency}</small></span>
+                            <span className="text-error">{backendTotals ? `-${formatNumber(backendTotals.totalDiscount)}` : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.orders.details.tax')}</span>
-                            <span>{formatNumber(totals.tax)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.totalTax) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '16px 0' }}></div>
@@ -464,7 +409,7 @@ function SalesOrderForm() {
                             marginBottom: '24px'
                         }}>
                             <span>{t('sales.orders.details.grand_total')}</span>
-                            <span>{formatNumber(totals.total)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div className="form-actions" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

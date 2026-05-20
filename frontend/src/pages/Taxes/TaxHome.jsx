@@ -26,8 +26,9 @@ function TaxHome() {
     const [returns, setReturns] = useState([])
     const [activeTab, setActiveTab] = useState('overview')
     const [showRateModal, setShowRateModal] = useState(false)
-    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '' })
+    const [rateForm, setRateForm] = useState({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '', effective_from: '', reason: '' })
     const [editingRate, setEditingRate] = useState(null)
+    const [originalRateValue, setOriginalRateValue] = useState(null)
     const [branchAnalysis, setBranchAnalysis] = useState(null)
     const [employeeTaxes, setEmployeeTaxes] = useState(null)
     const [filterYear, setFilterYear] = useState(new Date().getFullYear())
@@ -83,19 +84,36 @@ function TaxHome() {
     const handleCreateRate = async () => {
         try {
             if (editingRate) {
-                await taxesAPI.updateRate(editingRate.id, {
+                const rateChanged = String(rateForm.rate_value) !== String(originalRateValue)
+                if (rateChanged) {
+                    if (!rateForm.effective_from) {
+                        showToast(t('taxes.effective_from_required', 'يجب تحديد تاريخ السريان عند تغيير النسبة'), 'error')
+                        return
+                    }
+                    if (!rateForm.reason || !rateForm.reason.trim()) {
+                        showToast(t('taxes.reason_required', 'يجب إدخال سبب تغيير النسبة'), 'error')
+                        return
+                    }
+                }
+                const payload = {
                     tax_name: rateForm.tax_name,
                     tax_name_en: rateForm.tax_name_en,
-                    rate_value: String(rateForm.rate_value),
                     country_code: rateForm.country_code || null,
-                    description: rateForm.description
-                })
+                    description: rateForm.description,
+                }
+                if (rateChanged) {
+                    payload.rate_value = String(rateForm.rate_value)
+                    payload.effective_from = rateForm.effective_from
+                    payload.reason = rateForm.reason.trim()
+                }
+                await taxesAPI.updateRate(editingRate.id, payload)
             } else {
                 await taxesAPI.createRate({ ...rateForm, rate_value: String(rateForm.rate_value) })
             }
             setShowRateModal(false)
             setEditingRate(null)
-            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '' })
+            setOriginalRateValue(null)
+            setRateForm({ tax_code: '', tax_name: '', tax_name_en: '', rate_value: '', description: '', country_code: '', effective_from: '', reason: '' })
             fetchAll()
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error', 'error'))
@@ -114,13 +132,16 @@ function TaxHome() {
 
     const handleEditRate = (rate) => {
         setEditingRate(rate)
+        setOriginalRateValue(rate.rate_value)
         setRateForm({
             tax_code: rate.tax_code,
             tax_name: rate.tax_name,
             tax_name_en: rate.tax_name_en || '',
             rate_value: rate.rate_value,
             description: rate.description || '',
-            country_code: rate.country_code || ''
+            country_code: rate.country_code || '',
+            effective_from: '',
+            reason: '',
         })
         setShowRateModal(true)
     }
@@ -398,12 +419,12 @@ function TaxHome() {
             {/* Tax Rate Modal */}
             <SimpleModal
                 isOpen={showRateModal}
-                onClose={() => { setShowRateModal(false); setEditingRate(null); }}
+                onClose={() => { setShowRateModal(false); setEditingRate(null); setOriginalRateValue(null); }}
                 title={editingRate ? t('taxes.edit_rate') : t('taxes.add_rate')}
                 size="md"
                 footer={
                     <>
-                        <button className="btn btn-secondary" onClick={() => { setShowRateModal(false); setEditingRate(null); }}>
+                        <button className="btn btn-secondary" onClick={() => { setShowRateModal(false); setEditingRate(null); setOriginalRateValue(null); }}>
                             {t('common.cancel')}
                         </button>
                         <button className="btn btn-primary" onClick={handleCreateRate}
@@ -463,6 +484,33 @@ function TaxHome() {
                     <textarea className="form-input" rows="2" value={rateForm.description}
                         onChange={e => setRateForm({...rateForm, description: e.target.value})} />
                 </div>
+
+                {/* Rate-change audit fields — shown only when editing and rate_value has changed */}
+                {editingRate && String(rateForm.rate_value) !== String(originalRateValue) && (
+                    <div style={{ borderTop: '1px solid var(--border)', paddingTop: '12px', marginTop: '4px' }}>
+                        <p style={{ fontSize: '12px', color: 'var(--warning)', marginBottom: '10px', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                            ⚠️ {t('taxes.rate_change_notice', 'تغيير النسبة يُنشئ سجلاً جديداً — يجب تحديد تاريخ السريان والسبب')}
+                        </p>
+                        <div className="form-group mb-3">
+                            <label className="form-label">{t('taxes.effective_from')} *</label>
+                            <input
+                                className="form-input"
+                                type="date"
+                                value={rateForm.effective_from}
+                                onChange={e => setRateForm({...rateForm, effective_from: e.target.value})}
+                            />
+                        </div>
+                        <div className="form-group mb-3">
+                            <label className="form-label">{t('taxes.rate_change_reason', 'سبب تغيير النسبة')} *</label>
+                            <input
+                                className="form-input"
+                                value={rateForm.reason}
+                                onChange={e => setRateForm({...rateForm, reason: e.target.value})}
+                                placeholder={t('taxes.rate_change_reason_placeholder', 'مثال: قرار وزاري رقم 123، تعديل تشريعي...')}
+                            />
+                        </div>
+                    </div>
+                )}
             </SimpleModal>
 
             {/* ═══ Branch Tax Analysis Tab ═══ */}

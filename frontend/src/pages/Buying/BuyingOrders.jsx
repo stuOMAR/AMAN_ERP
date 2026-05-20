@@ -8,6 +8,7 @@ import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function BuyingOrders() {
     const { t } = useTranslation()
@@ -129,7 +130,7 @@ function BuyingOrders() {
                                     <td>{formatShortDate(order.order_date)}</td>
                                     <td>{order.expected_date ? formatShortDate(order.expected_date) : '-'}</td>
                                     <td className="font-bold">
-                                        {Number(order.total).toLocaleString()} <small>{currency}</small>
+                                        {formatNumber(order.total || 0)} <small>{order.currency || currency}</small>
                                     </td>
                                     <td>{getStatusBadge(order.status)}</td>
                                     <td>

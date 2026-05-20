@@ -3,34 +3,23 @@ import { useTranslation } from 'react-i18next'
 import { useNavigate } from 'react-router-dom'
 import { accountingAPI, currenciesAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
-import { calculateCrossExchangeRate, fetchCrossExchangeRate } from '../../hooks/useExchangeRate'
+import { fetchFxPreview } from '../../hooks/useExchangeRate'
 import BackButton from '../../components/common/BackButton'
 import FormField from '../../components/common/FormField'
 import { useToast } from '../../context/ToastContext'
+import Decimal from 'decimal.js'
 
 const normalizeCurrencyCode = (value, fallback = 'SAR') => {
     const code = String(value || '').trim().toUpperCase()
     return code || fallback
 }
 
-const buildCurrencyRateMap = (currencies) => currencies.reduce((acc, currency) => {
-    const code = normalizeCurrencyCode(currency.code, '')
-    const rate = Number(currency.current_rate ?? currency.rate ?? currency.exchange_rate)
-    if (code && Number.isFinite(rate) && rate > 0) acc[code] = rate
-    return acc
-}, {})
-
 const formatRateForInput = (rate) => {
-    const value = Number(rate)
-    if (!Number.isFinite(value) || value <= 0) return '1'
-    return value.toFixed(8).replace(/\.?0+$/, '')
-}
-
-const calculateConvertedAmount = (amount, rate) => {
-    const a = Number(amount)
-    const r = Number(rate)
-    if (!Number.isFinite(a) || !Number.isFinite(r) || a <= 0 || r <= 0) return 0
-    return Number((a * r).toFixed(4))
+    const raw = String(rate || '1').trim()
+    if (!/^\d+(\.\d+)?$/.test(raw)) return '1'
+    const [intPart, fracPart = ''] = raw.split('.')
+    const trimmed = fracPart.slice(0, 8).replace(/0+$/, '')
+    return trimmed ? `${intPart}.${trimmed}` : intPart
 }
 
 function TransactionForm() {
@@ -40,7 +29,7 @@ function TransactionForm() {
     const companyCurrency = normalizeCurrencyCode(getCurrency(), 'SAR')
     const [entities, setEntities] = useState([])
     const [currencies, setCurrencies] = useState([])
-    const [currencyRates, setCurrencyRates] = useState({})
+    const [fxPreview, setFxPreview] = useState({ source: null, target: null })
     const [loading, setLoading] = useState(false)
     const [form, setForm] = useState({
         source_entity_id: '',
@@ -69,7 +58,6 @@ function TransactionForm() {
                 if (cancelled) return
                 const list = Array.isArray(res.data) ? res.data : []
                 setCurrencies(list)
-                setCurrencyRates(buildCurrencyRateMap(list))
             })
             .catch(() => {})
         return () => { cancelled = true }
@@ -96,40 +84,33 @@ function TransactionForm() {
         })
     }, [sourceEntity, targetEntity, companyCurrency])
 
-    // 2) Recompute cross rates whenever the txn currency or either functional
-    //    currency changes. Local map first (instant), then refine via API.
+    // 2) Ask the backend for FX rates/converted amounts whenever inputs change.
     useEffect(() => {
         const txn = normalizeCurrencyCode(form.transaction_currency, companyCurrency)
         const srcF = normalizeCurrencyCode(form.source_currency, txn)
         const tgtF = normalizeCurrencyCode(form.target_currency, txn)
-
-        const localSrc = calculateCrossExchangeRate(currencyRates[txn], currencyRates[srcF])
-        const localTgt = calculateCrossExchangeRate(currencyRates[txn], currencyRates[tgtF])
-        if (Object.keys(currencyRates).length > 0) {
-            setForm(prev => ({
-                ...prev,
-                source_rate: formatRateForInput(localSrc),
-                target_rate: formatRateForInput(localTgt),
-            }))
-        }
+        const amount = form.transaction_amount || '0'
 
         let cancelled = false
         Promise.all([
-            fetchCrossExchangeRate(txn, srcF),
-            fetchCrossExchangeRate(txn, tgtF),
-        ]).then(([srcRate, tgtRate]) => {
+            fetchFxPreview(txn, srcF, amount),
+            fetchFxPreview(txn, tgtF, amount),
+        ]).then(([sourcePreview, targetPreview]) => {
             if (cancelled) return
+            setFxPreview({ source: sourcePreview, target: targetPreview })
             setForm(prev => ({
                 ...prev,
-                source_rate: formatRateForInput(srcRate),
-                target_rate: formatRateForInput(tgtRate),
+                source_rate: formatRateForInput(sourcePreview?.cross_rate),
+                target_rate: formatRateForInput(targetPreview?.cross_rate),
             }))
-        }).catch(() => {})
+        }).catch(() => {
+            if (!cancelled) setFxPreview({ source: null, target: null })
+        })
         return () => { cancelled = true }
-    }, [form.transaction_currency, form.source_currency, form.target_currency, currencyRates, companyCurrency])
+    }, [form.transaction_currency, form.source_currency, form.target_currency, form.transaction_amount, companyCurrency])
 
-    const sourceFuncAmount = calculateConvertedAmount(form.transaction_amount, form.source_rate)
-    const targetFuncAmount = calculateConvertedAmount(form.transaction_amount, form.target_rate)
+    const sourceFuncAmount = fxPreview.source?.converted_amount || ''
+    const targetFuncAmount = fxPreview.target?.converted_amount || ''
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -141,37 +122,31 @@ function TransactionForm() {
             showToast(t('intercompany.entity_required', 'اختر الكيان المصدر والكيان الهدف'), 'error')
             return
         }
-        const txnAmount = Number(form.transaction_amount)
-        if (!Number.isFinite(txnAmount) || txnAmount <= 0) {
+        const txnAmount = new Decimal(form.transaction_amount || 0)
+        if (!txnAmount.isFinite() || txnAmount.lte(0)) {
             showToast(t('intercompany.invalid_amount_or_rate', 'تحقق من المبلغ وسعر الصرف'), 'error')
             return
         }
-        const srcRate = Number(form.source_rate)
-        const tgtRate = Number(form.target_rate)
-        if (!Number.isFinite(srcRate) || srcRate <= 0 || !Number.isFinite(tgtRate) || tgtRate <= 0) {
+        if (!fxPreview.source || !fxPreview.target) {
             showToast(t('intercompany.invalid_amount_or_rate', 'تحقق من المبلغ وسعر الصرف'), 'error')
             return
         }
         const txnCurrency = normalizeCurrencyCode(form.transaction_currency, companyCurrency)
         const srcCurrency = normalizeCurrencyCode(form.source_currency, txnCurrency)
         const tgtCurrency = normalizeCurrencyCode(form.target_currency, txnCurrency)
-        const crossRate = targetFuncAmount > 0 ? Number((sourceFuncAmount / targetFuncAmount).toFixed(8)) : 1
         try {
             setLoading(true)
             await accountingAPI.createICTransactionV2({
                 source_entity_id: parseInt(form.source_entity_id, 10),
                 target_entity_id: parseInt(form.target_entity_id, 10),
                 transaction_type: form.transaction_type,
-                // Source booking values (in source functional currency)
-                source_amount: sourceFuncAmount,
+                source_amount: String(form.transaction_amount || '0'),
                 source_currency: srcCurrency,
-                // Target booking values (in target functional currency)
-                target_amount: targetFuncAmount,
                 target_currency: tgtCurrency,
                 // The actual money moved
                 transaction_currency: txnCurrency,
-                transaction_amount: txnAmount,
-                exchange_rate: crossRate || 1,
+                transaction_amount: String(form.transaction_amount || '0'),
+                exchange_rate: '1',
                 reference_document: form.reference_document,
             })
             showToast(t('intercompany.transaction_created'), 'success')
@@ -243,7 +218,7 @@ function TransactionForm() {
                         </select>
                     </FormField>
                     <FormField label={t('intercompany.transaction_amount', 'مبلغ المعاملة')} required>
-                        <input className="form-input" type="number" step="0.0001" min="0.0001" required
+                        <input className="form-input" type="text" inputMode="decimal" required
                             value={form.transaction_amount}
                             onChange={e => updateField('transaction_amount', e.target.value)} />
                     </FormField>
@@ -254,11 +229,11 @@ function TransactionForm() {
                         <input className="form-input" type="text" value={form.source_currency} readOnly />
                     </FormField>
                     <FormField label={t('intercompany.source_rate', 'سعر الصرف (المعاملة → المصدر)')}>
-                        <input className="form-input" type="number" step="0.00000001" value={form.source_rate} readOnly />
+                        <input className="form-input" type="text" inputMode="decimal" value={form.source_rate} readOnly />
                     </FormField>
                     <FormField label={t('intercompany.source_func_amount', 'القيمة بدفاتر المصدر')}>
-                        <input className="form-input" type="number" step="0.0001"
-                            value={form.transaction_amount ? sourceFuncAmount.toFixed(4) : ''} readOnly />
+                        <input className="form-input" type="text" inputMode="decimal"
+                            value={form.transaction_amount ? sourceFuncAmount : ''} readOnly />
                     </FormField>
                 </div>
 
@@ -267,11 +242,11 @@ function TransactionForm() {
                         <input className="form-input" type="text" value={form.target_currency} readOnly />
                     </FormField>
                     <FormField label={t('intercompany.target_rate', 'سعر الصرف (المعاملة → الهدف)')}>
-                        <input className="form-input" type="number" step="0.00000001" value={form.target_rate} readOnly />
+                        <input className="form-input" type="text" inputMode="decimal" value={form.target_rate} readOnly />
                     </FormField>
                     <FormField label={t('intercompany.target_func_amount', 'القيمة بدفاتر الهدف')}>
-                        <input className="form-input" type="number" step="0.0001"
-                            value={form.transaction_amount ? targetFuncAmount.toFixed(4) : ''} readOnly />
+                        <input className="form-input" type="text" inputMode="decimal"
+                            value={form.transaction_amount ? targetFuncAmount : ''} readOnly />
                     </FormField>
                 </div>
 

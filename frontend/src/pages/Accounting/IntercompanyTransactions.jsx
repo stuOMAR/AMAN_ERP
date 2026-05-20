@@ -8,31 +8,19 @@ import BackButton from '../../components/common/BackButton'
 import '../../components/ModuleStyles.css'
 import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
-import { calculateCrossExchangeRate, fetchCrossExchangeRate } from '../../hooks/useExchangeRate'
+import { fetchFxPreview } from '../../hooks/useExchangeRate'
 
 const normalizeCurrencyCode = (value, fallback = 'SAR') => {
     const code = String(value || '').trim().toUpperCase()
     return code || fallback
 }
 
-const buildCurrencyRateMap = (currencies) => currencies.reduce((acc, currency) => {
-    const code = normalizeCurrencyCode(currency.code, '')
-    const rate = Number(currency.current_rate ?? currency.rate ?? currency.exchange_rate)
-    if (code && Number.isFinite(rate) && rate > 0) acc[code] = rate
-    return acc
-}, {})
-
 const formatRateForInput = (rate) => {
-    const value = Number(rate)
-    if (!Number.isFinite(value) || value <= 0) return '1'
-    return value.toFixed(8).replace(/\.?0+$/, '')
-}
-
-const calculateConvertedAmount = (amount, rate) => {
-    const a = Number(amount)
-    const r = Number(rate)
-    if (!Number.isFinite(a) || !Number.isFinite(r) || a <= 0 || r <= 0) return 0
-    return Number((a * r).toFixed(4))
+    const raw = String(rate || '1').trim()
+    if (!/^\d+(\.\d+)?$/.test(raw)) return '1'
+    const [intPart, fracPart = ''] = raw.split('.')
+    const trimmed = fracPart.slice(0, 8).replace(/0+$/, '')
+    return trimmed ? `${intPart}.${trimmed}` : intPart
 }
 
 function IntercompanyTransactions() {
@@ -48,7 +36,7 @@ function IntercompanyTransactions() {
     const [showForm, setShowForm] = useState(false)
     const [entities, setEntities] = useState([])
     const [currencies, setCurrencies] = useState([])
-    const [currencyRates, setCurrencyRates] = useState({})
+    const [fxPreview, setFxPreview] = useState({ source: null, target: null })
     const [form, setForm] = useState({
         source_entity_id: '',
         target_entity_id: '',
@@ -89,7 +77,6 @@ function IntercompanyTransactions() {
             const res = await currenciesAPI.list()
             const list = Array.isArray(res.data) ? res.data : []
             setCurrencies(list)
-            setCurrencyRates(buildCurrencyRateMap(list))
         } catch (err) {
             console.error('Failed to fetch currencies', err)
         }
@@ -111,8 +98,8 @@ function IntercompanyTransactions() {
     const txnCurrency = normalizeCurrencyCode(form.transaction_currency, currentBranch?.default_currency || currency)
     const sourceCurrency = normalizeCurrencyCode(form.source_currency, txnCurrency)
     const targetCurrency = normalizeCurrencyCode(form.target_currency, txnCurrency)
-    const sourceFuncAmount = calculateConvertedAmount(form.amount, form.source_rate)
-    const targetFuncAmount = calculateConvertedAmount(form.amount, form.target_rate)
+    const sourceFuncAmount = fxPreview.source?.converted_amount || ''
+    const targetFuncAmount = fxPreview.target?.converted_amount || ''
 
     useEffect(() => {
         if (!form.source_entity_id && branchSourceEntity?.id) {
@@ -132,30 +119,23 @@ function IntercompanyTransactions() {
     }, [sourceEntity, targetEntity, currentBranch?.default_currency, currency])
 
     useEffect(() => {
-        const localSrc = calculateCrossExchangeRate(currencyRates[txnCurrency], currencyRates[sourceCurrency])
-        const localTgt = calculateCrossExchangeRate(currencyRates[txnCurrency], currencyRates[targetCurrency])
-        if (Object.keys(currencyRates).length > 0) {
-            setForm(prev => ({
-                ...prev,
-                source_rate: formatRateForInput(localSrc),
-                target_rate: formatRateForInput(localTgt),
-            }))
-        }
-
         let cancelled = false
         Promise.all([
-            fetchCrossExchangeRate(txnCurrency, sourceCurrency),
-            fetchCrossExchangeRate(txnCurrency, targetCurrency),
-        ]).then(([s, t]) => {
+            fetchFxPreview(txnCurrency, sourceCurrency, form.amount || '0', currentBranch?.id || null),
+            fetchFxPreview(txnCurrency, targetCurrency, form.amount || '0', currentBranch?.id || null),
+        ]).then(([sourcePreview, targetPreview]) => {
             if (cancelled) return
+            setFxPreview({ source: sourcePreview, target: targetPreview })
             setForm(prev => ({
                 ...prev,
-                source_rate: formatRateForInput(s),
-                target_rate: formatRateForInput(t),
+                source_rate: formatRateForInput(sourcePreview?.cross_rate),
+                target_rate: formatRateForInput(targetPreview?.cross_rate),
             }))
-        }).catch(() => {})
+        }).catch(() => {
+            if (!cancelled) setFxPreview({ source: null, target: null })
+        })
         return () => { cancelled = true }
-    }, [txnCurrency, sourceCurrency, targetCurrency, currencyRates])
+    }, [txnCurrency, sourceCurrency, targetCurrency, form.amount, currentBranch?.id])
 
     const fetchData = async () => {
         try {
@@ -194,27 +174,23 @@ function IntercompanyTransactions() {
             showToast(t('intercompany.same_entity_error', 'لا يمكن اختيار نفس الكيان كمصدر وهدف'), 'error')
             return
         }
-        const txnAmount = Number(form.amount)
-        const srcRate = Number(form.source_rate)
-        const tgtRate = Number(form.target_rate)
-        if (!Number.isFinite(txnAmount) || txnAmount <= 0 || !Number.isFinite(srcRate) || srcRate <= 0 || !Number.isFinite(tgtRate) || tgtRate <= 0) {
+        if (!fxPreview.source || !fxPreview.target || !form.amount) {
             showToast(t('intercompany.invalid_amount_or_rate', 'تحقق من المبلغ وسعر الصرف'), 'error')
             return
         }
-        const crossRate = targetFuncAmount > 0 ? Number((sourceFuncAmount / targetFuncAmount).toFixed(8)) : 1
         try {
             await accountingAPI.createIntercompanyTransaction({
                 source_entity_id: sourceEntity.id,
                 target_entity_id: parseInt(form.target_entity_id, 10),
                 transaction_type: form.transaction_type,
                 description: form.description,
-                source_amount: sourceFuncAmount,
+                source_amount: String(form.amount || '0'),
                 source_currency: sourceCurrency,
-                target_amount: targetFuncAmount,
+                target_amount: targetFuncAmount || null,
                 target_currency: targetCurrency,
                 transaction_currency: txnCurrency,
-                transaction_amount: txnAmount,
-                exchange_rate: crossRate || 1,
+                transaction_amount: String(form.amount || '0'),
+                exchange_rate: '1',
                 reference_document: form.reference || undefined,
             })
             setShowForm(false)
@@ -345,7 +321,7 @@ function IntercompanyTransactions() {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.transaction_amount', 'مبلغ المعاملة')} *</label>
-                                <input className="form-input" type="number" step="0.0001" min="0.0001" required value={form.amount}
+                                <input className="form-input" type="text" inputMode="decimal" required value={form.amount}
                                     onChange={e => setForm({ ...form, amount: e.target.value })} />
                             </div>
                             <div className="form-group">
@@ -354,11 +330,11 @@ function IntercompanyTransactions() {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.source_rate', 'معدّل المصدر')}</label>
-                                <input className="form-input" type="number" step="0.00000001" value={form.source_rate} readOnly />
+                                <input className="form-input" type="text" inputMode="decimal" value={form.source_rate} readOnly />
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.source_func_amount', 'القيمة بدفاتر المصدر')}</label>
-                                <input className="form-input" type="number" step="0.0001" value={form.amount ? sourceFuncAmount.toFixed(4) : ''} readOnly />
+                                <input className="form-input" type="text" inputMode="decimal" value={form.amount ? sourceFuncAmount : ''} readOnly />
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.target_currency', 'عملة الهدف الوظيفية')}</label>
@@ -366,11 +342,11 @@ function IntercompanyTransactions() {
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.target_rate', 'معدّل الهدف')}</label>
-                                <input className="form-input" type="number" step="0.00000001" value={form.target_rate} readOnly />
+                                <input className="form-input" type="text" inputMode="decimal" value={form.target_rate} readOnly />
                             </div>
                             <div className="form-group">
                                 <label className="form-label">{t('intercompany.target_func_amount', 'القيمة بدفاتر الهدف')}</label>
-                                <input className="form-input" type="number" step="0.0001" value={form.amount ? targetFuncAmount.toFixed(4) : ''} readOnly />
+                                <input className="form-input" type="text" inputMode="decimal" value={form.amount ? targetFuncAmount : ''} readOnly />
                             </div>
                             <div className="form-group" style={{ gridColumn: 'span 2' }}>
                                 <label className="form-label">{t('common.description')} *</label>

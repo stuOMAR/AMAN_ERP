@@ -9,6 +9,7 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import Decimal from 'decimal.js';
 
 
 function PurchaseOrderDetails() {
@@ -81,7 +82,7 @@ function PurchaseOrderDetails() {
         return <div className="workspace fade-in p-8 text-center">{t('buying.orders.not_found')}</div>;
     }
 
-    const hasRemainingToInvoice = order.items?.some(item => Number(item.remaining_to_invoice || 0) > 0);
+    const hasRemainingToInvoice = order.items?.some(item => new Decimal(item.remaining_to_invoice || 0).gt(0));
 
     return (
         <div className="workspace fade-in">
@@ -146,15 +147,10 @@ function PurchaseOrderDetails() {
                     {/* Financial Summary (New) */}
                     <div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('buying.orders.item.received_value')}</div>
-                        {(() => {
-                            const receivedValue = order.items?.reduce((sum, item) => sum + ((item.received_quantity || 0) * item.unit_price), 0) || 0;
-                            return (
-                                <div style={{ fontWeight: '600', fontSize: '18px', color: receivedValue > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
-                                    {formatNumber(receivedValue)} {currency}
-                                    {receivedValue > 0 && <span style={{ fontSize: '12px', marginRight: '8px', color: 'var(--text-secondary)', fontWeight: 'normal' }}>({t('buying.orders.item.accrued')})</span>}
-                                </div>
-                            );
-                        })()}
+                        <div style={{ fontWeight: '600', fontSize: '18px', color: order.received_value ? 'var(--success)' : 'var(--text-muted)' }}>
+                            {order.received_value != null ? formatNumber(order.received_value) : '—'} {currency}
+                            {order.received_value != null && new Decimal(order.received_value || 0).gt(0) && <span style={{ fontSize: '12px', marginRight: '8px', color: 'var(--text-secondary)', fontWeight: 'normal' }}>({t('buying.orders.item.accrued')})</span>}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -178,7 +174,7 @@ function PurchaseOrderDetails() {
                         {order.items?.map((item, idx) => {
                             const received = item.received_quantity || 0;
                             const remaining = item.quantity - received;
-                            const remainingToInvoice = Number(item.remaining_to_invoice || 0);
+                            const remainingToInvoice = new Decimal(item.remaining_to_invoice || 0).toString();
                             return (
                                 <tr key={idx}>
                                     <td>

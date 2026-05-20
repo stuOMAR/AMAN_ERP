@@ -4,7 +4,7 @@ import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { Clock, CheckCircle, XCircle, AlertTriangle } from 'lucide-react'
 import '../../components/ModuleStyles.css'
 
@@ -17,6 +17,8 @@ function ChecksReceivable() {
   const { showToast } = useToast()
     const { currentBranch } = useBranch()
     const currency = getCurrency()
+    const canCreateTreasury = hasPermission('treasury.create')
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
@@ -87,6 +89,10 @@ function ChecksReceivable() {
     }
 
     const openCreate = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setForm({
             check_number: '', drawer_name: '', bank_name: '', branch_name: '',
             amount: '', currency: getCurrency(), issue_date: new Date().toISOString().split('T')[0],
@@ -97,12 +103,16 @@ function ChecksReceivable() {
     }
 
     const handleCreate = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         if (!form.check_number || !form.amount || !form.due_date) return showToast(t('checks.receivable.requiredFields', 'warning'))
         try {
             setSaving(true)
             await checksAPI.createReceivable({
                 ...form,
-                amount: parseFloat(form.amount),
+                amount: form.amount,
                 party_id: form.party_id ? parseInt(form.party_id) : null,
                 treasury_account_id: form.treasury_account_id ? parseInt(form.treasury_account_id) : null,
                 branch_id: currentBranch?.id,
@@ -123,6 +133,10 @@ function ChecksReceivable() {
     }
 
     const handleCollect = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.collectReceivable(detailItem.id, {
@@ -137,6 +151,10 @@ function ChecksReceivable() {
     }
 
     const handleBounce = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.bounceReceivable(detailItem.id, {
@@ -151,22 +169,38 @@ function ChecksReceivable() {
     }
 
     const openCollect = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         loadCreateData()
         setActionForm({ collection_date: new Date().toISOString().split('T')[0], treasury_account_id: detailItem.treasury_account_id || '' })
         setShowCollect(true)
     }
 
     const openBounce = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setActionForm({ bounce_date: new Date().toISOString().split('T')[0], bounce_reason: '' })
         setShowBounce(true)
     }
 
     const openRepresent = () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         setActionForm({ represent_date: new Date().toISOString().split('T')[0] })
         setShowRepresent(true)
     }
 
     const handleRepresent = async () => {
+        if (!canCreateTreasury) {
+            permissionDenied()
+            return
+        }
         try {
             setSaving(true)
             await checksAPI.representReceivable(detailItem.id, {
@@ -202,7 +236,9 @@ function ChecksReceivable() {
                         <h1 className="workspace-title">📥 {t('checks.receivable.title')}</h1>
                         <p className="workspace-subtitle">{t('checks.receivable.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={openCreate}>+ {t('checks.receivable.create')}</button>
+                    {canCreateTreasury && (
+                        <button className="btn btn-primary" onClick={openCreate}>+ {t('checks.receivable.create')}</button>
+                    )}
                 </div>
             </div>
 
@@ -284,7 +320,7 @@ function ChecksReceivable() {
             </div>
 
             {/* Create Modal */}
-            {showCreate && (
+            {showCreate && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCreate(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 780, maxHeight: '90vh', overflow: 'auto' }}>
                         <div className="modal-header">
@@ -376,13 +412,13 @@ function ChecksReceivable() {
                             {detailItem.notes && <p style={{ color: '#666', marginBottom: 16 }}>📝 {detailItem.notes}</p>}
 
                             {/* Actions */}
-                            {detailItem.status === 'pending' && (
+                            {detailItem.status === 'pending' && canCreateTreasury && (
                                 <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
                                     <button className="btn btn-primary" onClick={openCollect}>✅ {t('checks.receivable.collect')}</button>
                                     <button className="btn" style={{ background: '#dc3545', color: '#fff' }} onClick={openBounce}>❌ {t('checks.receivable.bounce')}</button>
                                 </div>
                             )}
-                            {detailItem.status === 'bounced' && (
+                            {detailItem.status === 'bounced' && canCreateTreasury && (
                                 <div style={{ display: 'flex', gap: 12, marginTop: 20 }}>
                                     <button className="btn btn-warning" onClick={openRepresent}>🔄 {t('checks.receivable.represent', 'إعادة تقديم')}</button>
                                 </div>
@@ -393,7 +429,7 @@ function ChecksReceivable() {
             )}
 
             {/* Collect Modal */}
-            {showCollect && (
+            {showCollect && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowCollect(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">
@@ -426,7 +462,7 @@ function ChecksReceivable() {
             )}
 
             {/* Bounce Modal */}
-            {showBounce && (
+            {showBounce && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowBounce(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">
@@ -457,7 +493,7 @@ function ChecksReceivable() {
             )}
 
             {/* Represent Modal */}
-            {showRepresent && (
+            {showRepresent && canCreateTreasury && (
                 <div className="modal-overlay" onClick={() => setShowRepresent(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 500 }}>
                         <div className="modal-header">

@@ -6,6 +6,7 @@ import {
 } from 'lucide-react';
 import { customReportsAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
+import { hasPermission } from '../../utils/auth';
 import '../../components/ModuleStyles.css';
 
 import { formatShortDate } from '../../utils/dateUtils';
@@ -14,6 +15,7 @@ import { PageLoading } from '../../components/common/LoadingStates'
 
 export default function ReportBuilder() {
     const { t } = useTranslation();
+    const canDeleteReports = hasPermission('reports.delete');
 
     const [loading, setLoading] = useState(false);
     const [previewData, setPreviewData] = useState(null);
@@ -290,9 +292,11 @@ export default function ReportBuilder() {
                                                         <td>{r.description || '-'}</td>
                                                         <td>{formatShortDate(r.created_at)}</td>
                                                         <td>
-                                                            <button className="btn btn-icon btn-sm text-danger" onClick={() => deleteReport(r.id)}>
-                                                                <Trash2 size={14} />
-                                                            </button>
+                                                            {canDeleteReports && (
+                                                                <button className="btn btn-icon btn-sm text-danger" onClick={() => deleteReport(r.id)}>
+                                                                    <Trash2 size={14} />
+                                                                </button>
+                                                            )}
                                                         </td>
                                                     </tr>
                                                 ))}

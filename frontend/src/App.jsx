@@ -554,9 +554,9 @@ function App() {
                 <Route path="/accounting/period-comparison" element={<PrivateRoute permission="accounting.view"><PeriodComparison /></PrivateRoute>} />
                 <Route path="/accounting/opening-balances" element={<PrivateRoute permission="accounting.manage"><OpeningBalances /></PrivateRoute>} />
                 <Route path="/accounting/closing-entries" element={<PrivateRoute permission="accounting.manage"><ClosingEntries /></PrivateRoute>} />
-                <Route path="/accounting/budgets" element={<PrivateRoute permission="accounting.view"><Budgets /></PrivateRoute>} />
-                <Route path="/accounting/budgets/:id/items" element={<PrivateRoute permission="accounting.view"><BudgetItems /></PrivateRoute>} />
-                <Route path="/accounting/budgets/:id/report" element={<PrivateRoute permission="accounting.view"><BudgetReport /></PrivateRoute>} />
+                <Route path="/accounting/budgets" element={<PrivateRoute permission="accounting.budgets.view"><Budgets /></PrivateRoute>} />
+                <Route path="/accounting/budgets/:id/items" element={<PrivateRoute permission="accounting.budgets.view"><BudgetItems /></PrivateRoute>} />
+                <Route path="/accounting/budgets/:id/report" element={<PrivateRoute permission="accounting.budgets.view"><BudgetReport /></PrivateRoute>} />
                 <Route path="/accounting/vat-report" element={<PrivateRoute permission="accounting.view"><VATReport /></PrivateRoute>} />
                 <Route path="/accounting/tax-audit" element={<PrivateRoute permission="accounting.view"><TaxAudit /></PrivateRoute>} />
                 <Route path="/accounting/cashflow" element={<PrivateRoute permission="accounting.view"><CashFlowReport /></PrivateRoute>} />
@@ -778,7 +778,7 @@ function App() {
                 <Route path="/treasury" element={<PrivateRoute permission="treasury.view"><TreasuryHome /></PrivateRoute>} />
                 <Route path="/treasury/accounts" element={<PrivateRoute permission="treasury.view"><TreasuryAccountList /></PrivateRoute>} />
                 <Route path="/treasury/expense" element={<PrivateRoute permission="treasury.view"><TreasuryExpenseForm /></PrivateRoute>} />
-                <Route path="/treasury/transfer" element={<PrivateRoute permission="treasury.view"><TransferForm /></PrivateRoute>} />
+                <Route path="/treasury/transfer" element={<PrivateRoute permission="treasury.manage"><TransferForm /></PrivateRoute>} />
                 <Route path="/treasury/reconciliation" element={<PrivateRoute permission="reconciliation.view"><ReconciliationList /></PrivateRoute>} />
                 <Route path="/treasury/reconciliation/:id" element={<PrivateRoute permission="reconciliation.view"><ReconciliationForm /></PrivateRoute>} />
                 <Route path="/treasury/reports/cashflow" element={<PrivateRoute permission="treasury.view"><TreasuryCashflowReport /></PrivateRoute>} />
@@ -935,7 +935,7 @@ function App() {
                 <Route path="/admin/company-profile" element={<PrivateRoute permission="settings.view"><CompanyProfile /></PrivateRoute>} />
                 <Route path="/settings/branches" element={<PrivateRoute permission="branches.view"><Branches /></PrivateRoute>} />
                 <Route path="/settings/costing-policy" element={<PrivateRoute permission="settings.view"><CostingPolicy /></PrivateRoute>} />
-                <Route path="/settings/api-keys" element={<PrivateRoute permission="settings.view"><ApiKeys /></PrivateRoute>} />
+                <Route path="/settings/api-keys" element={<PrivateRoute permission="admin"><ApiKeys /></PrivateRoute>} />
                 <Route path="/settings/webhooks" element={<PrivateRoute permission="settings.view"><WebhooksPage /></PrivateRoute>} />
                 <Route path="/settings/print-templates" element={<PrivateRoute permission="settings.view"><PrintTemplates /></PrivateRoute>} />
                 <Route path="/settings/smart-alerts" element={<PrivateRoute permission="settings.view"><SmartAlerts /></PrivateRoute>} />

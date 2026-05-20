@@ -1,7 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { treasuryAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../../context/BranchContext'
 import { currenciesAPI } from '../../utils/api'
@@ -10,6 +10,8 @@ import { toastEmitter } from '../../utils/toastEmitter'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
 import BackButton from '../../components/common/BackButton'
+import { formatNumber } from '../../utils/format'
+import Decimal from 'decimal.js'
 
 export default function TreasuryAccountList() {
     const { t } = useTranslation()
@@ -31,15 +33,26 @@ export default function TreasuryAccountList() {
     const [accountForm, setAccountForm] = useState({
         name: '', name_en: '', account_type: 'cash', currency: '',
         bank_name: '', account_number: '', iban: '', branch_id: '',
-        opening_balance: 0, exchange_rate: 1, allow_overdraft: false
+        opening_balance: '', exchange_rate: '1', allow_overdraft: false
     })
+    const canCreateTreasuryAccount = hasPermission('treasury.create')
+    const canEditTreasuryAccount = hasPermission('treasury.edit')
+    const canDeleteTreasuryAccount = hasPermission('treasury.delete')
+    const permissionDenied = () => toastEmitter.emit(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
+    const decimal = (value) => {
+        try {
+            return new Decimal(value || 0)
+        } catch {
+            return new Decimal(0)
+        }
+    }
 
     const resetAccountForm = () => {
         const defaultCurrency = (currencies.find(c => c.is_base) || currencies[0])?.code || baseCurrency
         setAccountForm({
             name: '', name_en: '', account_type: 'cash', currency: defaultCurrency,
             bank_name: '', account_number: '', iban: '', branch_id: currentBranch?.id || '',
-            opening_balance: 0, exchange_rate: 1, allow_overdraft: false
+            opening_balance: '', exchange_rate: '1', allow_overdraft: false
         })
     }
 
@@ -64,12 +77,12 @@ export default function TreasuryAccountList() {
             bank_name: accountForm.bank_name?.trim() || null,
             account_number: accountForm.account_number?.trim() || null,
             iban: accountForm.iban?.trim() || null,
-            branch_id: accountForm.branch_id ? Number(accountForm.branch_id) : null,
-            exchange_rate: Number(accountForm.exchange_rate) || 1,
+            branch_id: accountForm.branch_id ? parseInt(accountForm.branch_id, 10) : null,
+            exchange_rate: accountForm.exchange_rate || '1',
             allow_overdraft: Boolean(accountForm.allow_overdraft),
         }
         if (includeOpeningBalance) {
-            payload.opening_balance = Number(accountForm.opening_balance) || 0
+            payload.opening_balance = accountForm.opening_balance || '0'
         }
         return payload
     }
@@ -81,6 +94,10 @@ export default function TreasuryAccountList() {
     }
 
     const openAddModal = () => {
+        if (!canCreateTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         setAccountError('')
         resetAccountForm()
         setShowAdd(true)
@@ -126,6 +143,10 @@ export default function TreasuryAccountList() {
     }
 
     const handleCreate = async () => {
+        if (!canCreateTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         const validationError = validateAccountForm()
         if (validationError) {
             setAccountError(validationError)
@@ -151,6 +172,10 @@ export default function TreasuryAccountList() {
     }
 
     const handleEditClick = (account) => {
+        if (!canEditTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         setAccountError('')
         setSelectedAccount(account)
         setAccountForm({
@@ -170,6 +195,10 @@ export default function TreasuryAccountList() {
     }
 
     const handleUpdate = async () => {
+        if (!canEditTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         const validationError = validateAccountForm()
         if (validationError) {
             setAccountError(validationError)
@@ -195,11 +224,19 @@ export default function TreasuryAccountList() {
     }
 
     const handleDeleteClick = (account) => {
+        if (!canDeleteTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         setSelectedAccount(account)
         setShowDelete(true)
     }
 
     const handleDelete = async () => {
+        if (!canDeleteTreasuryAccount) {
+            permissionDenied()
+            return
+        }
         try {
             await treasuryAPI.deleteAccount(selectedAccount.id)
             toastEmitter.emit(t('treasury.success_delete_account'), 'success')
@@ -264,13 +301,13 @@ export default function TreasuryAccountList() {
                 <div style={{ fontWeight: '600', direction: 'ltr', textAlign: 'right' }}>
                     {row.currency && row.currency !== baseCurrency ? (
                         <>
-                            <div>{Number(row.balance_in_currency || 0).toLocaleString()} {row.currency}</div>
+                            <div>{formatNumber(row.balance_in_currency || '0')} {row.currency}</div>
                             <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginTop: '2px' }}>
-                                {Number(val).toLocaleString()} {baseCurrency}
+                                {formatNumber(val || '0')} {baseCurrency}
                             </div>
                         </>
                     ) : (
-                        <div>{Number(val).toLocaleString()} {row.currency || baseCurrency}</div>
+                        <div>{formatNumber(val || '0')} {row.currency || baseCurrency}</div>
                     )}
                 </div>
             ),
@@ -284,22 +321,26 @@ export default function TreasuryAccountList() {
                     <button className="btn btn-link" onClick={() => navigate(`/treasury/accounts/${row.id}`)}>
                         {t('common.view_details')}
                     </button>
-                    <button
-                        className="btn-icon"
-                        onClick={() => handleEditClick(row)}
-                        title={t('common.edit')}
-                        style={{ marginRight: '8px' }}
-                    >
-                        {'\u270F\uFE0F'}
-                    </button>
-                    <button
-                        className="btn-icon"
-                        onClick={() => handleDeleteClick(row)}
-                        title={t('common.delete')}
-                        style={{ color: 'var(--danger)' }}
-                    >
-                        {'\uD83D\uDDD1\uFE0F'}
-                    </button>
+                    {canEditTreasuryAccount && (
+                        <button
+                            className="btn-icon"
+                            onClick={() => handleEditClick(row)}
+                            title={t('common.edit')}
+                            style={{ marginRight: '8px' }}
+                        >
+                            {'\u270F\uFE0F'}
+                        </button>
+                    )}
+                    {canDeleteTreasuryAccount && (
+                        <button
+                            className="btn-icon"
+                            onClick={() => handleDeleteClick(row)}
+                            title={t('common.delete')}
+                            style={{ color: 'var(--danger)' }}
+                        >
+                            {'\uD83D\uDDD1\uFE0F'}
+                        </button>
+                    )}
                 </div>
             ),
         },
@@ -315,10 +356,12 @@ export default function TreasuryAccountList() {
                         <h1 className="workspace-title">{t('treasury.menu.accounts')}</h1>
                         <p className="workspace-subtitle">{t('treasury.subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={openAddModal}>
-                        <span style={{ marginLeft: '8px' }}>+</span>
-                        {t('common.add_new')}
-                    </button>
+                    {canCreateTreasuryAccount && (
+                        <button className="btn btn-primary" onClick={openAddModal}>
+                            <span style={{ marginLeft: '8px' }}>+</span>
+                            {t('common.add_new')}
+                        </button>
+                    )}
                 </div>
             </div>
 
@@ -344,11 +387,11 @@ export default function TreasuryAccountList() {
                 loading={initialLoad}
                 emptyIcon={'\uD83C\uDFE6'}
                 emptyTitle={t('treasury.no_accounts')}
-                emptyAction={{ label: t('common.add_new'), onClick: openAddModal }}
+                emptyAction={canCreateTreasuryAccount ? { label: t('common.add_new'), onClick: openAddModal } : undefined}
             />
 
             <SimpleModal
-                isOpen={showAdd}
+                isOpen={showAdd && canCreateTreasuryAccount}
                 onClose={() => { setAccountError(''); setShowAdd(false); }}
                 title={t('treasury.add_account')}
                 footer={
@@ -408,7 +451,7 @@ export default function TreasuryAccountList() {
                                 type="number"
                                 className="form-input"
                                 value={accountForm.exchange_rate}
-                                onChange={e => setAccountForm({ ...accountForm, exchange_rate: parseFloat(e.target.value) || 1 })}
+                                onChange={e => setAccountForm({ ...accountForm, exchange_rate: e.target.value || '1' })}
                                 step="0.000001"
                             />
                             <div className="form-text text-sm text-gray-500">
@@ -427,11 +470,11 @@ export default function TreasuryAccountList() {
                             type="number"
                             className="form-input"
                             value={accountForm.opening_balance}
-                            onChange={e => setAccountForm({ ...accountForm, opening_balance: parseFloat(e.target.value) || 0 })}
+                            onChange={e => setAccountForm({ ...accountForm, opening_balance: e.target.value || '' })}
                         />
                         {accountForm.currency && accountForm.currency !== baseCurrency && (
                             <div className="form-text text-sm text-gray-500 mt-1">
-                                {t('common.equivalent')}: {(accountForm.opening_balance * (accountForm.exchange_rate || 1)).toLocaleString()} {baseCurrency}
+                                {t('common.equivalent')}: {formatNumber(decimal(accountForm.opening_balance).mul(decimal(accountForm.exchange_rate || 1)).toString())} {baseCurrency}
                             </div>
                         )}
                     </div>
@@ -467,7 +510,7 @@ export default function TreasuryAccountList() {
 
             {/* Edit Modal */}
             <SimpleModal
-                isOpen={showEdit}
+                isOpen={showEdit && canEditTreasuryAccount}
                 onClose={() => { setAccountError(''); setShowEdit(false); }}
                 title={t('treasury.edit_account')}
                 footer={
@@ -558,7 +601,7 @@ export default function TreasuryAccountList() {
             </SimpleModal>
 
             {/* Delete Confirmation Modal */}
-            {showDelete && (
+            {showDelete && canDeleteTreasuryAccount && (
                 <div className="modal-overlay" onClick={() => setShowDelete(false)}>
                     <div className="modal-content" onClick={(e) => e.stopPropagation()} style={{ maxWidth: '450px' }}>
                         <div className="modal-header">

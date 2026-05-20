@@ -7,6 +7,8 @@ import { useBranch } from '../../context/BranchContext';
 import { useToast } from '../../context/ToastContext';
 import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
+import { formatNumber } from '../../utils/format';
+import Decimal from 'decimal.js';
 
 const SupplierStatement = () => {
     const { t } = useTranslation();
@@ -117,13 +119,13 @@ const SupplierStatement = () => {
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.opening_balance')}</div>
                             <div className="metric-value text-secondary">
-                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : statement.opening_balance?.toLocaleString()} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : formatNumber(statement.opening_balance || 0)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('buying.reports.statement.summary.closing_balance')}</div>
-                            <div className="metric-value" style={{ color: statement.closing_balance > 0 ? 'var(--error)' : 'var(--success)' }}>
-                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : statement.closing_balance?.toLocaleString()} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
+                            <div className="metric-value" style={{ color: new Decimal(statement.closing_balance || 0).gt(0) ? 'var(--error)' : 'var(--success)' }}>
+                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : formatNumber(statement.closing_balance || 0)} {isAuthReady() && (hasPermission('reports.view') || hasPermission('buying.reports')) && <small>{selectedSupplierData?.currency || baseCurrency}</small>}
                             </div>
                         </div>
                     </div>
@@ -156,22 +158,22 @@ const SupplierStatement = () => {
                                             </td>
                                         </tr>
                                     )}
-                                    {statement.transactions.map((t, idx) => (
+                                    {statement.transactions.map((tx, idx) => (
                                         <tr key={idx}>
-                                            <td>{formatDate(t.date)}</td>
-                                            <td className="font-medium text-primary">{t.ref}</td>
+                                            <td>{formatDate(tx.date)}</td>
+                                            <td className="font-medium text-primary">{tx.ref}</td>
                                             <td>
-                                                <span className={`badge ${t.type === 'invoice' ? 'badge-danger' : 'badge-success'}`}>
-                                                    {t.type === 'invoice' ? t('buying.reports.statement.types.invoice') : t('buying.reports.statement.types.payment')}
+                                                <span className={`badge ${tx.type === 'invoice' ? 'badge-danger' : 'badge-success'}`}>
+                                                    {tx.type === 'invoice' ? t('buying.reports.statement.types.invoice') : t('buying.reports.statement.types.payment')}
                                                 </span>
                                             </td>
-                                            <td style={{ color: 'var(--success)', fontWeight: t.debit > 0 ? '600' : '400' }}>
-                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (t.debit > 0 ? t.debit?.toLocaleString() : '-')}
+                                            <td style={{ color: 'var(--success)', fontWeight: new Decimal(tx.debit || 0).gt(0) ? '600' : '400' }}>
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (new Decimal(tx.debit || 0).gt(0) ? formatNumber(tx.debit || 0) : '-')}
                                             </td>
-                                            <td style={{ color: 'var(--error)', fontWeight: t.credit > 0 ? '600' : '400' }}>
-                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (t.credit > 0 ? t.credit?.toLocaleString() : '-')}
+                                            <td style={{ color: 'var(--error)', fontWeight: new Decimal(tx.credit || 0).gt(0) ? '600' : '400' }}>
+                                                {!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : (new Decimal(tx.credit || 0).gt(0) ? formatNumber(tx.credit || 0) : '-')}
                                             </td>
-                                            <td className="font-medium">{!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : t.balance?.toLocaleString()}</td>
+                                            <td className="font-medium">{!isAuthReady() ? '...' : !hasPermission('reports.view') && !hasPermission('buying.reports') ? '***' : formatNumber(tx.balance || 0)}</td>
                                         </tr>
                                     ))}
                                 </tbody>

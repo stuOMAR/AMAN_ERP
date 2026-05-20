@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI, currenciesAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
+import { getCurrency, hasPermission } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import FormField from '../../components/common/FormField'
 import { useToast } from '../../context/ToastContext'
@@ -17,6 +17,8 @@ function EntityGroupTree() {
     const [form, setForm] = useState({ name: '', parent_id: '', company_id: '', group_currency: getCurrency() || 'SAR' })
     const [editingId, setEditingId] = useState(null)
     const [editingCurrency, setEditingCurrency] = useState('SAR')
+    const canManageIntercompany = hasPermission(['intercompany.manage', 'accounting.edit'])
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     useEffect(() => {
         fetchEntities()
@@ -39,9 +41,14 @@ function EntityGroupTree() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canManageIntercompany) {
+            permissionDenied()
+            return
+        }
         try {
             await accountingAPI.createEntityGroup({
-                ...form,
+                name: form.name.trim(),
+                company_id: form.company_id,
                 group_currency: String(form.group_currency || 'SAR').toUpperCase(),
                 parent_id: form.parent_id ? parseInt(form.parent_id) : null,
             })
@@ -55,13 +62,22 @@ function EntityGroupTree() {
     }
 
     const startEditCurrency = (node) => {
+        if (!canManageIntercompany) {
+            permissionDenied()
+            return
+        }
         setEditingId(node.id)
         setEditingCurrency(String(node.group_currency || 'SAR').toUpperCase())
     }
 
-    const saveCurrency = async (id) => {
+    const saveCurrency = async (node) => {
+        if (!canManageIntercompany) {
+            permissionDenied()
+            return
+        }
         try {
-            await accountingAPI.updateEntityGroup(id, {
+            await accountingAPI.updateEntityGroup(node.id, {
+                name: node.name,
                 group_currency: String(editingCurrency || 'SAR').toUpperCase(),
             })
             showToast(t('intercompany.entity_updated', 'تم تحديث الكيان'), 'success')
@@ -90,7 +106,7 @@ function EntityGroupTree() {
                         <span className="badge" style={{ marginInlineStart: 8, marginInlineEnd: 8 }}>
                             {t('intercompany.level')} {node.consolidation_level}
                         </span>
-                        {editingId === node.id ? (
+                        {canManageIntercompany && editingId === node.id ? (
                             <span style={{ display: 'inline-flex', gap: 6, alignItems: 'center' }}>
                                 <select
                                     className="form-input"
@@ -103,7 +119,7 @@ function EntityGroupTree() {
                                         <option key={c.code} value={c.code}>{c.code}</option>
                                     ))}
                                 </select>
-                                <button type="button" className="btn btn-success btn-sm" onClick={() => saveCurrency(node.id)}>
+                                <button type="button" className="btn btn-success btn-sm" onClick={() => saveCurrency(node)}>
                                     {t('common.save')}
                                 </button>
                                 <button type="button" className="btn btn-secondary btn-sm" onClick={() => setEditingId(null)}>
@@ -111,8 +127,8 @@ function EntityGroupTree() {
                                 </button>
                             </span>
                         ) : (
-                            <small className="text-muted" style={{ cursor: 'pointer' }} onClick={() => startEditCurrency(node)}>
-                                {node.group_currency} ✎
+                            <small className="text-muted" style={{ cursor: canManageIntercompany ? 'pointer' : 'default' }} onClick={() => canManageIntercompany && startEditCurrency(node)}>
+                                {node.group_currency}{canManageIntercompany ? ' ✎' : ''}
                             </small>
                         )}
                     </div>
@@ -134,9 +150,11 @@ function EntityGroupTree() {
                         <h1 className="workspace-title">{t('intercompany.entity_tree_title')}</h1>
                         <p className="workspace-subtitle">{t('intercompany.entity_tree_subtitle')}</p>
                     </div>
-                    <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-                        {showForm ? t('common.cancel') : t('intercompany.add_entity')}
-                    </button>
+                    {canManageIntercompany && (
+                        <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+                            {showForm ? t('common.cancel') : t('intercompany.add_entity')}
+                        </button>
+                    )}
                 </div>
             </div>
 

@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
+import { hasPermission } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import DataTable from '../../components/common/DataTable'
 import { formatNumber } from '../../utils/format'
@@ -16,6 +17,8 @@ function ConsolidationView() {
     const [result, setResult] = useState(null)
     const [balances, setBalances] = useState([])
     const [loading, setLoading] = useState(false)
+    const canManageIntercompany = hasPermission(['intercompany.manage', 'accounting.edit'])
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     useEffect(() => {
         accountingAPI.listEntityGroups()
@@ -27,6 +30,10 @@ function ConsolidationView() {
     }, [])
 
     const runConsolidation = async () => {
+        if (!canManageIntercompany) {
+            permissionDenied()
+            return
+        }
         if (!selectedGroup) return
         try {
             setLoading(true)
@@ -72,7 +79,7 @@ function ConsolidationView() {
                         <DateInput value={asOfDate} onChange={e => setAsOfDate(e.target.value)} />
                     </div>
                     <div className="form-group" style={{ display: 'flex', alignItems: 'flex-end' }}>
-                        <button className="btn btn-primary" disabled={!selectedGroup || loading} onClick={runConsolidation}>
+                        <button className="btn btn-primary" disabled={!selectedGroup || loading || !canManageIntercompany} onClick={runConsolidation}>
                             {loading ? t('common.loading') : t('intercompany.run_consolidation')}
                         </button>
                     </div>

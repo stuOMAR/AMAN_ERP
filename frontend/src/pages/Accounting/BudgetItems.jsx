@@ -5,7 +5,7 @@ import { useParams } from 'react-router-dom';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
 import { budgetsAPI, accountingAPI } from '../../utils/api';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import BackButton from '../../components/common/BackButton';
 import { Spinner } from '../../components/common/LoadingStates'
 
@@ -26,6 +26,8 @@ const BudgetItems = () => {
     const [budgetCurrency, setBudgetCurrency] = useState('');
     const currency = getCurrency() || '';
     const { currentBranch, branches, setBranch } = useBranch();
+    const canManageBudgets = hasPermission('accounting.budgets.manage');
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error');
 
     // Lock branch to budget's branch - warn if user tries to switch
     useEffect(() => {
@@ -100,6 +102,7 @@ const BudgetItems = () => {
     };
 
     const handleAmountChange = (accountId, field, value) => {
+        if (!canManageBudgets) return;
         const floatValue = parseFloat(value) || 0;
         setBudgetItems(prev => {
             const currentItem = prev[accountId] || { planned: 0, notes: '' };
@@ -126,6 +129,10 @@ const BudgetItems = () => {
     };
 
     const handleSave = async () => {
+        if (!canManageBudgets) {
+            permissionDenied();
+            return;
+        }
         // Prevent saving if branch doesn't match budget's branch
         if (budgetBranchId && currentBranch?.id && currentBranch.id !== budgetBranchId) {
             showToast(`⚠️ لا يمكن الحفظ! هذه الميزانية خاصة بفرع ${budgetBranchName}. يرجى التبديل لفرع ${budgetBranchName} أولاً.`, 'error');
@@ -180,7 +187,7 @@ const BudgetItems = () => {
                     </div>
                 </div>
                 <div className="header-actions">
-                    <button onClick={handleSave} className="btn btn-primary shadow-sm" disabled={saving}>
+                    <button onClick={handleSave} className="btn btn-primary shadow-sm" disabled={saving || !canManageBudgets}>
                         <Save size={18} className="me-2" />
                         {saving ? t('common.saving') : t('common.save')}
                     </button>
@@ -261,6 +268,7 @@ const BudgetItems = () => {
                                                         onChange={(e) => handleAmountChange(acc.id, 'monthly', e.target.value)}
                                                         placeholder="0.00"
                                                         autoComplete="off"
+                                                        disabled={!canManageBudgets}
                                                     />
                                                 </div>
                                             </td>
@@ -273,6 +281,7 @@ const BudgetItems = () => {
                                                         onChange={(e) => handleAmountChange(acc.id, 'annual', e.target.value)}
                                                         placeholder="0.00"
                                                         autoComplete="off"
+                                                        disabled={!canManageBudgets}
                                                     />
                                                 </div>
                                             </td>

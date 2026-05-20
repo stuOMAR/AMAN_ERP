@@ -7,6 +7,7 @@ import '../../components/ModuleStyles.css';
 import { useToast } from '../../context/ToastContext';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import Decimal from 'decimal.js';
 
 function PurchaseOrderReceive() {
     const { t } = useTranslation();
@@ -45,8 +46,8 @@ function PurchaseOrderReceive() {
             // Initialize receive quantities
             const initialQtys = {};
             orderRes.data.items?.forEach(item => {
-                const remaining = item.quantity - (item.received_quantity || 0);
-                initialQtys[item.id] = remaining > 0 ? remaining : 0;
+                const remaining = new Decimal(item.quantity || 0).minus(item.received_quantity || 0);
+                initialQtys[item.id] = remaining.gt(0) ? remaining.toString() : '0';
             });
             setReceiveQtys(initialQtys);
         } catch (err) {
@@ -64,12 +65,14 @@ function PurchaseOrderReceive() {
             return;
         }
 
-        const val = Number(value);
-        if (!isNaN(val)) {
+        try {
+            const val = new Decimal(value);
             setReceiveQtys(prev => ({
                 ...prev,
-                [itemId]: val
+                [itemId]: val.toString()
             }));
+        } catch {
+            return;
         }
     };
 
@@ -83,19 +86,19 @@ function PurchaseOrderReceive() {
 
         const itemsToReceive = [];
         for (const [lineId, qty] of Object.entries(receiveQtys)) {
-            const numericQty = Number(qty);
-            if (!isNaN(numericQty) && numericQty > 0) {
+            const numericQty = new Decimal(qty || 0);
+            if (numericQty.gt(0)) {
                 const item = order.items?.find(i => i.id === parseInt(lineId));
-                const remaining = item ? (item.quantity - (item.received_quantity || 0)) : 0;
+                const remaining = item ? new Decimal(item.quantity || 0).minus(item.received_quantity || 0) : new Decimal(0);
 
-                if (numericQty > remaining + 0.0001) { // small epsilon for floats
-                    showToast(`${t('common.error')}: ${t('buying.receive.qty_to_receive')} (${numericQty}) > ${t('buying.orders.item.qty_remaining')} (${remaining}) - ${item?.product_name}`, 'error');
+                if (numericQty.gt(remaining)) {
+                    showToast(`${t('common.error')}: ${t('buying.receive.qty_to_receive')} (${numericQty.toString()}) > ${t('buying.orders.item.qty_remaining')} (${remaining.toString()}) - ${item?.product_name}`, 'error');
                     return;
                 }
 
                 itemsToReceive.push({
                     line_id: parseInt(lineId),
-                    received_quantity: numericQty
+                    received_quantity: numericQty.toString()
                 });
             }
         }

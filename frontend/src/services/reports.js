@@ -1,4 +1,17 @@
 import api from './apiClient'
+import { hasPermission } from '../utils/auth'
+
+const requireFrontendPermission = (permission) => {
+    if (hasPermission(permission)) return
+    const error = new Error('Permission denied')
+    error.response = { status: 403, data: { detail: 'Permission denied' } }
+    throw error
+}
+
+const withPermission = (permission, request) => {
+    requireFrontendPermission(permission)
+    return request()
+}
 
 export const reportsAPI = {
     getSalesSummary: (start_date, end_date, branch_id) => api.get('/reports/sales/summary', { params: { start_date, end_date, branch_id } }),
@@ -59,10 +72,10 @@ export const reportsAPI = {
 }
 
 export const customReportsAPI = {
-    create: (data) => api.post('/reports/custom', data),
+    create: (data) => withPermission('reports.create', () => api.post('/reports/custom', data)),
     list: () => api.get('/reports/custom'),
     get: (id) => api.get(`/reports/custom/${id}`),
-    delete: (id) => api.delete(`/reports/custom/${id}`),
+    delete: (id) => withPermission('reports.delete', () => api.delete(`/reports/custom/${id}`)),
     preview: (data) => api.post('/reports/custom/preview', data),
 }
 

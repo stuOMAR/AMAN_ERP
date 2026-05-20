@@ -6,6 +6,7 @@ import { useTranslation } from 'react-i18next'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton'
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function LandedCostDetails() {
     const { id } = useParams()
@@ -89,13 +90,13 @@ function LandedCostDetails() {
                             <tr key={i}>
                                 <td>{t(`landed_costs.${item.cost_type}`, item.cost_type)}</td>
                                 <td>{item.description || '-'}</td>
-                                <td className="font-bold">{Number(item.amount).toLocaleString()} {currency}</td>
+                                <td className="font-bold">{formatNumber(item.amount)} {currency}</td>
                             </tr>
                         ))}
                     </tbody>
                 </table>
                 <div className="mt-2 text-lg font-bold">
-                    {t('landed_costs.total_cost')}: {Number(lc.total_cost).toLocaleString()} {currency}
+                    {t('landed_costs.total_cost')}: {formatNumber(lc.total_cost)} {currency}
                 </div>
             </div>
 
@@ -115,9 +116,9 @@ function LandedCostDetails() {
                             {lc.allocations.map((a, i) => (
                                 <tr key={i}>
                                     <td>{a.product_name || `#${a.line_id}`}</td>
-                                    <td>{Number(a.original_cost).toLocaleString()} {currency}</td>
-                                    <td className="text-primary">{Number(a.allocated_amount).toLocaleString()} {currency}</td>
-                                    <td className="font-bold">{Number(a.new_cost).toLocaleString()} {currency}</td>
+                                    <td>{formatNumber(a.original_cost)} {currency}</td>
+                                    <td className="text-primary">{formatNumber(a.allocated_amount)} {currency}</td>
+                                    <td className="font-bold">{formatNumber(a.new_cost)} {currency}</td>
                                 </tr>
                             ))}
                         </tbody>

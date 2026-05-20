@@ -258,7 +258,7 @@ function TreasuryCashflowReport() {
                                                 <td className="text-end text-danger">{formatNumber(d.outflow)}</td>
                                                 <td className="text-end" style={{ fontWeight: 600 }}>
                                                     <span className={d.inflow - d.outflow >= 0 ? 'text-primary' : 'text-danger'}>
-                                                        {formatNumber(d.inflow - d.outflow)}
+                                                        {formatNumber(d.net ?? '0')}
                                                     </span>
                                                 </td>
                                             </tr>

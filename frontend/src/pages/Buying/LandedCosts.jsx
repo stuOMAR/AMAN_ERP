@@ -7,6 +7,7 @@ import { formatShortDate } from '../../utils/dateUtils'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton'
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function LandedCosts() {
     const { t } = useTranslation()
@@ -41,8 +42,8 @@ function LandedCosts() {
                 ...f.cost_items,
                 {
                     ...newItem,
-                    amount: Number(newItem.amount),
-                    vendor_id: newItem.vendor_id ? Number(newItem.vendor_id) : null,
+                    amount: String(newItem.amount || 0),
+                    vendor_id: newItem.vendor_id ? parseInt(newItem.vendor_id, 10) : null,
                     invoice_ref: newItem.invoice_ref || null,
                 },
             ],
@@ -54,8 +55,8 @@ function LandedCosts() {
         try {
             const payload = {
                 ...form,
-                purchase_order_id: form.purchase_order_id ? Number(form.purchase_order_id) : null,
-                exchange_rate: form.exchange_rate != null && form.exchange_rate !== '' ? Number(form.exchange_rate) : 1,
+                purchase_order_id: form.purchase_order_id ? parseInt(form.purchase_order_id, 10) : null,
+                exchange_rate: form.exchange_rate != null && form.exchange_rate !== '' ? String(form.exchange_rate || '1') : '1',
             }
             const res = await landedCostsAPI.create(payload)
             showToast(t('landed_costs.created'), 'success')
@@ -138,7 +139,7 @@ function LandedCosts() {
                                     <tr key={i}>
                                         <td>{t(`landed_costs.${item.cost_type}`, item.cost_type)}</td>
                                         <td>{item.description}</td>
-                                        <td>{Number(item.amount).toLocaleString()} {currency}</td>
+                                        <td>{formatNumber(item.amount)} {currency}</td>
                                         <td><button className="btn-icon text-danger" onClick={() => setForm(f => ({ ...f, cost_items: f.cost_items.filter((_, j) => j !== i) }))}>🗑️</button></td>
                                     </tr>
                                 ))}
@@ -173,7 +174,7 @@ function LandedCosts() {
                             <tr key={c.id}>
                                 <td className="font-medium text-primary">{c.lc_number}</td>
                                 <td>{formatShortDate(c.created_at)}</td>
-                                <td className="font-bold">{Number(c.total_amount || 0).toLocaleString()} <small>{currency}</small></td>
+                                <td className="font-bold">{formatNumber(c.total_amount)} <small>{currency}</small></td>
                                 <td><span className={`status-badge ${c.status}`}>{c.status}</span></td>
                                 <td><button onClick={() => navigate(`/buying/landed-costs/${c.id}`)} className="btn-icon">👁️</button></td>
                             </tr>

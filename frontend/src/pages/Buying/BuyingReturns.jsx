@@ -7,6 +7,7 @@ import { useBranch } from '../../context/BranchContext'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 function BuyingReturns() {
     const { t } = useTranslation()
@@ -89,7 +90,7 @@ function BuyingReturns() {
                                     <td style={{ fontWeight: 'bold' }}>{ret.invoice_number}</td>
                                     <td>{ret.supplier_name}</td>
                                     <td>{formatShortDate(ret.invoice_date)}</td>
-                                    <td>{Number(ret.total).toLocaleString()}</td>
+                                    <td>{formatNumber(ret.total)}</td>
                                     <td>
                                         <span className="badge badge-success">{t('buying.returns.status.posted')}</span>
                                     </td>

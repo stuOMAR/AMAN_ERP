@@ -1,6 +1,7 @@
 import React from 'react';
 import { useTranslation } from 'react-i18next';
 import { AlertTriangle, X } from 'lucide-react';
+import { formatNumber } from '../../utils/format';
 
 /**
  * Drift-report dialog shown when POST /reconciliation/{id}/finalize
@@ -16,7 +17,7 @@ const ReconciliationFinalizeDialog = ({ drift, onClose, onProceed }) => {
 
     if (!drift) return null;
 
-    const fmt = (v) => Number(v ?? 0).toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+    const fmt = (v) => formatNumber(v ?? '0');
 
     return (
         <div style={overlayStyle}>

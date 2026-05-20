@@ -1,6 +1,7 @@
 import { useState, useEffect, useMemo } from 'react'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
+import { hasPermission } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
@@ -20,6 +21,8 @@ function AccountMappings() {
         source_account_id: '',
         target_account_id: '',
     })
+    const canManageIntercompany = hasPermission(['intercompany.manage', 'accounting.edit'])
+    const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
 
     const fetchData = async () => {
         try {
@@ -41,6 +44,10 @@ function AccountMappings() {
 
     const handleSubmit = async (e) => {
         e.preventDefault()
+        if (!canManageIntercompany) {
+            permissionDenied()
+            return
+        }
         try {
             await accountingAPI.createAccountMapping({
                 source_entity_id: parseInt(form.source_entity_id),
@@ -93,12 +100,14 @@ function AccountMappings() {
 
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBlockEnd: 16 }}>
                 <SearchFilter value={search} onChange={setSearch} placeholder={t('common.search')} />
-                <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
-                    {showForm ? t('common.cancel') : t('intercompany.add_mapping')}
-                </button>
+                {canManageIntercompany && (
+                    <button className="btn btn-primary" onClick={() => setShowForm(!showForm)}>
+                        {showForm ? t('common.cancel') : t('intercompany.add_mapping')}
+                    </button>
+                )}
             </div>
 
-            {showForm && (
+            {showForm && canManageIntercompany && (
                 <form onSubmit={handleSubmit} className="card" style={{ padding: 16, marginBlockEnd: 16 }}>
                     <div className="form-row">
                         <div className="form-group">

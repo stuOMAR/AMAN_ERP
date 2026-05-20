@@ -37,6 +37,7 @@ function FiscalYears() {
         year: currentYear,
         start_date: `${currentYear}-01-01`,
         end_date: `${currentYear}-12-31`,
+        retained_earnings_account_id: null,
     })
 
     const fetchFiscalYears = useCallback(async () => {
@@ -92,7 +93,10 @@ function FiscalYears() {
     const handleClose = async () => {
         try {
             setActionLoading(true)
-            const res = await accountingAPI.closeFiscalYear(selectedYear, { close_periods: true })
+            const res = await accountingAPI.closeFiscalYear(selectedYear, {
+                close_periods: true,
+                retained_earnings_account_id: preview?.retained_earnings_account?.id ?? null,
+            })
             showToast(res.data.message, 'success')
             setShowPreviewModal(false)
             fetchFiscalYears()

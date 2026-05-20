@@ -1,11 +1,12 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { RotateCcw, Search, Check, X } from 'lucide-react';
 import api from '../../../utils/api';
 import { useTranslation } from 'react-i18next';
 import { useToast } from '../../../context/ToastContext';
 import { formatShortDate } from '../../../utils/dateUtils';
 import { formatNumber } from '../../../utils/format';
-import { Spinner } from '../../../components/common/LoadingStates'
+import { Spinner } from '../../../components/common/LoadingStates';
+import useInvoiceCalc from '../../../hooks/useInvoiceCalc';
 
 
 const POSReturns = ({ onClose, onComplete }) => {
@@ -40,19 +41,26 @@ const POSReturns = ({ onClose, onComplete }) => {
         }
     };
 
-    const updateReturnQty = (itemId, delta) => {
-        setItems(items.map(item => {
-            if (item.id === itemId) {
-                const newQty = Math.max(0, Math.min(item.maxQty, item.returnQty + delta));
-                return { ...item, returnQty: newQty };
-            }
-            return item;
-        }));
-    };
+    const { totals: backendTotals, previewDebounced } = useInvoiceCalc();
 
-    const calculateTotal = () => {
-        return items.reduce((sum, item) => sum + (item.returnQty * item.unit_price), 0);
-    };
+    // Stream selected return items to backend for authoritative total
+    useEffect(() => {
+        const selectedLines = items.filter(i => i.returnQty > 0);
+        if (selectedLines.length > 0) {
+            previewDebounced({
+                lines: selectedLines.map(i => ({
+                    product_id: i.product_id || null,
+                    quantity: String(i.returnQty),
+                    unit_price: String(i.unit_price || '0'),
+                    tax_rate: i.tax_rate != null ? String(i.tax_rate) : null,
+                    discount: '0',
+                })),
+                currency: order?.currency || 'SAR',
+            });
+        }
+    }, [items, order, previewDebounced]);
+
+
 
     const handleSubmit = async () => {
         const returnItems = items.filter(i => i.returnQty > 0).map(i => ({
@@ -178,7 +186,7 @@ const POSReturns = ({ onClose, onComplete }) => {
                         <div className="return-summary">
                             <div className="total-refund">
                                 <span>{t('pos.refund_amount')}</span>
-                                <span className="amount">{formatNumber(calculateTotal())} {t('common.currency')}</span>
+                                <span className="amount">{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} {t('common.currency')}</span>
                             </div>
                         </div>
 
@@ -189,7 +197,7 @@ const POSReturns = ({ onClose, onComplete }) => {
                             <button
                                 className="btn btn-primary"
                                 onClick={handleSubmit}
-                                disabled={loading || calculateTotal() === 0}
+                                disabled={loading || !backendTotals || backendTotals.grandTotal === '0.00'}
                             >
                                 {loading ? (
                                     <Spinner size="sm"/>

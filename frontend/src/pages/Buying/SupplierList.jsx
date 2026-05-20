@@ -8,6 +8,8 @@ import { formatShortDate } from '../../utils/dateUtils'
 import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
 import BackButton from '../../components/common/BackButton'
+import { formatNumber } from '../../utils/format'
+import Decimal from 'decimal.js'
 
 function SupplierList() {
     const { t, i18n } = useTranslation()
@@ -133,11 +135,11 @@ function SupplierList() {
             render: (val, row) => (
                 <div style={{
                     fontWeight: '600', fontSize: '15px',
-                    color: val > 0 ? 'var(--error)' : 'var(--text-primary)',
+                    color: new Decimal(val || 0).gt(0) ? 'var(--error)' : 'var(--text-primary)',
                     direction: 'ltr',
                     textAlign: i18n.language === 'ar' ? 'right' : 'left',
                 }}>
-                    {(val || 0).toLocaleString()} {row.display_currency || currency}
+                    {formatNumber(val || 0)} {row.display_currency || currency}
                 </div>
             ),
         },

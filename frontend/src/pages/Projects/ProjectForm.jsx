@@ -98,7 +98,7 @@ export default function ProjectForm() {
                 ...formData,
                 customer_id: formData.customer_id ? parseInt(formData.customer_id) : null,
                 manager_id: formData.manager_id ? parseInt(formData.manager_id) : null,
-                planned_budget: parseFloat(formData.planned_budget) || 0,
+                planned_budget: formData.planned_budget || '0',
                 start_date: formData.start_date || null,
                 end_date: formData.end_date || null,
                 project_code: formData.project_code || null,

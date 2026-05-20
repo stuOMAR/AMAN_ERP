@@ -9,6 +9,7 @@ import DateInput from '../../components/common/DateInput';
 import BackButton from '../../components/common/BackButton';
 import DataTable from '../../components/common/DataTable';
 import SearchFilter from '../../components/common/SearchFilter';
+import Decimal from 'decimal.js';
 
 const RFQList = () => {
     const { t } = useTranslation();
@@ -17,7 +18,7 @@ const RFQList = () => {
     const [suppliers, setSuppliers] = useState([]);
     const [loading, setLoading] = useState(true);
     const [showModal, setShowModal] = useState(false);
-    const emptyLine = { product_name: '', quantity: 1, unit: '' };
+    const emptyLine = { product_name: '', quantity: '1', unit: '' };
     const [form, setForm] = useState({ title: '', supplier_ids: [], deadline: '', notes: '', lines: [{ ...emptyLine }] });
     const [supplierDropOpen, setSupplierDropOpen] = useState(false);
     const [supplierSearch, setSupplierSearch] = useState('');
@@ -50,7 +51,7 @@ const RFQList = () => {
     const handleCreate = async (e) => {
         e.preventDefault();
         if (form.supplier_ids.length === 0) { showToast(t('buying.rfq.select_supplier_required'), 'error'); return; }
-        const lines = form.lines.filter(line => (line.product_name || '').trim() && Number(line.quantity) > 0);
+        const lines = form.lines.filter(line => (line.product_name || '').trim() && new Decimal(line.quantity || 0).gt(0));
         if (lines.length === 0) { showToast(t('buying.rfq.line_required', 'يجب إضافة بند واحد على الأقل'), 'error'); return; }
         try {
             await purchasesAPI.createRFQ({ title: form.title, supplier_ids: form.supplier_ids, deadline: form.deadline || null, notes: form.notes || null, lines });
@@ -281,12 +282,13 @@ const RFQList = () => {
                                         />
                                         <input
                                             className="form-input"
-                                            type="number"
+                                            type="text"
+                                            inputMode="decimal"
                                             min="0.0001"
                                             step="0.0001"
                                             placeholder={t('buying.orders.item.qty_ordered')}
                                             value={line.quantity}
-                                            onChange={e => setForm(prev => ({ ...prev, lines: prev.lines.map((l, i) => i === idx ? { ...l, quantity: Number(e.target.value) } : l) }))}
+                                            onChange={e => setForm(prev => ({ ...prev, lines: prev.lines.map((l, i) => i === idx ? { ...l, quantity: e.target.value } : l) }))}
                                         />
                                         <input
                                             className="form-input"

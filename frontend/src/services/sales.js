@@ -1,25 +1,29 @@
 import api from './apiClient'
 
+const idempotencyHeaders = () => ({
+    headers: { 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` }
+})
+
 export const salesAPI = {
     listCustomers: (params) => api.get('/sales/customers', { params }),
     getCustomer: (id) => api.get(`/sales/customers/${id}`),
     createCustomer: (data) => api.post('/sales/customers', data),
     updateCustomer: (id, data) => api.put(`/sales/customers/${id}`, data),
     listInvoices: (params) => api.get('/sales/invoices', { params }),
-    createInvoice: (data) => api.post('/sales/invoices', data),
+    createInvoice: (data) => api.post('/sales/invoices', data, idempotencyHeaders()),
     getInvoice: (id) => api.get(`/sales/invoices/${id}`),
     cancelInvoice: (id) => api.post(`/sales/invoices/${id}/cancel`),
 
     // Sales Orders
     listOrders: (params) => api.get('/sales/orders', { params }),
     getOrder: (id) => api.get(`/sales/orders/${id}`),
-    createOrder: (data) => api.post('/sales/orders', data),
+    createOrder: (data) => api.post('/sales/orders', data, idempotencyHeaders()),
     cancelOrder: (id) => api.post(`/sales/orders/${id}/cancel`),
 
     // Quotations
     listQuotations: (params) => api.get('/sales/quotations', { params }),
     getQuotation: (id) => api.get(`/sales/quotations/${id}`),
-    createQuotation: (data) => api.post('/sales/quotations', data),
+    createQuotation: (data) => api.post('/sales/quotations', data, idempotencyHeaders()),
     sendQuotation: (id) => api.post(`/sales/quotations/${id}/send-email`),
     cancelQuotation: (id) => api.post(`/sales/quotations/${id}/cancel`),
 
@@ -32,12 +36,12 @@ export const salesAPI = {
     // Sales Returns
     listReturns: (params) => api.get('/sales/returns', { params }),
     getReturn: (id) => api.get(`/sales/returns/${id}`),
-    createReturn: (data) => api.post('/sales/returns', data),
+    createReturn: (data) => api.post('/sales/returns', data, idempotencyHeaders()),
     approveReturn: (id) => api.post(`/sales/returns/${id}/approve`),
     cancelReturn: (id) => api.post(`/sales/returns/${id}/cancel`),
 
     // Customer Receipts
-    createReceipt: (data) => api.post('/sales/receipts', data),
+    createReceipt: (data) => api.post('/sales/receipts', data, idempotencyHeaders()),
     listReceipts: (params) => api.get('/sales/receipts', { params }),
     getReceipt: (id) => api.get(`/sales/receipts/${id}`),
     getOutstandingInvoices: (customerId, params) => api.get(`/sales/customers/${customerId}/outstanding-invoices`, { params }),
@@ -45,19 +49,19 @@ export const salesAPI = {
     getCustomerTransactions: (customerId, branchId) => api.get(`/sales/customers/${customerId}/transactions`, { params: { branch_id: branchId } }),
 
     // Customer Payments (Refunds)
-    createPayment: (data) => api.post('/sales/payments', data),
+    createPayment: (data) => api.post('/sales/payments', data, idempotencyHeaders()),
     listPayments: (params) => api.get('/sales/payments', { params }),
     getPayment: (id) => api.get(`/sales/payments/${id}`),
 
     // Sales Credit Notes
     listCreditNotes: (params) => api.get('/sales/credit-notes', { params }),
     getCreditNote: (id) => api.get(`/sales/credit-notes/${id}`),
-    createCreditNote: (data) => api.post('/sales/credit-notes', data),
+    createCreditNote: (data) => api.post('/sales/credit-notes', data, idempotencyHeaders()),
 
     // Sales Debit Notes
     listDebitNotes: (params) => api.get('/sales/debit-notes', { params }),
     getDebitNote: (id) => api.get(`/sales/debit-notes/${id}`),
-    createDebitNote: (data) => api.post('/sales/debit-notes', data),
+    createDebitNote: (data) => api.post('/sales/debit-notes', data, idempotencyHeaders()),
 
     getSummary: (params) => api.get('/sales/summary', { params }),
 
@@ -70,7 +74,7 @@ export const salesAPI = {
     calculateCommissions: (data) => api.post('/sales/commissions/calculate', data),
     getCommissionSummary: (params) => api.get('/sales/commissions/summary', { params }),
     // Partial Invoicing
-    createPartialInvoice: (orderId, data) => api.post(`/sales/orders/${orderId}/partial-invoice`, data),
+    createPartialInvoice: (orderId, data) => api.post(`/sales/orders/${orderId}/partial-invoice`, data, idempotencyHeaders()),
     // Credit Limit
     getCreditStatus: (partyId) => api.get(`/sales/customers/${partyId}/credit-status`),
     updateCreditLimit: (partyId, data) => api.put(`/sales/customers/${partyId}/credit-limit`, data),
@@ -81,7 +85,7 @@ export const salesAPI = {
 export const deliveryOrdersAPI = {
     list: (params) => api.get('/sales/delivery-orders', { params }),
     get: (id) => api.get(`/sales/delivery-orders/${id}`),
-    create: (data) => api.post('/sales/delivery-orders', data),
+    create: (data) => api.post('/sales/delivery-orders', data, idempotencyHeaders()),
     update: (id, data) => api.put(`/sales/delivery-orders/${id}`, data),
     confirm: (id) => api.post(`/sales/delivery-orders/${id}/confirm`),
     deliver: (id) => api.post(`/sales/delivery-orders/${id}/deliver`),
@@ -95,7 +99,7 @@ export const cpqAPI = {
     getConfiguration: (id) => api.get(`/sales/cpq/products/${id}/configure`),
     validateConfig: (data) => api.post('/sales/cpq/validate', data),
     calculatePrice: (data) => api.post('/sales/cpq/price', data),
-    createQuote: (data) => api.post('/sales/cpq/quotes', data),
+    createQuote: (data) => api.post('/sales/cpq/quotes', data, idempotencyHeaders()),
     getQuote: (id) => api.get(`/sales/cpq/quotes/${id}`),
     generatePdf: (id) => api.post(`/sales/cpq/quotes/${id}/generate-pdf`),
     convertQuote: (id) => api.post(`/sales/cpq/quotes/${id}/convert`),

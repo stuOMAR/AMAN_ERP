@@ -22,7 +22,7 @@ function PurchaseDebitNotes() {
     const [items, setItems] = useState([])
     const [loading, setLoading] = useState(true)
     const [initialLoad, setInitialLoad] = useState(true)
-    const [total, setTotal] = useState(0)
+    const [total, setTotal] = useState('0')
     const [page, setPage] = useState(1)
     const [search, setSearch] = useState('')
     const [statusFilter, setStatusFilter] = useState('')
@@ -34,7 +34,7 @@ function PurchaseDebitNotes() {
     const [form, setForm] = useState({
         party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
         notes: '', branch_id: currentBranch?.id, party_site_id: '',
-        lines: [{ description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0 }]
+        lines: [{ description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
     })
     const [saving, setSaving] = useState(false)
 
@@ -82,13 +82,13 @@ function PurchaseDebitNotes() {
         setForm({
             party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
             notes: '', branch_id: currentBranch?.id, party_site_id: '',
-            lines: [{ product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0 }]
+            lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
         })
         loadCreateData()
         setShowCreate(true)
     }
 
-    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0 }] }))
+    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }] }))
     const removeLine = (i) => setForm(f => {
         if (f.lines.length <= 1) return f;
         return { ...f, lines: f.lines.filter((_, idx) => idx !== i) };
@@ -101,7 +101,7 @@ function PurchaseDebitNotes() {
                 const prod = products.find(p => String(p.id) === String(val))
                 if (prod) {
                     lines[i].description = prod.item_name || prod.name || ''
-                    lines[i].unit_price = prod.last_buying_price || prod.buying_price || 0
+                    lines[i].unit_price = String(prod.last_buying_price || prod.buying_price || '')
                     lines[i].tax_rate = null // Resolved by backend engine
                 }
             }
@@ -109,41 +109,49 @@ function PurchaseDebitNotes() {
         })
     }
 
-    const calcLineTotal = (l) => {
-        const net = l.quantity * l.unit_price - (l.discount || 0)
-        return net + net * (l.tax_rate || 0) / 100
-    }
-    const calcSubtotal = () => form.lines.reduce((s, l) => s + l.quantity * l.unit_price - (l.discount || 0), 0)
-    const calcTax = () => form.lines.reduce((s, l) => s + (l.quantity * l.unit_price - (l.discount || 0)) * (l.tax_rate || 0) / 100, 0)
-    const calcTotal = () => calcSubtotal() + calcTax()
-
     // Backend-powered calculations
-    const { totals: backendTotals, previewDebounced } = useInvoiceCalc()
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc()
     useEffect(() => {
-        if (form.lines?.length > 0 && form.lines.some(l => l.quantity > 0 && l.unit_price > 0)) {
+        if (form.lines?.length > 0 && form.lines.some(l => l.quantity && l.unit_price)) {
             previewDebounced({
                 lines: form.lines.map(l => ({
-                    quantity: Number(l.quantity) || 0,
-                    unit_price: Number(l.unit_price) || 0,
-                    tax_rate: Number(l.tax_rate) || 0,
-                    discount: Number(l.discount) || 0,
+                    product_id: l.product_id || null,
+                    quantity: String(l.quantity || '0'),
+                    unit_price: String(l.unit_price || '0'),
+                    discount: String(l.discount || '0'),
                 })),
+                branch_id: currentBranch?.id,
                 currency,
             })
         }
-    }, [form.lines])
+    }, [form.lines, currentBranch?.id, currency, previewDebounced])
+
+    const backendLineTotal = (index) => backendLines?.[index]?.total ?? backendLines?.[index]?.line_total ?? null
+    const summarySubtotal = backendTotals?.subtotal ?? null
+    const summaryTax = backendTotals?.totalTax ?? null
+    const summaryTotal = backendTotals?.grandTotal ?? null
 
     const handleCreate = async () => {
         if (!form.party_id) return showToast(t('buying.debit_notes.supplier_required', 'warning'))
-        if (!form.lines.length || form.lines.every(l => l.unit_price === 0)) return showToast(t('buying.debit_notes.line_required', 'warning'))
+        if (!form.lines.length || form.lines.every(l => !l.unit_price)) return showToast(t('buying.debit_notes.line_required', 'warning'))
         try {
             setSaving(true)
+            // Phase 2 fix: send all monetary/quantity line values as strings
+            // to preserve NUMERIC(18,4) precision — never rely on JS Number for wire format.
             await purchasesAPI.createDebitNote({
                 ...form,
                 party_id: parseInt(form.party_id),
                 branch_id: currentBranch?.id,
                 party_site_id: form.party_site_id ? parseInt(form.party_site_id) : null,
                 related_invoice_id: form.related_invoice_id ? parseInt(form.related_invoice_id) : null,
+                lines: form.lines.map(l => ({
+                    ...l,
+                    product_id: l.product_id ? parseInt(l.product_id) : null,
+                    quantity: String(l.quantity ?? 0),
+                    unit_price: String(l.unit_price ?? 0),
+                    discount: String(l.discount ?? 0),
+                    tax_rate: null,
+                })),
             })
             setShowCreate(false)
             fetchList()
@@ -285,11 +293,11 @@ function PurchaseDebitNotes() {
                                                     </select>
                                                 </td>
                                                 <td><input className="form-input" value={line.description} onChange={e => updateLine(i, 'description', e.target.value)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.quantity} onChange={e => updateLine(i, 'quantity', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', Number(e.target.value) || 0)} /></td>
-                                                <td><input className="form-input" type="number" min="0" step="0.01" value={line.discount} onChange={e => updateLine(i, 'discount', Number(e.target.value) || 0)} /></td>
-                                                <td style={{ fontWeight: 'bold', textAlign: 'center' }}>{formatNumber(calcLineTotal(line))}</td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} /></td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} /></td>
+                                                <td style={{ textAlign: 'center' }}>—</td>
+                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.discount} onChange={e => updateLine(i, 'discount', e.target.value)} /></td>
+                                                <td style={{ fontWeight: 'bold', textAlign: 'center' }}>{backendLineTotal(i) != null ? formatNumber(backendLineTotal(i)) : '—'}</td>
                                                 <td><button className="btn btn-sm" style={{ color: 'red', background: 'none', border: 'none' }} onClick={() => removeLine(i)}>✕</button></td>
                                             </tr>
                                         ))}
@@ -300,10 +308,10 @@ function PurchaseDebitNotes() {
 
                             <div style={{ marginTop: 20, display: 'flex', justifyContent: 'flex-end' }}>
                                 <div style={{ minWidth: 250, background: 'var(--card-bg)', padding: 16, borderRadius: 8 }}>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('common.amount')}:</span><strong>{formatNumber(calcSubtotal())} {currency}</strong></div>
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('buying.debit_notes.tax')}:</span><strong>{formatNumber(calcTax())} {currency}</strong></div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('common.amount')}:</span><strong>{summarySubtotal != null ? formatNumber(summarySubtotal) : '—'} {currency}</strong></div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 8 }}><span>{t('buying.debit_notes.tax')}:</span><strong>{summaryTax != null ? formatNumber(summaryTax) : '—'} {currency}</strong></div>
                                     <hr />
-                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 'bold' }}><span>{t('common.total')}:</span><span>{formatNumber(calcTotal())} {currency}</span></div>
+                                    <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: 18, fontWeight: 'bold' }}><span>{t('common.total')}:</span><span>{summaryTotal != null ? formatNumber(summaryTotal) : '—'} {currency}</span></div>
                                 </div>
                             </div>
 

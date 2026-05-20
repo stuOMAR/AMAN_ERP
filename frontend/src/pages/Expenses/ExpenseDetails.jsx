@@ -8,7 +8,7 @@ import {
 } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { formatNumber } from '../../utils/format';
-import { getCurrency } from '../../utils/auth';
+import { getCurrency, hasPermission } from '../../utils/auth';
 import SimpleModal from '../../components/common/SimpleModal';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
@@ -21,6 +21,10 @@ export default function ExpenseDetails() {
   const navigate = useNavigate();
   const { showToast } = useToast();
   const currency = getCurrency() || '';
+  const canEditExpense = hasPermission('expenses.edit');
+  const canApproveExpense = hasPermission('expenses.approve');
+  const canDeleteExpense = hasPermission('expenses.delete');
+  const permissionDenied = () => showToast(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error');
 
   const [expense, setExpense] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -50,12 +54,20 @@ export default function ExpenseDetails() {
   };
 
   const handleApproval = (action) => {
+    if (!canApproveExpense) {
+      permissionDenied();
+      return;
+    }
     setApprovalAction(action);
     setApprovalNotes('');
     setShowApprovalModal(true);
   };
 
   const submitApproval = async () => {
+    if (!canApproveExpense) {
+      permissionDenied();
+      return;
+    }
     try {
       setProcessing(true);
       await expensesAPI.approve(id, {
@@ -78,6 +90,10 @@ export default function ExpenseDetails() {
   };
 
   const submitReverse = async () => {
+    if (!canApproveExpense) {
+      permissionDenied();
+      return;
+    }
     if (!reverseReason || reverseReason.trim().length < 3) {
       showToast(t('expenses.errors.reverseReasonRequired', 'سبب العكس مطلوب'), 'error');
       return;
@@ -101,6 +117,10 @@ export default function ExpenseDetails() {
   };
 
   const handleDelete = async () => {
+    if (!canDeleteExpense) {
+      permissionDenied();
+      return;
+    }
     if (!confirm(t('expenses.confirmDelete'))) return;
 
     try {
@@ -154,37 +174,45 @@ export default function ExpenseDetails() {
         <div className="d-flex gap-2">
           {expense.approval_status === 'pending' && (
             <>
-              <button
-                className="btn btn-success d-flex align-items-center gap-2"
-                onClick={() => handleApproval('approved')}
-              >
-                <CheckCircle size={20} />
-                {t('expenses.actions.approve')}
-              </button>
-              <button
-                className="btn btn-danger d-flex align-items-center gap-2"
-                onClick={() => handleApproval('rejected')}
-              >
-                <XCircle size={20} />
-                {t('expenses.actions.reject')}
-              </button>
-              <button
-                className="btn btn-outline-primary d-flex align-items-center gap-2"
-                onClick={() => navigate(`/expenses/${id}/edit`)}
-              >
-                <Edit size={20} />
-                {t('common.edit')}
-              </button>
-              <button
-                className="btn btn-outline-danger d-flex align-items-center gap-2"
-                onClick={handleDelete}
-              >
-                <Trash2 size={20} />
-                {t('common.delete')}
-              </button>
+              {canApproveExpense && (
+                <>
+                  <button
+                    className="btn btn-success d-flex align-items-center gap-2"
+                    onClick={() => handleApproval('approved')}
+                  >
+                    <CheckCircle size={20} />
+                    {t('expenses.actions.approve')}
+                  </button>
+                  <button
+                    className="btn btn-danger d-flex align-items-center gap-2"
+                    onClick={() => handleApproval('rejected')}
+                  >
+                    <XCircle size={20} />
+                    {t('expenses.actions.reject')}
+                  </button>
+                </>
+              )}
+              {canEditExpense && (
+                <button
+                  className="btn btn-outline-primary d-flex align-items-center gap-2"
+                  onClick={() => navigate(`/expenses/${id}/edit`)}
+                >
+                  <Edit size={20} />
+                  {t('common.edit')}
+                </button>
+              )}
+              {canDeleteExpense && (
+                <button
+                  className="btn btn-outline-danger d-flex align-items-center gap-2"
+                  onClick={handleDelete}
+                >
+                  <Trash2 size={20} />
+                  {t('common.delete')}
+                </button>
+              )}
             </>
           )}
-          {expense.approval_status === 'approved' && (
+          {expense.approval_status === 'approved' && canApproveExpense && (
             <button
               className="btn btn-warning d-flex align-items-center gap-2"
               onClick={() => setShowReverseModal(true)}
@@ -396,7 +424,7 @@ export default function ExpenseDetails() {
 
       {/* Approval Modal */}
       <SimpleModal
-        isOpen={showApprovalModal}
+        isOpen={showApprovalModal && canApproveExpense}
         onClose={() => setShowApprovalModal(false)}
         title={approvalAction === 'approved' 
           ? t('expenses.modal.approveTitle') 
@@ -449,7 +477,7 @@ export default function ExpenseDetails() {
 
       {/* Reverse Modal (T3.13) */}
       <SimpleModal
-        isOpen={showReverseModal}
+        isOpen={showReverseModal && canApproveExpense}
         onClose={() => setShowReverseModal(false)}
         title={t('expenses.modal.reverseTitle', 'عكس قيد المصروف')}
         size="md"

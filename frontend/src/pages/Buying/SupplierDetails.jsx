@@ -9,6 +9,7 @@ import { useToast } from '../../context/ToastContext'
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 export default function SupplierDetails() {
     const { t } = useTranslation()
@@ -91,7 +92,7 @@ export default function SupplierDetails() {
                             direction: 'ltr',
                             display: 'block'
                         }}>
-                            {Number(data.supplier?.total_purchases || 0).toLocaleString()} {currency}
+                            {formatNumber(data.supplier?.total_purchases || 0)} {currency}
                         </span>
                     </div>
 
@@ -132,7 +133,7 @@ export default function SupplierDetails() {
                                 display: 'block',
                                 marginTop: '4px'
                             }}>
-                                {Number(data.supplier?.balance).toLocaleString()} {data.supplier?.currency || currency}
+                                {formatNumber(data.supplier?.balance || 0)} {data.supplier?.currency || currency}
                             </span>
                         ) : (
                             <span style={{
@@ -143,7 +144,7 @@ export default function SupplierDetails() {
                                 display: 'block',
                                 marginTop: '4px'
                             }}>
-                                {Number(data.supplier?.balance_bc).toLocaleString()} {currency}
+                                {formatNumber(data.supplier?.balance_bc || 0)} {currency}
                                 <div style={{ fontSize: '10px', color: 'var(--text-secondary)', fontWeight: 'normal' }}>
                                     (Rate: {data.supplier?.exchange_rate})
                                 </div>
@@ -178,7 +179,7 @@ export default function SupplierDetails() {
                                     fontSize: '16px', fontWeight: '700', marginTop: '8px',
                                     color: site.site_balance > 0 ? 'var(--error)' : 'var(--success)'
                                 }}>
-                                    {Number(site.site_balance).toLocaleString()} {site.currency}
+                                    {formatNumber(site.site_balance || 0)} {site.currency}
                                 </div>
                             </div>
                         ))}
@@ -270,8 +271,8 @@ export default function SupplierDetails() {
                                             {formatShortDate(inv.date)}
                                         </div>
                                     </td>
-                                    <td style={{ fontWeight: '600' }}>{Number(inv.total).toLocaleString()} {inv.currency}</td>
-                                    <td style={{ color: 'var(--success)' }}>{Number(inv.paid).toLocaleString()} {inv.currency}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatNumber(inv.total || 0)} {inv.currency}</td>
+                                    <td style={{ color: 'var(--success)' }}>{formatNumber(inv.paid || 0)} {inv.currency}</td>
                                     <td>
                                         <span className={`badge ${inv.status === 'paid' ? 'badge-success' :
                                             inv.status === 'partial' ? 'badge-warning' :
@@ -316,7 +317,7 @@ export default function SupplierDetails() {
                                             {formatShortDate(pay.date)}
                                         </div>
                                     </td>
-                                    <td style={{ fontWeight: '600' }}>{Number(pay.amount).toLocaleString()} {pay.currency}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatNumber(pay.amount || 0)} {pay.currency}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                             <CreditCard size={14} style={{ color: 'var(--text-secondary)' }} />
@@ -364,7 +365,7 @@ export default function SupplierDetails() {
                                             {formatShortDate(rec.date)}
                                         </div>
                                     </td>
-                                    <td style={{ fontWeight: '600' }}>{Number(rec.amount).toLocaleString()} {rec.currency}</td>
+                                    <td style={{ fontWeight: '600' }}>{formatNumber(rec.amount || 0)} {rec.currency}</td>
                                     <td>
                                         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
                                             <CreditCard size={14} style={{ color: 'var(--text-secondary)' }} />

@@ -1,9 +1,10 @@
 import { useState, useEffect, useRef } from 'react'
+import Decimal from 'decimal.js'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { purchasesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
 import { getCurrency } from '../../utils/auth'
-import { formatNumber, getStep } from '../../utils/format'
+import { formatNumber } from '../../utils/format'
 import { useTranslation } from 'react-i18next'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
@@ -25,7 +26,6 @@ function PurchaseInvoiceForm() {
 
     // Data Sources
     const [suppliers, setSuppliers] = useState([])
-    const [supplierGroups, setSupplierGroups] = useState([])
     const [products, setProducts] = useState([])
     const [warehouses, setWarehouses] = useState([])
     const [currencies, setCurrencies] = useState([])
@@ -40,32 +40,30 @@ function PurchaseInvoiceForm() {
         invoice_date: new Date().toISOString().split('T')[0],
         due_date: new Date().toISOString().split('T')[0],
         payment_method: '',
-        paid_amount: 0,
+        paid_amount: '',
         notes: '',
         currency: currency || '',
-        exchange_rate: 1.0,
+        exchange_rate: '1',
         treasury_id: '',
         is_prepayment: false
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }
+        { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
     ])
 
     useEffect(() => {
         const fetchResources = async () => {
             try {
                 const params = { branch_id: currentBranch?.id }
-                const [suppRes, groupsRes, prodRes, whRes, curRes, treasRes] = await Promise.all([
+                const [suppRes, prodRes, whRes, curRes, treasRes] = await Promise.all([
                     inventoryAPI.listSuppliers(params),
-                    purchasesAPI.listSupplierGroups(params),
                     inventoryAPI.listProducts(params),
                     inventoryAPI.listWarehouses(params),
                     currenciesAPI.list(),
                     treasuryAPI.listAccounts(currentBranch?.id)
                 ])
                 setSuppliers(suppRes.data)
-                setSupplierGroups(groupsRes.data)
                 setProducts(prodRes.data)
                 setWarehouses(whRes.data)
                 setCurrencies(curRes.data)
@@ -85,29 +83,24 @@ function PurchaseInvoiceForm() {
 	                        notes: order.notes || '',
 	                        due_date: order.expected_date ? new Date(order.expected_date).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
 	                        currency: order.currency || prev.currency,
-	                        exchange_rate: order.exchange_rate || prev.exchange_rate || 1,
+	                        exchange_rate: String(order.exchange_rate || prev.exchange_rate || '1'),
 	                        is_prepayment: false
 	                    }))
                     setItems(order.items
-                        .filter(item => Number(item.remaining_to_invoice || 0) > 0)
+                        .filter(item => new Decimal(item.remaining_to_invoice || 0).gt(0))
                         .map(item => {
                         // T040: Use remaining_to_invoice (received - invoiced) instead of received_quantity
-                        const remainingToInvoice = Number(item.remaining_to_invoice || 0)
-                        const quantity = remainingToInvoice
-                        const unitPrice = Number(item.unit_price) || 0
-                        const discount = Number(item.discount) || 0
-                        const discountPercent = (quantity * unitPrice) > 0 ? (discount / (quantity * unitPrice)) * 100 : 0
+                        const remainingToInvoice = new Decimal(item.remaining_to_invoice || 0).toString()
 
                         return {
                             product_id: item.product_id,
                             po_line_id: item.id,
                             max_remaining_to_invoice: remainingToInvoice,
                             description: item.description || '',
-                            quantity: quantity,
-                            unit_price: unitPrice,
-                            tax_rate: Number(item.tax_rate) || 0,
-                            discount: discount,
-                            discount_percent: discountPercent
+                            quantity: remainingToInvoice,
+                            unit_price: String(item.unit_price || '0'),
+                            tax_rate: null,
+                            discount: String(item.discount || '0')
                         }
                     }))
                 }
@@ -137,102 +130,43 @@ function PurchaseInvoiceForm() {
 
     // Calculations
     // Backend-powered calculations
-    const { totals: backendTotals, previewDebounced, quickCalc } = useInvoiceCalc()
-
-    const calculateTotals = () => {
-        // Use backend totals if available
-        if (backendTotals) {
-            return {
-                subtotal: backendTotals.subtotal,
-                totalDiscount: backendTotals.totalDiscount,
-                totalMarkup: 0,
-                totalTax: backendTotals.totalTax,
-                total: backendTotals.grandTotal,
-                globalEffectType: 'discount',
-                globalEffectPercent: 0,
-                globalMakeupAmount: 0,
-                globalDiscountAmount: backendTotals.totalDiscount,
-            }
-        }
-        // Fallback to local calculation
-        let subtotal = 0
-        let totalTax = 0
-        let totalDiscount = 0
-
-        let globalEffectType = 'discount';
-        let globalEffectPercent = 0;
-
-        // Find group effects on total
-        const supplier = suppliers.find(s => s.id === parseInt(formData.supplier_id));
-        if (supplier && supplier.group_id) {
-            const group = supplierGroups.find(g => g.id === supplier.group_id);
-            if (group && group.application_scope === 'total' && group.discount_percentage > 0) {
-                globalEffectType = group.effect_type;
-                globalEffectPercent = Number(group.discount_percentage);
-            }
-        }
-
-        items.forEach(item => {
-            const lineTotal = item.quantity * item.unit_price
-            subtotal += lineTotal
-            totalDiscount += item.discount
-        })
-
-        let totalAfterLineDiscounts = subtotal - totalDiscount;
-        let globalDiscountAmount = 0;
-        let globalMarkupAmount = 0;
-
-        if (globalEffectPercent > 0) {
-            if (globalEffectType === 'discount') {
-                globalDiscountAmount = totalAfterLineDiscounts * (globalEffectPercent / 100);
-            } else if (globalEffectType === 'markup') {
-                globalMarkupAmount = totalAfterLineDiscounts * (globalEffectPercent / 100);
-            }
-        }
-
-        let baseForTax = totalAfterLineDiscounts - globalDiscountAmount + globalMarkupAmount;
-
-        items.forEach(item => {
-            const weight = (item.quantity * item.unit_price - item.discount) / totalAfterLineDiscounts || 0;
-            const itemBase = (item.quantity * item.unit_price - item.discount)
-                - (globalDiscountAmount * weight)
-                + (globalMarkupAmount * weight);
-            totalTax += itemBase * (item.tax_rate / 100);
-        });
-
-        const total = baseForTax + totalTax
-        return {
-            subtotal,
-            totalTax,
-            totalDiscount: totalDiscount + globalDiscountAmount,
-            totalMarkup: globalMarkupAmount,
-            total,
-            globalEffectType,
-            globalEffectPercent,
-            globalMarkupAmount,
-            globalDiscountAmount
-        }
-    }
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc()
 
     // Call backend for accurate calculations
     useEffect(() => {
-        if (items.length > 0 && items.some(i => i.quantity > 0 && i.unit_price > 0)) {
+        if (items.length > 0 && items.some(i => String(i.quantity || '').trim() && String(i.unit_price || '').trim())) {
             previewDebounced({
                 lines: items.map(i => ({
-                    product_id: i.product_id ? Number(i.product_id) : null,
-                    quantity: Number(i.quantity) || 0,
-                    unit_price: Number(i.unit_price) || 0,
-                    discount: Number(i.discount) || 0,
+                    product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    discount: String(i.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
-                supplier_id: formData.supplier_id ? Number(formData.supplier_id) : null,
+                supplier_id: formData.supplier_id ? parseInt(formData.supplier_id, 10) : null,
                 document_date: formData.invoice_date,
+                paid_amount: String(formData.paid_amount || '0'),
                 currency,
             })
         }
-    }, [items, formData.supplier_id, formData.invoice_date, currentBranch])
+    }, [items, formData.supplier_id, formData.invoice_date, formData.paid_amount, currentBranch, currency, previewDebounced])
 
-    const totals = calculateTotals()
+    // Direct alias — no local arithmetic
+    const totals = backendTotals ? {
+        subtotal: backendTotals.subtotal,
+        totalDiscount: backendTotals.totalDiscount,
+        totalMarkup: null,
+        totalTax: backendTotals.totalTax,
+        total: backendTotals.grandTotal,
+        globalEffectType: 'discount',
+        globalEffectPercent: '0',
+        globalMarkupAmount: '0',
+        globalDiscountAmount: backendTotals.totalDiscount,
+    } : {
+        subtotal: null, totalTax: null, totalDiscount: null, totalMarkup: null,
+        total: null, globalEffectType: 'discount', globalEffectPercent: '0',
+        globalMarkupAmount: '0', globalDiscountAmount: '0'
+    }
 
     // Handlers
     const handleItemChange = (index, field, value) => {
@@ -247,47 +181,12 @@ function PurchaseInvoiceForm() {
                         // Use branch price if available, otherwise use product default
                         const branchPrices = window.__branchPrices || {}
                         const priceInfo = branchPrices[parseInt(value)]
-                        updatedItem.unit_price = priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || 0)
-                        updatedItem.tax_rate = null // Resolved by backend engine
-
-                        // Try applying item-level effect from group
-                        const supplier = suppliers.find(s => s.id === parseInt(formData.supplier_id));
-                        if (supplier && supplier.group_id) {
-                            const group = supplierGroups.find(g => g.id === supplier.group_id);
-                            if (group && group.application_scope === 'line' && group.discount_percentage > 0) {
-                                if (group.effect_type === 'discount') {
-                                    updatedItem.discount_percent = group.discount_percentage;
-                                } else if (group.effect_type === 'markup') {
-                                    // Markup applied by increasing unit_price
-                                    const basePrice = priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || 0)
-                                    updatedItem.unit_price = basePrice * (1 + (group.discount_percentage / 100));
-                                }
-                            }
-                        }
+                        updatedItem.unit_price = String(priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || ''))
+                        updatedItem.tax_rate = null
                     }
                 }
 
-                // Calculate discount logic
-                const qty = Number(field === 'quantity' ? value : updatedItem.quantity) || 0
-                const price = Number(field === 'unit_price' ? value : updatedItem.unit_price) || 0
-                let discount = Number(updatedItem.discount) || 0
-                let discountPercent = Number(updatedItem.discount_percent) || 0
-
-                if (field === 'discount_percent') {
-                    discountPercent = Number(value) || 0
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                } else if (field === 'quantity' || field === 'unit_price') {
-                    discount = (qty * price) * (discountPercent / 100)
-                    updatedItem.discount = discount
-                }
-
-                updatedItem.discount_percent = discountPercent
-                updatedItem.discount = discount
-
-                updatedItem[field] = ['quantity', 'unit_price', 'tax_rate', 'discount', 'discount_percent'].includes(field)
-                    ? (value === '' ? '' : Number(value) || 0)
-                    : value
+                updatedItem[field] = value
                 return updatedItem
             }
             return item
@@ -296,7 +195,7 @@ function PurchaseInvoiceForm() {
     }
 
     const addItem = () => {
-        setItems([...items, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0, discount: 0, discount_percent: 0, total: 0 }])
+        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }])
     }
 
     const removeItem = (index) => {
@@ -327,7 +226,7 @@ function PurchaseInvoiceForm() {
             return
         }
         const overRemaining = items.find(item =>
-            item.po_line_id && Number(item.quantity || 0) > Number(item.max_remaining_to_invoice || 0)
+            item.po_line_id && new Decimal(item.quantity || 0).gt(item.max_remaining_to_invoice || 0)
         )
         if (overRemaining) {
             setError(t('buying.purchase_invoices.form.error_qty_exceeds_remaining', 'Quantity exceeds remaining to invoice'))
@@ -354,22 +253,22 @@ function PurchaseInvoiceForm() {
                 paid_amount: String(formData.paid_amount || 0),
                 notes: formData.notes,
                 currency: formData.currency,
-                exchange_rate: String(formData.exchange_rate || 1.0),
+                exchange_rate: String(formData.exchange_rate || '1'),
                 treasury_id: formData.treasury_id ? parseInt(formData.treasury_id) : null,
                 is_prepayment: formData.is_prepayment,
                 original_invoice_id: location.state?.fromOrder?.id || null,
                 effect_type: totals.globalEffectType,
-                effect_percentage: totals.globalEffectPercent,
-                markup_amount: totals.globalMarkupAmount,
+                effect_percentage: totals.globalEffectPercent != null ? String(totals.globalEffectPercent) : '0',
+                markup_amount: totals.globalMarkupAmount != null ? String(totals.globalMarkupAmount) : '0',
                 items: items.map(item => ({
                     product_id: parseInt(item.product_id) || null,
                     po_line_id: item.po_line_id ? parseInt(item.po_line_id) : null,
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: String(item.tax_rate || 0),
+                    tax_rate: null,
                     discount: String(item.discount || 0),
-                    markup: 0 // Handled at line level unit_price for purchases
+                    markup: '0'
                 }))
             }
 
@@ -444,37 +343,9 @@ function PurchaseInvoiceForm() {
                 <div className="form-row">
                     <FormField label={t('buying.purchase_invoices.form.supplier')} required style={{ flex: 2 }}>
                         <select
-                            className="form-input"
-                            value={formData.supplier_id || ''}
-                            onChange={e => {
-                                setFormData({ ...formData, supplier_id: e.target.value });
-                                // Reset items discount when supplier changes
-                                setItems(prevItems => prevItems.map(item => {
-                                    let updated = { ...item };
-                                    if (item.product_id) {
-                                        const product = products.find(p => p.id === parseInt(item.product_id));
-                                        if (product) {
-                                            updated.unit_price = product.last_buying_price || product.buying_price || 0;
-                                            updated.discount_percent = 0;
-                                            updated.discount = 0;
-                                        }
-
-                                        const supplier = suppliers.find(s => s.id === parseInt(e.target.value));
-                                        if (supplier && supplier.group_id) {
-                                            const group = supplierGroups.find(g => g.id === supplier.group_id);
-                                            if (group && group.application_scope === 'line' && group.discount_percentage > 0) {
-                                                if (group.effect_type === 'discount') {
-                                                    updated.discount_percent = group.discount_percentage;
-                                                    updated.discount = (updated.quantity * updated.unit_price) * (group.discount_percentage / 100);
-                                                } else if (group.effect_type === 'markup') {
-                                                    updated.unit_price = updated.unit_price * (1 + (group.discount_percentage / 100));
-                                                }
-                                            }
-                                        }
-                                    }
-                                    return updated;
-                                }));
-                            }}
+	                            className="form-input"
+	                            value={formData.supplier_id || ''}
+	                            onChange={e => setFormData({ ...formData, supplier_id: e.target.value })}
                             required
                         >
                             <option value="">{t('buying.purchase_invoices.form.supplier_placeholder')}</option>
@@ -521,18 +392,15 @@ function PurchaseInvoiceForm() {
                                 <th style={{ width: '30%' }}>{t('buying.purchase_invoices.form.items.product')}</th>
                                 <th style={{ width: '10%' }}>{t('buying.purchase_invoices.form.items.quantity')}</th>
                                 <th style={{ width: '15%' }}>{t('buying.purchase_invoices.form.items.unit_price')}</th>
-                                <th style={{ width: '10%' }}>{t('buying.purchase_invoices.form.items.discount')} (%)</th>
+	                                <th style={{ width: '10%' }}>{t('buying.purchase_invoices.form.items.discount')}</th>
                                 <th style={{ width: '10%' }}>{t('buying.purchase_invoices.form.items.tax_rate')}</th>
                                 <th style={{ width: '15%' }}>{t('buying.purchase_invoices.form.items.total')}</th>
                                 <th style={{ width: '5%' }}></th>
                             </tr>
                         </thead>
                         <tbody>
-                            {items.map((item, index) => {
-                                const lineTotal = (item.quantity || 0) * (item.unit_price || 0) - (item.discount || 0);
-                                const withTax = lineTotal * (1 + (item.tax_rate || 0) / 100);
-                                return (
-                                    <tr key={index}>
+                            {items.map((item, index) => (
+	                                    <tr key={index}>
                                         <td>
                                             <select
                                                 className="form-input"
@@ -553,7 +421,7 @@ function PurchaseInvoiceForm() {
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" min="1" step={getStep()}
+	                                                type="text" inputMode="decimal" className="form-input"
                                                 max={item.max_remaining_to_invoice || undefined}
                                                 value={item.quantity || ''}
                                                 onChange={e => handleItemChange(index, 'quantity', e.target.value)}
@@ -561,28 +429,24 @@ function PurchaseInvoiceForm() {
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" step={getStep()}
+	                                                type="text" inputMode="decimal" className="form-input"
                                                 value={item.unit_price || ''}
                                                 onChange={e => handleItemChange(index, 'unit_price', e.target.value)}
                                             />
                                         </td>
                                         <td>
                                             <input
-                                                type="number" className="form-input" min="0" max="100" step="0.01"
-                                                value={item.discount_percent}
-                                                onChange={e => handleItemChange(index, 'discount_percent', e.target.value)}
+	                                                type="text" inputMode="decimal" className="form-input"
+	                                                value={item.discount}
+	                                                onChange={e => handleItemChange(index, 'discount', e.target.value)}
                                             />
                                         </td>
                                         <td>
-                                            <input
-                                                type="number" className="form-input"
-                                                value={item.tax_rate || ''}
-                                                onChange={e => handleItemChange(index, 'tax_rate', e.target.value)}
-                                            />
+	                                            <span>—</span>
                                         </td>
                                         <td>
                                             <div style={{ fontWeight: 'bold' }}>
-                                                {formatNumber(withTax)}
+	                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
                                             </div>
                                         </td>
                                         <td>
@@ -596,8 +460,7 @@ function PurchaseInvoiceForm() {
                                             </button>
                                         </td>
                                     </tr>
-                                )
-                            })}
+	                            ))}
                         </tbody>
                     </table>
                     <div style={{ padding: '8px', background: 'var(--bg-secondary)' }}>
@@ -619,13 +482,13 @@ function PurchaseInvoiceForm() {
                                         const code = e.target.value;
                                         const curr = currencies.find(c => c.code === code);
                                         // T8.4: live rate from /accounting/currencies/current.
-                                        let rate = curr?.current_rate || 1.0;
-                                        try { rate = await fetchCurrentRate(code); } catch { /* keep fallback */ }
-                                        setFormData(prev => ({
-                                            ...prev,
-                                            currency: code,
-                                            exchange_rate: rate || 1.0
-                                        }));
+	                                        let rate = String(curr?.current_rate || '1');
+	                                        try { rate = await fetchCurrentRate(code); } catch { /* keep fallback */ }
+	                                        setFormData(prev => ({
+	                                            ...prev,
+	                                            currency: code,
+	                                            exchange_rate: String(rate || '1')
+	                                        }));
                                     }}
                                 >
                                     {currencies.map(c => (
@@ -636,7 +499,8 @@ function PurchaseInvoiceForm() {
                             {formData.currency !== currency && (
                                 <FormField label={t('accounting.currencies.table.rate')} style={{ flex: 1 }}>
                                     <input
-                                        type="number"
+	                                        type="text"
+	                                        inputMode="decimal"
                                         step="0.000001"
                                         className="form-input form-input-sm font-mono"
                                         value={formData.exchange_rate}
@@ -718,15 +582,14 @@ function PurchaseInvoiceForm() {
                             <FormField label={t('buying.purchase_invoices.form.payment.paid_amount')}>
                                 <div className="input-with-suffix">
                                     <input
-                                        type="number" className="form-input"
+	                                        type="text" inputMode="decimal" className="form-input"
                                         value={formData.paid_amount}
                                         onChange={e => setFormData({ ...formData, paid_amount: e.target.value })}
-                                        min="0" step={getStep()}
                                     />
                                     <span className="input-suffix">{formData.currency}</span>
                                 </div>
 
-                                {Number(formData.paid_amount) > 0 && (
+                                {new Decimal(formData.paid_amount || 0).gt(0) && (
                                     <div style={{ marginTop: '12px' }}>
                                         <label className="form-label" style={{ fontSize: '0.9rem' }}>{t('buying.purchase_invoices.form.payment.down_payment_method')}:</label>
                                         <div style={{ display: 'flex', gap: '16px' }}>
@@ -789,7 +652,7 @@ function PurchaseInvoiceForm() {
                                 )}
 
                                 <small style={{ color: 'var(--text-secondary)', display: 'block', marginTop: '8px' }}>
-                                    {t('buying.purchase_invoices.form.payment.remaining_note')} ({formatNumber(totals.total - formData.paid_amount)} {formData.currency})
+                                    {t('buying.purchase_invoices.form.payment.remaining_note')} ({backendTotals?.remainingBalance != null ? formatNumber(backendTotals.remainingBalance) : '—'} {formData.currency})
                                 </small>
                             </FormField>
                         )}
@@ -806,9 +669,9 @@ function PurchaseInvoiceForm() {
                     <div style={{ width: '300px', padding: '24px', background: 'var(--bg-secondary)', borderRadius: '8px' }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.purchase_invoices.form.summary.subtotal')}</span>
-                            <span>{formatNumber(totals.subtotal)} <small>{formData.currency}</small></span>
+                            <span>{totals.subtotal != null ? formatNumber(totals.subtotal) : '—'} <small>{formData.currency}</small></span>
                         </div>
-                        {totals.globalEffectPercent > 0 && totals.globalEffectType === 'markup' && (
+                        {new Decimal(totals.globalEffectPercent || 0).gt(0) && totals.globalEffectType === 'markup' && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--text-success)' }}>
                                 <span>زيادة (مجموعة) ({totals.globalEffectPercent}%)</span>
                                 <span>{formatNumber(totals.totalMarkup)} <small>{formData.currency}</small></span>
@@ -816,16 +679,16 @@ function PurchaseInvoiceForm() {
                         )}
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.purchase_invoices.form.summary.discount')}</span>
-                            <span>{formatNumber(totals.totalDiscount)} <small>{formData.currency}</small></span>
+                            <span>{totals.totalDiscount != null ? formatNumber(totals.totalDiscount) : '—'} <small>{formData.currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                             <span>{t('buying.purchase_invoices.form.summary.tax')}</span>
-                            <span>{formatNumber(totals.totalTax)} <small>{formData.currency}</small></span>
+                            <span>{totals.totalTax != null ? formatNumber(totals.totalTax) : '—'} <small>{formData.currency}</small></span>
                         </div>
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontWeight: 'bold', fontSize: '18px' }}>
                             <span>{t('buying.purchase_invoices.form.summary.grand_total')}</span>
-                            <span>{formatNumber(totals.total)} <small>{formData.currency}</small></span>
+                            <span>{totals.total != null ? formatNumber(totals.total) : '—'} <small>{formData.currency}</small></span>
                         </div>
 
                         {formData.currency !== currency && (
@@ -836,7 +699,7 @@ function PurchaseInvoiceForm() {
                                 </div>
                                 <div style={{ display: 'flex', justifyContent: 'space-between', color: 'var(--primary)', fontWeight: 'bold', marginTop: '4px' }}>
                                     <span>{t('accounting.currencies.total_base') || 'Total in Base'}:</span>
-                                    <span>{formatNumber(totals.total * formData.exchange_rate, 2)} <small>{currency}</small></span>
+                                    <span>{totals.total != null && formData.exchange_rate ? formatNumber((parseFloat(totals.total) * parseFloat(formData.exchange_rate || 1)).toFixed(2)) : '—'} <small>{currency}</small></span>
                                 </div>
                             </div>
                         )}

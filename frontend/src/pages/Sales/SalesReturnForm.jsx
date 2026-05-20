@@ -114,15 +114,13 @@ const SalesReturnForm = () => {
                     return {
                         product_id: item.product_id || '',
                         description: item.description || '',
-                        quantity: quantity,
-                        max_quantity: quantity, // Store original quantity
-                        unit_price: unitPrice,
-                        tax_rate: taxRate,
-                        discount: discount,
-                        discount_percent: discountPercent,
+                        quantity: String(item.quantity || '0'),
+                        max_quantity: String(item.quantity || '0'),
+                        unit_price: String(item.unit_price || '0'),
+                        tax_rate: item.tax_rate != null ? String(item.tax_rate) : null,
+                        discount: String(item.discount || '0'),
                         reason: '',
                         unit: item.unit || '',
-                        total: total
                     };
                 });
 
@@ -157,89 +155,70 @@ const SalesReturnForm = () => {
         setFormData({ ...formData, items: newItems });
     };
 
+    // Dumb-terminal updateItem: store raw strings, no arithmetic
     const updateItem = (index, field, value) => {
-        const newItems = formData.items.map((item, i) => {
-            if (i === index) {
-                let newValue = value;
+        setFormData(prev => {
+            const newItems = prev.items.map((item, i) => {
+                if (i !== index) return item;
+                const updated = { ...item, [field]: value };
 
-                // Validate quantity
-                if (field === 'quantity') {
-                    if (newValue > item.max_quantity) {
-                        showToast(`${t('sales.returns.form.errors.max_quantity')} (${item.max_quantity})`, 'error');
-                        newValue = item.max_quantity;
-                    }
-                }
-
-                const updated = { ...item, [field]: newValue };
-
-                // Fetch product details
-                if (field === 'product_id') {
-                    const product = products.find(p => p.id === parseInt(value));
+                // Auto-fill from product selection — store raw strings
+                if (field === 'product_id' && value) {
+                    const product = products.find(p => p.id === parseInt(value, 10));
                     if (product) {
-                        updated.description = product.item_name;
-                        // Use branch price if available, otherwise use product default
                         const branchPrices = window.__branchPrices || {};
-                        const priceInfo = branchPrices[parseInt(value)];
-                        updated.unit_price = priceInfo ? priceInfo.price : (product.selling_price || 0);
+                        const priceInfo = branchPrices[parseInt(value, 10)];
+                        updated.description = product.item_name || '';
+                        updated.unit_price = String(priceInfo ? priceInfo.price : (product.selling_price || '0'));
                         updated.unit = product.unit || 'قطعة';
-                        updated.tax_rate = null // Resolved by backend engine;
+                        updated.tax_rate = null; // Resolved by backend engine
                     }
                 }
 
-                // Calculate discount logic
-                const qty = Number(field === 'quantity' ? newValue : updated.quantity) || 0;
-                const price = Number(field === 'unit_price' ? newValue : updated.unit_price) || 0;
-                let discount = Number(updated.discount) || 0;
-                let discountPercent = Number(updated.discount_percent) || 0;
-
-                if (field === 'discount_percent') {
-                    discountPercent = Number(newValue) || 0;
-                    discount = (qty * price) * (discountPercent / 100);
-                    updated.discount = discount;
-                } else if (field === 'quantity' || field === 'unit_price') {
-                    discount = (qty * price) * (discountPercent / 100);
-                    updated.discount = discount;
+                // Quantity cap guard (display only)
+                if (field === 'quantity') {
+                    const max = parseFloat(item.max_quantity);
+                    const entered = parseFloat(value);
+                    if (!isNaN(max) && !isNaN(entered) && entered > max) {
+                        showToast(`${t('sales.returns.form.errors.max_quantity')} (${max})`, 'error');
+                        updated[field] = String(max);
+                    }
                 }
-
-                updated.discount_percent = discountPercent;
-                updated.discount = discount;
 
                 return updated;
-            }
-            return item;
+            });
+            return { ...prev, items: newItems };
         });
-        setFormData({ ...formData, items: newItems });
     };
 
-    const calculateTotals = () => {
-        let subtotal = 0;
-        let totalDiscount = 0;
-        let tax = 0;
 
-        formData.items.forEach(item => {
-            const qty = Number(item.quantity) || 0;
-            const price = Number(item.unit_price) || 0;
-            const discount = Number(item.discount) || 0;
-            const taxRate = Number(item.tax_rate) || 0;
+    const { totals: backendTotals, lines: backendLines, previewDebounced } = useInvoiceCalc();
 
-            const linePrice = qty * price;
-            const taxable = linePrice - discount;
-            const lineTax = taxable * (taxRate / 100);
-
-            subtotal += linePrice;
-            totalDiscount += discount;
-            tax += lineTax;
-        });
-
-        const total = (subtotal - totalDiscount) + tax;
-
-        // Auto-sync refund_amount with total if refund method is not 'credit'
-        if (formData.refund_method !== 'credit' && formData.refund_amount !== total) {
-            setFormData(prev => ({ ...prev, refund_amount: total }));
+    // Stream items to backend for calculation
+    useEffect(() => {
+        if (formData.items.length > 0 && formData.items.some(i => String(i.quantity || '').trim() && String(i.unit_price || '').trim())) {
+            previewDebounced({
+                lines: formData.items.map(i => ({
+                    product_id: i.product_id ? parseInt(i.product_id, 10) : null,
+                    quantity: String(i.quantity || '0'),
+                    unit_price: String(i.unit_price || '0'),
+                    tax_rate: i.tax_rate != null ? String(i.tax_rate) : null,
+                    discount: String(i.discount || '0'),
+                })),
+                branch_id: currentBranch?.id || null,
+                customer_id: formData.customer_id ? parseInt(formData.customer_id, 10) : null,
+                currency,
+            });
         }
+    }, [formData.items, formData.customer_id, currentBranch, currency, previewDebounced]);
 
-        return { subtotal: subtotal - totalDiscount, tax, total };
-    };
+
+    // Auto-sync refund_amount from backend total when method is not 'credit'
+    useEffect(() => {
+        if (formData.refund_method !== 'credit' && backendTotals?.grandTotal != null) {
+            setFormData(prev => ({ ...prev, refund_amount: String(backendTotals.grandTotal) }));
+        }
+    }, [backendTotals, formData.refund_method]);
 
     const handleSubmit = async (e) => {
         e.preventDefault();
@@ -286,7 +265,6 @@ const SalesReturnForm = () => {
         }
     };
 
-    const { subtotal, tax, total } = calculateTotals();
 
     return (
         <div className="workspace fade-in">
@@ -490,9 +468,9 @@ const SalesReturnForm = () => {
                                                     className="form-input text-center"
                                                 />
                                             </td>
-                                            <td className="font-bold">
-                                                {formatNumber((item.quantity * item.unit_price - item.discount) * (1 + item.tax_rate / 100))}
-                                            </td>
+                                             <td style={{ fontWeight: 'bold' }}>
+                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+                                             </td>
                                             <td>
                                                 <input
                                                     type="text"
@@ -569,10 +547,10 @@ const SalesReturnForm = () => {
                             <div style={{ marginTop: '15px', padding: '15px', background: 'var(--bg-tertiary)', borderRadius: '8px' }}>
                                 <FormField label={t('sales.returns.form.refund_amount')} style={{ marginBottom: '10px' }}>
                                     <input
-                                        type="number"
-                                        step="0.01"
+                                        type="text"
+                                        inputMode="decimal"
                                         value={formData.refund_amount}
-                                        onChange={(e) => setFormData({ ...formData, refund_amount: Number(e.target.value) || 0 })}
+                                        onChange={(e) => setFormData({ ...formData, refund_amount: e.target.value })}
                                         className="form-input"
                                     />
                                 </FormField>
@@ -623,11 +601,11 @@ const SalesReturnForm = () => {
                     }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.subtotal')}</span>
-                            <span>{formatNumber(subtotal)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.subtotal) : '—'} <small>{currency}</small></span>
                         </div>
                         <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '12px' }}>
                             <span style={{ color: 'var(--text-secondary)' }}>{t('sales.quotations.details.tax')}</span>
-                            <span>{formatNumber(tax)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.totalTax) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div style={{ borderTop: '1px solid var(--border-color)', margin: '16px 0' }}></div>
@@ -641,7 +619,7 @@ const SalesReturnForm = () => {
                             marginBottom: '24px'
                         }}>
                             <span>{t('sales.quotations.details.grand_total')}</span>
-                            <span>{formatNumber(total)} <small>{currency}</small></span>
+                            <span>{backendTotals ? formatNumber(backendTotals.grandTotal) : '—'} <small>{currency}</small></span>
                         </div>
 
                         <div className="form-actions" style={{ display: 'flex', flexDirection: 'column', gap: '10px' }}>

@@ -9,6 +9,7 @@ import { formatNumber } from '../../utils/format'
 import { Printer, ArrowLeft, CreditCard, Clock, CheckCircle, AlertCircle, FileText, User } from 'lucide-react'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import Decimal from 'decimal.js'
 
 function PurchaseInvoiceDetails() {
     const { t } = useTranslation()
@@ -213,13 +214,13 @@ function PurchaseInvoiceDetails() {
                                 {invoice.currency && invoice.currency !== currency && (
                                     <div className="text-end">
                                         <small className="text-success" style={{ opacity: 0.8 }}>
-                                            ≈ {formatNumber(invoice.paid_amount * invoice.exchange_rate, 2)} {currency}
+                                            ≈ {formatNumber(new Decimal(invoice.paid_amount || 0).times(invoice.exchange_rate || 1).toString(), 2)} {currency}
                                         </small>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontWeight: 'bold' }}>
                                     <span style={{ fontSize: '14px' }}>{t('buying.purchase_invoices.details.remaining_debt')}</span>
-                                    <span>{formatNumber(Number(invoice.total) - Number(invoice.paid_amount))} <small>{invoice.currency || currency}</small></span>
+                                    <span>{formatNumber(new Decimal(invoice.total || 0).minus(invoice.paid_amount || 0).toString())} <small>{invoice.currency || currency}</small></span>
                                 </div>
                             </>
                         )}

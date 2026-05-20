@@ -8,6 +8,7 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format';
 
 
 function SupplierPayments() {
@@ -99,7 +100,7 @@ function SupplierPayments() {
                                     <td className="font-medium text-purple-700">{payment.voucher_number}</td>
                                     <td>{formatShortDate(payment.voucher_date)}</td>
                                     <td>{payment.supplier_name}</td>
-                                    <td className="font-bold">{Number(payment.amount).toLocaleString()} {currency}</td>
+                                    <td className="font-bold">{formatNumber(payment.amount)} {payment.currency || currency}</td>
                                     <td>
                                         {payment.payment_method === 'cash' ? t('buying.payments.form.payment_methods.cash') : payment.payment_method === 'bank' ? t('buying.payments.form.payment_methods.bank') : t('buying.payments.form.payment_methods.check')}
                                     </td>

@@ -5,6 +5,7 @@ import { Save, Plus, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { accountingAPI, costCentersAPI } from '../../utils/api';
+import Decimal from 'decimal.js';
 import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
@@ -34,6 +35,14 @@ const JournalEntryForm = () => {
         ]
     });
     const [idempotencyKey, setIdempotencyKey] = useState(crypto.randomUUID());
+
+    const money = (value) => {
+        try {
+            return new Decimal(value || 0);
+        } catch {
+            return new Decimal(0);
+        }
+    };
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -66,8 +75,8 @@ const JournalEntryForm = () => {
     const handleLineChange = (index, field, value) => {
         const newLines = [...formData.lines];
         // Prevent negative debit/credit values
-        if ((field === 'debit' || field === 'credit') && parseFloat(value) < 0) {
-            value = 0;
+        if ((field === 'debit' || field === 'credit') && money(value).lt(0)) {
+            value = '0';
         }
         newLines[index][field] = value;
         setFormData({ ...formData, lines: newLines });
@@ -90,9 +99,9 @@ const JournalEntryForm = () => {
     };
 
     const calculateTotals = () => {
-        const totalDebit = formData.lines.reduce((sum, line) => sum + parseFloat(line.debit || 0), 0);
-        const totalCredit = formData.lines.reduce((sum, line) => sum + parseFloat(line.credit || 0), 0);
-        const difference = totalDebit - totalCredit;
+        const totalDebit = formData.lines.reduce((sum, line) => sum.plus(money(line.debit)), new Decimal(0));
+        const totalCredit = formData.lines.reduce((sum, line) => sum.plus(money(line.credit)), new Decimal(0));
+        const difference = totalDebit.minus(totalCredit);
         return { totalDebit, totalCredit, difference };
     };
 
@@ -100,12 +109,12 @@ const JournalEntryForm = () => {
         if (e) e.preventDefault();
         const { totalDebit, totalCredit, difference } = calculateTotals();
 
-        if (Math.abs(difference) > 0.01) {
+        if (difference.abs().gt('0.01')) {
             toast.error(t('accounting.journal.unbalanced_error', 'Journal Entry must be balanced'));
             return;
         }
 
-        if (totalDebit === 0) {
+        if (totalDebit.eq(0)) {
             toast.error(t('accounting.journal.zero_amount_error', 'Total amount cannot be zero'));
             return;
         }
@@ -115,14 +124,14 @@ const JournalEntryForm = () => {
             return;
         }
 
-        const hasDebit = formData.lines.some(l => parseFloat(l.debit || 0) > 0);
-        const hasCredit = formData.lines.some(l => parseFloat(l.credit || 0) > 0);
+        const hasDebit = formData.lines.some(l => money(l.debit).gt(0));
+        const hasCredit = formData.lines.some(l => money(l.credit).gt(0));
         if (!hasDebit || !hasCredit) {
             toast.error(t('accounting.journal.debit_credit_required', 'Each entry must have at least one debit line and one credit line'));
             return;
         }
 
-        const invalidLines = formData.lines.filter(l => parseFloat(l.debit || 0) > 0 && parseFloat(l.credit || 0) > 0);
+        const invalidLines = formData.lines.filter(l => money(l.debit).gt(0) && money(l.credit).gt(0));
         if (invalidLines.length > 0) {
             toast.error(t('accounting.journal.both_debit_credit', 'A line cannot have both debit and credit amounts. Please use separate lines.'));
             return;
@@ -192,7 +201,7 @@ const JournalEntryForm = () => {
                                         step="0.000001"
                                         className="form-input"
                                         value={formData.exchange_rate || 1.0}
-                                        onChange={(e) => setFormData({ ...formData, exchange_rate: parseFloat(e.target.value) || 1 })}
+                                        onChange={(e) => setFormData({ ...formData, exchange_rate: e.target.value || '1' })}
                                     />
                                 </FormField>
                             </div>
