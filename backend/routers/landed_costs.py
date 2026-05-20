@@ -227,7 +227,7 @@ def create_landed_cost(body: LandedCostCreate, request: Request, current_user: d
 
 # ─── ALLOCATE & POST ──────────────────────────────────────────────────────────
 
-@router.post("/{lc_id}/allocate", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
+@router.post("/{lc_id}/allocate", dependencies=[Depends(require_permission("buying.edit"))], response_model=Dict[str, Any])
 def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """
     توزيع التكاليف المُضافة على أصناف أمر الشراء / استلام البضاعة
@@ -241,9 +241,12 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
     user_id = _u(current_user, "user_id") or _u(current_user, "id")
     with transactional(company_id) as db:
         try:
-            lc = db.execute(text("SELECT * FROM landed_costs WHERE id = :id"), {"id": lc_id}).fetchone()
+            lc = db.execute(text("SELECT * FROM landed_costs WHERE id = :id FOR UPDATE"), {"id": lc_id}).fetchone()
             if not lc:
                 raise HTTPException(**http_error(404, "landed_cost_not_found", request))
+            branch_id = validate_branch_access(current_user, lc.branch_id, request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "landed_cost_branch_required", request))
             if lc.status == 'posted':
                 raise HTTPException(**http_error(400, "landed_cost_already_posted", request))
     
@@ -365,6 +368,12 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
                     "new_cost": str(entry["new_cost"])
                 })
     
+            db.execute(text("""
+                UPDATE landed_costs
+                SET status = 'allocated', updated_at = NOW()
+                WHERE id = :id
+                  AND status != 'posted'
+            """), {"id": lc_id})
     
             log_activity(db, user_id=user_id,
                          username=_u(current_user, "username"),
@@ -372,7 +381,8 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
                          resource_type="landed_cost",
                          resource_id=str(lc_id),
                          details={"method": method, "total_cost": str(total_cost.quantize(_D2, ROUND_HALF_UP))},
-                         request=request)
+                         request=request,
+                         branch_id=branch_id)
     
             return {
                 "message": i18n_message("landed_cost_distributed_method", request, total=str(total_cost.quantize(_D2, ROUND_HALF_UP)), method=method),
@@ -385,7 +395,7 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
             raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.post("/{lc_id}/post", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
+@router.post("/{lc_id}/post", dependencies=[Depends(require_permission("buying.approve"))], response_model=Dict[str, Any])
 def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """
     ترحيل التكاليف المُضافة — تحديث تكلفة المنتجات + قيد محاسبي

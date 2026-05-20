@@ -15,7 +15,7 @@ from datetime import date
 from dateutil.relativedelta import relativedelta
 from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
@@ -78,6 +78,7 @@ def get_recurring_template(request: Request, template_id: int, current_user: dic
         """), {"id": template_id}).fetchone()
         if not tmpl:
             raise HTTPException(**http_error(404, "template_not_found"))
+        validate_branch_access(current_user, tmpl.branch_id, request)
 
         lines = db.execute(text("""
             SELECT l.*, a.name as account_name, a.account_code as account_code
@@ -163,9 +164,12 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
     """تعديل قالب قيد متكرر"""
     with transactional(current_user.company_id) as db:
         try:
-            existing = db.execute(text("SELECT id FROM recurring_journal_templates WHERE id = :id"), {"id": template_id}).fetchone()
+            existing = db.execute(text(
+                "SELECT id, branch_id FROM recurring_journal_templates WHERE id = :id"
+            ), {"id": template_id}).fetchone()
             if not existing:
                 raise HTTPException(**http_error(404, "template_not_found"))
+            validate_branch_access(current_user, existing.branch_id, request)
     
             lines = data.pop("lines", None)
     
@@ -241,10 +245,11 @@ def delete_recurring_template(request: Request, template_id: int, current_user: 
     with transactional(current_user.company_id) as db:
         try:
             existing = db.execute(text(
-                "SELECT id, name FROM recurring_journal_templates WHERE id = :id"
+                "SELECT id, name, branch_id FROM recurring_journal_templates WHERE id = :id"
             ), {"id": template_id}).fetchone()
             if not existing:
                 raise HTTPException(**http_error(404, "template_not_found"))
+            validate_branch_access(current_user, existing.branch_id, request)
     
             db.execute(text("DELETE FROM recurring_journal_templates WHERE id = :id"), {"id": template_id})
             log_activity(db, user_id=current_user.id, username=current_user.username,
@@ -268,6 +273,7 @@ def generate_from_template(request: Request, template_id: int, current_user: dic
             ), {"id": template_id}).fetchone()
             if not tmpl:
                 raise HTTPException(**http_error(404, "template_not_found"))
+            validate_branch_access(current_user, tmpl.branch_id, request)
     
             lines = db.execute(text(
                 "SELECT * FROM recurring_journal_lines WHERE template_id = :tid ORDER BY id"
@@ -290,14 +296,17 @@ def generate_all_due_templates(request: Request, current_user: dict = Depends(ge
     with transactional(current_user.company_id) as db:
         try:
             today = date.today()
-            templates = db.execute(text("""
+            params: Dict[str, Any] = {"today": today}
+            branch_filter = branch_scope_filter(current_user, None, "branch_id", params)
+            templates = db.execute(text(f"""
                 SELECT * FROM recurring_journal_templates
                 WHERE is_active = TRUE
                   AND next_run_date <= :today
                   AND (end_date IS NULL OR end_date >= :today)
                   AND (max_runs IS NULL OR run_count < max_runs)
+                  {branch_filter}
                 ORDER BY next_run_date
-            """), {"today": today}).fetchall()
+            """), params).fetchall()
     
             generated = []
             errors = []

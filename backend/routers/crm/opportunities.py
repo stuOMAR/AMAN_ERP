@@ -139,16 +139,16 @@ def create_opportunity(data: OpportunityCreate, request: Request, current_user=D
                 FROM parties
                 WHERE id = :id AND is_customer = TRUE
             """), {"id": data.customer_id}).fetchone()
-            if credit and credit.credit_limit and float(credit.credit_limit) > 0:
-                projected = float(credit.current_balance or 0) + float(data.expected_value or 0)
-                if projected > float(credit.credit_limit):
+            if credit and credit.credit_limit and Decimal(str(credit.credit_limit)) > 0:
+                projected = Decimal(str(credit.current_balance or 0)) + Decimal(str(data.expected_value or 0))
+                if projected > Decimal(str(credit.credit_limit)):
                     raise HTTPException(
                         status_code=400,
                         detail={
                             "error": "credit_limit_exceeded",
-                            "credit_limit": float(credit.credit_limit),
-                            "current_balance": float(credit.current_balance or 0),
-                            "opportunity_value": float(data.expected_value or 0),
+                            "credit_limit": str(credit.credit_limit),
+                            "current_balance": str(credit.current_balance or 0),
+                            "opportunity_value": str(data.expected_value or 0),
                         },
                     )
 
@@ -396,10 +396,10 @@ def update_activity(opp_id: int, aid: int, data: ActivityUpdate, request: Reques
 
 class OppConvertLine(BaseModel):
     description: str
-    quantity: float = 1
-    unit_price: float = 0
+    quantity: Decimal = Decimal('1')
+    unit_price: Decimal = Decimal('0')
     tax_rate: Optional[Decimal] = None
-    discount: float = 0
+    discount: Decimal = Decimal('0')
     product_id: Optional[int] = None
 
 
@@ -485,9 +485,9 @@ def convert_to_quotation(
         """), {
             "num": quot_num,
             "cust": opp["customer_id"],
-            "sub": float(subtotal),
-            "tax": float(tax_total),
-            "tot": float(grand_total),
+            "sub": subtotal,
+            "tax": tax_total,
+            "tot": grand_total,
             "notes": notes_val,
             "uid": current_user.id,
             "branch": opp.get("branch_id")
@@ -514,10 +514,10 @@ def convert_to_quotation(
                     "desc": ln.description,
                     "qty": ln.quantity,
                     "price": ln.unit_price,
-                    "rate": float(tax_rate),
+                    "rate": tax_rate,
                     "rate_id": tax_rate_id,
                     "disc": ln.discount or 0,
-                    "tot": float(line_sub + line_tax),
+                    "tot": line_sub + line_tax,
                 })
         elif opp.get("expected_value") and opp["expected_value"] > 0:
             db.execute(text("""

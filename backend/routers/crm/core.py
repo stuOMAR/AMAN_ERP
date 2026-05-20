@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typing import Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -31,7 +32,7 @@ class OpportunityCreate(BaseModel):
     contact_phone: Optional[str] = None
     stage: str = "lead"
     probability: int = 10
-    expected_value: float = 0
+    expected_value: Decimal = Decimal('0')
     expected_close_date: Optional[str] = None
     currency: Optional[str] = None
     source: Optional[str] = None
@@ -43,7 +44,7 @@ class OpportunityUpdate(BaseModel):
     title: Optional[str] = None
     stage: Optional[str] = None
     probability: Optional[int] = None
-    expected_value: Optional[float] = None
+    expected_value: Optional[Decimal] = None
     expected_close_date: Optional[str] = None
     assigned_to: Optional[int] = None
     notes: Optional[str] = None
@@ -127,14 +128,14 @@ class CampaignUpdate(BaseModel):
     status: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
-    budget: Optional[float] = None
+    budget: Optional[Decimal] = None
     target_audience: Optional[str] = None
     description: Optional[str] = None
     segment_id: Optional[int] = None
     subject: Optional[str] = None
     content: Optional[str] = None
     scheduled_date: Optional[str] = None
-    estimated_cost: Optional[float] = None
+    estimated_cost: Optional[Decimal] = None
 
 
 class ArticleCreate(BaseModel):

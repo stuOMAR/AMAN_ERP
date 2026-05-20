@@ -35,6 +35,9 @@ from .base import EInvoiceAdapter, SubmissionResult
 
 logger = logging.getLogger(__name__)
 
+from utils.masking import redact_token
+from utils.tax_precision import dec as _dec, q_money, q_qty, q_rate, money_str, rate_str
+
 _DEFAULT_BASE_URL = "https://api.invoicing.eta.gov.eg"
 _DEFAULT_TOKEN_URL = "https://id.eta.gov.eg/connect/token"
 
@@ -62,18 +65,32 @@ def build_eta_document(
     dicts with ``description``, ``quantity``, ``unit_price``, ``tax_amount``).
     """
     lines: List[dict] = []
-    total_sales = 0.0
-    total_tax = 0.0
-    total_discount = 0.0
+    # F-NEW-023 (R-FLOAT-MONEY) — PR16-fix: replace every ``float()``
+    # cast on the money/tax/rate/qty axes with Decimal+ROUND_HALF_UP via
+    # ``utils.tax_precision``. The previous implementation routed
+    # ``exchange_rate``, ``quantity``, ``unit_price``, ``tax_amount``,
+    # ``tax_rate``, ``discount`` and the running totals through
+    # ``float(...)``, which (a) silently coerced exact decimal inputs to
+    # binary floats and (b) made the ETA payload non-deterministic
+    # across runs. We now keep the inputs in Decimal end-to-end and
+    # only quantize when serialising to wire numbers.
+    from decimal import Decimal as _Decimal
+    total_sales = _Decimal("0")
+    total_tax = _Decimal("0")
+    total_discount = _Decimal("0")
     currency = invoice.get("currency") or "EGP"
-    fx_rate = float(invoice.get("exchange_rate") or 1)
+    fx_rate = q_rate(invoice.get("exchange_rate") or 1)
     for idx, ln in enumerate(invoice.get("lines") or [], start=1):
-        qty = float(ln.get("quantity") or 0)
-        unit_price = float(ln.get("unit_price") or 0)
+        # Compute first, quantize last: ``unit_price`` is held at full
+        # Decimal precision through the multiplication so high-precision
+        # prices (e.g. 1.2345 EGP) do not lose accuracy before the
+        # ``salesTotal`` and ``netTotal`` quantization steps.
+        qty = q_qty(ln.get("quantity") or 0)
+        unit_price = _dec(ln.get("unit_price") or 0)
         sales = qty * unit_price
-        discount = float(ln.get("discount") or 0)
-        tax_amt = float(ln.get("tax_amount") or 0)
-        tax_rate = float(ln.get("tax_rate") or 0)
+        discount = _dec(ln.get("discount") or 0)
+        tax_amt = q_money(ln.get("tax_amount") or 0)
+        tax_rate = q_rate(ln.get("tax_rate") or 0)
         net = sales - discount
         total_sales += sales
         total_discount += discount
@@ -83,29 +100,38 @@ def build_eta_document(
             "itemType": ln.get("item_type") or "GS1",
             "itemCode": str(ln.get("item_code") or ln.get("sku") or ""),
             "unitType": ln.get("unit_type") or "EA",
-            "quantity": qty,
+            # ETA expects numerics on the wire; we keep the precision
+            # promised by Decimal_Money_Rule by emitting the quantized
+            # string and parsing back to a deterministic float-shaped
+            # numeric for JSON. ``float(money_str(x))`` is exact at the
+            # 2dp/4dp tax granularity so the round-trip is loss-free.
+            "quantity": float(qty),
             "internalCode": str(ln.get("internal_code") or ""),
-            "salesTotal": {"currencySold": currency, "amountEGP": round(sales, 5)},
-            "total": round(net + tax_amt, 5),
+            "salesTotal": {"currencySold": currency, "amountEGP": float(money_str(sales))},
+            "total": float(money_str(net + tax_amt)),
             "valueDifference": 0,
             "totalTaxableFees": 0,
-            "netTotal": {"currencySold": currency, "amountEGP": round(net, 5)},
+            "netTotal": {"currencySold": currency, "amountEGP": float(money_str(net))},
             "itemsDiscount": 0,
-            "discount": {"rate": 0, "amount": round(discount, 5)},
+            "discount": {"rate": 0, "amount": float(money_str(discount))},
             "taxableItems": [{
                 "taxType": "T1",        # T1 = VAT
-                "amount": round(tax_amt, 5),
+                "amount": float(money_str(tax_amt)),
                 "subType": "V001",
-                "rate": tax_rate,
+                "rate": float(rate_str(tax_rate)),
             }],
             "unitValue": {"currencySold": currency,
-                          "amountEGP": round(unit_price, 5),
-                          "currencyExchangeRate": fx_rate},
+                          "amountEGP": float(money_str(unit_price)),
+                          "currencyExchangeRate": float(rate_str(fx_rate))},
         })
 
-    grand_total = float(invoice.get("total") or (total_sales - total_discount + total_tax))
-    net_total = float(invoice.get("net_total") or (total_sales - total_discount))
-    vat_total = float(invoice.get("vat_amount") or total_tax)
+    # ``total`` / ``net_total`` / ``vat_amount`` may be supplied
+    # explicitly by the caller (e.g. the GL-derived figures); honour
+    # those when present and otherwise rebuild from the per-line
+    # Decimals so the wire totals are auditable against the JE.
+    grand_total = q_money(invoice.get("total")) if invoice.get("total") is not None else q_money(total_sales - total_discount + total_tax)
+    net_total = q_money(invoice.get("net_total")) if invoice.get("net_total") is not None else q_money(total_sales - total_discount)
+    vat_total = q_money(invoice.get("vat_amount")) if invoice.get("vat_amount") is not None else q_money(total_tax)
 
     return {
         "issuer": {
@@ -129,11 +155,11 @@ def build_eta_document(
         "purchaseOrderDescription": invoice.get("po_description") or "",
         "salesOrderReference": str(invoice.get("sales_order_ref") or ""),
         "proformaInvoiceNumber": str(invoice.get("proforma_number") or ""),
-        "totalDiscountAmount": round(total_discount, 5),
-        "totalSalesAmount": round(total_sales, 5),
-        "netAmount": round(net_total, 5),
-        "taxTotals": [{"taxType": "T1", "amount": round(vat_total, 5)}],
-        "totalAmount": round(grand_total, 5),
+        "totalDiscountAmount": float(money_str(total_discount)),
+        "totalSalesAmount": float(money_str(total_sales)),
+        "netAmount": float(money_str(net_total)),
+        "taxTotals": [{"taxType": "T1", "amount": float(money_str(vat_total))}],
+        "totalAmount": float(money_str(grand_total)),
         "extraDiscountAmount": 0,
         "totalItemsDiscountAmount": 0,
         "invoiceLines": lines,
@@ -229,6 +255,9 @@ class EgyptETAAdapter(EInvoiceAdapter):
         url = f"{self.base_url}/api/v1/documentsubmissions"
         try:
             token = self._get_token()
+            # Audit F-NEW-001: never echo the raw bearer token in logs.
+            logger.debug("[ETA] submit invoice=%s auth=%s",
+                         invoice.get("id"), redact_token(token))
             resp = requests.post(
                 url,
                 json={"documents": [document]},
@@ -237,7 +266,9 @@ class EgyptETAAdapter(EInvoiceAdapter):
                 timeout=self._timeout,
             )
         except requests.RequestException as e:
-            logger.exception("[ETA] HTTP error during submission")
+            # Use a redacted log message so any logging hook that walks the
+            # exception chain cannot reach the token via the request object.
+            logger.warning("[ETA] HTTP error during submission: %s", str(e)[:500])
             return SubmissionResult(status="error", error_message=str(e))
         if resp.status_code >= 400:
             logger.warning("[ETA] submission rejected (%s): %s",
@@ -269,12 +300,16 @@ class EgyptETAAdapter(EInvoiceAdapter):
         url = f"{self.base_url}/api/v1/documents/{document_uuid}/details"
         try:
             token = self._get_token()
+            # Audit F-NEW-002: never echo the raw bearer token in logs.
+            logger.debug("[ETA] fetch_status uuid=%s auth=%s",
+                         document_uuid, redact_token(token))
             resp = requests.get(
                 url,
                 headers={"Authorization": f"Bearer {token}"},
                 timeout=self._timeout,
             )
         except requests.RequestException as e:
+            logger.warning("[ETA] HTTP error during fetch_status: %s", str(e)[:500])
             return SubmissionResult(status="error", document_uuid=document_uuid,
                                     error_message=str(e))
         if resp.status_code >= 400:
@@ -306,6 +341,9 @@ class EgyptETAAdapter(EInvoiceAdapter):
         url = f"{self.base_url}/api/v1/documents/state/{document_uuid}/state"
         try:
             token = self._get_token()
+            # Audit F-NEW-003: never echo the raw bearer token in logs.
+            logger.debug("[ETA] cancel uuid=%s auth=%s",
+                         document_uuid, redact_token(token))
             resp = requests.put(
                 url,
                 json={"status": "cancelled", "reason": reason},
@@ -314,6 +352,7 @@ class EgyptETAAdapter(EInvoiceAdapter):
                 timeout=self._timeout,
             )
         except requests.RequestException as e:
+            logger.warning("[ETA] HTTP error during cancel: %s", str(e)[:500])
             return SubmissionResult(status="error", document_uuid=document_uuid,
                                     error_message=str(e))
         if resp.status_code >= 400:

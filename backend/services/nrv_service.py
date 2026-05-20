@@ -11,12 +11,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D4 = Decimal("0.0001")
 
 
 def run_nrv_test(
@@ -54,10 +55,10 @@ def run_nrv_test(
         selling = Decimal(str(row.unit_selling or 0))
         if qty <= 0 or cost <= 0:
             continue
-        nrv = (selling * (Decimal("1") - Decimal(str(selling_cost_rate)))).quantize(Decimal("0.0001"))
-        cost_value = (qty * cost).quantize(Decimal("0.0001"))
-        nrv_value = (qty * nrv).quantize(Decimal("0.0001"))
-        writedown = max(Decimal("0"), cost_value - nrv_value).quantize(Decimal("0.0001"))
+        nrv = (selling * (Decimal("1") - Decimal(str(selling_cost_rate)))).quantize(_D4, rounding=ROUND_HALF_UP)
+        cost_value = (qty * cost).quantize(_D4, rounding=ROUND_HALF_UP)
+        nrv_value = (qty * nrv).quantize(_D4, rounding=ROUND_HALF_UP)
+        writedown = max(Decimal("0"), cost_value - nrv_value).quantize(_D4, rounding=ROUND_HALF_UP)
         if writedown <= 0:
             continue
         db.execute(text("""

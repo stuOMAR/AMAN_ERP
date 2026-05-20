@@ -39,6 +39,16 @@ from .core import _D2, _D4
 def complete_maintenance(request: Request, maint_id: int, data: MaintenanceComplete = MaintenanceComplete(), current_user: dict = Depends(get_current_user)):
     """Complete Maintenance."""
     with transactional(current_user.company_id) as conn:
+        maintenance = conn.execute(text("""
+            SELECT m.id, a.branch_id
+            FROM asset_maintenance m
+            JOIN assets a ON a.id = m.asset_id
+            WHERE m.id = :id
+        """), {"id": maint_id}).fetchone()
+        if not maintenance:
+            raise HTTPException(**http_error(404, "maintenance_not_found", request))
+        validate_branch_access(current_user, maintenance.branch_id, request)
+
         conn.execute(text("""
             UPDATE asset_maintenance SET status = 'completed', completed_date = :d,
                 cost = COALESCE(:cost, cost) WHERE id = :id
@@ -52,19 +62,28 @@ def complete_maintenance(request: Request, maint_id: int, data: MaintenanceCompl
 # ━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
 @router.get("/{asset_id}/maintenance", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
-def list_asset_maintenance(asset_id: int, current_user: dict = Depends(get_current_user)):
+def list_asset_maintenance(asset_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """List Asset Maintenance."""
     with transactional(current_user.company_id) as conn:
+        asset = conn.execute(text("SELECT branch_id FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+        if not asset:
+            raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
         rows = conn.execute(text("SELECT * FROM asset_maintenance WHERE asset_id = :id ORDER BY scheduled_date DESC"),
                             {"id": asset_id}).fetchall()
         return [dict(r._mapping) for r in rows]
 
 
 @router.post("/{asset_id}/maintenance", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def add_maintenance(asset_id: int, data: MaintenanceCreate, current_user: dict = Depends(get_current_user)):
+def add_maintenance(asset_id: int, data: MaintenanceCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """Add Maintenance."""
     with transactional(current_user.company_id) as conn:
         try:
+            asset = conn.execute(text("SELECT branch_id FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+            if not asset:
+                raise HTTPException(**http_error(404, "asset_not_found", request))
+            validate_branch_access(current_user, asset.branch_id, request)
+
             result = conn.execute(text("""
                 INSERT INTO asset_maintenance (asset_id, maintenance_type, description,
                     scheduled_date, cost, vendor, status, notes, created_by)
@@ -79,6 +98,8 @@ def add_maintenance(asset_id: int, data: MaintenanceCreate, current_user: dict =
             conn.execute(text("UPDATE assets SET last_maintenance_date = :d WHERE id = :id"),
                          {"d": data.scheduled_date, "id": asset_id})
             return dict(result._mapping)
+        except HTTPException:
+            raise
         except Exception:
             pass
             logger.exception("Internal error")
@@ -88,4 +109,3 @@ def add_maintenance(asset_id: int, data: MaintenanceCreate, current_user: dict =
 
 
 # ---------- ASSET-005: QR / Barcode ----------
-

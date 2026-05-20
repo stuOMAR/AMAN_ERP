@@ -53,7 +53,7 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     # accounting.manage implies view + edit
     "accounting.manage": ["accounting.view", "accounting.edit"],
     # treasury.manage implies full treasury operations
-    "treasury.manage": ["treasury.view", "treasury.create", "treasury.edit", "treasury.delete"],
+    "treasury.manage": ["treasury.view", "treasury.create", "treasury.edit", "treasury.delete", "treasury.bank_details.view"],
     # taxes.manage implies taxes.view
     "taxes.manage": ["taxes.view"],
     # settings.manage implies settings.view + settings.edit

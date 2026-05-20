@@ -15,7 +15,7 @@ import hashlib
 import hmac
 import json
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Dict, Optional
 
 import requests
@@ -31,8 +31,8 @@ _ZERO_DECIMAL = {"BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "MGA", "PYG",
 def _to_minor(amount: Decimal, currency: str) -> int:
     """Convert major units → Stripe's integer minor units."""
     if currency.upper() in _ZERO_DECIMAL:
-        return int(Decimal(amount).quantize(Decimal("1")))
-    return int((Decimal(amount) * 100).quantize(Decimal("1")))
+        return int(Decimal(str(amount)).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
+    return int((Decimal(str(amount)) * 100).quantize(Decimal("1"), rounding=ROUND_HALF_UP))
 
 
 class StripeGateway(PaymentGateway):

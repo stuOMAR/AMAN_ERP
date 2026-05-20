@@ -41,8 +41,8 @@ class DeliveryLineCreate(BaseModel):
     product_id: int
     so_line_id: Optional[int] = None
     description: Optional[str] = None
-    ordered_qty: float = 0
-    delivered_qty: float = 0
+    ordered_qty: Decimal = Decimal('0')
+    delivered_qty: Decimal = Decimal('0')
     unit: Optional[str] = None
     batch_number: Optional[str] = None
     serial_numbers: Optional[str] = None
@@ -436,7 +436,7 @@ def create_invoice_from_delivery(do_id: int, request: Request, current_user: dic
     
             # Generate invoice number
             year = datetime.now().year
-            inv_number = generate_sequential_number(db, f"SINV-{year}", "invoices", "invoice_number")
+            inv_number = generate_sequential_number(db, f"SINV-{year}", "invoices", "invoice_number", branch_id=order.branch_id)
             base_currency = get_base_currency(db)
     
             # Calculate totals (tax resolved via engine)

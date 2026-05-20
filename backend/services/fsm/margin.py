@@ -5,12 +5,13 @@ Contract: see specs/024-workforce-service-comms-integrity/contracts/service-marg
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any, Optional
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
 
 
 def compute_margin(
@@ -46,8 +47,8 @@ def compute_margin(
         "service_order_id": service_order_id,
         "revenue": str(revenue),
         "cost": str(cost),
-        "margin_amount": str(margin_amount.quantize(Decimal("0.01"))),
-        "margin_pct": str(margin_pct.quantize(Decimal("0.01"))),
+        "margin_amount": str(margin_amount.quantize(_D2, rounding=ROUND_HALF_UP)),
+        "margin_pct": str(margin_pct.quantize(_D2, rounding=ROUND_HALF_UP)),
         "status": order[3],
         "kind": order[4],
     }

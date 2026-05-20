@@ -97,6 +97,23 @@ class PaymentAllocationSchema(BaseModel):
     allocated_amount: Decimal
 
 
+class SupplierPaymentPreviewRequest(BaseModel):
+    supplier_id: Optional[int] = None
+    voucher_date: Optional[date] = None
+    amount: Decimal = Decimal("0")
+    branch_id: Optional[int] = None
+    voucher_type: Optional[str] = "payment"
+    currency: Optional[str] = None
+    exchange_rate: Optional[Decimal] = Decimal("1")
+    treasury_account_id: Optional[int] = None
+    bank_account_id: Optional[int] = None
+    transaction_rate: Optional[Decimal] = None
+    allocations: List[PaymentAllocationSchema] = Field(default_factory=list)
+    auto_allocate: bool = False
+    pay_all: bool = False
+    fill_invoice_id: Optional[int] = None
+
+
 class SupplierPaymentCreate(BaseModel):
     supplier_id: int
     party_site_id: Optional[int] = None
@@ -114,4 +131,4 @@ class SupplierPaymentCreate(BaseModel):
     exchange_rate: Optional[Decimal] = Decimal("1")
     treasury_account_id: Optional[int] = None
     transaction_rate: Optional[Decimal] = None
-    allocations: List[PaymentAllocationSchema] = []
+    allocations: List[PaymentAllocationSchema] = Field(default_factory=list)

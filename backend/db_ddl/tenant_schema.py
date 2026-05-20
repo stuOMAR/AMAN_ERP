@@ -134,6 +134,10 @@ def get_foundation_tables_sql() -> str:
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_treasury_accounts_gl_account_active
+        ON treasury_accounts (gl_account_id)
+        WHERE is_active = TRUE AND gl_account_id IS NOT NULL;
+
     -- bank_accounts table removed (ARCH-006): merged into treasury_accounts
     
     CREATE TABLE IF NOT EXISTS journal_entries (
@@ -485,7 +489,10 @@ def get_additional_base_tables_sql() -> str:
         warehouse_id INTEGER REFERENCES warehouses(id),
         quantity DECIMAL(18, 4) DEFAULT 0,
         reserved_quantity DECIMAL(18, 4) DEFAULT 0,
-        available_quantity DECIMAL(18, 4) DEFAULT 0,
+        damaged_quantity DECIMAL(18, 4) DEFAULT 0,  -- INV-06: damaged/quarantined stock excluded from available
+        available_quantity DECIMAL(18, 4) GENERATED ALWAYS AS (
+            GREATEST(quantity - COALESCE(reserved_quantity, 0) - COALESCE(damaged_quantity, 0), 0)
+        ) STORED,  -- INV-05: always computed, never stale
         in_transit_quantity DECIMAL(18, 4) DEFAULT 0,  -- TASK-026: stock dispatched but not yet received
         average_cost DECIMAL(18, 4) DEFAULT 0, -- Total company-wide or per-wh cost
         policy_version INTEGER DEFAULT 1,
@@ -527,6 +534,7 @@ def get_additional_base_tables_sql() -> str:
         notes TEXT,
         status VARCHAR(20) DEFAULT 'pending',
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ,
         updated_by INTEGER REFERENCES company_users(id)
@@ -565,6 +573,7 @@ def get_additional_base_tables_sql() -> str:
         from_avg_cost_before DECIMAL(18, 4) DEFAULT 0,
         to_avg_cost_before DECIMAL(18, 4) DEFAULT 0,
         to_avg_cost_after DECIMAL(18, 4) DEFAULT 0,
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
@@ -786,6 +795,9 @@ def get_treasury_base_tables_sql() -> str:
         branch_id INTEGER REFERENCES branches(id),
         description TEXT,
         reference_number VARCHAR(100),
+        exchange_rate DECIMAL(18, 6) DEFAULT 1.0,
+        currency VARCHAR(10),
+        idempotency_key VARCHAR(64),
         status VARCHAR(20) DEFAULT 'posted',
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
@@ -975,6 +987,11 @@ def get_core_dependent_tables_sql() -> str:
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_by VARCHAR(100)
     );
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS zatca_clearance_status VARCHAR(30) NOT NULL DEFAULT 'not_required',
+        ADD COLUMN IF NOT EXISTS zatca_cleared_at TIMESTAMPTZ,
+        ADD COLUMN IF NOT EXISTS zatca_cleared_uuid VARCHAR(80),
+        ADD COLUMN IF NOT EXISTS zatca_clearance_error TEXT;
 
     CREATE TABLE IF NOT EXISTS invoice_lines (
         id SERIAL PRIMARY KEY,
@@ -1085,9 +1102,13 @@ def get_additional_dependent_tables_sql() -> str:
         po_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
         warehouse_id INTEGER NOT NULL REFERENCES warehouses(id),
         receipt_date DATE NOT NULL DEFAULT CURRENT_DATE,
+        idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_po_receipts_idempotency_key
+        ON po_receipts (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS po_receipt_lines (
         id SERIAL PRIMARY KEY,
@@ -1209,6 +1230,7 @@ def get_additional_dependent_tables_sql() -> str:
         check_number VARCHAR(50),
         check_date DATE,
         exchange_rate DECIMAL(10, 6) DEFAULT 1.0,
+        idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -1252,12 +1274,16 @@ def get_additional_dependent_tables_sql() -> str:
         notes TEXT,
         currency VARCHAR(3) DEFAULT 'SAR',
         exchange_rate DECIMAL(18, 6) DEFAULT 1.0,
+        idempotency_key VARCHAR(64),
         status VARCHAR(20) DEFAULT 'posted',
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_by VARCHAR(100)
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payment_vouchers_idempotency_key
+        ON payment_vouchers (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS payment_allocations (
         id SERIAL PRIMARY KEY,
@@ -1725,6 +1751,9 @@ def get_organization_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'draft',
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_entries_period_employee
+        ON payroll_entries (period_id, employee_id);
 
     -- ===== JOB OPENINGS & APPLICATIONS (HR Recruitment) =====
     CREATE TABLE IF NOT EXISTS job_openings (
@@ -2592,6 +2621,7 @@ def get_treasury_dependent_tables_sql() -> str:
         branch_name VARCHAR(100),
         amount DECIMAL(18, 4) NOT NULL,
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         issue_date DATE,
         due_date DATE NOT NULL,
         collection_date DATE,
@@ -2602,6 +2632,10 @@ def get_treasury_dependent_tables_sql() -> str:
         journal_entry_id INTEGER REFERENCES journal_entries(id),
         collection_journal_id INTEGER REFERENCES journal_entries(id),
         bounce_journal_id INTEGER REFERENCES journal_entries(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
+        re_presentation_count INTEGER DEFAULT 0,
+        re_presentation_date DATE,
+        re_presentation_journal_id INTEGER REFERENCES journal_entries(id),
         status VARCHAR(30) DEFAULT 'pending',
         bounce_reason TEXT,
         notes TEXT,
@@ -2619,6 +2653,7 @@ def get_treasury_dependent_tables_sql() -> str:
         branch_name VARCHAR(100),
         amount DECIMAL(18, 4) NOT NULL,
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         issue_date DATE NOT NULL,
         due_date DATE NOT NULL,
         clearance_date DATE,
@@ -2629,6 +2664,10 @@ def get_treasury_dependent_tables_sql() -> str:
         journal_entry_id INTEGER REFERENCES journal_entries(id),
         clearance_journal_id INTEGER REFERENCES journal_entries(id),
         bounce_journal_id INTEGER REFERENCES journal_entries(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
+        re_presentation_count INTEGER DEFAULT 0,
+        re_presentation_date DATE,
+        re_presentation_journal_id INTEGER REFERENCES journal_entries(id),
         status VARCHAR(30) DEFAULT 'issued',
         bounce_reason TEXT,
         notes TEXT,
@@ -2646,6 +2685,7 @@ def get_treasury_dependent_tables_sql() -> str:
         bank_name VARCHAR(200),
         amount DECIMAL(18, 4) NOT NULL,
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         issue_date DATE,
         due_date DATE NOT NULL,
         maturity_date DATE,
@@ -2656,6 +2696,7 @@ def get_treasury_dependent_tables_sql() -> str:
         journal_entry_id INTEGER REFERENCES journal_entries(id),
         collection_journal_id INTEGER REFERENCES journal_entries(id),
         protest_journal_id INTEGER REFERENCES journal_entries(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
         status VARCHAR(20) DEFAULT 'pending',
         protest_reason TEXT,
         notes TEXT,
@@ -2672,6 +2713,7 @@ def get_treasury_dependent_tables_sql() -> str:
         bank_name VARCHAR(200),
         amount DECIMAL(18, 4) NOT NULL,
         currency VARCHAR(10) DEFAULT 'SAR',
+        exchange_rate NUMERIC(18,6) DEFAULT 1,
         issue_date DATE,
         due_date DATE NOT NULL,
         maturity_date DATE,
@@ -2682,6 +2724,7 @@ def get_treasury_dependent_tables_sql() -> str:
         journal_entry_id INTEGER REFERENCES journal_entries(id),
         payment_journal_id INTEGER REFERENCES journal_entries(id),
         protest_journal_id INTEGER REFERENCES journal_entries(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
         status VARCHAR(20) DEFAULT 'issued',
         protest_reason TEXT,
         notes TEXT,
@@ -4479,6 +4522,7 @@ def get_phase_features_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         name VARCHAR(255) NOT NULL,
         parent_id INTEGER REFERENCES entity_groups(id) ON DELETE SET NULL,
+        branch_id INTEGER REFERENCES branches(id),
         company_id VARCHAR(100) NOT NULL,
         group_currency VARCHAR(10) NOT NULL DEFAULT 'SAR',
         consolidation_level INTEGER NOT NULL DEFAULT 0,
@@ -4510,6 +4554,7 @@ def get_phase_features_tables_sql() -> str:
         elimination_status VARCHAR(30) NOT NULL DEFAULT 'pending',
         elimination_journal_entry_id INTEGER,
         reference_document VARCHAR(255),
+        idempotency_key VARCHAR(120),
         created_by VARCHAR(100),
         updated_by VARCHAR(100),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -4518,6 +4563,11 @@ def get_phase_features_tables_sql() -> str:
         deleted_at TIMESTAMPTZ,
         CONSTRAINT ck_ic_txn_diff_entities CHECK (source_entity_id != target_entity_id)
     );
+    CREATE INDEX IF NOT EXISTS ix_entity_groups_branch_id
+        ON entity_groups (branch_id) WHERE is_deleted = false;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_intercompany_transactions_v2_idempotency
+        ON intercompany_transactions_v2 (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS intercompany_account_mappings (
         id SERIAL PRIMARY KEY,
@@ -4786,6 +4836,8 @@ def get_system_completion_tables_sql() -> str:
         reason TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_fiscal_period_locks_period
+        ON fiscal_period_locks (period_start, period_end);
 
     -- ===== BACKUP HISTORY =====
     CREATE TABLE IF NOT EXISTS backup_history (
@@ -5116,6 +5168,7 @@ def get_extended_features_tables_sql() -> str:
         payload JSONB,
         status VARCHAR(20) DEFAULT 'pending' CHECK (status IN ('pending', 'submitted', 'failed', 'giveup')),
         attempts INTEGER DEFAULT 0,
+        idempotency_key VARCHAR(120),
         last_error TEXT,
         last_attempt_at TIMESTAMPTZ,
         next_attempt_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -5125,6 +5178,8 @@ def get_extended_features_tables_sql() -> str:
     );
     CREATE INDEX IF NOT EXISTS ix_einvoice_outbox_due ON einvoice_outbox(status, next_attempt_at);
     CREATE INDEX IF NOT EXISTS ix_einvoice_outbox_invoice ON einvoice_outbox(invoice_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_einvoice_outbox_idempotency
+        ON einvoice_outbox (idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     -- ==========================================================================
     -- Cross-module configuration + workflow + treasury hardening tables
@@ -5343,12 +5398,26 @@ def get_extended_features_tables_sql() -> str:
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ap_aging AS
         SELECT party_id,
-               SUM(CASE WHEN NOW() - due_date <= INTERVAL '30 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS current_bucket,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '30 days' AND NOW() - due_date <= INTERVAL '60 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_30,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '60 days' AND NOW() - due_date <= INTERVAL '90 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_60,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '90 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_90_plus
-        FROM invoices
-        WHERE invoice_type = 'purchase' AND status IN ('posted', 'partially_paid')
+               SUM(CASE WHEN NOW() - due_date <= INTERVAL '30 days' THEN amount_base ELSE 0 END) AS current_bucket,
+               SUM(CASE WHEN NOW() - due_date >  INTERVAL '30 days' AND NOW() - due_date <= INTERVAL '60 days' THEN amount_base ELSE 0 END) AS bucket_30,
+               SUM(CASE WHEN NOW() - due_date >  INTERVAL '60 days' AND NOW() - due_date <= INTERVAL '90 days' THEN amount_base ELSE 0 END) AS bucket_60,
+               SUM(CASE WHEN NOW() - due_date >  INTERVAL '90 days' THEN amount_base ELSE 0 END) AS bucket_90_plus
+        FROM (
+            SELECT party_id,
+                   COALESCE(due_date, invoice_date) AS due_date,
+                   (total - COALESCE(paid_amount,0)) * COALESCE(exchange_rate,1) AS amount_base
+            FROM invoices
+            WHERE invoice_type IN ('purchase', 'purchase_debit_note')
+              AND status NOT IN ('draft', 'cancelled', 'paid')
+              AND (total - COALESCE(paid_amount,0)) > 0.01
+            UNION ALL
+            SELECT party_id,
+                   invoice_date AS due_date,
+                   -1 * total * COALESCE(exchange_rate,1) AS amount_base
+            FROM invoices
+            WHERE invoice_type IN ('purchase_credit_note', 'purchase_return')
+              AND status NOT IN ('draft', 'cancelled')
+        ) ap_docs
         GROUP BY party_id;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_ap_aging_party ON mv_ap_aging(party_id);
 
@@ -5435,6 +5504,7 @@ def get_extended_features_tables_sql() -> str:
         release_quantity DECIMAL(18, 4) DEFAULT 0,
         release_amount DECIMAL(18, 4) DEFAULT 0,
         release_date DATE,
+        idempotency_key VARCHAR(64),
         created_by VARCHAR(100),
         updated_by VARCHAR(100),
         created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -5444,6 +5514,9 @@ def get_extended_features_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS ix_blanket_po_supplier ON blanket_purchase_orders(supplier_id);
     CREATE INDEX IF NOT EXISTS ix_blanket_po_status ON blanket_purchase_orders(status);
     CREATE INDEX IF NOT EXISTS ix_blanket_po_release_bpo ON blanket_po_release_orders(blanket_po_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_blanket_po_release_idempotency_key
+        ON blanket_po_release_orders (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     -- ========== US13: Shop Floor Logging ==========
     CREATE TABLE IF NOT EXISTS shop_floor_logs (
@@ -6234,6 +6307,35 @@ def get_gl_integrity_guards_sql() -> str:
         END IF;
     END $chk$;
 
+    -- FIN-C9: a journal line's booking currency must match the posting
+    -- account currency when that account is currency-restricted. Use
+    -- txn_currency/txn_amount for the original transaction currency in
+    -- cross-currency workflows.
+    CREATE OR REPLACE FUNCTION assert_journal_line_account_currency()
+    RETURNS trigger AS $fncur$
+    DECLARE
+        v_account_currency TEXT;
+    BEGIN
+        SELECT currency INTO v_account_currency
+        FROM accounts
+        WHERE id = NEW.account_id;
+
+        IF v_account_currency IS NOT NULL
+           AND NEW.currency IS NOT NULL
+           AND UPPER(v_account_currency) <> UPPER(NEW.currency) THEN
+            RAISE EXCEPTION 'Journal line currency % does not match account currency % for account %',
+                NEW.currency, v_account_currency, NEW.account_id
+                USING ERRCODE = '23514';
+        END IF;
+        RETURN NEW;
+    END;
+    $fncur$ LANGUAGE plpgsql;
+
+    DROP TRIGGER IF EXISTS trg_journal_line_account_currency ON journal_lines;
+    CREATE TRIGGER trg_journal_line_account_currency
+        BEFORE INSERT OR UPDATE OF account_id, currency ON journal_lines
+        FOR EACH ROW EXECUTE FUNCTION assert_journal_line_account_currency();
+
     -- DB-C3: status vocabulary CHECK on journal_entries
     DO $st$
     BEGIN
@@ -6253,6 +6355,7 @@ def get_gl_integrity_guards_sql() -> str:
     CREATE OR REPLACE FUNCTION assert_period_open() RETURNS trigger AS $fn1$
     DECLARE
         v_closed BOOLEAN;
+        v_locked BOOLEAN;
     BEGIN
         IF NEW.status IS DISTINCT FROM 'posted' THEN
             RETURN NEW;
@@ -6264,6 +6367,15 @@ def get_gl_integrity_guards_sql() -> str:
         LIMIT 1;
         IF v_closed THEN
             RAISE EXCEPTION 'Posting into a closed fiscal period is forbidden (entry_date=%)', NEW.entry_date
+                USING ERRCODE = '23514';
+        END IF;
+        SELECT TRUE INTO v_locked
+        FROM fiscal_period_locks
+        WHERE NEW.entry_date BETWEEN period_start AND period_end
+          AND is_locked = TRUE
+        LIMIT 1;
+        IF v_locked THEN
+            RAISE EXCEPTION 'Posting into a locked fiscal period is forbidden (entry_date=%)', NEW.entry_date
                 USING ERRCODE = '23514';
         END IF;
         RETURN NEW;
@@ -6690,6 +6802,8 @@ def get_gl_integrity_guards_sql() -> str:
         period_end DATE,
         source_format VARCHAR(20),        -- mt940 | csv | openbanking
         source_filename TEXT,
+        source_hash VARCHAR(64),
+        source_file_hash VARCHAR(64),
         imported_by INTEGER,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -6704,6 +6818,9 @@ def get_gl_integrity_guards_sql() -> str:
         ON bank_statement_lines (reconciliation_id);
     CREATE INDEX IF NOT EXISTS idx_bsl_unreconciled
         ON bank_statement_lines (is_reconciled) WHERE is_reconciled = FALSE;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bsl_matched_journal_line
+        ON bank_statement_lines (matched_journal_line_id)
+        WHERE matched_journal_line_id IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS wht_rules (
         id SERIAL PRIMARY KEY,
@@ -7200,6 +7317,7 @@ def get_feature023_tables_sql() -> str:
         invoice_id          BIGINT          NOT NULL,
         state               VARCHAR(20)     NOT NULL DEFAULT 'pending',
         attempts            INT             NOT NULL DEFAULT 0,
+        max_attempts        INT             NOT NULL DEFAULT 5,
         next_attempt_at     TIMESTAMPTZ     NOT NULL DEFAULT clock_timestamp(),
         last_error          TEXT,
         idempotency_key     VARCHAR(64),
@@ -7547,4 +7665,102 @@ def get_feature025_settings_seed_sql() -> str:
         ('backup.max_consecutive_failures', '3'),
         ('backup.offsite_provider', 's3')
     ON CONFLICT (setting_key) DO NOTHING;
+    """
+
+
+def get_audit_h_ddl_sync_sql() -> str:
+    """Audit H batch 10: DDL sync for High-tier remediation findings.
+
+    Mirrors `backend/alembic/versions/0030_audit_h_ddl_sync.py` so newly
+    provisioned tenants converge with migrated tenants. Closes:
+
+    * F-NEW-019: ``treasury_transactions.idempotency_key`` + partial unique
+      index used by Batch 11 (Idempotency-Key wiring on treasury POSTs).
+    * F-NEW-020: ``bank_statements.source_hash`` + per-(bank_account_id)
+      partial unique index used by ``/finance/bank-feeds/import`` to
+      reject duplicate uploads.
+    * F-NEW-021: ``zatca_outbox.last_idempotency_key`` recorded by the
+      outbox reprocess admin endpoint.
+    * F-NEW-022: ``zatca_csid`` table (lifecycle tracking for ZATCA Phase 2
+      Cryptographic Stamp Identifiers; mirrors alembic 0015_zatca_csid.py).
+
+    All statements are idempotent (``IF NOT EXISTS``) so re-running on a
+    tenant that already converged is a no-op.
+    """
+    return """
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Audit H / Batch 10 — DDL sync (F-NEW-019..022)
+    -- ═══════════════════════════════════════════════════════════════════
+
+    -- F-NEW-019: treasury_transactions.idempotency_key
+    ALTER TABLE treasury_transactions
+        ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(120);
+    ALTER TABLE treasury_transactions
+        ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1;
+    ALTER TABLE treasury_transactions
+        ADD COLUMN IF NOT EXISTS currency VARCHAR(10);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_treasury_transactions_idempotency
+        ON treasury_transactions (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
+    -- F-NEW-020: bank_statements.source_hash (SHA-256 hex of raw payload)
+    ALTER TABLE bank_statements
+        ADD COLUMN IF NOT EXISTS source_hash VARCHAR(64);
+    ALTER TABLE bank_statements
+        ADD COLUMN IF NOT EXISTS source_file_hash VARCHAR(64);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_statements_source_hash
+        ON bank_statements (bank_account_id, source_hash)
+        WHERE source_hash IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_statements_source_file_hash
+        ON bank_statements (bank_account_id, source_file_hash)
+        WHERE source_file_hash IS NOT NULL;
+
+    ALTER TABLE checks_receivable ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1;
+    ALTER TABLE checks_receivable ADD COLUMN IF NOT EXISTS party_site_id INTEGER REFERENCES party_sites(id);
+    ALTER TABLE checks_receivable ADD COLUMN IF NOT EXISTS re_presentation_count INTEGER DEFAULT 0;
+    ALTER TABLE checks_receivable ADD COLUMN IF NOT EXISTS re_presentation_date DATE;
+    ALTER TABLE checks_receivable ADD COLUMN IF NOT EXISTS re_presentation_journal_id INTEGER REFERENCES journal_entries(id);
+
+    ALTER TABLE checks_payable ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1;
+    ALTER TABLE checks_payable ADD COLUMN IF NOT EXISTS party_site_id INTEGER REFERENCES party_sites(id);
+    ALTER TABLE checks_payable ADD COLUMN IF NOT EXISTS re_presentation_count INTEGER DEFAULT 0;
+    ALTER TABLE checks_payable ADD COLUMN IF NOT EXISTS re_presentation_date DATE;
+    ALTER TABLE checks_payable ADD COLUMN IF NOT EXISTS re_presentation_journal_id INTEGER REFERENCES journal_entries(id);
+
+    ALTER TABLE notes_receivable ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1;
+    ALTER TABLE notes_receivable ADD COLUMN IF NOT EXISTS party_site_id INTEGER REFERENCES party_sites(id);
+    ALTER TABLE notes_payable ADD COLUMN IF NOT EXISTS exchange_rate NUMERIC(18,6) DEFAULT 1;
+    ALTER TABLE notes_payable ADD COLUMN IF NOT EXISTS party_site_id INTEGER REFERENCES party_sites(id);
+
+    -- F-NEW-021: zatca_outbox.last_idempotency_key
+    ALTER TABLE zatca_outbox
+        ADD COLUMN IF NOT EXISTS last_idempotency_key VARCHAR(64);
+    CREATE INDEX IF NOT EXISTS ix_zatca_outbox_last_idempotency
+        ON zatca_outbox (tenant_id, last_idempotency_key)
+        WHERE last_idempotency_key IS NOT NULL;
+
+    -- F-NEW-022: zatca_csid table (CSID lifecycle tracking for ZATCA Phase 2)
+    CREATE TABLE IF NOT EXISTS zatca_csid (
+        id              SERIAL PRIMARY KEY,
+        environment     VARCHAR(20) NOT NULL DEFAULT 'production'
+                        CHECK (environment IN ('compliance','production')),
+        pcsid           TEXT NOT NULL,
+        secret_encrypted TEXT NOT NULL,
+        common_name     VARCHAR(200),
+        serial_number   VARCHAR(80),
+        issued_at       TIMESTAMPTZ NOT NULL,
+        expires_at      TIMESTAMPTZ NOT NULL,
+        status          VARCHAR(20) NOT NULL DEFAULT 'active'
+                        CHECK (status IN ('active','expired','revoked','superseded')),
+        last_alert_at   TIMESTAMPTZ,
+        last_alert_threshold_days INTEGER,
+        renewed_to_id   INTEGER REFERENCES zatca_csid(id) ON DELETE SET NULL,
+        created_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at      TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CHECK (expires_at > issued_at)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_zatca_csid_active
+        ON zatca_csid (environment) WHERE status = 'active';
+    CREATE INDEX IF NOT EXISTS ix_zatca_csid_expiring
+        ON zatca_csid (expires_at) WHERE status = 'active';
     """

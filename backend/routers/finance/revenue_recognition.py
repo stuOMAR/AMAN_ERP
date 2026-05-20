@@ -107,7 +107,7 @@ def create_revenue_schedule(data: RevenueScheduleCreate, request: Request, curre
                     "period": period_start.strftime("%Y-%m"),
                     "start_date": period_start.isoformat(),
                     "end_date": period_end.isoformat(),
-                    "amount": float(amt),
+                    "amount": str(amt),
                     "recognized": False,
                 })
         elif data.method == "percentage_completion":
@@ -116,14 +116,14 @@ def create_revenue_schedule(data: RevenueScheduleCreate, request: Request, curre
                 lines.append({
                     "milestone": f"مرحلة {i + 1}",
                     "percentage": (i + 1) * 25,
-                    "amount": float((total_amount * Decimal("0.25")).quantize(_D2, ROUND_HALF_UP)),
+                    "amount": str((total_amount * Decimal("0.25")).quantize(_D2, ROUND_HALF_UP)),
                     "recognized": False,
                 })
         else:
             lines.append({
                 "milestone": "إنجاز كامل",
                 "percentage": 100,
-                "amount": float(_dec(data.total_amount).quantize(_D2, ROUND_HALF_UP)),
+                "amount": str(_dec(data.total_amount).quantize(_D2, ROUND_HALF_UP)),
                 "recognized": False,
             })
 
@@ -253,8 +253,8 @@ def recognize_revenue_period(schedule_id: int, request: Request, period_index: i
         db.commit()
         return {
             "message": i18n_message("revenue_recognized_amount", request),
-            "recognized_total": float(new_recognized.quantize(_D2, ROUND_HALF_UP)),
-            "remaining": float(max(new_deferred, Decimal("0")).quantize(_D2, ROUND_HALF_UP)),
+            "recognized_total": str(new_recognized.quantize(_D2, ROUND_HALF_UP)),
+            "remaining": str(max(new_deferred, Decimal("0")).quantize(_D2, ROUND_HALF_UP)),
             "status": new_status,
         }
     except HTTPException:

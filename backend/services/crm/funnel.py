@@ -4,9 +4,12 @@ Feature 023 — T056.  Contract: contracts/crm-velocity-funnel.md
 """
 from __future__ import annotations
 
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import text
+
+_D4 = Decimal("0.0001")
 
 
 def compute_funnel(
@@ -55,7 +58,11 @@ def compute_funnel(
         to_stage = row.to_stage
         count = int(row.transition_count)
         denominator = entry_map.get(from_stage, 0)
-        conversion_rate = round(count / denominator, 4) if denominator > 0 else 0
+        conversion_rate = (
+            (Decimal(count) / Decimal(denominator)).quantize(_D4, rounding=ROUND_HALF_UP)
+            if denominator > 0
+            else Decimal("0")
+        )
 
         result.append({
             "from_stage": from_stage,

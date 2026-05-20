@@ -24,18 +24,58 @@ def _dec(v) -> Decimal:
     return Decimal(str(v if v is not None else 0))
 
 
+def _branch_allowed(branch_id: Any, branch_scope: Optional[Dict[str, Any]]) -> bool:
+    if not branch_scope:
+        return True
+    if branch_scope.get("branch_id") is not None:
+        return branch_id is not None and int(branch_id) == int(branch_scope["branch_id"])
+    branch_ids = branch_scope.get("branch_ids")
+    if branch_ids is None:
+        return True
+    if branch_id is None:
+        return False
+    return int(branch_id) in {int(bid) for bid in branch_ids}
+
+
+def _branch_filter_sql(
+    branch_scope: Optional[Dict[str, Any]],
+    source_column: str,
+    target_column: Optional[str],
+    params: Dict[str, Any],
+) -> str:
+    if not branch_scope:
+        return ""
+    if branch_scope.get("branch_id") is not None:
+        params["branch_id"] = int(branch_scope["branch_id"])
+        if target_column:
+            return f" AND ({source_column} = :branch_id OR {target_column} = :branch_id)"
+        return f" AND {source_column} = :branch_id"
+    branch_ids = branch_scope.get("branch_ids")
+    if branch_ids is None:
+        return ""
+    if not branch_ids:
+        return " AND 1=0"
+    params["allowed_branch_ids"] = [int(bid) for bid in branch_ids]
+    if target_column:
+        return f" AND ({source_column} = ANY(:allowed_branch_ids) OR {target_column} = ANY(:allowed_branch_ids))"
+    return f" AND {source_column} = ANY(:allowed_branch_ids)"
+
+
 # ---------------------------------------------------------------------------
 # Entity Group CRUD
 # ---------------------------------------------------------------------------
 
-def get_entity_tree(company_id: str) -> List[Dict[str, Any]]:
+def get_entity_tree(company_id: str, branch_scope: Optional[Dict[str, Any]] = None) -> List[Dict[str, Any]]:
     """Return all entity groups as a flat list (frontend builds the tree)."""
     with db_connection(company_id) as conn:
+        params: Dict[str, Any] = {}
+        branch_filter = _branch_filter_sql(branch_scope, "branch_id", None, params)
         rows = conn.execute(text(
-            "SELECT id, name, parent_id, company_id, group_currency, consolidation_level, "
-            "created_at, updated_at FROM entity_groups ORDER BY consolidation_level, name"
-        )).fetchall()
-        cols = ["id", "name", "parent_id", "company_id", "group_currency",
+            "SELECT id, name, parent_id, branch_id, company_id, group_currency, consolidation_level, "
+            f"created_at, updated_at FROM entity_groups WHERE is_deleted = false {branch_filter} "
+            "ORDER BY consolidation_level, name"
+        ), params).fetchall()
+        cols = ["id", "name", "parent_id", "branch_id", "company_id", "group_currency",
                 "consolidation_level", "created_at", "updated_at"]
         return [dict(zip(cols, r)) for r in rows]
 
@@ -54,19 +94,20 @@ def create_entity_group(data: Dict[str, Any], company_id: str, user_id: int) -> 
                 level = parent[0] + 1
 
         row = conn.execute(text("""
-            INSERT INTO entity_groups (name, parent_id, company_id, group_currency, consolidation_level, created_by)
-            VALUES (:name, :parent_id, :company_id, :currency, :level, :uid)
-            RETURNING id, name, parent_id, company_id, group_currency, consolidation_level, created_at
+            INSERT INTO entity_groups (name, parent_id, branch_id, company_id, group_currency, consolidation_level, created_by)
+            VALUES (:name, :parent_id, :branch_id, :company_id, :currency, :level, :uid)
+            RETURNING id, name, parent_id, branch_id, company_id, group_currency, consolidation_level, created_at
         """), {
             "name": data["name"],
             "parent_id": data.get("parent_id"),
+            "branch_id": data.get("branch_id"),
             "company_id": data.get("company_id", company_id),
             "currency": data.get("group_currency", "SAR"),
             "level": level,
             "uid": str(user_id),
         }).fetchone()
         conn.commit()
-        cols = ["id", "name", "parent_id", "company_id", "group_currency",
+        cols = ["id", "name", "parent_id", "branch_id", "company_id", "group_currency",
                 "consolidation_level", "created_at"]
         return dict(zip(cols, row))
 
@@ -92,6 +133,9 @@ def update_entity_group(
     if "parent_id" in data:
         fields.append("parent_id = :parent_id")
         params["parent_id"] = data["parent_id"]
+    if "branch_id" in data:
+        fields.append("branch_id = :branch_id")
+        params["branch_id"] = data["branch_id"]
     if "group_currency" in data and data["group_currency"]:
         fields.append("group_currency = :currency")
         params["currency"] = str(data["group_currency"]).upper()
@@ -120,14 +164,14 @@ def update_entity_group(
             UPDATE entity_groups
                SET {', '.join(fields)}
              WHERE id = :id
-             RETURNING id, name, parent_id, company_id, group_currency,
-                       consolidation_level, created_at, updated_at
+	             RETURNING id, name, parent_id, branch_id, company_id, group_currency,
+	                       consolidation_level, created_at, updated_at
             """
         ), params).fetchone()
         if not row:
             raise ValueError("Entity not found")
         conn.commit()
-        cols = ["id", "name", "parent_id", "company_id", "group_currency",
+        cols = ["id", "name", "parent_id", "branch_id", "company_id", "group_currency",
                 "consolidation_level", "created_at", "updated_at"]
         return dict(zip(cols, row))
 
@@ -140,6 +184,9 @@ def create_transaction(
     data: Dict[str, Any],
     company_id: str,
     user_id: int,
+    *,
+    idempotency_key: Optional[str] = None,
+    branch_scope: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create an intercompany transaction and post reciprocal journal entries.
@@ -182,6 +229,18 @@ def create_transaction(
     )
 
     with db_connection(company_id) as conn:
+        if idempotency_key:
+            existing = conn.execute(text("""
+                SELECT id, source_journal_entry_id, target_journal_entry_id, reference_document,
+                       transaction_currency, transaction_amount, source_amount, source_currency,
+                       target_amount, target_currency, exchange_rate, idempotency_key
+                FROM intercompany_transactions_v2
+                WHERE idempotency_key = :key AND is_deleted = false
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return dict(existing._mapping) | {"idempotent": True}
+
         # Resolve entity names and branches
         src = conn.execute(
             text("SELECT id, name, company_id, branch_id, group_currency FROM entity_groups WHERE id = :id"),
@@ -196,6 +255,8 @@ def create_transaction(
 
         src_branch_id = src.branch_id
         tgt_branch_id = tgt.branch_id
+        if not _branch_allowed(src_branch_id, branch_scope) or not _branch_allowed(tgt_branch_id, branch_scope):
+            raise PermissionError("access_denied")
 
         # Functional currency of each leg = entity.group_currency. Falls back
         # to the request's source_currency / SAR for legacy data without it.
@@ -204,9 +265,22 @@ def create_transaction(
 
         # Pull rates against base. Base = currency flagged is_base
         # (defaults to SAR for legacy tenants).
-        rate_rows = conn.execute(text(
-            "SELECT code, current_rate, is_base FROM currencies WHERE is_active = TRUE"
-        )).fetchall()
+        # Lock rates at transaction date (Constitution §1: exchange rate locked at transaction date)
+        today_str = date.today().isoformat()
+        rate_rows = conn.execute(text("""
+            SELECT c.code,
+                   COALESCE(
+                       (SELECT er.rate FROM exchange_rates er
+                        WHERE er.currency_id = c.id
+                          AND er.rate_date <= :today
+                        ORDER BY er.rate_date DESC LIMIT 1),
+                       c.current_rate,
+                       1
+                   ) AS current_rate,
+                   c.is_base
+            FROM currencies c
+            WHERE c.is_active = TRUE
+        """), {"today": today_str}).fetchall()
         rates: Dict[str, Decimal] = {}
         base_currency = "SAR"
         for r in rate_rows:
@@ -290,6 +364,32 @@ def create_transaction(
         today = date.today().isoformat()
         ref = data.get("reference_document") or f"IC-{datetime.now().strftime('%Y%m%d%H%M%S')}"
 
+        row = conn.execute(text("""
+            INSERT INTO intercompany_transactions_v2
+                (source_entity_id, target_entity_id, transaction_type,
+                 source_amount, source_currency, target_amount, target_currency,
+                 transaction_currency, transaction_amount,
+                 exchange_rate, reference_document, idempotency_key, created_by)
+            VALUES
+                (:src_eid, :tgt_eid, :txn_type,
+                 0, :src_curr, 0, :tgt_curr,
+                 :txn_curr, :txn_amt,
+                 1, :ref, :idem, :uid)
+            RETURNING id
+        """), {
+            "src_eid": data["source_entity_id"],
+            "tgt_eid": data["target_entity_id"],
+            "txn_type": data.get("transaction_type", "sale"),
+            "src_curr": src_currency,
+            "tgt_curr": tgt_currency,
+            "txn_curr": transaction_currency,
+            "txn_amt": str(transaction_amount),
+            "ref": ref,
+            "idem": idempotency_key,
+            "uid": str(user_id),
+        }).fetchone()
+        txn_id = int(row[0])
+
         # Both legs preserve the same (txn_currency, txn_amount) so that
         # consolidation/elimination matches them deterministically across
         # branches even when functional FX values differ.
@@ -318,9 +418,11 @@ def create_transaction(
             user_id=user_id,
             branch_id=src_branch_id,
             reference=ref,
-            source="intercompany",
+            source="intercompany_source",
+            source_id=txn_id,
+            idempotency_key=f"intercompany:{idempotency_key}:source" if idempotency_key else None,
             currency=src_currency,
-            exchange_rate=float(src_line_rate),
+            exchange_rate=src_line_rate,
         )
 
         # --- Target entity JE: Dr Expense/COGS, Cr IC Payable (in tgt_func) ---
@@ -343,35 +445,34 @@ def create_transaction(
             user_id=user_id,
             branch_id=tgt_branch_id,
             reference=ref,
-            source="intercompany",
+            source="intercompany_target",
+            source_id=txn_id,
+            idempotency_key=f"intercompany:{idempotency_key}:target" if idempotency_key else None,
             currency=tgt_currency,
-            exchange_rate=float(tgt_line_rate),
+            exchange_rate=tgt_line_rate,
         )
 
-        # Insert the IC transaction record
         cross_rate = (
             (source_func_amount / target_func_amount)
             if target_func_amount and target_func_amount > 0 else Decimal("1")
         )
 
-        row = conn.execute(text("""
-            INSERT INTO intercompany_transactions_v2
-                (source_entity_id, target_entity_id, transaction_type,
-                 source_amount, source_currency, target_amount, target_currency,
-                 transaction_currency, transaction_amount,
-                 exchange_rate, source_journal_entry_id, target_journal_entry_id,
-                 reference_document, created_by)
-            VALUES
-                (:src_eid, :tgt_eid, :txn_type,
-                 :src_amt, :src_curr, :tgt_amt, :tgt_curr,
-                 :txn_curr, :txn_amt,
-                 :rate, :src_je, :tgt_je,
-                 :ref, :uid)
-            RETURNING id
+        conn.execute(text("""
+            UPDATE intercompany_transactions_v2
+               SET source_amount = :src_amt,
+                   source_currency = :src_curr,
+                   target_amount = :tgt_amt,
+                   target_currency = :tgt_curr,
+                   transaction_currency = :txn_curr,
+                   transaction_amount = :txn_amt,
+                   exchange_rate = :rate,
+                   source_journal_entry_id = :src_je,
+                   target_journal_entry_id = :tgt_je,
+                   updated_by = :uid,
+                   updated_at = NOW()
+             WHERE id = :txn_id
         """), {
-            "src_eid": data["source_entity_id"],
-            "tgt_eid": data["target_entity_id"],
-            "txn_type": data.get("transaction_type", "sale"),
+            "txn_id": txn_id,
             "src_amt": str(source_func_amount),
             "src_curr": src_currency,
             "tgt_amt": str(target_func_amount),
@@ -383,11 +484,11 @@ def create_transaction(
             "tgt_je": target_je_id,
             "ref": ref,
             "uid": str(user_id),
-        }).fetchone()
+        })
         conn.commit()
 
         return {
-            "id": row[0],
+            "id": txn_id,
             "source_journal_entry_id": source_je_id,
             "target_journal_entry_id": target_je_id,
             "reference_document": ref,
@@ -398,6 +499,7 @@ def create_transaction(
             "target_amount": str(target_func_amount),
             "target_currency": tgt_currency,
             "exchange_rate": str(cross_rate),
+            "idempotency_key": idempotency_key,
         }
 
 
@@ -410,6 +512,7 @@ def get_transactions(
     status_filter: Optional[str] = None,
     entity_id: Optional[int] = None,
     branch_id: Optional[int] = None,
+    branch_scope: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     with db_connection(company_id) as conn:
         conditions = ["1=1"]
@@ -423,6 +526,8 @@ def get_transactions(
         if branch_id:
             conditions.append("(se.branch_id = :branch_id OR te.branch_id = :branch_id)")
             params["branch_id"] = branch_id
+        conditions.append("t.is_deleted = false")
+        scope_filter = _branch_filter_sql(branch_scope, "se.branch_id", "te.branch_id", params)
 
         rows = conn.execute(text(f"""
             SELECT t.*, se.name as source_entity_name, te.name as target_entity_name,
@@ -431,20 +536,23 @@ def get_transactions(
             LEFT JOIN entity_groups se ON se.id = t.source_entity_id
             LEFT JOIN entity_groups te ON te.id = t.target_entity_id
             WHERE {' AND '.join(conditions)}
+            {scope_filter}
             ORDER BY t.created_at DESC
         """), params).fetchall()
         return [dict(row._mapping) for row in rows]
 
 
-def get_transaction_by_id(txn_id: int, company_id: str) -> Optional[Dict[str, Any]]:
+def get_transaction_by_id(txn_id: int, company_id: str, branch_scope: Optional[Dict[str, Any]] = None) -> Optional[Dict[str, Any]]:
     with db_connection(company_id) as conn:
+        params: Dict[str, Any] = {"id": txn_id}
+        scope_filter = _branch_filter_sql(branch_scope, "se.branch_id", "te.branch_id", params)
         row = conn.execute(text("""
             SELECT t.*, se.name as source_entity_name, te.name as target_entity_name
             FROM intercompany_transactions_v2 t
             LEFT JOIN entity_groups se ON se.id = t.source_entity_id
             LEFT JOIN entity_groups te ON te.id = t.target_entity_id
-            WHERE t.id = :id
-        """), {"id": txn_id}).fetchone()
+            WHERE t.id = :id AND t.is_deleted = false
+            """ + scope_filter), params).fetchone()
         if not row:
             return None
         return dict(row._mapping)
@@ -640,9 +748,11 @@ def _get_descendant_ids(conn, group_id: int) -> List[int]:
 # Intercompany Balances Report
 # ---------------------------------------------------------------------------
 
-def get_intercompany_balances(company_id: str) -> Dict[str, Any]:
+def get_intercompany_balances(company_id: str, branch_scope: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
     """Report outstanding (pending) IC balances grouped by entity pair."""
     with db_connection(company_id) as conn:
+        params: Dict[str, Any] = {}
+        scope_filter = _branch_filter_sql(branch_scope, "se.branch_id", "te.branch_id", params)
         rows = conn.execute(text("""
             SELECT t.source_entity_id, se.name as source_entity_name,
                    t.target_entity_id, te.name as target_entity_name,
@@ -653,26 +763,33 @@ def get_intercompany_balances(company_id: str) -> Dict[str, Any]:
             JOIN entity_groups se ON se.id = t.source_entity_id
             JOIN entity_groups te ON te.id = t.target_entity_id
             WHERE t.elimination_status = 'pending'
+              AND t.is_deleted = false
+              """ + scope_filter + """
             GROUP BY t.source_entity_id, se.name, t.target_entity_id, te.name, t.source_currency
             ORDER BY net_amount DESC
-        """)).fetchall()
+        """), params).fetchall()
 
         balances = []
-        total = Decimal("0")
+        totals_by_currency: dict = {}
         for r in rows:
             amt = _dec(r[4])
+            currency = str(r[5] or "SAR")
             balances.append({
                 "source_entity_id": r[0],
                 "source_entity_name": r[1],
                 "target_entity_id": r[2],
                 "target_entity_name": r[3],
                 "net_amount": amt,
-                "currency": r[5],
+                "currency": currency,
                 "pending_count": r[6],
             })
-            total += amt
+            totals_by_currency[currency] = totals_by_currency.get(currency, Decimal("0")) + amt
 
-        return {"balances": balances, "total_pending": total}
+        return {
+            "balances": balances,
+            "total_pending_by_currency": {k: str(v) for k, v in totals_by_currency.items()},
+            "total_pending": str(next(iter(totals_by_currency.values()))) if len(totals_by_currency) == 1 else None,
+        }
 
 
 # ---------------------------------------------------------------------------

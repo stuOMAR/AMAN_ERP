@@ -13,11 +13,12 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 DEFAULT_TOLERANCE = Decimal("0.01")
+_D2 = Decimal("0.01")
 
 
 def get_trial_balance(db: Any, tenant_id: str, company_id: str,
                       as_of_date: str | None = None,
-                      tolerance: float | None = None) -> dict[str, Any]:
+                      tolerance: Decimal | str | None = None) -> dict[str, Any]:
     """Generate trial balance from GL.
 
     Uses account_classifications for sign logic. Reports drift from
@@ -72,7 +73,7 @@ def get_trial_balance(db: Any, tenant_id: str, company_id: str,
         rows = result.fetchall()
     except Exception as exc:
         logger.error("Trial balance query failed: %s", exc)
-        return {"rows": [], "balanced": False, "total_drift": 0, "tolerance": float(tol)}
+        return {"rows": [], "balanced": False, "total_drift": "0.00", "tolerance": str(tol)}
 
     output_rows = []
     total_debit = Decimal("0")
@@ -98,22 +99,22 @@ def get_trial_balance(db: Any, tenant_id: str, company_id: str,
             "account_name": row[1],
             "account_code": row[2],
             "normal_side": normal_side,
-            "debit": float(debit),
-            "credit": float(credit),
-            "balance": float(balance),
+            "debit": str(debit.quantize(_D2, rounding=ROUND_HALF_UP)),
+            "credit": str(credit.quantize(_D2, rounding=ROUND_HALF_UP)),
+            "balance": str(balance.quantize(_D2, rounding=ROUND_HALF_UP)),
         })
 
         total_debit += debit
         total_credit += credit
 
-    drift = (total_debit - total_credit).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+    drift = (total_debit - total_credit).quantize(_D2, rounding=ROUND_HALF_UP)
     balanced = abs(drift) <= tol
 
     return {
         "rows": output_rows,
         "balanced": balanced,
-        "total_drift": float(drift),
-        "tolerance": float(tol),
-        "total_debit": float(total_debit.quantize(Decimal("0.01"))),
-        "total_credit": float(total_credit.quantize(Decimal("0.01"))),
+        "total_drift": str(drift),
+        "tolerance": str(tol),
+        "total_debit": str(total_debit.quantize(_D2, rounding=ROUND_HALF_UP)),
+        "total_credit": str(total_credit.quantize(_D2, rounding=ROUND_HALF_UP)),
     }

@@ -18,7 +18,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
-from utils.currency_display import base_to_display_amount, resolve_display_currency
+from utils.currency_display import base_to_display_decimal, resolve_display_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
@@ -84,16 +84,16 @@ def get_accounting_summary(
         """), treasury_params).scalar() or 0
 
         display_meta = resolve_display_currency(db, branch_scope)
-        total_income = base_to_display_amount(total_income, display_meta)
-        total_expenses = base_to_display_amount(total_expenses, display_meta)
-        cash_balance = base_to_display_amount(cash_balance, display_meta)
+        total_income = base_to_display_decimal(total_income, display_meta)
+        total_expenses = base_to_display_decimal(total_expenses, display_meta)
+        cash_balance = base_to_display_decimal(cash_balance, display_meta)
         net_profit = total_income - total_expenses
         
         return {
-            "total_income": float(total_income),
-            "total_expenses": float(total_expenses),
-            "net_profit": float(net_profit),
-            "cash_balance": float(cash_balance),
+            "total_income": str(total_income.quantize(_D4, ROUND_HALF_UP)),
+            "total_expenses": str(total_expenses.quantize(_D4, ROUND_HALF_UP)),
+            "net_profit": str(net_profit.quantize(_D4, ROUND_HALF_UP)),
+            "cash_balance": str(cash_balance.quantize(_D4, ROUND_HALF_UP)),
             "display_currency": display_meta.get("currency"),
             "base_currency": display_meta.get("base_currency"),
             "is_multi_currency_scope": display_meta.get("is_multi_currency_scope"),
@@ -241,12 +241,22 @@ def _create_entry_from_template(db, tmpl, lines, current_user):
 # ==================== ACC-005: Opening Balances ====================
 
 class ProvisionRequest(BaseModel):
-    amount: float
+    # F-NEW-036 (R-FLOAT-ON-WIRE, Req 8.8): the request body lands on the
+    # GL writer; using Decimal preserves cent-level precision through the
+    # JSON boundary. ``json_encoders`` keeps the response shape as a
+    # canonical string so the FE never re-introduces float drift.
+    amount: Decimal
     description: Optional[str] = None
     branch_id: Optional[int] = None
 
+    model_config = {"json_encoders": {Decimal: str}}
+
 class FXRevaluationRequest(BaseModel):
     currency_code: str
-    new_rate: float
+    # F-NEW-036 (sibling on the same hunk): re-type the FX rate on the
+    # wire as Decimal too — the audit's R-FLOAT-ON-WIRE guard treats the
+    # exchange-rate axis the same as money.
+    new_rate: Decimal
     branch_id: Optional[int] = None
 
+    model_config = {"json_encoders": {Decimal: str}}

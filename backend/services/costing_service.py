@@ -1,8 +1,12 @@
 
+import logging
+
 from sqlalchemy import text
 from typing import Optional, Union
 from decimal import Decimal, ROUND_HALF_UP
 from contextlib import nullcontext
+
+logger = logging.getLogger(__name__)
 
 # FIN-FIX: Precision constants for costing calculations
 _D4 = Decimal('0.0001')
@@ -108,6 +112,13 @@ class CostingService:
 
                 new_wac = CostingService.calculate_new_cost(curr_qty, curr_cost, new_qty, new_price)
 
+                # R4-02: Warn on negative WAC (indicates corrupted inventory state)
+                if new_wac < 0:
+                    logger.warning(
+                        "WAC negative balance detected: product_id=%s warehouse_id=%s new_avg_cost=%s",
+                        product_id, warehouse_id, new_wac,
+                    )
+
                 # Update Product Master (Global Cost)
                 db.execute(text("UPDATE products SET cost_price = :cost, last_purchase_price = :last WHERE id = :pid"),
                            {"cost": new_wac, "last": new_price, "pid": product_id})
@@ -129,6 +140,13 @@ class CostingService:
                 curr_qty = _dec(current_stats.quantity or 0) if current_stats else Decimal('0')
 
                 new_wac = CostingService.calculate_new_cost(curr_qty, curr_cost, new_qty, new_price)
+
+                # R4-02: Warn on negative WAC (indicates corrupted inventory state)
+                if new_wac < 0:
+                    logger.warning(
+                        "WAC negative balance detected: product_id=%s warehouse_id=%s new_avg_cost=%s",
+                        product_id, warehouse_id, new_wac,
+                    )
 
                 # Update Inventory Cost (Warehouse Specific) — under lock
                 if current_stats:
@@ -301,7 +319,7 @@ class CostingService:
 
         return {
             "affected_products_count": impact.affected_products or 0,
-            "total_cost_impact": float(impact.total_deviation or 0)
+            "total_cost_impact": str(Decimal(str(impact.total_deviation or 0)).quantize(_D4, ROUND_HALF_UP))
         }
 
     # ─────────────────────────────────────────────────────────────────────
@@ -760,8 +778,8 @@ class CostingService:
             "product_id": product_id,
             "warehouse_id": warehouse_id,
             "new_method": new_method,
-            "opening_quantity": float(total_qty),
-            "opening_unit_cost": float(avg_cost),
+            "opening_quantity": str(total_qty.quantize(_D4, ROUND_HALF_UP)),
+            "opening_unit_cost": str(avg_cost.quantize(_D4, ROUND_HALF_UP)),
             "opening_layer_id": opening_layer_id,
         }
 
@@ -852,16 +870,16 @@ class CostingService:
                 "product_id": r[0],
                 "product_name": r[1],
                 "costing_method": r[2],
-                "total_quantity": float(_dec(r[3])),
-                "total_value": float(val),
-                "weighted_avg_cost": float(_dec(r[5])),
+                "total_quantity": str(_dec(r[3]).quantize(_D4, ROUND_HALF_UP)),
+                "total_value": str(val.quantize(_D4, ROUND_HALF_UP)),
+                "weighted_avg_cost": str(_dec(r[5]).quantize(_D4, ROUND_HALF_UP)),
             })
             grand_total += val
 
         return {
             "as_of_date": str(as_of_date or "current"),
             "items": items,
-            "grand_total": float(grand_total),
+            "grand_total": str(grand_total.quantize(_D4, ROUND_HALF_UP)),
         }
 
     @staticmethod

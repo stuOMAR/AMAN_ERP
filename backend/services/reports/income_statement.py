@@ -11,6 +11,11 @@ from decimal import Decimal
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
+
+
+def _money(value: Decimal) -> str:
+    return str(value.quantize(_D2))
 
 
 def get_income_statement(db: Any, tenant_id: str, company_id: str,
@@ -88,7 +93,7 @@ def get_income_statement(db: Any, tenant_id: str, company_id: str,
         rows = result.fetchall()
     except Exception as exc:
         logger.error("Income statement query failed: %s", exc)
-        return {"rows": [], "totals": {"revenue": 0, "expense": 0, "net_income": 0}}
+        return {"rows": [], "totals": {"revenue": "0.00", "expense": "0.00", "net_income": "0.00"}}
 
     # Group by category
     categories: dict[str, list[dict]] = {}
@@ -107,7 +112,7 @@ def get_income_statement(db: Any, tenant_id: str, company_id: str,
             "account_id": row[1],
             "account_name": row[2],
             "account_code": row[3],
-            "amount": float(amount),
+            "amount": _money(amount),
             "is_header": False,
         }
 
@@ -131,7 +136,7 @@ def get_income_statement(db: Any, tenant_id: str, company_id: str,
             output_rows.append({
                 "category": cat_name,
                 "account_name": cat_name.upper(),
-                "amount": float(cat_total),
+                "amount": _money(cat_total),
                 "is_header": True,
             })
 
@@ -147,8 +152,8 @@ def get_income_statement(db: Any, tenant_id: str, company_id: str,
     return {
         "rows": output_rows,
         "totals": {
-            "revenue": float(total_revenue),
-            "expense": float(total_expense),
-            "net_income": float(net_income),
+            "revenue": _money(total_revenue),
+            "expense": _money(total_expense),
+            "net_income": _money(net_income),
         },
     }

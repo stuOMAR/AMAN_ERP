@@ -21,6 +21,7 @@ from utils.accounting import get_mapped_account_id, generate_sequential_number, 
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
+from utils.tax_precision import require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
@@ -146,7 +147,7 @@ def list_purchase_invoices(
                 "currency": r.get("currency") or base_currency,
                 "exchange_rate": r.get("exchange_rate") or 1,
                 "base_currency": base_currency,
-                "total_base": float(_dec(r["total"]) * _dec(r.get("exchange_rate") or 1)),
+                "total_base": str(_dec(r["total"]) * _dec(r.get("exchange_rate") or 1)),
                 "status": r["status"],
             }
             for r in rows
@@ -218,7 +219,7 @@ def get_purchase_invoice(
             "total": invoice.total,
             "paid_amount": str(invoice.paid_amount or 0),
             "currency": invoice.currency or base_currency,
-            "exchange_rate": str(invoice.exchange_rate or 1.0),
+            "exchange_rate": str(invoice.exchange_rate or Decimal("1")),
             "notes": invoice.notes,
             "items": [{
                 "id": l.id,
@@ -247,18 +248,19 @@ async def create_purchase_invoice(
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
         try:
+            idempotency_key = require_idempotency_key(request, operation="purchase invoice")
             # M6: replay guard — return the existing invoice if this key
             # was already processed.
-            if idempotency_key:
-                existing_inv = db.execute(text("""
-                    SELECT id, invoice_number FROM invoices
-                    WHERE idempotency_key = :key
-                    LIMIT 1
-                """), {"key": idempotency_key}).fetchone()
-                if existing_inv:
-                    return {"success": True, "invoice_id": existing_inv.id,
-                            "invoice_number": existing_inv.invoice_number,
-                            "idempotent_replay": True}
+            existing_inv = db.execute(text("""
+                SELECT id, invoice_number FROM invoices
+                WHERE idempotency_key = :key
+                  AND invoice_type = 'purchase'
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing_inv:
+                return {"success": True, "invoice_id": existing_inv.id,
+                        "invoice_number": existing_inv.invoice_number,
+                        "idempotent_replay": True}
 
             validated_branch_id = validate_branch_access(current_user, invoice.branch_id)
             selected_treasury = None
@@ -323,9 +325,10 @@ async def create_purchase_invoice(
 
             def to_base(amount):
                 return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+            effective_branch_id = validated_branch_id or invoice.branch_id
             # 1. Generate Sequential Invoice Number
             from utils.accounting import generate_sequential_number
-            inv_num = generate_sequential_number(db, f"PINV-{datetime.now().year}", "invoices", "invoice_number")
+            inv_num = generate_sequential_number(db, f"PINV-{datetime.now().year}", "invoices", "invoice_number", branch_id=effective_branch_id)
 
             # FISCAL-LOCK: Reject if accounting period is closed
             check_fiscal_period_open(db, invoice.invoice_date)
@@ -336,7 +339,6 @@ async def create_purchase_invoice(
                  wh_id = db.execute(text("SELECT id FROM warehouses WHERE is_default = TRUE")).scalar() or 1
 
             # 2.5 Validate Warehouse-Branch Association
-            effective_branch_id = validated_branch_id or invoice.branch_id
             if wh_id and effective_branch_id:
                 wh_check = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": wh_id}).fetchone()
                 if wh_check and wh_check[0] and wh_check[0] != effective_branch_id:
@@ -731,12 +733,12 @@ async def create_purchase_invoice(
                         voucher_number, voucher_type, voucher_date,
                         party_type, party_id, amount, payment_method,
                         reference, status, created_by,
-                        currency, exchange_rate, treasury_account_id
+                        currency, exchange_rate, treasury_account_id, branch_id
                     ) VALUES (
                         :num, 'payment', :date,
                         'supplier', :pid, :amt, :method,
                         :ref, 'posted', :user,
-                        :currency, :exchange_rate, :treasury_id
+                        :currency, :exchange_rate, :treasury_id, :branch_id
                     ) RETURNING id
                 """), {
                     "num": v_num,
@@ -748,7 +750,8 @@ async def create_purchase_invoice(
                     "user": current_user.get("id") if isinstance(current_user, dict) else current_user.id,
                     "currency": inv_currency,
                     "exchange_rate": exchange_rate,
-                    "treasury_id": invoice.treasury_id
+                    "treasury_id": invoice.treasury_id,
+                    "branch_id": effective_branch_id
                 }).scalar()
 
                 # Create Allocation
@@ -960,7 +963,8 @@ async def create_purchase_invoice(
                     currency=inv_currency,
                     exchange_rate=exchange_rate,
                     source="purchase_invoice",
-                    source_id=invoice_id
+                    source_id=invoice_id,
+                    idempotency_key=idempotency_key
                 )
 
             if selected_treasury and invoice.treasury_id and gl_paid > 0:
@@ -1216,7 +1220,7 @@ def cancel_purchase_invoice(
                         product_id=row.product_id,
                         warehouse_id=row.warehouse_id,
                         quantity=qty,
-                        unit_cost=float(unit_cost),
+                        unit_cost=str(unit_cost),
                         source_document_type="purchase_invoice_cancel",
                         source_document_id=id,
                         costing_method=method,

@@ -28,8 +28,10 @@ from database import get_db_connection
 from integrations.einvoicing import get_adapter
 from routers.auth import get_current_user
 from services import ecl_service, ifrs15_revenue_service, impairment_service, nrv_service
+from utils.fiscal_lock import check_fiscal_period_open
 from utils.i18n import http_error
 from utils.permissions import require_permission
+from utils.tx import transactional
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/finance/accounting-depth", tags=["accounting-depth"])
@@ -191,18 +193,14 @@ class ImpairmentTestRequest(BaseModel):
 )
 def cgu_create(body: CGUCreateRequest, current_user=Depends(get_current_user)):
     """Cgu Create."""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         row = db.execute(text("""
             INSERT INTO cash_generating_units (code, name)
             VALUES (:c, :n)
             ON CONFLICT (code) DO UPDATE SET name = EXCLUDED.name
             RETURNING id, code, name, is_active
         """), {"c": body.code, "n": body.name}).fetchone()
-        db.commit()
         return dict(row._mapping)
-    finally:
-        _close(db)
 
 
 @router.get(
@@ -400,35 +398,63 @@ def einvoice_submit(body: EInvoiceSubmitRequest,
     except ValueError as e:
         raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
 
-    db = get_db_connection(current_user.company_id)
-    try:
-        payload = {"id": body.invoice_id, **(body.invoice_payload or {})}
-        result = adapter.submit(payload)
-        row = db.execute(text("""
-            INSERT INTO e_invoice_submissions (jurisdiction, invoice_type, invoice_id,
-                document_uuid, submission_status, submitted_at, response_payload, error_message)
-            VALUES (:j, :t, :iid, :u, :s, CURRENT_TIMESTAMP, CAST(:r AS JSONB), :err)
-            RETURNING id
-        """), {
-            "j": body.jurisdiction.upper(),
-            "t": body.invoice_type,
-            "iid": body.invoice_id,
-            "u": result.document_uuid,
-            "s": result.status,
-            "r": json.dumps(result.response or {}, default=str, ensure_ascii=False),
-            "err": result.error_message,
-        }).fetchone()
+    # Fiscal-lock check needs DB access; do it in a short read-only block
+    # so we fail fast (and *before* any network round-trip) when the
+    # period is closed. The check is idempotent and side-effect free.
+    inv_date = (body.invoice_payload or {}).get("invoice_date") or date.today()
+    with transactional(current_user.company_id) as db:
+        check_fiscal_period_open(db, inv_date, request=request)
 
-        # EINV-F2: enqueue submissions for automatic retry via outbox.
-        # T1.5a (#419z): treat "offline" success the same as a transient failure —
-        # the adapter built local artifacts but never reached ZATCA, so the
-        # payload MUST be persisted for later relay or the invoice is lost.
-        resp = result.response or {}
-        is_offline = bool(resp.get("offline"))
-        outcome = (result.status or "").lower()
-        needs_outbox = outcome in ("failed", "error", "rejected") or is_offline
-        if needs_outbox:
-            try:
+    # PR19-fix (F-NEW-052): the ZATCA/ETA submit() is an HTTPS round-trip
+    # that can take seconds. Holding a tenant DB connection open across
+    # the network call starved the connection pool under load, and any
+    # adapter error mid-flight rolled back unrelated DB writes. We now
+    # do the network call *outside* the transaction and only enter
+    # ``transactional(...)`` to persist the recorded result + (optional)
+    # outbox row. Both writes still land atomically — if either fails,
+    # neither is committed and the caller can safely retry.
+    payload = {"id": body.invoice_id, **(body.invoice_payload or {})}
+    try:
+        result = adapter.submit(payload)
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("einvoice submit failed at adapter")
+        raise HTTPException(**http_error(500, "internal_error", request))
+
+    resp = result.response or {}
+    is_offline = bool(resp.get("offline"))
+    outcome = (result.status or "").lower()
+    needs_outbox = outcome in ("failed", "error", "rejected") or is_offline
+
+    with transactional(current_user.company_id) as db:
+        try:
+            db.execute(text("""
+                SELECT id FROM invoices
+                WHERE id = :id
+                FOR UPDATE
+            """), {"id": body.invoice_id}).fetchone()
+
+            row = db.execute(text("""
+                INSERT INTO e_invoice_submissions (jurisdiction, invoice_type, invoice_id,
+                    document_uuid, submission_status, submitted_at, response_payload, error_message)
+                VALUES (:j, :t, :iid, :u, :s, CURRENT_TIMESTAMP, CAST(:r AS JSONB), :err)
+                RETURNING id
+            """), {
+                "j": body.jurisdiction.upper(),
+                "t": body.invoice_type,
+                "iid": body.invoice_id,
+                "u": result.document_uuid,
+                "s": result.status,
+                "r": json.dumps(result.response or {}, default=str, ensure_ascii=False),
+                "err": result.error_message,
+            }).fetchone()
+
+            # EINV-F2: enqueue submissions for automatic retry via outbox.
+            # T1.5a (#419z): treat "offline" success the same as a transient failure —
+            # the adapter built local artifacts but never reached ZATCA, so the
+            # payload MUST be persisted for later relay or the invoice is lost.
+            if needs_outbox:
                 err_msg = result.error_message or (
                     "offline: adapter unconfigured (no PCSID/secret) — payload saved for retry"
                     if is_offline else "submission failed"
@@ -436,32 +462,34 @@ def einvoice_submit(body: EInvoiceSubmitRequest,
                 db.execute(text("""
                     INSERT INTO einvoice_outbox
                         (invoice_id, adapter, payload, status, attempts,
-                         last_error, last_attempt_at, next_attempt_at)
+                         idempotency_key, last_error, last_attempt_at, next_attempt_at)
                     VALUES (:iid, :adp, CAST(:pl AS JSONB), 'pending', 1,
-                            :err, CURRENT_TIMESTAMP,
+                            :idem, :err, CURRENT_TIMESTAMP,
                             CURRENT_TIMESTAMP + INTERVAL '5 minutes')
+                    ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                    DO UPDATE SET payload = EXCLUDED.payload,
+                                  last_error = EXCLUDED.last_error,
+                                  next_attempt_at = EXCLUDED.next_attempt_at,
+                                  updated_at = CURRENT_TIMESTAMP
                 """), {
                     "iid": body.invoice_id,
                     "adp": body.jurisdiction.upper(),
                     "pl": json.dumps(payload, default=str, ensure_ascii=False),
+                    "idem": f"einvoice:{body.jurisdiction.upper()}:{body.invoice_id}",
                     "err": err_msg,
                 })
-            except Exception:
-                logger.exception("failed to enqueue outbox retry")
 
-        db.commit()
-        return {
-            "submission_id": row.id,
-            "status": result.status,
-            "document_uuid": result.document_uuid,
-            "error_message": result.error_message,
-        }
-    except Exception:
-        db.rollback()
-        logger.exception("einvoice submit failed")
-        raise HTTPException(**http_error(500, "internal_error", request))
-    finally:
-        _close(db)
+            return {
+                "submission_id": row.id,
+                "status": result.status,
+                "document_uuid": result.document_uuid,
+                "error_message": result.error_message,
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("einvoice submit persistence failed")
+            raise HTTPException(**http_error(500, "internal_error", request))
 
 
 @router.get(
@@ -558,13 +586,13 @@ def einvoice_outbox_relay(
     the configured adapter, and records the outcome. Rows that exceed
     ``MAX_OUTBOX_ATTEMPTS`` are marked ``giveup`` for manual review.
     """
-    db = get_db_connection(current_user.company_id)
-    processed, succeeded, failed, giveup = 0, 0, 0, 0
-    try:
-        rows = db.execute(
-            text(
-                """
-                SELECT id, invoice_id, adapter, payload, attempts
+    with transactional(current_user.company_id) as db:
+        processed, succeeded, failed, giveup = 0, 0, 0, 0
+        try:
+            rows = db.execute(
+                text(
+                    """
+                SELECT id, invoice_id, adapter, payload, attempts, idempotency_key
                 FROM einvoice_outbox
                 WHERE status = 'pending'
                   AND next_attempt_at <= CURRENT_TIMESTAMP
@@ -572,78 +600,127 @@ def einvoice_outbox_relay(
                 LIMIT :lim
                 FOR UPDATE SKIP LOCKED
                 """
-            ),
-            {"lim": int(max(1, min(limit, 100)))},
-        ).fetchall()
+                ),
+                {"lim": int(max(1, min(limit, 100)))},
+            ).fetchall()
 
-        for r in rows:
-            processed += 1
-            payload = r.payload if isinstance(r.payload, dict) else {}
-            payload.setdefault("id", r.invoice_id)
-            attempts = int(r.attempts or 0) + 1
-            try:
-                adapter = get_adapter(r.adapter or "SA")
-                result = adapter.submit(payload)
+            # PR19-fix (F-NEW-053): each row gets its own SAVEPOINT via
+            # ``db.begin_nested()``. The outer transaction still holds
+            # the FOR UPDATE SKIP LOCKED lease on the claimed rows, but
+            # if a DB exception fires while persisting one row's outcome
+            # (e.g. constraint violation on the UPDATE), only that row's
+            # savepoint rolls back — the rows that ZATCA has already
+            # accepted in earlier iterations stay committed at outer
+            # commit. Without the savepoint, a single DB error on row N
+            # would roll back the success UPDATEs for rows 1..N-1, but
+            # ZATCA would still hold those submissions, producing
+            # duplicate clearance attempts on the next relay.
+            for r in rows:
+                processed += 1
+                payload = r.payload if isinstance(r.payload, dict) else {}
+                payload.setdefault("id", r.invoice_id)
+                attempts = int(r.attempts or 0) + 1
+                payload["idempotency_key"] = r.idempotency_key or f"einvoice-outbox:{r.id}"
+                try:
+                    adapter = get_adapter(r.adapter or "SA")
+                    result = adapter.submit(payload)
+                except Exception as exc:
+                    # Network / adapter error — record failure inside
+                    # its own savepoint so a subsequent DB error during
+                    # the failure UPDATE itself doesn't poison sibling
+                    # rows.
+                    with db.begin_nested():
+                        if attempts >= MAX_OUTBOX_ATTEMPTS:
+                            db.execute(
+                                text(
+                                    "UPDATE einvoice_outbox SET status = 'giveup', "
+                                    "attempts = :a, last_attempt_at = CURRENT_TIMESTAMP, "
+                                    "last_error = :err, updated_at = CURRENT_TIMESTAMP "
+                                    "WHERE id = :id"
+                                ),
+                                {"a": attempts, "err": str(exc)[:500], "id": r.id},
+                            )
+                            giveup += 1
+                        else:
+                            db.execute(
+                                text(
+                                    "UPDATE einvoice_outbox SET attempts = :a, "
+                                    "last_attempt_at = CURRENT_TIMESTAMP, "
+                                    "next_attempt_at = CURRENT_TIMESTAMP + "
+                                    "    (INTERVAL '5 minutes' * POWER(2, :a - 1)), "
+                                    "last_error = :err, updated_at = CURRENT_TIMESTAMP "
+                                    "WHERE id = :id"
+                                ),
+                                {"a": attempts, "err": str(exc)[:500], "id": r.id},
+                            )
+                            failed += 1
+                    continue
+
+                # Adapter returned. Persist outcome inside a savepoint
+                # so any DB error here cannot roll back sibling rows
+                # whose ZATCA submission is already accepted.
                 outcome = (result.status or "").lower()
                 # T1.5a (#419z): offline responses must NOT be marked submitted —
                 # the adapter built artifacts but did not reach ZATCA.
                 is_offline = bool((result.response or {}).get("offline"))
-                if outcome in ("success", "accepted", "ok", "cleared", "reported") and not is_offline:
-                    db.execute(
-                        text(
-                            "UPDATE einvoice_outbox SET status = 'submitted', "
-                            "attempts = :a, last_attempt_at = CURRENT_TIMESTAMP, "
-                            "response = CAST(:r AS JSONB), last_error = NULL, "
-                            "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
-                        ),
-                        {
-                            "a": attempts,
-                            "r": json.dumps(result.response or {}, default=str, ensure_ascii=False),
-                            "id": r.id,
-                        },
+                try:
+                    with db.begin_nested():
+                        if outcome in ("success", "accepted", "ok", "cleared", "reported") and not is_offline:
+                            db.execute(
+                                text(
+                                    "UPDATE einvoice_outbox SET status = 'submitted', "
+                                    "attempts = :a, last_attempt_at = CURRENT_TIMESTAMP, "
+                                    "response = CAST(:r AS JSONB), last_error = NULL, "
+                                    "updated_at = CURRENT_TIMESTAMP WHERE id = :id"
+                                ),
+                                {
+                                    "a": attempts,
+                                    "r": json.dumps(result.response or {}, default=str, ensure_ascii=False),
+                                    "id": r.id,
+                                },
+                            )
+                            succeeded += 1
+                        else:
+                            err = result.error_message or outcome or "unknown failure"
+                            if attempts >= MAX_OUTBOX_ATTEMPTS:
+                                db.execute(
+                                    text(
+                                        "UPDATE einvoice_outbox SET status = 'giveup', "
+                                        "attempts = :a, last_attempt_at = CURRENT_TIMESTAMP, "
+                                        "last_error = :err, updated_at = CURRENT_TIMESTAMP "
+                                        "WHERE id = :id"
+                                    ),
+                                    {"a": attempts, "err": str(err)[:500], "id": r.id},
+                                )
+                                giveup += 1
+                            else:
+                                db.execute(
+                                    text(
+                                        "UPDATE einvoice_outbox SET attempts = :a, "
+                                        "last_attempt_at = CURRENT_TIMESTAMP, "
+                                        "next_attempt_at = CURRENT_TIMESTAMP + "
+                                        "    (INTERVAL '5 minutes' * POWER(2, :a - 1)), "
+                                        "last_error = :err, updated_at = CURRENT_TIMESTAMP "
+                                        "WHERE id = :id"
+                                    ),
+                                    {"a": attempts, "err": str(err)[:500], "id": r.id},
+                                )
+                                failed += 1
+                except Exception:
+                    logger.exception(
+                        "outbox-relay: per-row persistence failed for id=%s "
+                        "(adapter outcome=%s); savepoint rolled back, sibling rows preserved",
+                        r.id, outcome,
                     )
-                    succeeded += 1
-                else:
-                    raise RuntimeError(result.error_message or outcome or "unknown failure")
-            except Exception as exc:
-                if attempts >= MAX_OUTBOX_ATTEMPTS:
-                    db.execute(
-                        text(
-                            "UPDATE einvoice_outbox SET status = 'giveup', "
-                            "attempts = :a, last_attempt_at = CURRENT_TIMESTAMP, "
-                            "last_error = :err, updated_at = CURRENT_TIMESTAMP "
-                            "WHERE id = :id"
-                        ),
-                        {"a": attempts, "err": str(exc)[:500], "id": r.id},
-                    )
-                    giveup += 1
-                else:
-                    # Exponential back-off: 5min * 2^(attempts-1), capped by worker
-                    db.execute(
-                        text(
-                            "UPDATE einvoice_outbox SET attempts = :a, "
-                            "last_attempt_at = CURRENT_TIMESTAMP, "
-                            "next_attempt_at = CURRENT_TIMESTAMP + "
-                            "    (INTERVAL '5 minutes' * POWER(2, :a - 1)), "
-                            "last_error = :err, updated_at = CURRENT_TIMESTAMP "
-                            "WHERE id = :id"
-                        ),
-                        {"a": attempts, "err": str(exc)[:500], "id": r.id},
-                    )
-                    failed += 1
-        db.commit()
-        return {
-            "processed": processed,
-            "succeeded": succeeded,
-            "failed": failed,
-            "giveup": giveup,
-        }
-    except Exception:
-        db.rollback()
-        logger.exception("einvoice outbox relay failed")
-        raise HTTPException(**http_error(500, "internal_error", request))
-    finally:
-        _close(db)
+            return {
+                "processed": processed,
+                "succeeded": succeeded,
+                "failed": failed,
+                "giveup": giveup,
+            }
+        except Exception:
+            logger.exception("einvoice outbox relay failed")
+            raise HTTPException(**http_error(500, "internal_error", request))
 
 
 @router.get(

@@ -2,11 +2,12 @@
 Inventory Module - Stock Transfers (Single-item with GL + Multi-item)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Optional
 import logging
 import uuid
 
@@ -81,6 +82,8 @@ def _next_transfer_doc_id(db) -> int:
 def create_stock_transfer(
     transfer: StockTransferSingleCreate,
     request: Request,
+    # INV-16: Idempotency-Key prevents duplicate transfers on network retry.
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """تحويل مخزني مباشر بين المستودعات مع تطبيق سياسة التكلفة"""
@@ -89,6 +92,15 @@ def create_stock_transfer(
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
         user_id = _user_id(current_user)
+
+        # INV-16: Idempotency check at document level
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id FROM stock_transfer_log WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"message": i18n_message("transfer_successful", request), "idempotent_replay": True}
+
         transfer_ref = f"TRF-{datetime.now().strftime('%Y%m%d')}-{uuid.uuid4().hex[:8].upper()}"
         transfer_doc_id = _next_transfer_doc_id(db)
 
@@ -260,11 +272,13 @@ def create_stock_transfer(
 
         # 8. Log transactions
         db.execute(text("""
-            INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type, 
+            INSERT INTO inventory_transactions (product_id, warehouse_id, transaction_type,
                                                reference_type, reference_id, reference_document,
-                                               quantity, notes, created_by, unit_cost, total_cost)
+                                               quantity, notes, created_by, unit_cost, total_cost,
+                                               balance_before, balance_after)
             VALUES (:pid, :wh, 'transfer_out', 'transfer', :ref_id, :ref_doc,
-                    :qty, :notes, :user, :unit_cost, :total_cost)
+                    :qty, :notes, :user, :unit_cost, :total_cost,
+                    :bal_before, :bal_after)
         """), {
             "pid": transfer.product_id,
             "wh": transfer.source_warehouse_id,
@@ -275,6 +289,8 @@ def create_stock_transfer(
             "user": user_id,
             "unit_cost": str(source_cost),
             "total_cost": str(transfer_value),
+            "bal_before": str(source_qty),
+            "bal_after": str(source_qty - transfer_qty),
         })
 
         db.execute(text("""
@@ -321,8 +337,8 @@ def create_stock_transfer(
         src_branch = src_wh.branch_id
         dst_branch = dst_wh.branch_id
 
-        gl_transfer_value = float(transfer_value)
-        if gl_transfer_value > 0.01:
+        gl_transfer_value = transfer_value  # keep as Decimal — no float cast
+        if gl_transfer_value > Decimal("0.01"):
             src_inv_acc = _resolve_inventory_account_for_wh(db, src_wh)
             dst_inv_acc = _resolve_inventory_account_for_wh(db, dst_wh)
 
@@ -392,8 +408,8 @@ def create_stock_transfer(
                 "quantity": transfer.quantity,
                 "source_warehouse": src_wh.warehouse_name,
                 "destination_warehouse": dst_wh.warehouse_name,
-                "transfer_cost": float(source_cost),
-                "new_destination_avg_cost": float(new_avg_cost)
+                "transfer_cost": str(source_cost.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
+                "new_destination_avg_cost": str(new_avg_cost.quantize(Decimal("0.0001"), ROUND_HALF_UP))
             }
         }
 
@@ -649,29 +665,28 @@ def transfer_stock(
             if src_inv_acc and dst_inv_acc:
                 src_branch_id = src.branch_id
                 dst_branch_id = dst.branch_id
-                # F-30: capture per-side currency on the txn fields.
                 src_currency = (src.branch_currency or base_currency).upper()
                 dst_currency = (dst.branch_currency or base_currency).upper()
                 lines = [
                     {
                         "account_id": dst_inv_acc,
-                        "debit": float(total_transfer_value),
+                        "debit": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                         "credit": 0,
                         "description": f"Transfer In - WH#{dst.id} {dst.warehouse_name} / branch {dst_branch_id or '-'}",
-                        "amount_currency": float(total_transfer_value),
+                        "amount_currency": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                         "currency": base_currency,
                         "txn_currency": dst_currency,
-                        "txn_amount": float(total_transfer_value),
+                        "txn_amount": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                     },
                     {
                         "account_id": src_inv_acc,
                         "debit": 0,
-                        "credit": float(total_transfer_value),
+                        "credit": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                         "description": f"Transfer Out - WH#{src.id} {src.warehouse_name} / branch {src_branch_id or '-'}",
-                        "amount_currency": float(total_transfer_value),
+                        "amount_currency": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                         "currency": base_currency,
                         "txn_currency": src_currency,
-                        "txn_amount": float(total_transfer_value),
+                        "txn_amount": str(total_transfer_value.quantize(Decimal("0.0001"), ROUND_HALF_UP)),
                     },
                 ]
                 gl_create_journal_entry(

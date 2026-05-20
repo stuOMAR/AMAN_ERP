@@ -13,6 +13,7 @@ from typing import Optional
 
 from database import get_db_connection
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import http_error, i18n_message
 
 router = APIRouter(prefix="/templates", tags=["Email Templates"])
 
@@ -71,6 +72,7 @@ def list_templates(
 
 @router.post("")
 def create_template(
+    request: Request,
     body: TemplateCreate,
     current_user=Depends(require_sensitive_permission("email_templates.admin")),
 ):
@@ -94,7 +96,7 @@ def create_template(
         conn.commit()
         return {"id": row[0], "code": body.code, "locale": body.locale}
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
         conn.close()
 

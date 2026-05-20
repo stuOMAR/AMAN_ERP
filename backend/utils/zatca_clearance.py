@@ -47,14 +47,20 @@ def _enqueue_outbox(db, *, invoice_id: int, payload: Dict[str, Any],
         db.execute(text("""
             INSERT INTO einvoice_outbox
                 (invoice_id, adapter, payload, status, attempts,
-                 last_error, last_attempt_at, next_attempt_at)
+                 idempotency_key, last_error, last_attempt_at, next_attempt_at)
             VALUES (:iid, :adp, CAST(:pl AS JSONB), 'pending', 1,
-                    :err, CURRENT_TIMESTAMP,
+                    :idem, :err, CURRENT_TIMESTAMP,
                     CURRENT_TIMESTAMP + INTERVAL '5 minutes')
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO UPDATE SET payload = EXCLUDED.payload,
+                          last_error = EXCLUDED.last_error,
+                          next_attempt_at = EXCLUDED.next_attempt_at,
+                          updated_at = CURRENT_TIMESTAMP
         """), {
             "iid": invoice_id,
             "adp": adapter_code,
             "pl": json.dumps(payload, default=str, ensure_ascii=False),
+            "idem": f"einvoice:{adapter_code}:{invoice_id}",
             "err": last_error[:500],
         })
     except Exception:

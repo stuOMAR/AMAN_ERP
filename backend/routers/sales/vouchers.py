@@ -141,7 +141,7 @@ def create_customer_receipt(request: Request, data: CustomerReceiptCreate, curre
 
         # 3. Update Customer Balance via party_site_balances (reduce receivables)
         update_party_site_balance(db, party_id=data.customer_id, branch_id=branch_id,
-                           currency=currency, amount=-float(data.amount))
+                           currency=currency, amount=-_dec(data.amount))
 
         # 4. Create GL Entry (TASK-015: centralized)
         acc_ar = get_mapped_account_id(db, "acc_map_ar")
@@ -346,7 +346,7 @@ def create_customer_payment(request: Request, data: CustomerPaymentCreate, curre
 
         # 2. Update Customer Balance via party_site_balances (increase because we're paying them)
         update_party_site_balance(db, party_id=data.customer_id, branch_id=branch_id,
-                           currency=currency, amount=float(data.amount))
+                           currency=currency, amount=_dec(data.amount))
 
         # 3. Create GL Entry (TASK-015: centralized)
         from utils.accounting import get_mapped_account_id, prepare_je_lines
@@ -681,13 +681,13 @@ def auto_match_receipt(
             action="payments.auto_match",
             resource_type="voucher",
             resource_id=str(voucher_id),
-            details={"allocations": [dict(a, amount=float(a["amount"])) for a in allocations]},
+            details={"allocations": [dict(a, amount=str(a["amount"])) for a in allocations]},
             request=request,
         )
         return {
-            "allocated": float(total_alloc),
+            "allocated": str(total_alloc),
             "allocation_count": len(allocations),
-            "allocations": [{"invoice_id": a["invoice_id"], "amount": float(a["amount"])} for a in allocations],
+            "allocations": [{"invoice_id": a["invoice_id"], "amount": str(a["amount"])} for a in allocations],
         }
     except HTTPException:
         db.rollback()

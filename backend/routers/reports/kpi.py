@@ -15,7 +15,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access
 from utils.cache import cached
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -28,18 +28,33 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
     db = get_db_connection(current_user.company_id)
     try:
         kpis = {}
+        branch_scope = resolve_branch_scope(current_user, None)
 
         # Revenue KPI (with exchange_rate conversion)
-        rev = db.execute(text("""
+        rev_params: Dict[str, Any] = {}
+        rev_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", rev_params)
+        last_rev_params: Dict[str, Any] = {}
+        last_rev_branch_filter = branch_scope_filter_from_scope(
+            branch_scope,
+            "branch_id",
+            last_rev_params,
+            branch_param="last_branch_id",
+            branches_param="last_allowed_branch_ids",
+        )
+        for key, value in last_rev_params.items():
+            rev_params[key] = value
+        rev = db.execute(text(f"""
             SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as current_month,
                    (SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) FROM invoices
                     WHERE invoice_type = 'sales' AND status != 'cancelled'
                       AND invoice_date >= date_trunc('month', CURRENT_DATE - INTERVAL '1 month')
-                      AND invoice_date < date_trunc('month', CURRENT_DATE)) as last_month
+                      AND invoice_date < date_trunc('month', CURRENT_DATE)
+                      {last_rev_branch_filter}) as last_month
             FROM invoices
             WHERE invoice_type = 'sales' AND status != 'cancelled'
               AND invoice_date >= date_trunc('month', CURRENT_DATE)
-        """)).fetchone()
+              {rev_branch_filter}
+        """), rev_params).fetchone()
         if rev:
             r = dict(rev._mapping)
             current = Decimal(str(r.get("current_month", 0)))
@@ -50,29 +65,40 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
             }
 
         # Expenses KPI
-        exp = db.execute(text("""
+        exp_params: Dict[str, Any] = {}
+        exp_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", exp_params)
+        exp = db.execute(text(f"""
             SELECT COALESCE(SUM(total_amount), 0) as current_month
             FROM expenses WHERE expense_date >= date_trunc('month', CURRENT_DATE)
-        """)).fetchone()
+            {exp_branch_filter}
+        """), exp_params).fetchone()
         kpis["expenses"] = {"value": Decimal(str(dict(exp._mapping).get("current_month", 0)))} if exp else {"value": 0}
 
         # Outstanding receivables (converted to base)
-        ar = db.execute(text("""
+        ar_params: Dict[str, Any] = {}
+        ar_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", ar_params)
+        ar = db.execute(text(f"""
             SELECT COALESCE(SUM((total - COALESCE(paid_amount, 0)) * COALESCE(exchange_rate, 1)), 0) as total
             FROM invoices WHERE status IN ('unpaid', 'partial') AND invoice_type = 'sales'
-        """)).fetchone()
+            {ar_branch_filter}
+        """), ar_params).fetchone()
         kpis["accounts_receivable"] = {"value": Decimal(str(dict(ar._mapping).get("total", 0)))} if ar else {"value": 0}
 
         # Outstanding payables (converted to base)
-        ap = db.execute(text("""
+        ap_params: Dict[str, Any] = {}
+        ap_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", ap_params)
+        ap = db.execute(text(f"""
             SELECT COALESCE(SUM((total - COALESCE(paid_amount, 0)) * COALESCE(exchange_rate, 1)), 0) as total
             FROM invoices WHERE status IN ('unpaid', 'partial') AND invoice_type = 'purchase'
-        """)).fetchone()
+            {ap_branch_filter}
+        """), ap_params).fetchone()
         kpis["accounts_payable"] = {"value": Decimal(str(dict(ap._mapping).get("total", 0)))} if ap else {"value": 0}
 
         # Cash balance — pulled from GL (journal_lines) using company_settings
         # acc_map_cash_main + acc_map_bank so the KPI always matches the TB.
-        cash = db.execute(text("""
+        cash_params: Dict[str, Any] = {}
+        cash_branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", cash_params)
+        cash = db.execute(text(f"""
             WITH cash_accs AS (
                 SELECT CAST(setting_value AS INTEGER) AS account_id
                 FROM company_settings
@@ -84,7 +110,8 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
             JOIN journal_entries je ON je.id = jl.journal_entry_id
             WHERE jl.account_id IN (SELECT account_id FROM cash_accs)
               AND je.status = 'posted'
-        """)).fetchone()
+              {cash_branch_filter}
+        """), cash_params).fetchone()
         kpis["cash_balance"] = {"value": Decimal(str(dict(cash._mapping).get("balance", 0)))} if cash else {"value": 0}
 
         # Inventory value (using cost_price from products)
@@ -120,4 +147,3 @@ def get_kpi_dashboard(current_user=Depends(get_current_user)):
 #   10 INDUSTRY-SPECIFIC REPORT ENDPOINTS
 #   تقارير صناعية متخصصة ببيانات حقيقية من قاعدة البيانات
 # ============================================================
-

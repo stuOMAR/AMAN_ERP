@@ -187,9 +187,9 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
             date=date.today().isoformat(),
             description=f"Salary advance — emp {adv.employee_id}",
             lines=[
-                {"account_id": adv_gl, "debit": float(adv.amount), "credit": 0,
+                {"account_id": adv_gl, "debit": adv.amount, "credit": 0,
                  "currency": None, "exchange_rate": 1.0},
-                {"account_id": treasury_gl, "debit": 0, "credit": float(adv.amount),
+                {"account_id": treasury_gl, "debit": 0, "credit": adv.amount,
                  "currency": None, "exchange_rate": 1.0},
             ],
             user_id=current_user.id, branch_id=branch_id,
@@ -219,7 +219,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="hr.advance.approve", resource_type="salary_advance",
                      resource_id=str(advance_id),
-                     details={"je_id": je_id, "amount": float(adv.amount)},
+                     details={"je_id": je_id, "amount": str(adv.amount)},
                      request=request, branch_id=branch_id)
         return {"id": advance_id, "status": "paid", "je_id": je_id}
     except HTTPException:

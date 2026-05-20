@@ -2,6 +2,7 @@
 from sqlalchemy import text
 from datetime import date, timedelta
 from typing import Any, Optional, Tuple
+from decimal import Decimal
 import logging
 
 logger = logging.getLogger(__name__)
@@ -117,10 +118,13 @@ def _build_ap_aging(db, as_of: date, branch_id: Optional[int] = None) -> list:
                 END as bucket,
                 COALESCE(SUM({due_base_sql}), 0)
             FROM invoices i
-            WHERE i.invoice_type = 'purchase' AND i.status IN ('received', 'partially_paid') AND i.due_date IS NOT NULL {branch_sql}
+            WHERE i.invoice_type IN ('purchase', 'purchase_debit_note')
+              AND i.status NOT IN ('draft', 'cancelled', 'paid')
+              AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
+              AND i.due_date IS NOT NULL {branch_sql}
             GROUP BY bucket
         """), {"today": as_of, "base_currency": base_currency, **bp}).fetchall()
-        bucket_map = {r[0]: float(r[1]) for r in rows}
+        bucket_map = {r[0]: Decimal(str(r[1] or 0)) for r in rows}
         for a in aging:
             a["value"] = bucket_map.get(a["bucket"], 0)
     except Exception:

@@ -6,16 +6,26 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from .schemas import SupplierCreate, SupplierResponse
 
 suppliers_router = APIRouter()
 logger = logging.getLogger(__name__)
+_D4 = Decimal("0.0001")
+
+
+def _company_id(current_user) -> int:
+    return current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+
+
+def _dec(value) -> Decimal:
+    return Decimal(str(value)) if value is not None else Decimal("0")
 
 
 @suppliers_router.get("/suppliers", response_model=List[SupplierResponse], dependencies=[Depends(require_permission("buying.view"))])
@@ -26,40 +36,35 @@ def list_suppliers(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض قائمة الموردين مع أرصدة حسب الفرع والموقع"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         
         # Get branch currency if branch_id is provided
         branch_cur = base_cur
-        if branch_id:
-            branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_id}).scalar() or base_cur
-        
-        # Subquery to get aggregated balance per party
-        if branch_id:
-            # When branch is selected: show balance in branch's local currency
-            balance_subquery = """
-                SELECT ps.party_id,
-                       COALESCE(SUM(psb.balance), 0) as total_balance,
-                       psb.currency as balance_currency
-                FROM party_sites ps
-                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
-                WHERE psb.company_branch_id = :bid
-                GROUP BY ps.party_id, psb.currency
-            """
-            balance_params = {"bid": branch_id}
-        else:
-            # When all branches: show total in base currency
-            balance_subquery = """
-                SELECT ps.party_id,
-                       COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_balance,
-                       :base_cur as balance_currency
-                FROM party_sites ps
-                LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
-                LEFT JOIN currencies c ON psb.currency = c.code
-                GROUP BY ps.party_id
-            """
-            balance_params = {"base_cur": base_cur}
+        if branch_scope.get("branch_id"):
+            branch_cur = db.execute(text("SELECT default_currency FROM branches WHERE id = :bid"), {"bid": branch_scope["branch_id"]}).scalar() or base_cur
+
+        balance_params = {"base_cur": base_cur}
+        balance_scope_clause = branch_scope_filter_from_scope(
+            branch_scope,
+            "psb.company_branch_id",
+            balance_params,
+            branch_param="balance_branch_id",
+            branches_param="balance_branch_ids",
+        )
+        balance_subquery = f"""
+            SELECT ps.party_id,
+                   COALESCE(SUM(psb.balance * COALESCE(c.current_rate, 1)), 0) as total_balance,
+                   :base_cur as balance_currency
+            FROM party_sites ps
+            LEFT JOIN party_site_balances psb ON psb.party_site_id = ps.id
+            LEFT JOIN currencies c ON psb.currency = c.code
+            WHERE 1=1
+            {balance_scope_clause}
+            GROUP BY ps.party_id
+        """
 
         query = f"""
             SELECT
@@ -85,6 +90,12 @@ def list_suppliers(
             WHERE p.is_supplier = TRUE
         """
         params = {"limit": limit, "skip": skip, "display_cur": branch_cur, **balance_params}
+        if branch_scope.get("branch_id") is not None:
+            query += " AND (p.branch_id = :supplier_branch_id OR bal.party_id IS NOT NULL)"
+            params["supplier_branch_id"] = branch_scope["branch_id"]
+        elif branch_scope.get("branch_ids") is not None:
+            query += " AND (p.branch_id = ANY(:supplier_branch_ids) OR bal.party_id IS NOT NULL)"
+            params["supplier_branch_ids"] = branch_scope["branch_ids"]
 
         query += " ORDER BY p.name ASC LIMIT :limit OFFSET :skip"
         result = db.execute(text(query), params).fetchall()
@@ -93,6 +104,7 @@ def list_suppliers(
         for row in result:
             d = dict(row._mapping)
             display_currency = d.get("balance_currency") or base_cur
+            balance_value = _dec(d["current_balance"] or 0).quantize(_D4, ROUND_HALF_UP)
             
             suppliers.append({
                 "id": d["id"],
@@ -105,10 +117,10 @@ def list_suppliers(
                 "commercial_register": d["commercial_register"],
                 "currency": d["currency"],
                 "group_id": d.get("group_id"),
-                "current_balance": float(d["current_balance"] or 0),
-                "balance_display": float(d["current_balance"] or 0),
+                "current_balance": balance_value,
+                "balance_display": balance_value,
                 "display_currency": display_currency,
-                "balance_sar": float(d["current_balance"] or 0) if display_currency == base_cur else float(d["current_balance"] or 0) * float(db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": display_currency}).scalar() or 1),
+                "balance_sar": balance_value,
                 "site_id": d.get("site_id"),
                 "site_name": d.get("site_name"),
                 "is_active": d["is_active"],
@@ -126,8 +138,9 @@ def get_supplier(
     current_user: dict = Depends(get_current_user)
 ):
     """عرض تفاصيل مورد محدد مع مواقعه وأرصدة كل موقع"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         
         supplier = db.execute(text("""
@@ -161,26 +174,29 @@ def get_supplier(
             WHERE ps.party_id = :pid AND ps.is_active = TRUE
         """
         balance_params = {"pid": id}
-        
-        if branch_id:
-            balance_query += " AND (psb.company_branch_id = :bid OR psb.company_branch_id IS NULL)"
-            balance_params["bid"] = branch_id
+        balance_query += branch_scope_filter_from_scope(
+            branch_scope,
+            "psb.company_branch_id",
+            balance_params,
+            branch_param="balance_branch_id",
+            branches_param="balance_branch_ids",
+        )
         
         balance_query += " ORDER BY ps.site_name, b.branch_name"
         balance_rows = db.execute(text(balance_query), balance_params).fetchall()
         
         # Group balances by site
         sites_data = []
-        total_sar = 0
+        total_sar = Decimal("0")
         for site in sites:
             site_balances = [r for r in balance_rows if r.site_id == site.id and r.balance is not None]
             balance_list = []
-            site_total = 0
+            site_total = Decimal("0")
             for b in site_balances:
-                bal = float(b.balance)
+                bal = _dec(b.balance).quantize(_D4, ROUND_HALF_UP)
                 if b.currency != base_cur:
                     rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), {"c": b.currency}).scalar()
-                    bal_sar = bal * float(rate or 1)
+                    bal_sar = (bal * _dec(rate or 1)).quantize(_D4, ROUND_HALF_UP)
                 else:
                     bal_sar = bal
                 site_total += bal_sar
@@ -201,8 +217,13 @@ def get_supplier(
                 "payment_terms": site.payment_terms,
                 "is_default": site.is_default,
                 "balances": balance_list,
-                "total_sar": site_total
+                "total_sar": site_total.quantize(_D4, ROUND_HALF_UP)
             })
+
+        if branch_scope.get("branch_id") is not None and supplier.branch_id not in (None, branch_scope["branch_id"]) and not balance_rows:
+            raise HTTPException(**http_error(403, "access_denied"))
+        if branch_scope.get("branch_ids") is not None and supplier.branch_id not in (None, *branch_scope["branch_ids"]) and not balance_rows:
+            raise HTTPException(**http_error(403, "access_denied"))
 
         return {
             "id": supplier.id,
@@ -216,9 +237,9 @@ def get_supplier(
             "currency": supplier.currency,
             "branch_id": supplier.branch_id,
             "group_id": getattr(supplier, 'group_id', None),
-            "current_balance": total_sar,
-            "balance": total_sar,
-            "balance_bc": total_sar,
+            "current_balance": total_sar.quantize(_D4, ROUND_HALF_UP),
+            "balance": total_sar.quantize(_D4, ROUND_HALF_UP),
+            "balance_bc": total_sar.quantize(_D4, ROUND_HALF_UP),
             "sites": sites_data,
             "balances": [b for site in sites_data for b in site["balances"]],
             "is_active": supplier.is_active,
@@ -231,12 +252,16 @@ def get_supplier(
 @suppliers_router.post("/suppliers", response_model=SupplierResponse, status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission(["parties.manage", "buying.create"]))])
 def create_supplier(
     supplier: SupplierCreate,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء مورد جديد مع إنشاء موقع افتراضي تلقائياً"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
         from utils.accounting import generate_sequential_number
+        user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+        username = current_user.get("username") if isinstance(current_user, dict) else current_user.username
+        branch_id = validate_branch_access(current_user, supplier.branch_id, request)
         code = generate_sequential_number(db, "SUP", "parties", "party_code")
 
         # Merge if tax number exists
@@ -265,7 +290,7 @@ def create_supplier(
                 "address": supplier.address,
                 "tax": supplier.tax_number,
                 "tax_exempt": supplier.tax_exempt or False,
-                "branch_id": supplier.branch_id,
+                "branch_id": branch_id,
                 "currency": supplier.currency
             }).fetchone()
             pid = result[0]
@@ -307,20 +332,21 @@ def create_supplier(
 
         log_activity(
             db,
-            user_id=current_user.id,
-            username=current_user.username,
+            user_id=user_id,
+            username=username,
             action="inventory.supplier.create",
             resource_type="supplier",
             resource_id=str(pid),
             details={"name": supplier.name},
-            request=None,
-            branch_id=supplier.branch_id
+            request=request,
+            branch_id=branch_id
         )
 
         return {
             **supplier.model_dump(),
+            "branch_id": branch_id,
             "id": pid,
-            "current_balance": float(result.current_balance or 0),
+            "current_balance": _dec(result.current_balance or 0).quantize(_D4, ROUND_HALF_UP),
             "is_active": True,
             "created_at": result.created_at
         }
@@ -337,15 +363,18 @@ def create_supplier(
 def update_supplier(
     id: int,
     supplier: SupplierCreate,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث بيانات مورد"""
-    db = get_db_connection(current_user.company_id)
+    db = get_db_connection(_company_id(current_user))
     try:
+        branch_id = validate_branch_access(current_user, supplier.branch_id, request)
         # Check existence
         existing = db.execute(text("SELECT id, created_at, current_balance, branch_id FROM parties WHERE id = :id AND is_supplier = TRUE"), {"id": id}).fetchone()
         if not existing:
             raise HTTPException(**http_error(404, "supplier_not_found"))
+        validate_branch_access(current_user, existing.branch_id, request)
 
         db.execute(text("""
             UPDATE parties SET
@@ -369,7 +398,7 @@ def update_supplier(
             "address": supplier.address,
             "tax": supplier.tax_number,
             "tax_exempt": supplier.tax_exempt or False,
-            "branch_id": supplier.branch_id,
+            "branch_id": branch_id,
             "currency": supplier.currency
         })
 
@@ -383,14 +412,15 @@ def update_supplier(
             resource_type="supplier",
             resource_id=str(id),
             details={"name": supplier.name},
-            request=None,
-            branch_id=supplier.branch_id
+            request=request,
+            branch_id=branch_id
         )
 
         return {
             **supplier.model_dump(),
+            "branch_id": branch_id,
             "id": id,
-            "current_balance": float(existing.current_balance or 0),
+            "current_balance": _dec(existing.current_balance or 0).quantize(_D4, ROUND_HALF_UP),
             "is_active": True,
             "created_at": existing.created_at
         }

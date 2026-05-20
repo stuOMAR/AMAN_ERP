@@ -18,7 +18,12 @@ from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
-from services.gl_service import create_journal_entry as gl_create_journal_entry, reverse_journal_entry as gl_reverse_journal_entry
+from utils.idempotency import find_je_by_idempotency_key
+from services.gl_service import (
+    create_journal_entry as gl_create_journal_entry,
+    reverse_journal_entry as gl_reverse_journal_entry,
+    post_draft_journal_entry as gl_post_draft_journal_entry,
+)
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
 from utils.cache import cache
@@ -226,9 +231,9 @@ def list_journal_entries(
                 "reference": r.reference,
                 "status": r.status,
                 "currency": r.currency,
-                "exchange_rate": float(r.exchange_rate) if r.exchange_rate else 1.0,
-                "total_debit": float(r.total_debit),
-                "total_credit": float(r.total_credit),
+                "exchange_rate": str(_dec(r.exchange_rate or 1).quantize(_D4, ROUND_HALF_UP)),
+                "total_debit": str(_dec(r.total_debit).quantize(_D2, ROUND_HALF_UP)),
+                "total_credit": str(_dec(r.total_credit).quantize(_D2, ROUND_HALF_UP)),
                 "line_count": r.line_count,
                 "created_by": r.created_by,
                 "created_by_name": r.created_by_name,
@@ -283,7 +288,7 @@ def get_journal_entry(
             "reference": entry.reference,
             "status": entry.status,
             "currency": entry.currency,
-            "exchange_rate": float(entry.exchange_rate) if entry.exchange_rate else 1.0,
+            "exchange_rate": str(_dec(entry.exchange_rate or 1).quantize(_D4, ROUND_HALF_UP)),
             "branch_id": entry.branch_id,
             "created_by": entry.created_by,
             "created_by_name": entry.created_by_name,
@@ -297,11 +302,11 @@ def get_journal_entry(
                 "account_number": l.account_number,
                 "account_name": l.account_name,
                 "account_name_en": l.account_name_en,
-                "debit": float(l.debit),
-                "credit": float(l.credit),
+                "debit": str(_dec(l.debit).quantize(_D2, ROUND_HALF_UP)),
+                "credit": str(_dec(l.credit).quantize(_D2, ROUND_HALF_UP)),
                 "description": l.description,
                 "currency": l.currency,
-                "amount_currency": float(l.amount_currency) if l.amount_currency else 0,
+                "amount_currency": str(_dec(l.amount_currency).quantize(_D2, ROUND_HALF_UP)) if l.amount_currency else "0.00",
                 "cost_center_id": l.cost_center_id,
             } for l in lines]
         }
@@ -315,58 +320,82 @@ async def post_journal_entry(
     """اعتماد وترحيل قيد مسودة"""
     with transactional(current_user.company_id) as db:
         try:
-            entry = db.execute(text("SELECT * FROM journal_entries WHERE id = :id"), {"id": entry_id}).fetchone()
+            # F-NEW-041 (R-MISSING-IDEMPOTENCY) — PR16-fix:
+            #
+            # The previous implementation read ``Idempotency-Key`` and
+            # called ``find_je_by_idempotency_key`` *before* posting,
+            # but never wrote the key onto the row. ``post_draft_journal_entry``
+            # only flips status; the next replay therefore saw the row
+            # already in ``posted`` and returned 400 ``status_invalid``
+            # rather than echoing the prior result. We now persist the
+            # key on ``journal_entries.idempotency_key`` *as part of
+            # the transition* so subsequent retries with the same key
+            # short-circuit at the probe.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                hit = find_je_by_idempotency_key(db, idempotency_key)
+                if hit and int(hit[0]) == int(entry_id):
+                    return {
+                        "success": True,
+                        "message": i18n_message("journal_entry_already_posted", request),
+                        "entry_number": hit[1],
+                        "idempotent": True,
+                    }
+            entry = db.execute(
+                text(
+                    "SELECT id, entry_number, status, branch_id, description, "
+                    "idempotency_key "
+                    "FROM journal_entries WHERE id = :id"
+                ),
+                {"id": entry_id},
+            ).fetchone()
             if not entry:
                 raise HTTPException(**http_error(404, "journal_entry_not_found", request))
+            # If the row already carries this idempotency key (e.g. a
+            # retry after a crash mid-post), echo the existing entry
+            # rather than failing on the state guard.
+            if (
+                idempotency_key
+                and entry.idempotency_key == idempotency_key
+                and entry.status == "posted"
+            ):
+                return {
+                    "success": True,
+                    "message": i18n_message("journal_entry_already_posted", request),
+                    "entry_number": entry.entry_number,
+                    "idempotent": True,
+                }
             if entry.status != 'draft':
                 raise HTTPException(status_code=400, detail=i18n_message("journal_entry_status_invalid", request))
-    
-            # Closed period check
-            if entry.entry_date:
-                closed_period = db.execute(text("""
-                    SELECT 1 FROM fiscal_periods
-                    WHERE :entry_date BETWEEN start_date AND end_date
-                    AND is_closed = TRUE LIMIT 1
-                """), {"entry_date": entry.entry_date}).fetchone()
-                if closed_period:
-                    raise HTTPException(**http_error(400, "cannot_post_closed_period", request))
-    
-            # Get lines and update account balances
-            lines = db.execute(text("""
-                SELECT account_id, debit, credit, currency, amount_currency FROM journal_lines
-                WHERE journal_entry_id = :id
-            """), {"id": entry_id}).fetchall()
-    
-            # Get the exchange rate from the journal entry
-            je_rate = _dec(entry.exchange_rate or 1)
-    
-            from utils.accounting import update_account_balance
-            for line in lines:
-                debit_base = _dec(line.debit)
-                credit_base = _dec(line.credit)
-                # Reverse the base amounts to get original currency amounts
-                if je_rate != 0:
-                    debit_curr = debit_base / je_rate
-                    credit_curr = credit_base / je_rate
-                else:
-                    debit_curr = debit_base
-                    credit_curr = credit_base
-                update_account_balance(
-                    db,
-                    account_id=line.account_id,
-                    debit_base=debit_base,
-                    credit_base=credit_base,
-                    debit_curr=debit_curr,
-                    credit_curr=credit_curr,
-                    currency=line.currency
+
+            # Persist the idempotency key *before* the state transition
+            # so a crash-after-flip but pre-commit retry observes the
+            # key on the next probe. The unique partial index on
+            # ``journal_entries.idempotency_key`` (alembic 0030)
+            # rejects collisions across rows, which is the desired
+            # behaviour: two distinct JEs cannot share the same key.
+            if idempotency_key and entry.idempotency_key != idempotency_key:
+                db.execute(
+                    text(
+                        "UPDATE journal_entries "
+                        "SET idempotency_key = :k "
+                        "WHERE id = :id "
+                        "  AND idempotency_key IS NULL"
+                    ),
+                    {"k": idempotency_key, "id": entry_id},
                 )
-    
-            # Update status to posted
-            db.execute(text("""
-                UPDATE journal_entries SET status = 'posted', posted_at = NOW()
-                WHERE id = :id
-            """), {"id": entry_id})
-    
+
+            # Audit F-NEW-010: route through gl_service.post_draft_journal_entry
+            # so balance writes go through the sanctioned path. The helper
+            # itself runs SELECT ... FOR UPDATE on the row, re-checks the
+            # fiscal period via utils.fiscal_lock.check_fiscal_period_open
+            # (the canonical guard, per Phase 0 contradiction C-ARCH-002),
+            # flips status to 'posted', and applies balances via
+            # update_account_balance exactly once.
+            gl_post_draft_journal_entry(
+                db, je_id=entry_id, user_id=current_user.id, request=request
+            )
+
             # T12 — scoped invalidation (post/unpost only affects accounting)
             invalidate_aggregates(str(current_user.company_id),
                                   "reports", "dashboard", "trial_balance",
@@ -422,6 +451,21 @@ async def void_journal_entry(
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-043 (R-MISSING-IDEMPOTENCY): a retried /void must return
+            # the same reversal JE rather than create a second one. The
+            # reversal is keyed by the supplied Idempotency-Key, which we
+            # forward to gl_create_journal_entry below.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                hit = find_je_by_idempotency_key(db, idempotency_key)
+                if hit:
+                    return {
+                        "success": True,
+                        "message": i18n_message("journal_entry_cancelled_success", request),
+                        "reversal_entry_id": hit[0],
+                        "reversal_entry_number": hit[1],
+                        "idempotent": True,
+                    }
             # 1. Get original entry
             original = db.execute(text("""
                 SELECT * FROM journal_entries WHERE id = :id
@@ -485,50 +529,20 @@ async def void_journal_entry(
                     detail=f"لا تملك صلاحية إلغاء قيد صادر من المصدر: {src}",
                 )
             
-            # 2. Get original lines
-            lines = db.execute(text("""
-                SELECT account_id, debit, credit, description, amount_currency, currency, cost_center_id
-                FROM journal_lines WHERE journal_entry_id = :id
-            """), {"id": entry_id}).fetchall()
+            # 2. Get original lines (validated internally by gl_reverse_journal_entry)
             
-            if not lines:
-                raise HTTPException(**http_error(400, "journal_entry_no_lines", request))
-            
-            # 3. Create reversal entry via centralized GL service
-            # Fiscal-period lock: the reversal posts at today, so the current
-            # period must be open.
+            # 3. Create reversal via centralized GL service (Constitution §3: single writer)
+            # gl_reverse_journal_entry creates the reversal AND marks original as 'reversed'
             check_fiscal_period_open(db, date.today())
-            rev_lines = []
-            for line in lines:
-                rev_lines.append({
-                    "account_id": line.account_id,
-                    "debit": _dec(line.credit or 0),
-                    "credit": _dec(line.debit or 0),
-                    "description": f"عكس: {line.description or ''}",
-                    "amount_currency": _dec(line.amount_currency or 0),
-                    "currency": line.currency,
-                    "cost_center_id": line.cost_center_id,
-                })
-    
-            rev_id, rev_entry_number = gl_create_journal_entry(
+            rev_id, rev_entry_number = gl_reverse_journal_entry(
                 db=db,
-                company_id=current_user.company_id,
-                date=str(date.today()),
-                description=f"عكس قيد: {original.description}",
-                lines=rev_lines,
+                je_id=entry_id,
                 user_id=current_user.id,
-                branch_id=original.branch_id,
-                reference=original.entry_number,
-                currency=original.currency,
-                exchange_rate=_dec(original.exchange_rate or 1),
-                source="reversal",
-                source_id=entry_id,
+                company_id=current_user.company_id,
+                reversal_date=str(date.today()),
+                reason=f"Void: {original.description}",
+                idempotency_key=idempotency_key,
             )
-            
-            # 5. Mark original as voided
-            db.execute(text("""
-                UPDATE journal_entries SET status = 'void' WHERE id = :id
-            """), {"id": entry_id})
             
             
             log_activity(
@@ -571,6 +585,10 @@ def reverse_journal_entry_endpoint(
     """إنشاء قيد عكسي لقيد مرحَّل مع الاحتفاظ بالقيد الأصلي."""
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-044 (R-MISSING-IDEMPOTENCY): forward Idempotency-Key
+            # to gl_reverse_journal_entry so retries return the same
+            # reversal entry rather than failing with reversal_already_exists.
+            idempotency_key = request.headers.get("Idempotency-Key")
             # Validate reversal date period is open
             reversal_date = body.reversal_date or str(date.today())
             check_fiscal_period_open(db, reversal_date)
@@ -582,6 +600,7 @@ def reverse_journal_entry_endpoint(
                 company_id=current_user.company_id,
                 reversal_date=reversal_date,
                 reason=body.reason,
+                idempotency_key=idempotency_key,
             )
 
             log_activity(
@@ -615,4 +634,3 @@ def reverse_journal_entry_endpoint(
 # ============================================================
 # Fiscal Year Management & Year-End Closing (ACC-001)
 # ============================================================
-

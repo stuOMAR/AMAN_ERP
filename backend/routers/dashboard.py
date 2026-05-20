@@ -125,12 +125,12 @@ def _dashboard_display_currency(db, branch_scope: dict) -> dict:
     }
 
 
-def _base_to_display_amount(value, display_meta: dict) -> float:
+def _base_to_display_amount(value, display_meta: dict) -> Decimal:
     amount = Decimal(str(value or 0))
     rate = display_meta.get("rate") or Decimal("1")
     if display_meta.get("currency") != display_meta.get("base_currency") and rate:
         amount = amount / rate
-    return float(amount)
+    return Decimal(str(amount))
 
 
 def _convert_stats_from_base(stats: dict, display_meta: dict) -> dict:
@@ -185,7 +185,7 @@ def get_dashboard_stats(
                 branch_id=branch_scope["branch_id"],
                 branch_ids=branch_scope["branch_ids"],
             )
-            total_sales = float(sales_data["total_sales"])
+            total_sales = Decimal(str(sales_data["total_sales"]))
 
             # GL-based profit breakdown
             gl = get_gl_profit_breakdown(
@@ -195,9 +195,9 @@ def get_dashboard_stats(
                 branch_id=branch_scope["branch_id"],
                 branch_ids=branch_scope["branch_ids"],
             )
-            total_expenses = float(gl["operating_expenses"])
-            cogs = float(gl["cogs"])
-            net_profit = float(gl["net_profit"])
+            total_expenses = Decimal(str(gl["operating_expenses"]))
+            cogs = Decimal(str(gl["cogs"]))
+            net_profit = Decimal(str(gl["net_profit"]))
 
             # Cash balance follows treasury ownership. A branch-owned bank/cash
             # account belongs to its treasury branch even if an old JE line was
@@ -238,7 +238,7 @@ def get_dashboard_stats(
                 "cogs": cogs,
                 "expenses": total_expenses,
                 "profit": net_profit,
-                "cash": float(cash_balance),
+                "cash": Decimal(str(cash_balance)),
             }
 
         # Calculate cumulative stats (matching accounting summary - all-time balances)
@@ -380,7 +380,7 @@ def get_financial_chart(
             d = row.sale_date
             if isinstance(d, datetime): d = d.date()
             key = d.isoformat() if hasattr(d, "isoformat") else str(d)
-            sales_map[key] = float(row.total)
+            sales_map[key] = Decimal(str(row.total))
 
         # Fetch Expenses by Date
         expenses_data = db.execute(text(f"""
@@ -396,7 +396,7 @@ def get_financial_chart(
             d = row.transaction_date
             if isinstance(d, datetime): d = d.date()
             key = d.isoformat() if hasattr(d, "isoformat") else str(d)
-            expenses_map[key] = float(row.total)
+            expenses_map[key] = Decimal(str(row.total))
 
         # Merge
         result = []
@@ -467,7 +467,7 @@ def get_top_products(
         """), params).fetchall()
 
 
-        return [{"name": row.name, "value": float(row.value)} for row in result]
+        return [{"name": row.name, "value": Decimal(str(row.value))} for row in result]
 @router.get("/system-stats", response_model=Dict[str, Any])
 def get_system_stats(
     current_user: dict = Depends(get_current_user)
@@ -757,7 +757,7 @@ def widget_sales_summary(
             {pos_branch_filter}
         """), params).fetchone()
 
-        total_sales = float(sales.total or 0) + float(pos.total or 0)
+        total_sales = Decimal(str(sales.total or 0)) + Decimal(str(pos.total or 0))
         total_count = int(sales.count or 0) + int(pos.count or 0)
 
         # Previous period comparison
@@ -785,7 +785,7 @@ def widget_sales_summary(
             {pos_branch_filter_prev}
         """), params_prev).scalar() or 0
 
-        prev_total = float(prev_sales) + float(prev_pos)
+        prev_total = Decimal(str(prev_sales)) + Decimal(str(prev_pos))
         change = round(((total_sales - prev_total) / prev_total * 100), 1) if prev_total > 0 else (100 if total_sales > 0 else 0)
 
         return {
@@ -847,7 +847,7 @@ def widget_top_products(
         """), params).fetchall()
 
         return {"display_currency": display_meta["currency"], "base_currency": display_meta["base_currency"], "products": [
-            {"name": r.name, "quantity": float(r.qty or 0), "value": _base_to_display_amount(r.value or 0, display_meta)}
+            {"name": r.name, "quantity": Decimal(str(r.qty or 0)), "value": _base_to_display_amount(r.value or 0, display_meta)}
             for r in result
         ]}
     except Exception:
@@ -898,9 +898,9 @@ def widget_low_stock(
                 "id": r.id,
                 "product_name": r.product_name,
                 "sku": r.sku,
-                "current_stock": float(r.current_stock),
-                "reorder_level": float(r.reorder_level or 0),
-                "shortage": max(float(r.reorder_level or 0) - float(r.current_stock), 0.0),
+                "current_stock": Decimal(str(r.current_stock)),
+                "reorder_level": Decimal(str(r.reorder_level or 0)),
+                "shortage": max(Decimal(str(r.reorder_level or 0)) - Decimal(str(r.current_stock)), Decimal('0')),
             }
             for r in result
         ]}
@@ -947,7 +947,7 @@ def widget_pending_tasks(
                 tasks.append({
                     "type": "unpaid_invoices",
                     "label": f"{unpaid.cnt} فاتورة غير مدفوعة",
-                    "value": float(unpaid.total),
+                    "value": Decimal(str(unpaid.total)),
                     "link": "/accounting/invoices?status=pending"
                 })
         except Exception:
@@ -1069,7 +1069,7 @@ def widget_cash_flow(
         for r in inflows:
             d = r.dt
             if isinstance(d, datetime): d = d.date()
-            inflow_map[d.isoformat()] = float(r.total)
+            inflow_map[d.isoformat()] = Decimal(str(r.total))
 
         # Cash outflows (payments) by day
         outflows = db.execute(text( # noqa: sql-lint
@@ -1086,7 +1086,7 @@ def widget_cash_flow(
         for r in outflows:
             d = r.dt
             if isinstance(d, datetime): d = d.date()
-            outflow_map[d.isoformat()] = float(r.total)
+            outflow_map[d.isoformat()] = Decimal(str(r.total))
 
         # Build daily series
         result = []
@@ -1187,7 +1187,7 @@ def _get_industry_widgets(industry_type: str, db) -> list:
                      JOIN journal_entries j ON jl.journal_entry_id = j.id AND j.status = 'posted'
                      WHERE j.entry_date >= date_trunc('month', CURRENT_DATE)), 0)
             """)).scalar() or 0
-            widgets.append({"key": "food_cost_pct", "value": round(float(food_cost), 1), "label_ar": "نسبة تكلفة الطعام", "label_en": "Food Cost %", "icon": "🍽️", "target": 30})
+            widgets.append({"key": "food_cost_pct", "value": round(Decimal(str(food_cost)), 1), "label_ar": "نسبة تكلفة الطعام", "label_en": "Food Cost %", "icon": "🍽️", "target": 30})
             
         elif industry_type == "manufacturing":
             # WIP value — account 13010
@@ -1197,7 +1197,7 @@ def _get_industry_widgets(industry_type: str, db) -> list:
                 ), 0) FROM journal_lines jl JOIN accounts a ON jl.account_id = a.id
                 JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
             """)).scalar() or 0
-            widgets.append({"key": "wip_value", "value": float(wip), "label_ar": "قيمة الإنتاج تحت التشغيل", "label_en": "WIP Value", "icon": "🏭"})
+            widgets.append({"key": "wip_value", "value": Decimal(str(wip)), "label_ar": "قيمة الإنتاج تحت التشغيل", "label_en": "WIP Value", "icon": "🏭"})
             
         elif industry_type == "construction":
             # Active projects count
@@ -1220,7 +1220,7 @@ def _get_industry_widgets(industry_type: str, db) -> list:
                 SELECT COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) FROM invoices 
                 WHERE DATE(created_at) = CURRENT_DATE AND invoice_type = 'sales'
             """)).scalar() or 0
-            widgets.append({"key": "today_sales", "value": float(today_sales), "label_ar": "مبيعات اليوم", "label_en": "Today's Sales", "icon": "🛍️"})
+            widgets.append({"key": "today_sales", "value": Decimal(str(today_sales)), "label_ar": "مبيعات اليوم", "label_en": "Today's Sales", "icon": "🛍️"})
             
         elif industry_type == "logistics":
             # Active shipments — uses delivery_orders

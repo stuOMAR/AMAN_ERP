@@ -39,12 +39,13 @@ import hashlib
 import logging
 import time
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any, Callable, Dict, Optional
 
 import requests
 
 from .base import EInvoiceAdapter, SubmissionResult
+from utils.tax_precision import money_str, qty_str, q_money, dec
 
 logger = logging.getLogger(__name__)
 
@@ -89,8 +90,8 @@ def build_qr_payload(
         _tlv(1, seller_name),
         _tlv(2, seller_vat),
         _tlv(3, ts),
-        _tlv(4, f"{float(total_with_vat):.2f}"),
-        _tlv(5, f"{float(vat_amount):.2f}"),
+        _tlv(4, money_str(total_with_vat)),
+        _tlv(5, money_str(vat_amount)),
     ]
     # Phase 2 extensions (only included if caller supplied them).
     if invoice_hash:
@@ -116,6 +117,65 @@ def _xml_escape(v: Any) -> str:
              .replace("\"", "&quot;"))
 
 
+def _parse_issue_date(value: Any) -> Optional[date]:
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, date):
+        return value
+    if value is None:
+        return None
+    try:
+        return datetime.strptime(str(value)[:10], "%Y-%m-%d").date()
+    except ValueError:
+        return None
+
+
+def _gregorian_to_hijri(gregorian_date: date) -> str:
+    year = gregorian_date.year
+    month = gregorian_date.month
+    day = gregorian_date.day
+    if month < 3:
+        year -= 1
+        month += 12
+    century = year // 100
+    correction = 2 - century + (century // 4)
+    julian_day = (
+        int(365.25 * (year + 4716))
+        + int(30.6001 * (month + 1))
+        + day
+        + correction
+        - 1524
+    )
+    lunar_days = julian_day - 1948440 + 10632
+    cycle = (lunar_days - 1) // 10631
+    lunar_days = lunar_days - (10631 * cycle) + 354
+    adjustment = (
+        ((10985 - lunar_days) // 5316) * ((50 * lunar_days) // 17719)
+        + (lunar_days // 5670) * ((43 * lunar_days) // 15238)
+    )
+    lunar_days = (
+        lunar_days
+        - ((30 - adjustment) // 15) * ((17719 * adjustment) // 50)
+        - (adjustment // 16) * ((15238 * adjustment) // 43)
+        + 29
+    )
+    hijri_month = (24 * lunar_days) // 709
+    hijri_day = lunar_days - (709 * hijri_month) // 24
+    hijri_year = (30 * cycle) + adjustment - 30
+    return f"{hijri_year:04d}-{hijri_month:02d}-{hijri_day:02d}"
+
+
+def _hijri_issue_note(invoice: dict) -> str:
+    hijri_date = invoice.get("hijri_date") or invoice.get("hijri_issue_date")
+    if not hijri_date:
+        issue_date = _parse_issue_date(invoice.get("invoice_date"))
+        if issue_date:
+            hijri_date = _gregorian_to_hijri(issue_date)
+    if not hijri_date:
+        return ""
+    return f"\n  <cbc:Note>HIJRI:{_xml_escape(hijri_date)}</cbc:Note>"
+
+
 def build_ubl_xml(invoice: dict, seller_name: str, seller_vat: str,
                   previous_invoice_hash: str = "") -> str:
     """Build a minimal UBL 2.1 invoice.
@@ -126,27 +186,28 @@ def build_ubl_xml(invoice: dict, seller_name: str, seller_vat: str,
       lines=[{description, quantity, unit_price, tax_rate, line_total, tax_amount}],
       subtotal, tax_total, grand_total.
     """
+    hijri_issue_note = _hijri_issue_note(invoice)
     lines_xml = []
     for idx, line in enumerate(invoice.get("lines") or [], start=1):
         lines_xml.append(f"""
     <cac:InvoiceLine>
       <cbc:ID>{idx}</cbc:ID>
-      <cbc:InvoicedQuantity unitCode="PCE">{float(line.get("quantity") or 0):.3f}</cbc:InvoicedQuantity>
-      <cbc:LineExtensionAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(line.get("line_total") or 0):.2f}</cbc:LineExtensionAmount>
+      <cbc:InvoicedQuantity unitCode="PCE">{qty_str(line.get("quantity") or 0)}</cbc:InvoicedQuantity>
+      <cbc:LineExtensionAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(line.get("line_total") or 0)}</cbc:LineExtensionAmount>
       <cac:TaxTotal>
-        <cbc:TaxAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(line.get("tax_amount") or 0):.2f}</cbc:TaxAmount>
-        <cbc:RoundingAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(line.get("line_total") or 0) + float(line.get("tax_amount") or 0):.2f}</cbc:RoundingAmount>
+        <cbc:TaxAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(line.get("tax_amount") or 0)}</cbc:TaxAmount>
+        <cbc:RoundingAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(dec(line.get("line_total") or 0) + dec(line.get("tax_amount") or 0))}</cbc:RoundingAmount>
       </cac:TaxTotal>
       <cac:Item>
         <cbc:Name>{_xml_escape(line.get("description"))}</cbc:Name>
         <cac:ClassifiedTaxCategory>
           <cbc:ID>S</cbc:ID>
-          <cbc:Percent>{float(line.get("tax_rate") or 0):.2f}</cbc:Percent>
+          <cbc:Percent>{money_str(line.get("tax_rate") or 0)}</cbc:Percent>
           <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
         </cac:ClassifiedTaxCategory>
       </cac:Item>
       <cac:Price>
-        <cbc:PriceAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(line.get("unit_price") or 0):.2f}</cbc:PriceAmount>
+        <cbc:PriceAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(line.get("unit_price") or 0)}</cbc:PriceAmount>
       </cac:Price>
     </cac:InvoiceLine>""")
 
@@ -157,7 +218,7 @@ def build_ubl_xml(invoice: dict, seller_name: str, seller_vat: str,
   <cbc:ProfileID>reporting:1.0</cbc:ProfileID>
   <cbc:ID>{_xml_escape(invoice.get("invoice_number"))}</cbc:ID>
   <cbc:UUID>{_xml_escape(invoice.get("uuid") or invoice.get("invoice_number"))}</cbc:UUID>
-  <cbc:IssueDate>{_xml_escape(invoice.get("invoice_date"))}</cbc:IssueDate>
+  <cbc:IssueDate>{_xml_escape(invoice.get("invoice_date"))}</cbc:IssueDate>{hijri_issue_note}
   <cbc:IssueTime>{_xml_escape(invoice.get("invoice_time") or "00:00:00")}</cbc:IssueTime>
   <cbc:InvoiceTypeCode name="0200000">{_xml_escape(invoice.get("invoice_type_code") or "388")}</cbc:InvoiceTypeCode>
   <cbc:DocumentCurrencyCode>{_xml_escape(invoice.get("currency", "SAR"))}</cbc:DocumentCurrencyCode>
@@ -192,13 +253,13 @@ def build_ubl_xml(invoice: dict, seller_name: str, seller_vat: str,
     </cac:Party>
   </cac:AccountingCustomerParty>
   <cac:TaxTotal>
-    <cbc:TaxAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(invoice.get("tax_total") or 0):.2f}</cbc:TaxAmount>
+    <cbc:TaxAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(invoice.get("tax_total") or 0)}</cbc:TaxAmount>
   </cac:TaxTotal>
   <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(invoice.get("subtotal") or 0):.2f}</cbc:LineExtensionAmount>
-    <cbc:TaxExclusiveAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(invoice.get("subtotal") or 0):.2f}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(invoice.get("grand_total") or 0):.2f}</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{float(invoice.get("grand_total") or 0):.2f}</cbc:PayableAmount>
+    <cbc:LineExtensionAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(invoice.get("subtotal") or 0)}</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(invoice.get("subtotal") or 0)}</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(invoice.get("grand_total") or 0)}</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="{_xml_escape(invoice.get("currency", "SAR"))}">{money_str(invoice.get("grand_total") or 0)}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
   {"".join(lines_xml)}
 </Invoice>"""
@@ -290,11 +351,14 @@ class ZATCAAdapter(EInvoiceAdapter):
         last_exc: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
             try:
+                headers = {"Accept-Version": "V2", "Content-Type": "application/json"}
+                if invoice.get("idempotency_key"):
+                    headers["Idempotency-Key"] = str(invoice["idempotency_key"])
                 r = requests.post(
                     self.config.api_base.rstrip("/") + endpoint,
                     json=payload,
                     auth=(self.config.pcsid, self.config.secret),
-                    headers={"Accept-Version": "V2", "Content-Type": "application/json"},
+                    headers=headers,
                     timeout=self.config.timeout_seconds,
                     verify=self.config.verify_ssl,
                 )

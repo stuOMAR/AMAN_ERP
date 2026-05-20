@@ -220,12 +220,17 @@ def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_curr
         currency=base_currency,
         exchange_rate=1.0,
         source="expense",
-        source_id=expense_data.get("expense_id")
+        source_id=expense_data.get("expense_id"),
+        # F-NEW-110 (GL-4.4 posted-immutability): pre-allocate the EXP-
+        # prefixed number and hand it to gl_service so the row is born
+        # with the correct entry_number. The previous implementation
+        # issued ``UPDATE journal_entries SET entry_number`` immediately
+        # after the central writer returned, mutating a row that may
+        # already be in ``posted`` state — a documented audit-trail
+        # breach. With this override the post-create UPDATE is gone.
+        entry_number_override=je_number,
     )
-    
-    # Update journal entry number to keep the EXP- prefix (since gl_service generates JV-)
-    db.execute(text("UPDATE journal_entries SET entry_number = :num WHERE id = :id"), {"num": je_number, "id": je_id})
-    
+
     return je_id, je_number
 
 
@@ -426,7 +431,11 @@ def delete_expense_policy(request: Request, policy_id: int, current_user=Depends
             raise HTTPException(**http_error(500, "internal_error"))
 
 
-@router.post("/validate-policy", response_model=Dict[str, Any])
+@router.post(
+    "/validate-policy",
+    dependencies=[Depends(require_permission("expenses.create"))],
+    response_model=Dict[str, Any],
+)
 def validate_expense_against_policy(expense: ExpenseValidation, current_user=Depends(get_current_user)):
     """التحقق من المصروف ضد السياسات"""
     with transactional(current_user.company_id) as db:
@@ -442,7 +451,7 @@ def validate_expense_against_policy(expense: ExpenseValidation, current_user=Dep
 
 
 @router.get("/{expense_id}", dependencies=[Depends(require_permission("expenses.view"))], response_model=Dict[str, Any])
-async def get_expense_details(expense_id: int, current_user: dict = Depends(get_current_user)):
+async def get_expense_details(expense_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """تفاصيل مصروف محدد"""
     with transactional(current_user.company_id) as db:
         result = db.execute(text("""
@@ -469,6 +478,7 @@ async def get_expense_details(expense_id: int, current_user: dict = Depends(get_
             raise HTTPException(**http_error(404, "expense_not_found"))
         
         expense = dict(result._mapping)
+        validate_branch_access(current_user, expense.get("branch_id"), request)
         
         # Get journal entry if exists
         je = db.execute(text("""
@@ -707,14 +717,18 @@ async def update_expense(
         try:
             # Check if expense exists and is pending
             existing = db.execute(text(
-                "SELECT id, approval_status FROM expenses WHERE id = :id AND is_deleted = false"
+                "SELECT id, approval_status, branch_id FROM expenses WHERE id = :id AND is_deleted = false"
             ), {"id": expense_id}).fetchone()
             
             if not existing:
                 raise HTTPException(**http_error(404, "expense_not_found"))
+            validate_branch_access(current_user, existing.branch_id, request)
             
             if existing.approval_status != "pending":
                 raise HTTPException(**http_error(400, "expense_cannot_edit_approved_or_rejected", request))
+
+            if expense.treasury_id is not None:
+                validate_treasury_account_access(db, current_user, expense.treasury_id, existing.branch_id, request=request)
             
             # Build update fields
             update_fields = []
@@ -932,12 +946,15 @@ async def reverse_expense(
     المدين والدائن لكل حساب طرف في القيدين الأصلي والعكسي يتساوى،
     فيُعاد الرصيد لقيمته قبل المصروف.
     """
-    db = get_db_connection(current_user.company_id)
     payload = payload or {}
     reason = (payload.get("reason") or "").strip() or None
     reversal_date = payload.get("reversal_date")
+    # F-NEW-116 (R-MISSING-IDEMPOTENCY): forward Idempotency-Key to
+    # reverse_journal_entry so retried /reverse calls return the same
+    # reversal entry rather than failing with reversal_already_exists.
+    idempotency_key = request.headers.get("Idempotency-Key") if request else None
 
-    try:
+    with transactional(current_user.company_id) as db:
         # Lock the row before any work — T3.12 pattern.
         db.execute(text(
             "SELECT id FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
@@ -971,6 +988,7 @@ async def reverse_expense(
             company_id=current_user.company_id,
             reversal_date=eff_date,
             reason=reason,
+            idempotency_key=idempotency_key,
         )
 
         amount = Decimal(str(expense["amount"]))
@@ -996,8 +1014,6 @@ async def reverse_expense(
                 reversal_reason = :reason
             WHERE id = :id
         """), {"rid": rev_id, "uid": current_user.id, "reason": reason, "id": expense_id})
-
-        db.commit()
 
         log_activity(
             db,
@@ -1025,15 +1041,6 @@ async def reverse_expense(
             "reversal_journal_entry_id": rev_id,
             "reversal_journal_entry_number": rev_num,
         }
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error reversing expense: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
 
 @router.delete("/{expense_id}", dependencies=[Depends(require_permission("expenses.delete"))], response_model=Dict[str, Any])
@@ -1046,11 +1053,12 @@ async def delete_expense(
     with transactional(current_user.company_id) as db:
         try:
             expense = db.execute(text(
-                "SELECT approval_status FROM expenses WHERE id = :id AND is_deleted = false"
+                "SELECT approval_status, branch_id FROM expenses WHERE id = :id AND is_deleted = false"
             ), {"id": expense_id}).fetchone()
             
             if not expense:
                 raise HTTPException(**http_error(404, "expense_not_found"))
+            validate_branch_access(current_user, expense.branch_id, request)
             
             if expense.approval_status != "pending":
                 raise HTTPException(**http_error(400, "expense_approved_cannot_delete", request))

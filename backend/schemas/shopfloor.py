@@ -50,7 +50,7 @@ class WorkOrderDashboardItem(BaseModel):
     due_date: Optional[str] = None
     current_operation: Optional[str] = None
     current_operation_status: Optional[str] = None
-    progress_pct: float = 0.0
+    progress_pct: Decimal = Decimal("0.0")
     is_delayed: bool = False
 
 

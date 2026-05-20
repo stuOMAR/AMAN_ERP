@@ -495,27 +495,20 @@ def resolve_line_tax(
         }
 
     # Priority 4: Product has a specific tax assigned
-    if product and product.tax_rate_id and product.tax_is_active:
+    if product and product.tax_rate_id:
         rate_row = db.execute(text("""
             SELECT id, rate_value, tax_name, tax_code, country_code, effective_from, effective_to
             FROM tax_rates WHERE id = :rid AND is_active = TRUE
         """), {"rid": product.tax_rate_id}).fetchone()
-        if rate_row:
-            # Validate date range
-            if rate_row.effective_from and rate_row.effective_from > as_of_date:
-                pass  # not yet effective, fall through
-            elif rate_row.effective_to and rate_row.effective_to < as_of_date:
-                pass  # expired, fall through
-            # Validate country
-            elif rate_row.country_code:
-                branch = db.execute(text("SELECT country_code FROM branches WHERE id = :bid"), {"bid": branch_id}).fetchone()
-                branch_cc = (branch.country_code or "SA").upper() if branch else "SA"
-                if rate_row.country_code.upper() != branch_cc:
-                    pass  # wrong country, fall through
-                else:
-                    return {"tax_rate_id": rate_row.id, "tax_rate": Decimal(str(rate_row.rate_value)), "tax_name": rate_row.tax_name}
-            else:
-                return {"tax_rate_id": rate_row.id, "tax_rate": Decimal(str(rate_row.rate_value)), "tax_name": rate_row.tax_name}
+        if not rate_row:
+            raise HTTPException(**http_error(400, "product_tax_rate_inactive_or_missing"))
+        if rate_row.effective_from and rate_row.effective_from > as_of_date:
+            raise HTTPException(**http_error(400, "product_tax_rate_not_yet_effective"))
+        if rate_row.effective_to and rate_row.effective_to < as_of_date:
+            raise HTTPException(**http_error(400, "product_tax_rate_expired"))
+        if rate_row.country_code and rate_row.country_code.upper() != _branch_country:
+            raise HTTPException(**http_error(400, "product_tax_rate_wrong_country"))
+        return {"tax_rate_id": rate_row.id, "tax_rate": Decimal(str(rate_row.rate_value)), "tax_name": rate_row.tax_name}
 
     # Priority 5: Product has a tax classification → lookup per-country rate
     if product and product.tax_classification_id:

@@ -7,22 +7,23 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from typing import Optional
+from decimal import Decimal
 
 
 class ScrapLine(BaseModel):
     item_id: int
-    qty: float
+    qty: Decimal
     reason: str
 
 
 class ByproductLine(BaseModel):
     item_id: int
-    qty: float
-    sales_value: Optional[float] = None
+    qty: Decimal
+    sales_value: Optional[Decimal] = None
 
 
 class CompletionRequest(BaseModel):
-    qty: float
+    qty: Decimal
     warehouse_id: int
     scrap_lines: Optional[list[ScrapLine]] = None
     byproduct_lines: Optional[list[ByproductLine]] = None
@@ -32,8 +33,8 @@ class CompletionRequest(BaseModel):
 class CompletionResponse(BaseModel):
     mo_id: int
     completion_id: int
-    qty_completed: float
-    remaining_qty: float
+    qty_completed: Decimal
+    remaining_qty: Decimal
     wip_to_fg_je_id: Optional[int] = None
     state: str
 

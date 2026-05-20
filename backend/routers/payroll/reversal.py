@@ -4,15 +4,18 @@ POST /api/payroll/periods/{id}/reverse — reverse a locked payroll period.
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+import logging
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 
 from database import get_db_connection
 from services.payroll.period_reversal import reverse_payroll_period
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import i18n_message
 
 router = APIRouter(prefix="/api/payroll/periods", tags=["Payroll"])
+logger = logging.getLogger(__name__)
 
 
 class ReversalRequest(BaseModel):
@@ -40,6 +43,7 @@ def _get_user_id(current_user) -> int:
 def reverse_period(
     period_id: int,
     body: ReversalRequest,
+    request: Request,
     current_user=Depends(require_sensitive_permission("payroll.reverse")),
 ):
     """Reverse a locked payroll period."""
@@ -56,11 +60,14 @@ def reverse_period(
         )
         return result
     except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.exception("Payroll period not found for reversal")
+        raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
     except ValueError as e:
-        detail = str(e)
-        if detail == "payroll.period_not_locked":
-            raise HTTPException(status_code=422, detail=detail)
-        raise HTTPException(status_code=400, detail=detail)
+        error_code = str(e)
+        if error_code == "payroll.period_not_locked":
+            logger.exception("Payroll period not locked for reversal")
+            raise HTTPException(status_code=422, detail=i18n_message("validation_error", request) if request else "Validation error")
+        logger.exception("Validation error in payroll reversal")
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
     finally:
         conn.close()

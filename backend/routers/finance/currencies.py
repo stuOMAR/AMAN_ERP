@@ -2,20 +2,71 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.tx import transactional
 from schemas import CurrencyCreate, CurrencyResponse, ExchangeRateCreate, ExchangeRateResponse
 
 logger = logging.getLogger(__name__)
-from schemas.currencies import RevaluationRequest
+from schemas.currencies import FXPreviewRequest, RevaluationRequest
 
 router = APIRouter(
     prefix="/accounting/currencies",
     tags=["accounting"]
 )
+
+# F-NEW-098 (R-FLOAT-MONEY, Req 8.5): canonical Decimal precision —
+# 2 dp for money aggregates, 4 dp for FX rates / accumulated diffs.
+_D2 = Decimal("0.01")
+_D4 = Decimal("0.0001")
+_D8 = Decimal("0.00000001")
+
+
+def _dec(v) -> Decimal:
+    """Normalise any numeric input (Decimal/str/int/float) to Decimal."""
+    return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _effective_currency_rate(db, code: str) -> tuple[Decimal, Dict[str, Any]]:
+    cur = db.execute(text("""
+        SELECT id, code, is_base, COALESCE(current_rate, 1) AS legacy_rate
+        FROM currencies
+        WHERE upper(code) = :code
+        LIMIT 1
+    """), {"code": code}).mappings().first()
+    if not cur:
+        raise ValueError("currency_not_found")
+    if cur["is_base"]:
+        return Decimal("1"), {"code": cur["code"], "rate": "1", "source": "base", "rate_date": None}
+
+    latest = db.execute(text("""
+        SELECT rate, rate_date
+        FROM exchange_rates
+        WHERE currency_id = :id AND rate_date <= CURRENT_DATE
+        ORDER BY rate_date DESC
+        LIMIT 1
+    """), {"id": cur["id"]}).mappings().first()
+    if latest and latest["rate"]:
+        rate = _dec(latest["rate"])
+        return rate, {
+            "code": cur["code"],
+            "rate": str(rate),
+            "source": "exchange_rates",
+            "rate_date": latest["rate_date"].isoformat() if latest["rate_date"] else None,
+        }
+
+    rate = _dec(cur["legacy_rate"] or 1)
+    return rate, {"code": cur["code"], "rate": str(rate), "source": "currencies.current_rate", "rate_date": None}
+
+
+def _require_company_wide_branch_scope(current_user: Any, request: Request) -> None:
+    scope = resolve_branch_scope(current_user, None)
+    if scope.get("branch_ids") is not None:
+        raise HTTPException(**http_error(403, "access_denied", request))
 
 
 def _auto_create_currency_accounts(db, currency_code: str, currency_name: str, current_user):
@@ -41,7 +92,6 @@ def _auto_create_currency_accounts(db, currency_code: str, currency_name: str, c
                 INSERT INTO accounts (account_number, account_code, name, name_en, account_type, parent_id, currency, is_header, is_active)
                 VALUES ('31', '31', 'رأس المال', 'Capital', 'equity', :parent_id, 'SAR', TRUE, TRUE)
             """), {"parent_id": equity_parent_id})
-            db.commit()
             parent_capital = db.execute(
                 text("SELECT id FROM accounts WHERE account_number = '31' LIMIT 1")
             ).fetchone()
@@ -88,19 +138,18 @@ def _auto_create_currency_accounts(db, currency_code: str, currency_name: str, c
             "parent_id": parent_id,
             "currency": currency_code,
         })
-        db.commit()
 
         logger.info(f"✓ Auto-created capital account {next_num}: {account_name} ({currency_code})")
 
     except Exception as e:
         logger.warning(f"Failed to auto-create capital account for {currency_code}: {e}")
-        db.rollback()
+        raise
 
 
 def compute_fx_revaluation_diff(
-    fc_balance: float,
-    bc_balance: float,
-    new_rate: float,
+    fc_balance,
+    bc_balance,
+    new_rate,
     *,
     account_type: str = "asset",
 ) -> dict:
@@ -122,9 +171,17 @@ def compute_fx_revaluation_diff(
                           the account's normal-balance sign (positive
                           = credit balance for liabilities). Returned
                           for logging/test diagnostics only.
+
+    F-NEW-098 (R-FLOAT-MONEY, Req 8.5): inputs may arrive as Decimal,
+    str, int, or float; we normalise through ``Decimal(str(...))`` and
+    quantize the diff/target to 4 dp via ROUND_HALF_UP — the GL
+    convention — instead of the legacy banker's-rounding ``round()``.
     """
-    diff = round(float(fc_balance) * float(new_rate) - float(bc_balance), 4)
-    target_bc = round(float(fc_balance) * float(new_rate), 4)
+    fc = Decimal(str(fc_balance or 0))
+    bc = Decimal(str(bc_balance or 0))
+    rate = Decimal(str(new_rate or 0))
+    target_bc = (fc * rate).quantize(_D4, ROUND_HALF_UP)
+    diff = (target_bc - bc).quantize(_D4, ROUND_HALF_UP)
 
     credit_normal = (account_type or "asset").lower() in {
         "liability",
@@ -132,10 +189,10 @@ def compute_fx_revaluation_diff(
         "revenue",
         "income",
     }
-    natural_old = -bc_balance if credit_normal else bc_balance
+    natural_old = -bc if credit_normal else bc
     natural_new = -target_bc if credit_normal else target_bc
 
-    if abs(diff) < 0.01:
+    if abs(diff) < Decimal("0.01"):
         side = None
     elif credit_normal:
         # Liability/equity/revenue: bc_balance is negative for a
@@ -155,7 +212,7 @@ def compute_fx_revaluation_diff(
     }
 
 
-@router.get("/", response_model=List[CurrencyResponse])
+@router.get("/", response_model=List[CurrencyResponse], dependencies=[Depends(require_permission(["accounting.view", "currencies.view"]))])
 @limiter.limit("200/minute")
 def list_currencies(
     request: Request,
@@ -163,7 +220,8 @@ def list_currencies(
 ):
     """List all configured currencies"""
     from database import get_db_connection, get_currency_tables_sql
-    db = get_db_connection(current_user.company_id)
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    db = get_db_connection(company_id)
     try:
         try:
             result = db.execute(text("SELECT * FROM currencies ORDER BY is_base DESC, code ASC"))
@@ -216,9 +274,7 @@ def create_currency(
     current_user: Any = Depends(require_permission(["accounting.manage", "currencies.manage"]))
 ):
     """Add a new currency"""
-    from database import get_db_connection
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Validate currency code format (ISO 4217: 3 uppercase letters)
         import re
         if not re.match(r'^[A-Z]{3}$', currency.code):
@@ -239,7 +295,6 @@ def create_currency(
             RETURNING *
         """)
         result = db.execute(query, currency.model_dump()).mappings().fetchone()
-        db.commit()
 
         # ═══ Auto-create capital account for this currency ═══
         _auto_create_currency_accounts(db, currency.code, currency.name, current_user)
@@ -249,8 +304,6 @@ def create_currency(
                      resource_id=str(result["id"]),
                      details={"code": currency.code}, request=request)
         return result
-    finally:
-        db.close()
 
 @router.put("/{currency_id}", response_model=CurrencyResponse)
 @limiter.limit("100/minute")
@@ -261,9 +314,7 @@ def update_currency(
     current_user: Any = Depends(require_permission(["accounting.manage", "currencies.manage"]))
 ):
     """Update currency details"""
-    from database import get_db_connection
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # If setting as base, unset others
         if currency.is_base:
             db.execute(text("UPDATE currencies SET is_base = FALSE WHERE id != :id"), {"id": currency_id})
@@ -285,14 +336,11 @@ def update_currency(
         if not result:
             raise HTTPException(**http_error(404, "currency_not_found", request))
             
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="update_currency", resource_type="currency",
                      resource_id=str(currency_id),
                      details={"code": currency.code}, request=request)
         return result
-    finally:
-        db.close()
 
 @router.delete("/{currency_id}", response_model=Dict[str, Any])
 @limiter.limit("100/minute")
@@ -305,6 +353,8 @@ def delete_currency(
     from database import get_db_connection
     db = get_db_connection(current_user.company_id)
     try:
+        _require_company_wide_branch_scope(current_user, request)
+
         # Don't delete base currency
         check = db.execute(text("SELECT is_base, code FROM currencies WHERE id = :id"), {"id": currency_id}).fetchone()
         if not check:
@@ -349,9 +399,7 @@ def add_exchange_rate(
     current_user: Any = Depends(require_permission(["accounting.manage", "currencies.manage"]))
 ):
     """Record a historical exchange rate"""
-    from database import get_db_connection
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Validate exchange rate
         if rate_data.rate is None or rate_data.rate <= 0:
             raise HTTPException(**http_error(400, "exchange_rate_must_be_positive"))
@@ -377,11 +425,10 @@ def add_exchange_rate(
         db.execute(text("UPDATE currencies SET current_rate = :rate WHERE id = :id"), 
                 {"rate": rate_data.rate, "id": rate_data.currency_id})
         
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="add_exchange_rate", resource_type="exchange_rate",
                      resource_id=str(result["id"]) if result else "0",
-                     details={"currency_id": rate_data.currency_id, "rate": float(rate_data.rate)}, request=request)
+                     details={"currency_id": rate_data.currency_id, "rate": str(_dec(rate_data.rate))}, request=request)
         
         # Return the rate record (use result if INSERT returned, otherwise construct from input)
         if result:
@@ -396,8 +443,6 @@ def add_exchange_rate(
                 "source": rate_data.source or "manual",
                 "created_by": current_user.id
             }
-    finally:
-        db.close()
 
 @router.get("/{currency_id}/rates", response_model=List[ExchangeRateResponse])
 @limiter.limit("200/minute")
@@ -443,57 +488,68 @@ def get_current_rate(
     if not code:
         raise HTTPException(status_code=400, detail=http_error("currency_code_required"))
 
-    from database import get_db_connection
     db = get_db_connection(current_user.company_id)
     try:
-        cur = db.execute(
-            text(
-                "SELECT id, code, name, name_en, symbol, is_base, "
-                "       coalesce(current_rate, 1.0) AS legacy_rate "
-                "FROM currencies WHERE upper(code) = :c LIMIT 1"
-            ),
-            {"c": code},
-        ).mappings().first()
-        if not cur:
+        try:
+            rate, meta = _effective_currency_rate(db, code)
+        except ValueError:
             raise HTTPException(status_code=404, detail=http_error("currency_not_found"))
-
-        if cur["is_base"]:
-            return {
-                "code": cur["code"],
-                "rate": 1.0,
-                "is_base": True,
-                "rate_date": None,
-                "source": "base",
-            }
-
-        # Latest exchange_rates row for that currency, dated on/before today.
-        latest = db.execute(
-            text(
-                "SELECT rate, rate_date FROM exchange_rates "
-                "WHERE currency_id = :id AND rate_date <= CURRENT_DATE "
-                "ORDER BY rate_date DESC LIMIT 1"
-            ),
-            {"id": cur["id"]},
-        ).mappings().first()
-
-        if latest and latest["rate"]:
-            return {
-                "code": cur["code"],
-                "rate": float(latest["rate"]),
-                "is_base": False,
-                "rate_date": latest["rate_date"].isoformat() if latest["rate_date"] else None,
-                "source": "exchange_rates",
-            }
-
         return {
-            "code": cur["code"],
-            "rate": float(cur["legacy_rate"] or 1.0),
-            "is_base": False,
-            "rate_date": None,
-            "source": "currencies.exchange_rate",
+            "code": meta["code"],
+            "rate": str(rate),
+            "is_base": meta["source"] == "base",
+            "rate_date": meta["rate_date"],
+            "source": meta["source"],
         }
     finally:
         db.close()
+
+
+@router.post(
+    "/preview",
+    dependencies=[Depends(require_permission(["accounting.view", "currencies.view", "treasury.view"]))],
+    response_model=Dict[str, Any],
+)
+@limiter.limit("300/minute")
+def preview_fx(request: Request, data: FXPreviewRequest, current_user: Any = Depends(get_current_user)):
+    """Preview FX conversion without posting or mutating state."""
+    source_code = (data.source_currency or "").strip().upper()
+    target_code = (data.target_currency or "").strip().upper()
+    if not source_code or not target_code:
+        raise HTTPException(**http_error(400, "currency_code_required", request))
+
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    with transactional(company_id) as db:
+        validate_branch_access(current_user, data.branch_id, request)
+        try:
+            source_rate, source_meta = _effective_currency_rate(db, source_code)
+            target_rate, target_meta = _effective_currency_rate(db, target_code)
+        except ValueError:
+            raise HTTPException(**http_error(404, "currency_not_found", request))
+        if source_rate <= 0 or target_rate <= 0:
+            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
+
+        amount = _dec(data.amount or 0).quantize(_D4, ROUND_HALF_UP)
+        cross_rate = Decimal("1") if source_code == target_code else (source_rate / target_rate).quantize(_D8, ROUND_HALF_UP)
+        converted_amount = (amount * cross_rate).quantize(_D4, ROUND_HALF_UP)
+
+        return {
+            "source_currency": source_meta["code"],
+            "target_currency": target_meta["code"],
+            "amount": str(amount),
+            "converted_amount": str(converted_amount),
+            "cross_rate": str(cross_rate),
+            "source_rate": str(source_rate),
+            "target_rate": str(target_rate),
+            "source": {
+                "source_rate": source_meta["source"],
+                "target_rate": target_meta["source"],
+            },
+            "rate_date": {
+                "source_rate": source_meta["rate_date"],
+                "target_rate": target_meta["rate_date"],
+            },
+        }
 
 
 @router.post("/revaluate", response_model=Dict[str, Any])
@@ -507,9 +563,7 @@ def create_revaluation(
     Calculate and book Unrealized FX Gains/Losses for a specific currency.
     Compares (Account Balance in FC * New Rate) vs (Account Balance in BC from GL).
     """
-    from database import get_db_connection
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Validate new rate
         if req.new_rate is None or req.new_rate <= 0:
             raise HTTPException(**http_error(400, "exchange_rate_must_be_greater_than_zero", request))
@@ -618,7 +672,7 @@ def create_revaluation(
                 FROM journal_lines
                 WHERE account_id = :aid
             """), {"aid": acc.id}).fetchone()
-            fc_balance = float(fc_balance_row.fc_balance)
+            fc_balance = _dec(fc_balance_row.fc_balance)
 
             if abs(fc_balance) < 0.01:
                 continue
@@ -630,11 +684,11 @@ def create_revaluation(
                 WHERE account_id = :aid
             """), {"aid": acc.id}).fetchone()
             
-            bc_balance = float(bc_balance_row.balance)
+            bc_balance = _dec(bc_balance_row.balance)
             reval = compute_fx_revaluation_diff(
                 fc_balance=fc_balance,
                 bc_balance=bc_balance,
-                new_rate=float(req.new_rate),
+                new_rate=_dec(req.new_rate),
                 account_type=acc_type,
             )
             diff = reval["diff"]
@@ -704,13 +758,11 @@ def create_revaluation(
             # Update currency current_rate
             db.execute(text("UPDATE currencies SET current_rate = :rate WHERE id = :id"),
                        {"rate": req.new_rate, "id": req.currency_id})
-                
-            db.commit()
             
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="currency_revaluation", resource_type="currency",
                          resource_id=str(req.currency_id),
-                         details={"new_rate": float(req.new_rate), "je_id": je_id, "lines": len(journal_entry_lines)}, request=request)
+                         details={"new_rate": str(_dec(req.new_rate)), "je_id": je_id, "lines": len(journal_entry_lines)}, request=request)
             
             return {
                 "message": i18n_message("revaluation_completed", request),
@@ -720,11 +772,7 @@ def create_revaluation(
                 "total_impact": sum(l['debit'] for l in journal_entry_lines) / 2
             }
         except HTTPException:
-            db.rollback()
             raise
         except Exception:
-            db.rollback()
             logger.exception("Error during currency revaluation")
             raise HTTPException(**http_error(500, "currency_revaluation_error", request))
-    finally:
-        db.close()

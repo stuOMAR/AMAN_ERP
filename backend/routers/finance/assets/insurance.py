@@ -2,7 +2,7 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -36,19 +36,28 @@ router = APIRouter()
 from .core import _D2, _D4
 
 @router.get("/{asset_id}/insurance", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
-def list_asset_insurance(asset_id: int, current_user: dict = Depends(get_current_user)):
+def list_asset_insurance(asset_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """List Asset Insurance."""
     with transactional(current_user.company_id) as conn:
+        asset = conn.execute(text("SELECT branch_id FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+        if not asset:
+            raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
         rows = conn.execute(text("SELECT * FROM asset_insurance WHERE asset_id = :id ORDER BY end_date DESC"),
                             {"id": asset_id}).fetchall()
         return [dict(r._mapping) for r in rows]
 
 
 @router.post("/{asset_id}/insurance", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def add_insurance(asset_id: int, data: InsuranceCreate, current_user: dict = Depends(get_current_user)):
+def add_insurance(asset_id: int, data: InsuranceCreate, request: Request, current_user: dict = Depends(get_current_user)):
     """Add Insurance."""
     with transactional(current_user.company_id) as conn:
         try:
+            asset = conn.execute(text("SELECT branch_id FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+            if not asset:
+                raise HTTPException(**http_error(404, "asset_not_found", request))
+            validate_branch_access(current_user, asset.branch_id, request)
+
             result = conn.execute(text("""
                 INSERT INTO asset_insurance (asset_id, policy_number, insurer, coverage_type,
                     premium_amount, coverage_amount, start_date, end_date, notes)
@@ -62,9 +71,9 @@ def add_insurance(asset_id: int, data: InsuranceCreate, current_user: dict = Dep
                 "notes": data.notes,
             }).fetchone()
             return dict(result._mapping)
+        except HTTPException:
+            raise
         except Exception:
             pass
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
-
-

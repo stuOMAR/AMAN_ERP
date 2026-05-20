@@ -126,6 +126,7 @@ def get_match(match_id: int, current_user=Depends(get_current_user)):
             SELECT m.id, m.purchase_order_id, m.invoice_id, m.match_status,
                    m.matched_at, m.matched_by, m.exception_approved_by,
                    m.exception_notes,
+                   po.branch_id,
                    po.po_number,
                    COALESCE(inv.invoice_number, '') AS invoice_number,
                    COALESCE(p.name, '') AS supplier_name
@@ -137,6 +138,7 @@ def get_match(match_id: int, current_user=Depends(get_current_user)):
         """), {"mid": match_id}).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "match_not_found"))
+        validate_branch_access(current_user, row.branch_id)
 
         # Fetch lines
         lines = db.execute(text("""
@@ -196,11 +198,17 @@ def approve_match(
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
     with transactional(company_id) as db:
-        row = db.execute(text(
-            "SELECT id, match_status FROM three_way_matches WHERE id = :mid AND is_deleted = false"
-        ), {"mid": match_id}).fetchone()
+        row = db.execute(text("""
+            SELECT m.id, m.match_status, po.branch_id
+            FROM three_way_matches m
+            LEFT JOIN purchase_orders po ON po.id = m.purchase_order_id
+            WHERE m.id = :mid
+              AND m.is_deleted = false
+            FOR UPDATE OF m
+        """), {"mid": match_id}).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "match_not_found"))
+        validate_branch_access(current_user, row.branch_id)
         if row.match_status not in ("held",):
             raise HTTPException(**http_error(400, "match_approve_only_held"))
         db.execute(text("""
@@ -224,11 +232,17 @@ def reject_match(
     company_id = _get_company_id(current_user)
     user_id = _get_user_id(current_user)
     with transactional(company_id) as db:
-        row = db.execute(text(
-            "SELECT id, match_status FROM three_way_matches WHERE id = :mid AND is_deleted = false"
-        ), {"mid": match_id}).fetchone()
+        row = db.execute(text("""
+            SELECT m.id, m.match_status, po.branch_id
+            FROM three_way_matches m
+            LEFT JOIN purchase_orders po ON po.id = m.purchase_order_id
+            WHERE m.id = :mid
+              AND m.is_deleted = false
+            FOR UPDATE OF m
+        """), {"mid": match_id}).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "match_not_found"))
+        validate_branch_access(current_user, row.branch_id)
         if row.match_status not in ("held",):
             raise HTTPException(**http_error(400, "match_reject_only_held"))
         db.execute(text("""

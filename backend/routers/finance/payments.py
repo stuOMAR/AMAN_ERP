@@ -31,6 +31,7 @@ from integrations.payments import get_gateway
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 from utils.i18n import http_error
+from utils.tx import transactional
 
 try:  # event bus is optional in some deployments
     from utils.event_bus import publish as _bus_publish
@@ -106,6 +107,17 @@ def _load_gateway_config(db, provider: str, *, tenant_id: Optional[str] = None) 
     return cfg
 
 
+def _verify_webhook_event(provider: str, company_id: str, headers: Dict[str, str], raw: bytes):
+    """Load tenant gateway credentials, then verify the webhook before writes."""
+    config_db = get_db_connection(company_id)
+    try:
+        cfg = _load_gateway_config(config_db, provider, tenant_id=company_id)
+    finally:
+        _close(config_db)
+    gateway = get_gateway(provider, **cfg)
+    return gateway.verify_webhook(headers, raw)
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Create charge
 # ═══════════════════════════════════════════════════════════════════════════
@@ -134,7 +146,8 @@ def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
                 text("""SELECT id, provider, charge_id, status, amount, currency
                           FROM gateway_charges
                          WHERE idempotency_key = :k AND provider = :p
-                         LIMIT 1"""),
+                         LIMIT 1
+                         FOR UPDATE"""),
                 {"k": body.idempotency_key, "p": body.provider},
             ).fetchone()
             if prior:
@@ -143,6 +156,12 @@ def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
                     "status": prior[3], "amount": str(prior[4]), "currency": prior[5],
                     "idempotent_replay": True,
                 }
+
+        if body.invoice_id is not None:
+            db.execute(
+                text("SELECT id FROM invoices WHERE id = :id FOR UPDATE"),
+                {"id": body.invoice_id},
+            ).fetchone()
 
         cfg = _load_gateway_config(db, body.provider, tenant_id=current_user.company_id)
         gateway = get_gateway(body.provider, **cfg)
@@ -256,33 +275,14 @@ async def webhook(provider: str, company_id: str, request: Request):
     raw = await request.body()
     headers = {k: v for k, v in request.headers.items()}
 
-    tenant_db = get_db_connection(company_id)
-    try:
-        cfg = _load_gateway_config(tenant_db, provider, tenant_id=company_id)
-        gateway = get_gateway(provider, **cfg)
-        verified = gateway.verify_webhook(headers, raw)
-    except HTTPException:
-        _close(tenant_db)
-        raise
+    verified = _verify_webhook_event(provider, company_id, headers, raw)
 
     if not verified:
-        try:
-            tenant_db.execute(
-                text("""INSERT INTO gateway_webhook_events
-                            (provider, event_type, payload, verified)
-                        VALUES (:p, :t, CAST(:pl AS JSONB), FALSE)"""),
-                {"p": provider, "t": "unverified",
-                 "pl": json.dumps({"raw": raw.decode("utf-8", errors="replace")[:65_000]})},
-            )
-            tenant_db.commit()
-        except Exception:
-            tenant_db.rollback()
-        finally:
-            _close(tenant_db)
-        raise HTTPException(**http_error(status.HTTP_400_BAD_REQUEST, "webhook_signature_invalid", request))
+        raise HTTPException(**http_error(status.HTTP_403_FORBIDDEN, "webhook_signature_invalid", request))
 
     # Persist + update charge status in matched tenant
-    try:
+    new_status = None
+    with transactional(company_id) as tenant_db:
         tenant_db.execute(
             text("""INSERT INTO gateway_webhook_events
                         (provider, event_type, charge_id, payload, verified)
@@ -291,7 +291,6 @@ async def webhook(provider: str, company_id: str, request: Request):
              "c": verified.charge_id,
              "pl": json.dumps(verified.payload)},
         )
-        new_status = None
         if "succeeded" in verified.event_type or "captured" in verified.event_type:
             new_status = "captured"
         elif "failed" in verified.event_type:
@@ -302,6 +301,12 @@ async def webhook(provider: str, company_id: str, request: Request):
             new_status = "cancelled"
         if new_status and verified.charge_id:
             tenant_db.execute(
+                text("""SELECT id FROM gateway_charges
+                         WHERE provider = :p AND charge_id = :c
+                         FOR UPDATE"""),
+                {"p": provider, "c": verified.charge_id},
+            ).fetchone()
+            tenant_db.execute(
                 text("""UPDATE gateway_charges
                            SET status = :s, updated_at = CURRENT_TIMESTAMP,
                                gateway_response = CAST(:pl AS JSONB)
@@ -309,19 +314,17 @@ async def webhook(provider: str, company_id: str, request: Request):
                 {"s": new_status, "p": provider, "c": verified.charge_id,
                  "pl": json.dumps(verified.payload)},
             )
-        tenant_db.commit()
-        if _bus_publish and new_status:
-            try:
-                _bus_publish(f"payment.{new_status}", {
-                    "provider": provider,
-                    "charge_id": verified.charge_id,
-                    "company_id": company_id,
-                })
-            except Exception:
-                pass
-        return {"status": "ok", "event_type": verified.event_type}
-    finally:
-        _close(tenant_db)
+
+    if _bus_publish and new_status:
+        try:
+            _bus_publish(f"payment.{new_status}", {
+                "provider": provider,
+                "charge_id": verified.charge_id,
+                "company_id": company_id,
+            })
+        except Exception:
+            pass
+    return {"status": "ok", "event_type": verified.event_type}
 
 
 # ═══════════════════════════════════════════════════════════════════════════
@@ -363,20 +366,55 @@ class RefundRequest(BaseModel):
 @router.post("/{provider}/{charge_id}/refund",
              dependencies=[Depends(require_permission("finance.accounting_post"))])
 def refund_charge(provider: str, charge_id: str, body: RefundRequest,
+                  request: Request,
                   current_user=Depends(get_current_user)):
     """Refund Charge."""
     db = get_db_connection(current_user.company_id)
     try:
+        # F-NEW-135 (R-MISSING-IDEMPOTENCY): dedup retried refunds on the
+        # supplied Idempotency-Key. The natural key
+        # ``(provider, charge_id, status='refunded')`` already prevents
+        # double-refund at the storage layer, but the audit asks for an
+        # explicit replay surface so callers get a clean response on
+        # network retries instead of a state-mismatch error.
+        idempotency_key = request.headers.get("Idempotency-Key") if request else None
+        if idempotency_key:
+            existing = db.execute(
+                text(
+                    """SELECT charge_id, status, error_message
+                         FROM gateway_charges
+                        WHERE provider = :p AND charge_id = :c
+                          AND idempotency_key = :k
+                        LIMIT 1
+                        FOR UPDATE"""
+                ),
+                {"p": provider, "c": charge_id, "k": idempotency_key},
+            ).fetchone()
+            if existing:
+                return {
+                    "status": existing.status,
+                    "charge_id": existing.charge_id,
+                    "error_message": existing.error_message,
+                    "idempotent": True,
+                }
+        db.execute(
+            text("""SELECT id FROM gateway_charges
+                     WHERE provider = :p AND charge_id = :c
+                     FOR UPDATE"""),
+            {"p": provider, "c": charge_id},
+        ).fetchone()
         cfg = _load_gateway_config(db, provider, tenant_id=current_user.company_id)
         gateway = get_gateway(provider, **cfg)
         result = gateway.refund(charge_id, amount=body.amount, reason=body.reason)
         db.execute(
             text("""UPDATE gateway_charges
                        SET status = :s, updated_at = CURRENT_TIMESTAMP,
-                           gateway_response = CAST(:pl AS JSONB)
+                           gateway_response = CAST(:pl AS JSONB),
+                           idempotency_key = COALESCE(:k, idempotency_key)
                      WHERE provider = :p AND charge_id = :c"""),
             {"s": result.status, "p": provider, "c": charge_id,
-             "pl": json.dumps(result.gateway_response or {})},
+             "pl": json.dumps(result.gateway_response or {}),
+             "k": idempotency_key},
         )
         db.commit()
         return {"status": result.status, "charge_id": result.charge_id,

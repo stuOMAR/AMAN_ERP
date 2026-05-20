@@ -11,6 +11,11 @@ from decimal import Decimal
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
+
+
+def _money(value: Decimal) -> str:
+    return str(value.quantize(_D2))
 
 
 def get_balance_sheet(db: Any, tenant_id: str, company_id: str,
@@ -65,7 +70,7 @@ def get_balance_sheet(db: Any, tenant_id: str, company_id: str,
         rows = result.fetchall()
     except Exception as exc:
         logger.error("Balance sheet query failed: %s", exc)
-        return {"assets": [], "liabilities": [], "equity": [], "total_assets": 0, "total_liabilities_equity": 0}
+        return {"assets": [], "liabilities": [], "equity": [], "total_assets": "0.00", "total_liabilities_equity": "0.00"}
 
     assets = []
     liabilities = []
@@ -87,7 +92,7 @@ def get_balance_sheet(db: Any, tenant_id: str, company_id: str,
             "account_id": row[1],
             "account_name": row[2],
             "account_code": row[3],
-            "balance": float(balance),
+            "balance": _money(balance),
         }
 
         if category in ("asset", "contra_asset"):
@@ -97,16 +102,16 @@ def get_balance_sheet(db: Any, tenant_id: str, company_id: str,
         elif category in ("equity", "contra_equity"):
             equity.append(entry)
 
-    total_assets = sum(a["balance"] for a in assets)
-    total_liabilities = sum(l["balance"] for l in liabilities)
-    total_equity = sum(e["balance"] for e in equity)
+    total_assets = sum((to_decimal(a["balance"]) for a in assets), Decimal("0"))
+    total_liabilities = sum((to_decimal(l["balance"]) for l in liabilities), Decimal("0"))
+    total_equity = sum((to_decimal(e["balance"]) for e in equity), Decimal("0"))
 
     return {
         "assets": assets,
         "liabilities": liabilities,
         "equity": equity,
-        "total_assets": total_assets,
-        "total_liabilities": total_liabilities,
-        "total_equity": total_equity,
-        "total_liabilities_equity": total_liabilities + total_equity,
+        "total_assets": _money(total_assets),
+        "total_liabilities": _money(total_liabilities),
+        "total_equity": _money(total_equity),
+        "total_liabilities_equity": _money(total_liabilities + total_equity),
     }

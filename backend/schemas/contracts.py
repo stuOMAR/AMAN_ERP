@@ -6,7 +6,7 @@ from decimal import Decimal
 class ContractItemBase(BaseModel):
     product_id: int
     description: Optional[str] = None
-    quantity: float
+    quantity: Decimal
     unit_price: Decimal
     tax_rate: Optional[Decimal] = None
 

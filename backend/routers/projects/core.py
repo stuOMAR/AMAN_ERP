@@ -641,7 +641,7 @@ async def create_project_invoice(
             raise HTTPException(**http_error(404, "project_not_found"))
             
         # 1. Generate Invoice Number
-        inv_num = generate_sequential_number(db, f"INV-{datetime.now().year}", "invoices", "invoice_number")
+        inv_num = generate_sequential_number(db, f"INV-{datetime.now().year}", "invoices", "invoice_number", branch_id=project.branch_id)
         
         # 2. Calculate Totals (centralized — no inline float math)
         line_dicts = []
@@ -1137,4 +1137,3 @@ def _compute_total_allocation(db, employee_id: int, start_date, end_date, exclud
           {exclude_clause}
     """), params).fetchone()
     return float(row.total_pct)
-

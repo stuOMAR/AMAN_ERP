@@ -12,12 +12,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
 
 
 def record_impairment_test(
@@ -44,7 +45,7 @@ def record_impairment_test(
         raise ValueError("at least one of value_in_use / fair_value_less_costs is required")
     candidates = [v for v in (viu, fvlcs) if v is not None]
     recoverable = max(candidates)
-    impairment_loss = max(Decimal("0"), carrying_amount - recoverable).quantize(Decimal("0.01"))
+    impairment_loss = max(Decimal("0"), carrying_amount - recoverable).quantize(_D2, rounding=ROUND_HALF_UP)
 
     journal_entry_id = None
     if post_journal and impairment_loss > 0:

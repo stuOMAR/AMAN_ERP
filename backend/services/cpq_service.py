@@ -154,8 +154,8 @@ def calculate_price(conn, lines: list[dict], customer_id: int | None = None) -> 
             "line_total": line_total,
         })
 
-        total_amount += (unit_before_discount * quantity).quantize(Decimal("0.0001"))
-        discount_total += (discount * quantity).quantize(Decimal("0.0001"))
+        total_amount += (unit_before_discount * quantity).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
+        discount_total += (discount * quantity).quantize(Decimal("0.0001"), rounding=ROUND_HALF_UP)
         final_amount += line_total
 
     return {

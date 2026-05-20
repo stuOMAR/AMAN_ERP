@@ -3,6 +3,7 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 from datetime import date, datetime
+from decimal import Decimal
 
 
 # ---------- Review Cycles ----------
@@ -34,7 +35,7 @@ class ReviewCycleRead(BaseModel):
 class GoalCreate(BaseModel):
     title: str = Field(min_length=1, max_length=300)
     description: Optional[str] = None
-    weight: float = Field(ge=0, le=100)
+    weight: Decimal = Field(ge=0, le=100)
     target: Optional[str] = None
 
 
@@ -43,7 +44,7 @@ class GoalRead(BaseModel):
     review_id: int
     title: str
     description: Optional[str] = None
-    weight: float
+    weight: Decimal
     target: Optional[str] = None
 
 
@@ -51,7 +52,7 @@ class GoalRead(BaseModel):
 
 class GoalScore(BaseModel):
     goal_id: int
-    score: float = Field(ge=0, le=5)
+    score: Decimal = Field(ge=0, le=5)
     comments: Optional[str] = None
 
 
@@ -78,7 +79,7 @@ class ReviewRead(BaseModel):
     review_date: Optional[date] = None
     self_assessment: Optional[list] = None
     manager_assessment: Optional[list] = None
-    composite_score: Optional[float] = None
+    composite_score: Optional[Decimal] = None
     final_comments: Optional[str] = None
     goals: Optional[List[GoalRead]] = None
     created_at: Optional[datetime] = None

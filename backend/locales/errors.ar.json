@@ -740,6 +740,7 @@
   "accounting_period_not_found": "الفترة المحاسبية غير موجودة",
   "fiscal_period_created": "تم إنشاء الفترة المحاسبية",
   "fiscal_period_opened": "تم فتح الفترة المحاسبية",
+  "invalid_saudi_vat_number": "يجب أن يتكون رقم ضريبة القيمة المضافة السعودي من 15 رقماً ويبدأ بالرقم 3",
   "tax_settings_updated_success": "تم تحديث إعدادات الضرائب بنجاح",
   "rate_link_deactivated_success": "تم إلغاء تفعيل ربط المعدل",
   "treasury_name_duplicate": "يوجد حساب خزينة آخر بنفس الاسم",
@@ -1808,6 +1809,7 @@
   "no_inventory_transactions_for_invoice": "لا توجد حركات مخزون مرتبطة بهذه الفاتورة",
   "invoice_has_payments_use_credit_note": "الفاتورة لها مدفوعات — أصدر إشعار دائن بدلاً من التعديل",
   "zatca_cleared_invoice_no_amend": "لا يمكن تعديل فاتورة موافقة زكاة؛ استخدم إشعار دائن + إعادة إصدار",
+  "zatca_cleared_invoice_must_credit_note": "تم اعتماد هذه الفاتورة من هيئة الزكاة والضريبة والجمارك ولا يمكن إلغاؤها. يرجى إصدار إشعار دائن بدلاً من ذلك.",
   "pos_conflict_already_resolved": "النزاع محل بالفعل (الحالة={status})",
   "branch_country_code_required": "رمز الدولة للفرع مطلوب لحساب الضرائب",
   "branch_has_linked_records": "لا يمكن حذف الفرع لارتباطه بـ {count} سجل",
@@ -1974,5 +1976,15 @@
   "commission_or_bank_account_not_configured": "لم يتم ضبط حساب مصروف العمولة أو حساب البنك",
   "invoice_has_sales_returns": "لا يمكن إلغاء فاتورة لها مرتجعات مبيعات معتمدة",
   "voucher_cancelled": "لا يمكن تخصيص سند ملغي",
-  "supplier_overpayment_not_allowed": "مبلغ السداد يتجاوز رصيد المورد المستحق؛ فعّل buying.allow_overpayment للسماح بالدفعات المقدمة"
+  "supplier_overpayment_not_allowed": "مبلغ السداد يتجاوز رصيد المورد المستحق؛ فعّل buying.allow_overpayment للسماح بالدفعات المقدمة",
+  "wht_payment_required": "يجب ربط ضريبة الاستقطاع بسند دفع مورد",
+  "product_tax_rate_inactive_or_missing": "ضريبة المنتج غير فعالة أو غير موجودة",
+  "product_tax_rate_not_yet_effective": "ضريبة المنتج لم تصبح سارية بعد",
+  "product_tax_rate_expired": "ضريبة المنتج منتهية الصلاحية",
+  "product_tax_rate_wrong_country": "ضريبة المنتج لا تنطبق على بلد هذا الفرع",
+  "journal_line_account_currency_mismatch": "عملة سطر القيد يجب أن تطابق عملة الحساب المرحّل عليه",
+  "invalid_invoice_state_transition": "لا يمكن نقل الفاتورة إلى الحالة المطلوبة",
+  "duplicate_idempotency_key": "تم استخدام مفتاح منع التكرار هذا في عملية أخرى",
+  "credit_note_exceeds_remaining_invoice": "إجمالي الإشعار الدائن يتجاوز المبلغ المتبقي في الفاتورة المرتبطة",
+  "purchase_invoice_payment_requires_treasury_permission": "إنشاء فاتورة مشتريات مدفوعة يتطلب صلاحية دفع في الخزينة"
 }

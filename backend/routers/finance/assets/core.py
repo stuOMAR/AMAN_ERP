@@ -246,6 +246,7 @@ def get_asset(request: Request, asset_id: int, current_user: dict = Depends(get_
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
             
         schedule = conn.execute(text("""
             SELECT * FROM asset_depreciation_schedule 
@@ -486,9 +487,13 @@ def create_asset_return_write_down(
         date=str(date.today()),
         description=f"Asset return write-down #{asset_id} (NBV={nbv})",
         lines=[
-            {"account_id": acc_loss, "debit": float(nbv), "credit": 0,
+            # F-NEW-054 (R-FLOAT-MONEY, Req 8.5): pass Decimal straight
+            # through; gl_service.create_journal_entry quantizes via
+            # _dec(...) on entry, so a float() cast here is a precision
+            # leak with no benefit.
+            {"account_id": acc_loss, "debit": _dec(nbv), "credit": 0,
              "description": "Loss on asset return"},
-            {"account_id": acc_fixed, "debit": 0, "credit": float(nbv),
+            {"account_id": acc_fixed, "debit": 0, "credit": _dec(nbv),
              "description": "Asset return write-down"},
         ],
         user_id=user_id,
@@ -497,4 +502,3 @@ def create_asset_return_write_down(
         idempotency_key=f"asset_return_write_down:{asset_id}",
     )
     return je_id, je_num
-

@@ -195,11 +195,14 @@ def get_lease_schedule(lease_id: int, request: Request, current_user: dict = Dep
             principal = (monthly - interest).quantize(_D2, ROUND_HALF_UP)
             balance = (balance - principal).quantize(_D2, ROUND_HALF_UP)
             schedule.append({
+                # F-NEW-059 (R-FLOAT-MONEY, Req 8.5): emit Decimal as
+                # canonical strings so the IFRS 16 schedule preview
+                # preserves cent precision over the JSON boundary.
                 "period": i,
-                "payment": float(monthly),
-                "interest": float(interest),
-                "principal": float(principal),
-                "balance": float(max(balance, Decimal('0')))
+                "payment": str(monthly),
+                "interest": str(interest),
+                "principal": str(principal),
+                "balance": str(max(balance, Decimal('0'))),
             })
         return {"lease": lc, "schedule": schedule}
 
@@ -209,7 +212,7 @@ def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user:
     """Post IFRS 16 lease payment — splits into interest expense + principal reduction."""
     with transactional(current_user.company_id) as conn:
         try:
-            row = conn.execute(text("SELECT * FROM lease_contracts WHERE id = :id"), {"id": lease_id}).fetchone()
+            row = conn.execute(text("SELECT * FROM lease_contracts WHERE id = :id FOR UPDATE"), {"id": lease_id}).fetchone()
             if not row:
                 raise HTTPException(**http_error(404, "lease_not_found"))
             lc = dict(row._mapping)
@@ -289,10 +292,12 @@ def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user:
     
             return {
                 "lease_id": lease_id,
-                "payment_amount": float(payment.amount),
-                "interest": float(interest),
-                "principal": float(principal),
-                "remaining_liability": float(new_balance),
+                # F-NEW-059: Decimal-string serialisation preserves the
+                # IFRS 16 split precision at the wire boundary.
+                "payment_amount": str(_dec(payment.amount).quantize(_D2, ROUND_HALF_UP)),
+                "interest": str(interest),
+                "principal": str(principal),
+                "remaining_liability": str(new_balance),
                 "journal_entry_id": journal_entry_id
             }
         except HTTPException:
@@ -302,5 +307,4 @@ def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user:
             pass
             logger.exception("Error posting lease payment")
             raise HTTPException(**http_error(500, "internal_error"))
-
 

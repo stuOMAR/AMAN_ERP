@@ -17,7 +17,7 @@ _TREASURY_GL_ACCOUNTS = [
 ]
 
 
-def ensure_treasury_gl_accounts(db, *, user_id=None, username=None):
+def ensure_treasury_gl_accounts(db, *, user_id=None, username=None, commit: bool = True):
     """Idempotently create required treasury GL accounts.
 
     Returns a dict mapping account_code -> account_id for all four accounts.
@@ -62,7 +62,8 @@ def ensure_treasury_gl_accounts(db, *, user_id=None, username=None):
             },
         ).scalar()
 
-        db.commit()
+        if commit:
+            db.commit()
         result[code] = new_id
 
         if user_id:

@@ -36,9 +36,13 @@ router = APIRouter()
 from .core import _D2, _D4, _dec
 
 @router.get("/{asset_id}/impairments", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
-def list_asset_impairments(asset_id: int, current_user: dict = Depends(get_current_user)):
+def list_asset_impairments(asset_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """سجل اختبارات الانخفاض"""
     with transactional(current_user.company_id) as conn:
+        asset = conn.execute(text("SELECT branch_id FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+        if not asset:
+            raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
         rows = conn.execute(text("""
             SELECT * FROM asset_impairments WHERE asset_id = :aid ORDER BY test_date DESC
         """), {"aid": asset_id}).fetchall()
@@ -54,6 +58,7 @@ def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, request: 
             if not asset:
                 raise HTTPException(**http_error(404, "asset_not_found", request))
             asset = dict(asset._mapping)
+            validate_branch_access(current_user, asset.get("branch_id"), request)
     
             carrying = _dec(asset.get("current_value") or asset.get("cost", 0)).quantize(_D2, ROUND_HALF_UP)
             recoverable = _dec(test_data.recoverable_amount).quantize(_D2, ROUND_HALF_UP)
@@ -109,6 +114,7 @@ def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, request: 
                         description=f"خسارة انخفاض قيمة الأصل: {asset.get('name', '')} (IAS 36)",
                         lines=je_lines,
                         user_id=current_user.get("id") if isinstance(current_user, dict) else current_user.id,
+                        branch_id=asset.get("branch_id"),
                         currency=get_base_currency(conn),
                         exchange_rate=Decimal("1"),
                         source="asset_impairment",

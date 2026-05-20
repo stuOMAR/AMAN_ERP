@@ -18,7 +18,10 @@ from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from services.gl_service import (
+    create_journal_entry as gl_create_journal_entry,
+    reverse_journal_entry as gl_reverse_journal_entry,
+)
 from utils.fiscal_lock import check_fiscal_period_open
 from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
 from utils.cache import cache
@@ -76,6 +79,12 @@ def _first_int(values: Any) -> Optional[int]:
         except (TypeError, ValueError):
             continue
     return None
+
+
+def _require_company_wide_branch_scope(current_user: Any, request: Request) -> None:
+    scope = resolve_branch_scope(current_user, None)
+    if scope.get("branch_ids") is not None:
+        raise HTTPException(**http_error(403, "access_denied", request))
 
 
 def _resolve_coa_display_currency(db, branch_scope: Dict[str, Any], current_user: Any, base_currency: str) -> Dict[str, Any]:
@@ -337,15 +346,15 @@ async def get_chart_of_accounts(
             display_balance = _base_to_display(raw_balance, display_meta)
             display_own_balance = _base_to_display(raw_own_balance, display_meta)
 
-            acc["base_balance"] = float(raw_balance.quantize(_D2, ROUND_HALF_UP))
-            acc["own_base_balance"] = float(raw_own_balance.quantize(_D2, ROUND_HALF_UP))
-            acc["balance"] = float(display_balance.quantize(_D2, ROUND_HALF_UP))
-            acc["own_balance"] = float(display_own_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["base_balance"] = str(raw_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["own_base_balance"] = str(raw_own_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["balance"] = str(display_balance.quantize(_D2, ROUND_HALF_UP))
+            acc["own_balance"] = str(display_own_balance.quantize(_D2, ROUND_HALF_UP))
             acc["is_aggregated_balance"] = bool(acc.get("is_header"))
             acc["balance_origin"] = "aggregate" if acc["is_aggregated_balance"] else "own"
-            acc["balance_currency"] = float(raw_balance_currency.quantize(_D2, ROUND_HALF_UP))
-            acc["exchange_rate"] = float(rate_map.get(acc_currency, Decimal("1")))
-            acc["display_exchange_rate"] = float(display_meta.get("rate") or Decimal("1"))
+            acc["balance_currency"] = str(raw_balance_currency.quantize(_D2, ROUND_HALF_UP))
+            acc["exchange_rate"] = str(rate_map.get(acc_currency, Decimal("1")).quantize(_D4, ROUND_HALF_UP))
+            acc["display_exchange_rate"] = str(_dec(display_meta.get("rate") or Decimal("1")).quantize(_D4, ROUND_HALF_UP))
             acc["display_currency"] = display_meta.get("currency")
             acc["base_currency"] = display_meta.get("base_currency")
             acc["is_multi_currency_scope"] = display_meta.get("is_multi_currency_scope", False)
@@ -462,6 +471,8 @@ async def delete_account(
     """حذف حساب من شجرة الحسابات (بشرط عدم وجود حركات أو أبناء)"""
     with transactional(current_user.company_id) as db:
         try:
+            _require_company_wide_branch_scope(current_user, request)
+
             # 1. Check if has children
             has_children = db.execute(text("SELECT 1 FROM accounts WHERE parent_id = :id"), {"id": account_id}).fetchone()
             if has_children:
@@ -670,20 +681,34 @@ def save_opening_balances(
             """)).fetchone()
     
             if existing:
-                # Reverse old balances if it was posted
+                # Audit F-NEW-009 / F-NEW-035: posted entries are immutable.
+                # Reverse via gl_service so the audit trail is preserved
+                # (a balanced reversing JE is created and balances neutralised
+                # centrally). For drafts (no balance impact) a hard delete is
+                # safe. We then create the new opening-balance entry below.
                 if existing.status == 'posted':
-                    from utils.accounting import update_account_balance as _uab
-                    old_lines = db.execute(text(
-                        "SELECT account_id, debit, credit FROM journal_lines WHERE journal_entry_id = :eid"
-                    ), {"eid": existing.id}).fetchall()
-                    for ol in old_lines:
-                        # Reverse: swap debit/credit to undo original effect
-                        _uab(db, account_id=ol.account_id,
-                            debit_base=_dec(ol.credit or 0),
-                            credit_base=_dec(ol.debit or 0))
-    
-                # Replace old opening balance entry with a fresh centralized one
-                db.execute(text("DELETE FROM journal_entries WHERE id = :eid"), {"eid": existing.id})
+                    gl_reverse_journal_entry(
+                        db,
+                        je_id=existing.id,
+                        user_id=current_user.id,
+                        company_id=current_user.company_id,
+                        reversal_date=entry_date,
+                        reason="opening_balance_replaced",
+                        request=request,
+                    )
+                else:
+                    # Draft: no posted balance impact, hard delete is safe.
+                    db.execute(
+                        text("DELETE FROM journal_lines WHERE journal_entry_id = :eid"),
+                        {"eid": existing.id},
+                    )
+                    db.execute(
+                        text(
+                            "DELETE FROM journal_entries "
+                            "WHERE id = :eid AND status = 'draft'"
+                        ),
+                        {"eid": existing.id},
+                    )
     
             # Default behavior is strict: reject imbalanced opening balances.
             # Admin can explicitly allow suspense adjustment by passing allow_auto_balance=true.
@@ -751,4 +776,3 @@ def save_opening_balances(
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # ==================== ACC-006: Automatic Closing Entries ====================
-

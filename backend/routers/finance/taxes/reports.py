@@ -14,6 +14,8 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
+from utils.hr_pii import has_pii_access
+from utils.masking import mask_pii
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
@@ -70,6 +72,7 @@ def get_vat_report(
                     FROM invoices i
                     WHERE i.invoice_type = '{invoice_type}'
                       AND i.status NOT IN ('draft', 'cancelled')
+                      AND COALESCE(i.zatca_clearance_status, 'not_required') NOT IN ('pending_clearance', 'rejected')
                       AND i.invoice_date BETWEEN :start AND :end
                       {branch_filter}
                 ) inv
@@ -84,14 +87,55 @@ def get_vat_report(
         input_vat_returns = db.execute(text(_invoice_vat_subquery("purchase_return")), params).fetchone()
 
         # T037: Include credit/debit notes in VAT calculation
+        output_credit_notes = db.execute(text(_invoice_vat_subquery("sales_credit_note")), params).fetchone()
+        output_debit_notes = db.execute(text(_invoice_vat_subquery("sales_debit_note")), params).fetchone()
         input_credit_notes = db.execute(text(_invoice_vat_subquery("purchase_credit_note")), params).fetchone()
         input_debit_notes = db.execute(text(_invoice_vat_subquery("purchase_debit_note")), params).fetchone()
 
-        net_output_taxable = (_dec(output_vat.taxable_amount) - _dec(output_vat_returns.taxable_amount)).quantize(_D2, ROUND_HALF_UP)
-        net_output_vat = (_dec(output_vat.vat_amount) - _dec(output_vat_returns.vat_amount)).quantize(_D2, ROUND_HALF_UP)
+        # Credit notes reduce output VAT; debit notes increase it.
+        net_output_taxable = (
+            _dec(output_vat.taxable_amount)
+            - _dec(output_vat_returns.taxable_amount)
+            - _dec(output_credit_notes.taxable_amount)
+            + _dec(output_debit_notes.taxable_amount)
+        ).quantize(_D2, ROUND_HALF_UP)
+        net_output_vat = (
+            _dec(output_vat.vat_amount)
+            - _dec(output_vat_returns.vat_amount)
+            - _dec(output_credit_notes.vat_amount)
+            + _dec(output_debit_notes.vat_amount)
+        ).quantize(_D2, ROUND_HALF_UP)
         # T037: Net input VAT includes credit notes (reduce) and debit notes (increase)
         net_input_taxable = (_dec(input_vat.taxable_amount) - _dec(input_vat_returns.taxable_amount) - _dec(input_credit_notes.taxable_amount) + _dec(input_debit_notes.taxable_amount)).quantize(_D2, ROUND_HALF_UP)
         net_input_vat = (_dec(input_vat.vat_amount) - _dec(input_vat_returns.vat_amount) - _dec(input_credit_notes.vat_amount) + _dec(input_debit_notes.vat_amount)).quantize(_D2, ROUND_HALF_UP)
+
+        vat_out_account_id = get_mapped_account_id(db, "acc_map_vat_out") or get_mapped_account_id(db, "acc_map_vat_output")
+        vat_in_account_id = get_mapped_account_id(db, "acc_map_vat_in") or get_mapped_account_id(db, "acc_map_vat_input")
+        if vat_out_account_id or vat_in_account_id:
+            gl_params = {"start": start_date, "end": end_date}
+            gl_branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", gl_params)
+            if vat_out_account_id:
+                gl_output = db.execute(text(f"""
+                    SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS amount
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                    WHERE jl.account_id = :account_id
+                      AND je.status = 'posted'
+                      AND je.entry_date BETWEEN :start AND :end
+                      {gl_branch_filter}
+                """), {**gl_params, "account_id": vat_out_account_id}).scalar()
+                net_output_vat = _dec(gl_output).quantize(_D2, ROUND_HALF_UP)
+            if vat_in_account_id:
+                gl_input = db.execute(text(f"""
+                    SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS amount
+                    FROM journal_lines jl
+                    JOIN journal_entries je ON je.id = jl.journal_entry_id
+                    WHERE jl.account_id = :account_id
+                      AND je.status = 'posted'
+                      AND je.entry_date BETWEEN :start AND :end
+                      {gl_branch_filter}
+                """), {**gl_params, "account_id": vat_in_account_id}).scalar()
+                net_input_vat = _dec(gl_input).quantize(_D2, ROUND_HALF_UP)
         net_vat_payable = (net_output_vat - net_input_vat).quantize(_D2, ROUND_HALF_UP)
 
         return {
@@ -137,6 +181,7 @@ def get_tax_audit(
             WHERE i.invoice_date BETWEEN :start AND :end
               AND COALESCE(i.tax_amount, 0) <> 0
               AND i.status NOT IN ('draft', 'cancelled')
+              AND COALESCE(i.zatca_clearance_status, 'not_required') NOT IN ('pending_clearance', 'rejected')
               {branch_filter}
             ORDER BY i.invoice_date DESC
         """), params).fetchall()
@@ -208,8 +253,16 @@ def get_tax_summary(
         current_vat = db.execute(text(  # noqa: sql-lint
             f"""
             SELECT
-                COALESCE(SUM(CASE WHEN inv.invoice_type = 'sales' THEN inv.vat_amount ELSE 0 END), 0) as output_vat,
-                COALESCE(SUM(CASE WHEN inv.invoice_type = 'purchase' THEN inv.vat_amount ELSE 0 END), 0) as input_vat
+                COALESCE(SUM(CASE
+                    WHEN inv.invoice_type IN ('sales', 'sales_debit_note') THEN inv.vat_amount
+                    WHEN inv.invoice_type IN ('sales_return', 'sales_credit_note') THEN -inv.vat_amount
+                    ELSE 0
+                END), 0) as output_vat,
+                COALESCE(SUM(CASE
+                    WHEN inv.invoice_type IN ('purchase', 'purchase_debit_note') THEN inv.vat_amount
+                    WHEN inv.invoice_type IN ('purchase_return', 'purchase_credit_note') THEN -inv.vat_amount
+                    ELSE 0
+                END), 0) as input_vat
             FROM (
                 SELECT
                     i.id,
@@ -218,7 +271,11 @@ def get_tax_summary(
                 FROM invoices i
                 WHERE i.invoice_date >= :start AND i.invoice_date <= :end
                   AND i.status NOT IN ('draft', 'cancelled')
-                  AND i.invoice_type IN ('sales', 'purchase')
+                  AND COALESCE(i.zatca_clearance_status, 'not_required') NOT IN ('pending_clearance', 'rejected')
+                  AND i.invoice_type IN (
+                      'sales', 'sales_return', 'sales_credit_note', 'sales_debit_note',
+                      'purchase', 'purchase_return', 'purchase_credit_note', 'purchase_debit_note'
+                  )
                   {vat_branch_filter}
             ) inv
         """), vat_params).fetchone()
@@ -390,6 +447,7 @@ def get_branch_tax_analysis(
 
 @router.get("/employee-taxes", dependencies=[Depends(require_permission(["accounting.view", "taxes.view", "hr.view"]))], response_model=Dict[str, Any])
 def get_employee_tax_obligations(
+    request: Request,
     branch_id: Optional[int] = None,
     department_id: Optional[int] = None,
     employee_id: Optional[int] = None,
@@ -408,6 +466,7 @@ def get_employee_tax_obligations(
             year = date.today().year
 
         display_meta = resolve_display_currency(db, branch_scope)
+        can_view_pii = has_pii_access(current_user)
         where_parts = ["pe.status IN ('approved', 'paid')"]
         params = {"year": year}
         branch_condition = branch_scope_filter_from_scope(branch_scope, "e.branch_id", params, prefix="").strip()
@@ -485,12 +544,19 @@ def get_employee_tax_obligations(
                     tax_rate_dec = _dec(regime.default_rate)
                     tax_due = (gross * (tax_rate_dec / Decimal("100"))).quantize(_D2, ROUND_HALF_UP)
 
+            tax_id = emp.tax_id
+            social_security = emp.social_security
+            if not can_view_pii:
+                tax_id = mask_pii(tax_id, visible_chars=4)
+                social_security = mask_pii(social_security, visible_chars=4)
+
             employee_list.append({
                 "employee_id": emp.employee_id,
                 "employee_code": emp.employee_code,
                 "employee_name": emp.employee_name,
-                "tax_id": emp.tax_id,
-                "social_security": emp.social_security,
+                "tax_id": tax_id,
+                "social_security": social_security,
+                "pii_masked": not can_view_pii,
                 "branch_id": emp.branch_id,
                 "branch_name": emp.branch_name,
                 "jurisdiction": jurisdiction,
@@ -525,14 +591,11 @@ def get_employee_tax_obligations(
                 "max_salary": display_money_str(gosi.max_contributable_salary, display_meta) if gosi else "0.00",
             } if gosi else None
         }
-    except Exception as e:
-        logger.error(f"Error fetching employee tax obligations: {e}")
-        return {
-            "year": year, "branch_id": branch_id,
-            "employees": [], "summary": {"total_employees": 0, "total_gross": 0,
-                "total_gosi_employee": 0, "total_gosi_employer": 0, "total_gosi_combined": 0},
-            "gosi_settings": None
-        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.exception("Error fetching employee tax obligations")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         db.close()
 

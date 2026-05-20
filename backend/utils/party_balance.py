@@ -126,14 +126,14 @@ def get_party_balance(db, party_id: int, branch_id: int = None, currency: str = 
             "branch_id": r.company_branch_id,
             "branch_name": r.branch_name,
             "currency": r.currency,
-            "balance": float(r.balance) if r.balance is not None else 0,
+            "balance": str(Decimal(str(r.balance or 0)).quantize(Decimal("0.01"))),
             "account_type": r.account_type
         }
         for r in rows
     ]
 
 
-def get_party_total_balance_sar(db, party_id: int, branch_id: int = None) -> float:
+def get_party_total_balance_sar(db, party_id: int, branch_id: int = None) -> Decimal:
     """
     Get total balance in SAR (base currency) for a party, using current exchange rates.
     """
@@ -153,4 +153,4 @@ def get_party_total_balance_sar(db, party_id: int, branch_id: int = None) -> flo
         params["bid"] = branch_id
 
     result = db.execute(text(query), params).scalar()
-    return float(result or 0)
+    return Decimal(str(result or 0))

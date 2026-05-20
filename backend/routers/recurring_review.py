@@ -18,6 +18,7 @@ from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -95,10 +96,8 @@ def approve_pending_review(request: Request,
         }
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception:
-        conn.rollback()
-        logger.exception("Failed to approve pending review %s", pending_id)
+        logger.exception("Validation error in approve_pending_review %s", pending_id)
+        raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
         raise HTTPException(**http_error(500, "approval_failed", request))
     finally:
         conn.close()
@@ -127,10 +126,8 @@ def reject_pending_review(request: Request,
         return {"status": "rejected", "id": pending_id}
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=404, detail=str(e))
-    except Exception:
-        conn.rollback()
-        logger.exception("Failed to reject pending review %s", pending_id)
+        logger.exception("Validation error in reject_pending_review %s", pending_id)
+        raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
         raise HTTPException(**http_error(500, "rejection_failed", request))
     finally:
         conn.close()

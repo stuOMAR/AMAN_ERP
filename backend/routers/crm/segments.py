@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -121,13 +122,13 @@ def calculate_lead_scores(request: Request, current_user=Depends(get_current_use
                     match = (r_d["field_value"] or "").lower() in val.lower()
                 elif r_d["operator"] == "greater_than":
                     try:
-                        match = float(val) > float(r_d["field_value"] or 0)
-                    except (ValueError, TypeError):
+                        match = Decimal(str(val)) > Decimal(str(r_d["field_value"] or 0))
+                    except (ValueError, TypeError, Exception):
                         pass
                 elif r_d["operator"] == "less_than":
                     try:
-                        match = float(val) < float(r_d["field_value"] or 0)
-                    except (ValueError, TypeError):
+                        match = Decimal(str(val)) < Decimal(str(r_d["field_value"] or 0))
+                    except (ValueError, TypeError, Exception):
                         pass
                 elif r_d["operator"] == "exists":
                     match = bool(val and val.strip())

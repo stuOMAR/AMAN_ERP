@@ -248,11 +248,11 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
             "paid": str(_dec(r.paid_amount or 0)),
             "status": r.status,
             "currency": r.currency or base_currency,
-            "exchange_rate": str(_dec(r.exchange_rate or 1.0))
+            "exchange_rate": str(_dec(r.exchange_rate or Decimal("1")))
         } for r in invoices_res]
         
         # Calculate total purchases in Base Currency
-        total_purchases = sum((_dec(r.total) * _dec(r.exchange_rate or 1.0) for r in invoices_res), Decimal('0')).quantize(_D2, ROUND_HALF_UP)
+        total_purchases = sum((_dec(r.total) * _dec(r.exchange_rate or Decimal("1")) for r in invoices_res), Decimal('0')).quantize(_D2, ROUND_HALF_UP)
         
         # 2. Fetch Payments (Vouchers)
         # Note: payment_vouchers table has currency field
@@ -420,4 +420,3 @@ def rate_supplier(data: dict, request: Request, current_user=Depends(get_current
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 # ---------- PUR-003: Purchase Agreements (Blanket PO) ----------
-

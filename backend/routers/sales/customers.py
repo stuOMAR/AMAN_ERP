@@ -126,7 +126,8 @@ def list_customers(branch_id: Optional[int] = None, current_user: dict = Depends
         customers = []
         for row in result:
             d = dict(row._mapping)
-            d["balance_display"] = float(d.get("current_balance") or 0)
+            # Fix 5: use str(Decimal) not float() for monetary balance values
+            d["balance_display"] = str(d.get("current_balance") or "0")
             d["display_currency"] = d.get("balance_currency") or branch_cur
             customers.append(d)
         return customers
@@ -286,12 +287,12 @@ def get_customer(customer_id: int, branch_id: Optional[int] = None, current_user
                 GROUP BY psb.currency
             """), {"cid": customer_id, "bid": branch_id}).fetchone()
             if bal_row:
-                d["balance"] = float(bal_row.total or 0)
-                d["balance_bc"] = float(bal_row.total or 0)
+                d["balance"] = str(bal_row.total or "0")
+                d["balance_bc"] = str(bal_row.total or "0")
                 d["balance_currency"] = bal_row.currency
             else:
-                d["balance"] = 0
-                d["balance_bc"] = 0
+                d["balance"] = "0"
+                d["balance_bc"] = "0"
                 d["balance_currency"] = base_cur
         else:
             # All branches: total converted to SAR
@@ -302,8 +303,8 @@ def get_customer(customer_id: int, branch_id: Optional[int] = None, current_user
                 LEFT JOIN currencies c ON psb.currency = c.code
                 WHERE ps.party_id = :cid
             """), {"cid": customer_id}).scalar() or 0
-            d["balance"] = float(total_sar)
-            d["balance_bc"] = float(total_sar)
+            d["balance"] = str(total_sar)
+            d["balance_bc"] = str(total_sar)
             d["balance_currency"] = base_cur
 
         # Get party sites

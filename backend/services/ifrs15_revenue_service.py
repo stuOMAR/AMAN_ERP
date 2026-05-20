@@ -23,12 +23,13 @@ from __future__ import annotations
 
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
 
 
 def create_contract(db, contract_number: str, customer_id: Optional[int],
@@ -89,12 +90,12 @@ def allocate_transaction_price(db, contract_id: int, commit: bool = True) -> dic
     for i, p in enumerate(pos):
         ssp = Decimal(str(p.standalone_selling_price or 0))
         if total_ssp > 0:
-            alloc = (tp * ssp / total_ssp).quantize(Decimal("0.01"))
+            alloc = (tp * ssp / total_ssp).quantize(_D2, rounding=ROUND_HALF_UP)
         else:
-            alloc = (tp / len(pos)).quantize(Decimal("0.01"))
+            alloc = (tp / len(pos)).quantize(_D2, rounding=ROUND_HALF_UP)
         # Absorb rounding diff into the last PO.
         if i == len(pos) - 1:
-            alloc = (tp - running).quantize(Decimal("0.01"))
+            alloc = (tp - running).quantize(_D2, rounding=ROUND_HALF_UP)
         running += alloc
         db.execute(text(
             "UPDATE performance_obligations SET allocated_price = :a WHERE id = :id"
@@ -147,8 +148,8 @@ def recognise_revenue(db, po_id: int,
                 "total_recognised": str(prev_rev), "satisfied_pct": str(prev_pct),
                 "journal_entry_id": None}
 
-    new_total_rev = (allocated * target_pct).quantize(Decimal("0.01"))
-    delta = (new_total_rev - prev_rev).quantize(Decimal("0.01"))
+    new_total_rev = (allocated * target_pct).quantize(_D2, rounding=ROUND_HALF_UP)
+    delta = (new_total_rev - prev_rev).quantize(_D2, rounding=ROUND_HALF_UP)
 
     journal_entry_id = None
     if post_journal and delta > 0:
@@ -168,10 +169,10 @@ def recognise_revenue(db, po_id: int,
             description=f"IFRS 15 revenue recognition PO#{po_id}",
             lines=[
                 {"account_id": debit_account_id,
-                 "debit": float(delta), "credit": 0,
+                 "debit": delta, "credit": Decimal("0"),
                  "description": f"Contract asset — {po.description}"},
                 {"account_id": credit_account_id,
-                 "debit": 0, "credit": float(delta),
+                 "debit": Decimal("0"), "credit": delta,
                  "description": f"Revenue — {po.description}"},
             ],
             user_id=user_id,

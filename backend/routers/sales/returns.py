@@ -1,5 +1,5 @@
 """Sales returns endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header, Query
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -169,26 +169,45 @@ def _table_columns(db, table_name: str) -> frozenset[str]:
     return cols
 
 
-@returns_router.get("/returns", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
-def list_sales_returns(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
-    """عرض قائمة مرتجعات المبيعات"""
+@returns_router.get("/returns", response_model=Dict[str, Any], dependencies=[Depends(require_permission("sales.view"))])
+def list_sales_returns(
+    branch_id: Optional[int] = None,
+    page: int = 1,
+    limit: int = Query(default=25, le=100),
+    current_user: dict = Depends(get_current_user),
+):
+    """عرض قائمة مرتجعات المبيعات — Fix 9: paginated, default 25, max 100."""
+    skip = (page - 1) * limit
     branch_scope = resolve_branch_scope(current_user, branch_id)
 
     db = get_db_connection(_company_id(current_user))
     try:
-        query_str = """
-            SELECT r.*, p.name as customer_name 
+        base_from = """
             FROM sales_returns r
             JOIN parties p ON r.party_id = p.id
             WHERE 1=1
         """
-        params = {}
-        query_str += branch_scope_filter_from_scope(branch_scope, "r.branch_id", params)
+        params: Dict[str, Any] = {}
+        filter_clause = branch_scope_filter_from_scope(branch_scope, "r.branch_id", params)
 
-        query_str += " ORDER BY r.created_at DESC"
+        total = db.execute(text(f"SELECT COUNT(*) {base_from} {filter_clause}"), params).scalar() or 0
 
-        result = db.execute(text(query_str), params).fetchall()
-        return [dict(row._mapping) for row in result]
+        params["limit"] = limit
+        params["skip"] = skip
+        result = db.execute(text(f"""
+            SELECT r.*, p.name as customer_name
+            {base_from} {filter_clause}
+            ORDER BY r.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """), params).fetchall()
+
+        return {
+            "items": [dict(row._mapping) for row in result],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit,
+        }
     finally:
         db.close()
 
@@ -297,10 +316,25 @@ def get_sales_return(request: Request, return_id: int, current_user: dict = Depe
 
 
 @returns_router.post("/returns", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_sales_return(request: Request, data: SalesReturnCreate, current_user: dict = Depends(get_current_user)):
+def create_sales_return(
+    request: Request,
+    data: SalesReturnCreate,
+    # Fix 10: Idempotency-Key prevents duplicate returns on double-submit or network retry.
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+    current_user: dict = Depends(get_current_user),
+):
     """إنشاء مرتجع مبيعات جديد (مسودة)"""
     db = get_db_connection(_company_id(current_user))
     try:
+        # Fix 10: Idempotency check — return existing return if key already used
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, return_number FROM sales_returns
+                WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"return_id": existing.id, "return_number": existing.return_number, "idempotent_replay": True}
+
         # Generate Sequential Return Number
         from utils.accounting import generate_sequential_number
         ret_num = generate_sequential_number(db, f"RET-{datetime.now().year}", "sales_returns", "return_number")
@@ -456,12 +490,12 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
                 return_number, party_id, invoice_id, return_date,
                 subtotal, tax_amount, total, status, notes, created_by,
                 refund_method, refund_amount, bank_account_id, treasury_account_id, check_number, check_date, branch_id, warehouse_id,
-                currency, exchange_rate
+                currency, exchange_rate, idempotency_key
             ) VALUES (
                 :num, :cust, :inv, :rdate,
                 :sub, :tax, :total, 'draft', :notes, :user,
                 :rmethod, :ramount, :rbank, :treasury, :rcheck, :rcheckdate, :bid, :wh_id,
-                :currency, :exchange_rate
+                :currency, :exchange_rate, :idem_key
             ) RETURNING id
         """), {
             "num": ret_num, "cust": data.customer_id, "inv": data.invoice_id,
@@ -471,7 +505,8 @@ def create_sales_return(request: Request, data: SalesReturnCreate, current_user:
             "rbank": data.bank_account_id, "treasury": selected_treasury_id,
             "rcheck": data.check_number,
             "rcheckdate": data.check_date, "bid": branch_id, "wh_id": return_warehouse_id,
-            "currency": ret_currency, "exchange_rate": ret_rate
+            "currency": ret_currency, "exchange_rate": ret_rate,
+            "idem_key": idempotency_key,
         }).fetchone()
 
         ret_id = res[0]
@@ -612,7 +647,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                             product_id=line.product_id,
                             warehouse_id=wh_id,
                             quantity=line.quantity,
-                            unit_cost=float(cost_price),
+                            unit_cost=cost_price,
                             source_document_type="sales_return",
                             source_document_id=return_id,
                             costing_method=costing_method,
@@ -630,8 +665,8 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                         db,
                         product_id=line.product_id,
                         warehouse_id=wh_id,
-                        new_qty=float(line.quantity),
-                        new_price=float(restored_cost),
+                        new_qty=_dec(line.quantity),
+                        new_price=restored_cost,
                     )
 
                 # Update Inventory
@@ -645,7 +680,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                     "qty": line.quantity,
                     "pid": line.product_id,
                     "wh": wh_id,
-                    "cost": float(restored_cost),
+                    "cost": restored_cost,
                 })
 
                 # Log Inventory Transaction
@@ -710,7 +745,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
         gl_total = to_base(header.total)
         update_party_site_balance(db, party_id=header.party_id, branch_id=header.branch_id,
                                   currency=header.currency or base_currency,
-                                  amount=-float(_dec(header.total)))
+                                  amount=-_dec(header.total))
 
         # Returns reduce receivables through their own GL/audit trail; they
         # are not cash collections, so the source invoice paid_amount is left
@@ -773,7 +808,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             gl_refund = to_base(header.refund_amount)
             update_party_site_balance(db, party_id=header.party_id, branch_id=header.branch_id,
                                       currency=header.currency or base_currency,
-                                      amount=float(_dec(header.refund_amount)))
+                                      amount=_dec(header.refund_amount))
 
             # GL for Refund
             acc_cash = get_mapped_account_id(db, "acc_map_cash_main")
@@ -1006,7 +1041,7 @@ def cancel_sales_return(return_id: int, request: Request, current_user: dict = D
                 party_id=header.party_id,
                 branch_id=header.branch_id,
                 currency=header.currency or (db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"),
-                amount=float(_dec(header.total)),
+                amount=_dec(header.total),
             )
 
             from services.gl_service import reverse_journal_entry
@@ -1050,7 +1085,7 @@ def cancel_sales_return(return_id: int, request: Request, current_user: dict = D
                     party_id=header.party_id,
                     branch_id=header.branch_id,
                     currency=header.currency or (db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"),
-                    amount=-float(refund_reversal_total_fc),
+                    amount=-refund_reversal_total_fc,
                 )
 
             db.execute(text("""

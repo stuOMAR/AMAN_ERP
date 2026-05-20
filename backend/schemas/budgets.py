@@ -2,11 +2,12 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import date
+from decimal import Decimal
 
 
 class BudgetItemBase(BaseModel):
     account_id: int
-    planned_amount: float
+    planned_amount: Decimal
     notes: Optional[str] = None
 
 
@@ -39,9 +40,9 @@ class BudgetReportItem(BaseModel):
     account_id: int
     account_number: str
     account_name: str
-    planned: float
-    actual: float
-    variance: float
-    usage_percentage: float
-    variance_percentage: float
+    planned: Decimal
+    actual: Decimal
+    variance: Decimal
+    usage_percentage: Decimal
+    variance_percentage: Decimal
     is_over_budget: bool

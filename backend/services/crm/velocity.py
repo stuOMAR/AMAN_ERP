@@ -4,10 +4,13 @@ Feature 023 — T055.  Contract: contracts/crm-velocity-funnel.md
 """
 from __future__ import annotations
 
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 from sqlalchemy import text
+
+_D2 = Decimal("0.01")
+_D4 = Decimal("0.0001")
 
 
 def compute_velocity(
@@ -59,7 +62,7 @@ def compute_velocity(
           AND sh.entered_at >= NOW() - INTERVAL ':days days'
     """), params).fetchone()
 
-    avg_days = float(avg_cycle.avg_days or 0) if avg_cycle else 0
+    avg_days = Decimal(str(avg_cycle.avg_days or 0)) if avg_cycle else Decimal("0")
 
     if total_count == 0 or avg_days == 0:
         return {
@@ -68,14 +71,14 @@ def compute_velocity(
             "confidence": "insufficient_data",
         }
 
-    win_rate = won_count / total_count
-    velocity = float(won_value) * win_rate / avg_days
+    win_rate = Decimal(won_count) / Decimal(total_count)
+    velocity = won_value * win_rate / avg_days
 
     return {
-        "velocity": round(velocity, 4),
-        "win_rate": round(win_rate, 4),
-        "avg_cycle_days": round(avg_days, 2),
-        "won_value": float(won_value),
+        "velocity": velocity.quantize(_D4, rounding=ROUND_HALF_UP),
+        "win_rate": win_rate.quantize(_D4, rounding=ROUND_HALF_UP),
+        "avg_cycle_days": avg_days.quantize(_D2, rounding=ROUND_HALF_UP),
+        "won_value": won_value.quantize(_D2, rounding=ROUND_HALF_UP),
         "won_count": won_count,
         "total_count": total_count,
         "confidence": "sufficient",

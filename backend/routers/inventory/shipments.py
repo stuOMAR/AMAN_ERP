@@ -174,46 +174,66 @@ def create_shipment(
         db.close()
 
 
-@shipments_router.get("/shipments", dependencies=[Depends(require_permission("stock.view"))], response_model=List[Dict[str, Any]])
+@shipments_router.get("/shipments", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
 def list_shipments(
     status_filter: Optional[str] = None,
     branch_id: Optional[int] = None,
+    page: int = 1,
+    limit: int = 25,
     current_user: dict = Depends(get_current_user)
 ):
-    """عرض جميع الشحنات"""
+    """عرض جميع الشحنات — INV-20: paginated, default 25, max 100."""
+    if limit > 100:
+        limit = 100
+    skip = (page - 1) * limit
     db = get_db_connection(current_user.company_id)
     try:
         branch_scope = resolve_branch_scope(current_user, branch_id)
-        query = """
-            SELECT s.id, s.shipment_ref, s.status, s.notes, s.created_at, s.shipped_at, s.received_at,
-                   sw.warehouse_name as source_warehouse,
-                   dw.warehouse_name as destination_warehouse,
-                   u.full_name as created_by_name,
-                   (SELECT COUNT(*) FROM stock_shipment_items WHERE shipment_id = s.id) as item_count
+        base_from = """
             FROM stock_shipments s
             JOIN warehouses sw ON s.source_warehouse_id = sw.id
             JOIN warehouses dw ON s.destination_warehouse_id = dw.id
             LEFT JOIN company_users u ON s.created_by = u.id
             WHERE 1=1
         """
-        params = {}
+        params: Dict[str, Any] = {}
+
         if branch_scope["branch_id"] is not None:
             params["branch_id"] = branch_scope["branch_id"]
-            query += " AND (sw.branch_id = :branch_id OR dw.branch_id = :branch_id)"
+            base_from += " AND (sw.branch_id = :branch_id OR dw.branch_id = :branch_id)"
         elif branch_scope["branch_ids"] is not None:
             if branch_scope["branch_ids"]:
                 params["allowed_branch_ids"] = branch_scope["branch_ids"]
-                query += " AND (sw.branch_id = ANY(:allowed_branch_ids) OR dw.branch_id = ANY(:allowed_branch_ids))"
+                base_from += " AND (sw.branch_id = ANY(:allowed_branch_ids) OR dw.branch_id = ANY(:allowed_branch_ids))"
             else:
-                query += " AND 1=0"
+                base_from += " AND 1=0"
 
         if status_filter:
-            query += " AND s.status = :status"
+            base_from += " AND s.status = :status"
             params["status"] = status_filter
-        query += " ORDER BY s.created_at DESC"
 
-        result = db.execute(text(query), params).fetchall()
-        return [dict(r._mapping) for r in result]
+        total = db.execute(text(f"SELECT COUNT(*) {base_from}"), params).scalar() or 0
+
+        params["limit"] = limit
+        params["skip"] = skip
+        result = db.execute(text(f"""
+            SELECT s.id, s.shipment_ref, s.status, s.notes, s.created_at, s.shipped_at, s.received_at,
+                   sw.warehouse_name as source_warehouse,
+                   dw.warehouse_name as destination_warehouse,
+                   u.full_name as created_by_name,
+                   (SELECT COUNT(*) FROM stock_shipment_items WHERE shipment_id = s.id) as item_count
+            {base_from}
+            ORDER BY s.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """), params).fetchall()
+
+        return {
+            "items": [dict(r._mapping) for r in result],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit,
+        }
     finally:
         db.close()
 
@@ -423,7 +443,7 @@ def dispatch_shipment(
 
         # T053: Post GL — Dr In-Transit / Cr Source Inventory
         if total_transit_value > Decimal("0"):
-            value_f = float(total_transit_value)
+            value_f = total_transit_value  # Decimal — no float cast needed
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),
@@ -594,8 +614,8 @@ def confirm_shipment(
                             db,
                             product_id=item.product_id,
                             warehouse_id=shipment.destination_warehouse_id,
-                            quantity=float(src_layer.quantity_consumed),
-                            unit_cost=float(src_layer.unit_cost or 0),
+                            quantity=Decimal(str(src_layer.quantity_consumed)),
+                            unit_cost=Decimal(str(src_layer.unit_cost or 0)),
                             source_document_type="shipment_receive",
                             source_document_id=id,
                             costing_method=dest_method,
@@ -605,8 +625,8 @@ def confirm_shipment(
                         db,
                         product_id=item.product_id,
                         warehouse_id=shipment.destination_warehouse_id,
-                        quantity=item.quantity,
-                        unit_cost=float(source_cost or 0),
+                        quantity=Decimal(str(item.quantity)),
+                        unit_cost=source_cost,
                         source_document_type="shipment_receive",
                         source_document_id=id,
                         costing_method=dest_method,
@@ -617,8 +637,8 @@ def confirm_shipment(
                 db,
                 product_id=item.product_id,
                 warehouse_id=shipment.destination_warehouse_id,
-                new_qty=float(item.quantity),
-                new_price=float(source_cost or 0),
+                new_qty=Decimal(str(item.quantity)),
+                new_price=source_cost,
             )
 
             # T055: Add to destination quantity
@@ -664,13 +684,16 @@ def confirm_shipment(
             """), {
                 "sid": id, "pid": item.product_id,
                 "fwh": shipment.source_warehouse_id, "twh": shipment.destination_warehouse_id,
-                "qty": item.quantity, "tcost": source_cost, "fcast": source_cost,
-                "tcast_b": 0, "tcast_a": float(dest_stats_after.average_cost if dest_stats_after else 0),
+                "qty": str(Decimal(str(item.quantity))),
+                "tcost": str(source_cost),
+                "fcast": str(source_cost),
+                "tcast_b": "0",
+                "tcast_a": str(Decimal(str(dest_stats_after.average_cost)) if dest_stats_after else Decimal("0")),
             })
 
         # T056: Post GL — Dr Destination Inventory / Cr In-Transit
         if total_transit_value > Decimal("0"):
-            value_f = float(total_transit_value)
+            value_f = total_transit_value  # Decimal — no float cast needed
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),
@@ -931,7 +954,7 @@ def recall_shipment(
 
         # Post GL reversal: Dr Source Inventory / Cr In-Transit
         if total_recall_value > Decimal("0"):
-            value_f = float(total_recall_value)
+            value_f = total_recall_value  # Decimal — no float cast needed
             create_journal_entry(
                 db=db,
                 company_id=str(company_id),

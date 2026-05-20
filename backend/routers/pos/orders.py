@@ -3,7 +3,7 @@
 Mounted under the parent router via pos/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -330,7 +330,8 @@ def create_order(
                     total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
             except ValueError as e:
                 # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
-                raise HTTPException(status_code=400, detail=str(e))
+                logger.exception("FIFO/LIFO layer exhaustion on POS order create")
+                raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 
             # T030: Atomic deduction with authoritative available formula
             inv_update = db.execute(text("""

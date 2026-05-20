@@ -5,10 +5,11 @@ Feature 023 — T082.  Contract: contracts/byproduct-allocation.md
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_D4 = Decimal("0.0001")
 
 
 def allocate(
@@ -34,7 +35,7 @@ def allocate(
         if total_value > 0:
             for bp in byproducts:
                 share = Decimal(str(bp.get("sales_value", 0))) / total_value
-                bp["allocated_cost"] = (total_cost * share).quantize(Decimal("0.0001"))
+                bp["allocated_cost"] = (total_cost * share).quantize(_D4, rounding=ROUND_HALF_UP)
             return byproducts
         # Fallback to quantity
         logger.warning("byproduct.fallback_to_qty: sales_value inputs missing")
@@ -45,7 +46,7 @@ def allocate(
         if total_qty > 0:
             for bp in byproducts:
                 share = Decimal(str(bp.get("qty", 0))) / total_qty
-                bp["allocated_cost"] = (total_cost * share).quantize(Decimal("0.0001"))
+                bp["allocated_cost"] = (total_cost * share).quantize(_D4, rounding=ROUND_HALF_UP)
             return byproducts
 
     if method == "fixed":

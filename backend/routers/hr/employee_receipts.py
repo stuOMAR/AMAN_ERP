@@ -21,6 +21,7 @@ from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +37,7 @@ class SettlementCreate(BaseModel):
     employee_id: int
     advance_id: int
     receipt_id: int
-    amount: float = Field(..., gt=0)
+    amount: Decimal = Field(..., gt=0)
 
 
 class RejectBody(BaseModel):
@@ -91,16 +92,14 @@ def submit_settlement(request: Request,
         from services.employee_receipt_service import submit_settlement
         result = submit_settlement(
             conn, tenant_id, payload.employee_id,
-            payload.advance_id, payload.receipt_id, Decimal(str(payload.amount)),
+            payload.advance_id, payload.receipt_id, payload.amount,
         )
         conn.commit()
         return result
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
-    except Exception:
-        conn.rollback()
-        logger.exception("Failed to submit settlement")
+        logger.exception("Validation error in submit_settlement")
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
         raise HTTPException(**http_error(500, "submission_failed", request))
     finally:
         conn.close()
@@ -126,7 +125,8 @@ def approve_settlement(request: Request,
         return result
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Validation error in approve_settlement %s", settlement_id)
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
     except Exception:
         conn.rollback()
         logger.exception("Failed to approve settlement %s", settlement_id)
@@ -156,7 +156,8 @@ def reject_settlement(request: Request,
         return {"status": "rejected", "id": settlement_id}
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Validation error in reject_settlement %s", settlement_id)
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
     except Exception:
         conn.rollback()
         logger.exception("Failed to reject settlement %s", settlement_id)
@@ -185,7 +186,8 @@ def post_settlement(request: Request,
         return result
     except ValueError as e:
         conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Validation error in post_settlement %s", settlement_id)
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
     except Exception:
         conn.rollback()
         logger.exception("Failed to post settlement %s", settlement_id)

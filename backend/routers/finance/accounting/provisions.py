@@ -88,7 +88,7 @@ def create_bad_debt_provision(request: Request, req: ProvisionRequest, current_u
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="accounting.provision.bad_debt",
                      resource_type="provision", resource_id=str(je_num),
-                     details={"amount": float(req.amount)})
+                     details={"amount": str(_dec(req.amount).quantize(_D2, ROUND_HALF_UP))})
         trans.commit()
         return {"success": True, "journal_entry": je_num, "amount": req.amount}
     except HTTPException:
@@ -157,7 +157,7 @@ def create_leave_provision(request: Request, req: ProvisionRequest, current_user
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="accounting.provision.leave",
                      resource_type="provision", resource_id=str(je_num),
-                     details={"amount": float(req.amount)})
+                     details={"amount": str(_dec(req.amount).quantize(_D2, ROUND_HALF_UP))})
         trans.commit()
         return {"success": True, "journal_entry": je_num, "amount": req.amount}
     except HTTPException:
@@ -172,4 +172,3 @@ def create_leave_provision(request: Request, req: ProvisionRequest, current_user
 # ═══════════════════════════════════════════════════════════
 # GL-006: FX Revaluation (تسوية العملات الأجنبية)
 # ═══════════════════════════════════════════════════════════
-

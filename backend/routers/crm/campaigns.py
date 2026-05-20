@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -80,8 +81,8 @@ def get_campaign(request: Request, campaign_id: int, current_user=Depends(get_cu
         data["click_rate"] = round(100.0 * (data.get("total_clicked") or 0) / sent, 1) if sent else 0
         data["response_rate"] = round(100.0 * (data.get("total_responded") or 0) / sent, 1) if sent else 0
         responded = data.get("total_responded") or 0
-        cost = float(data.get("actual_cost") or data.get("estimated_cost") or 0)
-        data["cost_per_lead"] = round(cost / responded, 2) if responded and cost else 0
+        cost = Decimal(str(data.get("actual_cost") or data.get("estimated_cost") or 0))
+        data["cost_per_lead"] = str(round(cost / responded, 2)) if responded and cost else "0"
         return data
     finally:
         db.close()
@@ -468,8 +469,8 @@ def get_campaign_metrics(request: Request, campaign_id: int, current_user=Depend
         """), {"cid": campaign_id}).fetchall()
 
         responded = c["total_responded"] or 0
-        cost = float(c.get("actual_cost") or c.get("estimated_cost") or 0)
-        c["cost_per_lead"] = round(cost / responded, 2) if responded and cost else 0
+        cost = Decimal(str(c.get("actual_cost") or c.get("estimated_cost") or 0))
+        c["cost_per_lead"] = str(round(cost / responded, 2)) if responded and cost else "0"
         c["attributed_leads"] = [dict(r._mapping) for r in leads]
         c["total_attributed_leads"] = len(leads)
 

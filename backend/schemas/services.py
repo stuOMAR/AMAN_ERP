@@ -13,7 +13,7 @@ class ServiceRequestCreate(BaseModel):
     asset_id: Optional[int] = None
     assigned_to: Optional[int] = None
     branch_id: Optional[int] = None
-    estimated_hours: Optional[float] = None
+    estimated_hours: Optional[Decimal] = None
     hourly_rate: Optional[Decimal] = None
     estimated_cost: Optional[Decimal] = None
     scheduled_date: Optional[str] = None
@@ -31,8 +31,8 @@ class ServiceRequestUpdate(BaseModel):
     customer_id: Optional[int] = None
     asset_id: Optional[int] = None
     assigned_to: Optional[int] = None
-    estimated_hours: Optional[float] = None
-    actual_hours: Optional[float] = None
+    estimated_hours: Optional[Decimal] = None
+    actual_hours: Optional[Decimal] = None
     hourly_rate: Optional[Decimal] = None
     estimated_cost: Optional[Decimal] = None
     actual_cost: Optional[Decimal] = None
@@ -47,7 +47,7 @@ class TechnicianAssignRequest(BaseModel):
 
 
 class ServiceCostCreate(BaseModel):
-    quantity: Optional[float] = None
+    quantity: Optional[Decimal] = None
     unit_cost: Optional[Decimal] = None
     markup_pct: Optional[Decimal] = None
     cost_type: Optional[str] = None

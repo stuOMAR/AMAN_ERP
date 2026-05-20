@@ -7,12 +7,12 @@ Uses intercompany_service.py (entity_groups, intercompany_transactions_v2, inter
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 import logging
 
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from utils.limiter import limiter
 from schemas.intercompany import (
     EntityGroupCreate, EntityGroupUpdate, IntercompanyTransactionCreate,
@@ -33,7 +33,8 @@ logger = logging.getLogger(__name__)
 def list_entities(request: Request, current_user=Depends(get_current_user)):
     """Return entity group tree."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    return intercompany_service.get_entity_tree(str(company_id))
+    branch_scope = resolve_branch_scope(current_user, None)
+    return intercompany_service.get_entity_tree(str(company_id), branch_scope=branch_scope)
 
 
 @router.post("/entities", status_code=201, dependencies=[Depends(require_permission(["intercompany.manage", "accounting.edit"]))], response_model=Dict[str, Any])
@@ -42,7 +43,9 @@ def create_entity(request: Request, data: EntityGroupCreate, current_user=Depend
     """Create a new entity group node."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
-    return intercompany_service.create_entity_group(data.model_dump(), str(company_id), user_id)
+    payload = data.model_dump()
+    payload["branch_id"] = validate_branch_access(current_user, payload.get("branch_id"), request)
+    return intercompany_service.create_entity_group(payload, str(company_id), user_id)
 
 
 @router.patch(
@@ -63,18 +66,20 @@ def update_entity(
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     try:
+        payload = data.model_dump(exclude_unset=True)
+        if "branch_id" in payload:
+            payload["branch_id"] = validate_branch_access(current_user, payload.get("branch_id"), request)
         return intercompany_service.update_entity_group(
             entity_id,
-            data.model_dump(exclude_unset=True),
+            payload,
             str(company_id),
             user_id,
         )
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Validation error in update_entity")
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 
 
-# ---------------------------------------------------------------------------
-# Intercompany Transactions
 # ---------------------------------------------------------------------------
 
 @router.post("/transactions", status_code=201, dependencies=[Depends(require_permission(["intercompany.manage", "accounting.edit"]))], response_model=Dict[str, Any])
@@ -84,10 +89,19 @@ def create_transaction(request: Request, data: IntercompanyTransactionCreate, cu
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     try:
-        return intercompany_service.create_transaction(data.model_dump(), str(company_id), user_id)
+        branch_scope = resolve_branch_scope(current_user, None)
+        return intercompany_service.create_transaction(
+            data.model_dump(),
+            str(company_id),
+            user_id,
+            idempotency_key=request.headers.get("Idempotency-Key"),
+            branch_scope=branch_scope,
+        )
+    except PermissionError:
+        raise HTTPException(**http_error(403, "access_denied", request))
     except ValueError as e:
-        logger.exception("Validation error")
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Validation error in create_transaction")
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
     except Exception as e:
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
@@ -106,7 +120,14 @@ def list_transactions(
     """List intercompany transactions (v2 tables)."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     try:
-        return intercompany_service.get_transactions(str(company_id), status_filter or status, entity_id, branch_id)
+        branch_scope = resolve_branch_scope(current_user, branch_id)
+        return intercompany_service.get_transactions(
+            str(company_id),
+            status_filter or status,
+            entity_id,
+            branch_scope["branch_id"],
+            branch_scope=branch_scope,
+        )
     except Exception as e:
         err_str = str(e).lower()
         if "does not exist" in err_str or "undefinedtable" in err_str or "undefinedcolumn" in err_str:
@@ -121,7 +142,8 @@ def list_transactions(
 def get_transaction(request: Request, txn_id: int, current_user=Depends(get_current_user)):
     """Get a single intercompany transaction."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    result = intercompany_service.get_transaction_by_id(txn_id, str(company_id))
+    branch_scope = resolve_branch_scope(current_user, None)
+    result = intercompany_service.get_transaction_by_id(txn_id, str(company_id), branch_scope=branch_scope)
     if not result:
         raise HTTPException(**http_error(404, "transaction_not_found", request))
     return result
@@ -134,13 +156,13 @@ def process_transaction(request: Request, txn_id: int, current_user=Depends(get_
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
     try:
+        branch_scope = resolve_branch_scope(current_user, None)
+        if not intercompany_service.get_transaction_by_id(txn_id, str(company_id), branch_scope=branch_scope):
+            raise HTTPException(**http_error(404, "transaction_not_found", request))
         return intercompany_service.process_transaction(txn_id, str(company_id), user_id)
     except ValueError as e:
-        raise HTTPException(status_code=400, detail=str(e))
-
-
-# ---------------------------------------------------------------------------
-# Consolidation
+        logger.exception("Validation error in process_transaction")
+        raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 # ---------------------------------------------------------------------------
 
 @router.post("/consolidate", dependencies=[Depends(require_permission(["intercompany.manage", "accounting.edit"]))], response_model=Dict[str, Any])
@@ -170,7 +192,8 @@ def consolidate(request: Request, data: ConsolidationRequest, current_user=Depen
 def get_balances(request: Request, current_user=Depends(get_current_user)):
     """Report outstanding intercompany balances."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    return intercompany_service.get_intercompany_balances(str(company_id))
+    branch_scope = resolve_branch_scope(current_user, None)
+    return intercompany_service.get_intercompany_balances(str(company_id), branch_scope=branch_scope)
 
 
 # ---------------------------------------------------------------------------

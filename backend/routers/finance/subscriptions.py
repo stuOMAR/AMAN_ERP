@@ -406,10 +406,17 @@ def scan_dunning(current_user=Depends(get_current_user)):
     Idempotent: re-running refreshes ``amount_outstanding`` / ``days_overdue``
     and escalates ``dunning_level`` based on configurable day buckets
     (30/60/90/120 days).
+
+    PR19-fix (F-NEW-150): each subscription is processed inside its own
+    SAVEPOINT (``db.begin_nested()``). A constraint violation or any
+    DB error on subscription N rolls back only that row's UPDATE/INSERT
+    — the dunning cases successfully refreshed for subscriptions
+    1..N-1 are preserved when the outer transaction commits. The
+    business intent for a batch scanner is "best-effort per-row", not
+    all-or-nothing.
     """
-    db = get_db_connection(current_user.company_id)
-    opened, updated = 0, 0
-    try:
+    opened, updated, errors = 0, 0, 0
+    with transactional(current_user.company_id) as db:
         # Pull all overdue unpaid subscription invoices
         rows = db.execute(text("""
             SELECT si.id AS sub_inv_id,
@@ -427,7 +434,10 @@ def scan_dunning(current_user=Depends(get_current_user)):
         """)).fetchall()
 
         for r in rows:
-            outstanding = float(r.total_amt or 0) - float(r.paid_amt or 0)
+            # F-NEW-151 (R-FLOAT-MONEY, Req 8.5): keep dunning math in
+            # Decimal so the cent-level threshold check ``outstanding <= 0``
+            # is precise even on retry edges.
+            outstanding = Decimal(str(r.total_amt or 0)) - Decimal(str(r.paid_amt or 0))
             if outstanding <= 0:
                 continue
             days = (
@@ -443,53 +453,60 @@ def scan_dunning(current_user=Depends(get_current_user)):
             elif days > 30:
                 level = 2
 
-            existing = db.execute(
-                text(
-                    "SELECT id FROM dunning_cases "
-                    "WHERE subscription_invoice_id = :sid "
-                    "AND status NOT IN ('resolved', 'written_off')"
-                ),
-                {"sid": r.sub_inv_id},
-            ).fetchone()
-            if existing:
-                db.execute(
-                    text(
-                        "UPDATE dunning_cases SET "
-                        "amount_outstanding = :amt, days_overdue = :d, "
-                        "dunning_level = :lvl, updated_at = CURRENT_TIMESTAMP "
-                        "WHERE id = :id"
-                    ),
-                    {"amt": outstanding, "d": days, "lvl": level, "id": existing.id},
+            try:
+                with db.begin_nested():
+                    existing = db.execute(
+                        text(
+                            "SELECT id FROM dunning_cases "
+                            "WHERE subscription_invoice_id = :sid "
+                            "AND status NOT IN ('resolved', 'written_off')"
+                        ),
+                        {"sid": r.sub_inv_id},
+                    ).fetchone()
+                    if existing:
+                        db.execute(
+                            text(
+                                "UPDATE dunning_cases SET "
+                                "amount_outstanding = :amt, days_overdue = :d, "
+                                "dunning_level = :lvl, updated_at = CURRENT_TIMESTAMP "
+                                "WHERE id = :id"
+                            ),
+                            {"amt": outstanding, "d": days, "lvl": level, "id": existing.id},
+                        )
+                        updated += 1
+                    else:
+                        db.execute(
+                            text(
+                                "INSERT INTO dunning_cases "
+                                "(invoice_id, subscription_invoice_id, party_id, "
+                                " amount_outstanding, currency, days_overdue, "
+                                " dunning_level, status) VALUES "
+                                "(:iid, :sid, :pid, :amt, :cur, :d, :lvl, 'open')"
+                            ),
+                            {
+                                "iid": r.inv_id,
+                                "sid": r.sub_inv_id,
+                                "pid": r.party_id,
+                                "amt": outstanding,
+                                "cur": r.currency,
+                                "d": days,
+                                "lvl": level,
+                            },
+                        )
+                        opened += 1
+            except Exception:
+                # Per-row savepoint rolled back; record the failure and
+                # continue with the next subscription.
+                errors += 1
+                logger.exception(
+                    "dunning-scan: per-row failure for sub_inv_id=%s; "
+                    "savepoint rolled back, sibling rows preserved",
+                    r.sub_inv_id,
                 )
-                updated += 1
-            else:
-                db.execute(
-                    text(
-                        "INSERT INTO dunning_cases "
-                        "(invoice_id, subscription_invoice_id, party_id, "
-                        " amount_outstanding, currency, days_overdue, "
-                        " dunning_level, status) VALUES "
-                        "(:iid, :sid, :pid, :amt, :cur, :d, :lvl, 'open')"
-                    ),
-                    {
-                        "iid": r.inv_id,
-                        "sid": r.sub_inv_id,
-                        "pid": r.party_id,
-                        "amt": outstanding,
-                        "cur": r.currency,
-                        "d": days,
-                        "lvl": level,
-                    },
-                )
-                opened += 1
-        db.commit()
-        return {"opened": opened, "updated": updated, "scanned": len(rows)}
-    except Exception:
-        db.rollback()
-        logger.exception("Dunning scan failed")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+        return {
+            "opened": opened, "updated": updated,
+            "scanned": len(rows), "errors": errors,
+        }
 
 
 @router.get(

@@ -167,7 +167,7 @@ def create_tax_return(
             params = {"start": start_date, "end": end_date}
             branch_filter = ""
             if branch_id:
-                branch_filter = "AND i.branch_id = :branch_id"
+                branch_filter = "AND je.branch_id = :branch_id"
                 params["branch_id"] = branch_id
     
             # Check for duplicate
@@ -184,85 +184,50 @@ def create_tax_return(
             if dup:
                 raise HTTPException(status_code=409, detail=i18n_message("tax_return_already_exists_period", request))
     
-            # Output VAT (sales) — aggregate at invoice level to respect header discounts
-            output = db.execute(text(  # noqa: sql-lint
+            vat_out_id = get_mapped_account_id(db, "acc_map_vat_out")
+            vat_in_id = get_mapped_account_id(db, "acc_map_vat_in")
+            if not vat_out_id or not vat_in_id:
+                raise HTTPException(**http_error(400, "input_output_tax_accounts_not_configured", request))
+
+            tax_rows = db.execute(text(  # noqa: sql-lint
                 f"""
                 SELECT
-                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
-                    COALESCE(SUM(inv.vat_amount), 0) as vat
-                FROM (
-                    SELECT
-                        i.id,
-                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
-                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
-                    FROM invoices i
-                    WHERE i.invoice_type = 'sales'
-                      AND i.status NOT IN ('draft', 'cancelled')
-                      AND i.invoice_date >= :start AND i.invoice_date < :end
-                      {branch_filter}
-                ) inv
-            """), params).fetchone()
-    
-            # Sales returns — aggregate at invoice level
-            output_returns = db.execute(text(  # noqa: sql-lint
+                    jl.account_id,
+                    COALESCE(SUM(jl.debit), 0) AS debit,
+                    COALESCE(SUM(jl.credit), 0) AS credit
+                FROM journal_lines jl
+                JOIN journal_entries je ON je.id = jl.journal_entry_id
+                WHERE jl.account_id IN (:vat_out_id, :vat_in_id)
+                  AND je.status = 'posted'
+                  AND je.entry_date >= :start AND je.entry_date < :end
+                  {branch_filter}
+                GROUP BY jl.account_id
+            """), {**params, "vat_out_id": vat_out_id, "vat_in_id": vat_in_id}).fetchall()
+
+            tax_by_account = {row.account_id: row for row in tax_rows}
+            out_row = tax_by_account.get(vat_out_id)
+            in_row = tax_by_account.get(vat_in_id)
+            net_output_vat = (_dec(out_row.credit) - _dec(out_row.debit)) if out_row else Decimal("0")
+            net_input_vat = (_dec(in_row.debit) - _dec(in_row.credit)) if in_row else Decimal("0")
+
+            taxable_amount = db.execute(text(  # noqa: sql-lint
                 f"""
-                SELECT
-                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
-                    COALESCE(SUM(inv.vat_amount), 0) as vat
-                FROM (
-                    SELECT
-                        i.id,
-                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
-                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
-                    FROM invoices i
-                    WHERE i.invoice_type = 'sales_return'
-                      AND i.status NOT IN ('draft', 'cancelled')
-                      AND i.invoice_date >= :start AND i.invoice_date < :end
-                      {branch_filter}
-                ) inv
-            """), params).fetchone()
-    
-            # Input VAT (purchases) — aggregate at invoice level
-            input_vat = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT
-                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
-                    COALESCE(SUM(inv.vat_amount), 0) as vat
-                FROM (
-                    SELECT
-                        i.id,
-                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
-                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
-                    FROM invoices i
-                    WHERE i.invoice_type = 'purchase'
-                      AND i.status NOT IN ('draft', 'cancelled')
-                      AND i.invoice_date >= :start AND i.invoice_date < :end
-                      {branch_filter}
-                ) inv
-            """), params).fetchone()
-    
-            # Purchase returns — aggregate at invoice level
-            input_returns = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT
-                    COALESCE(SUM(inv.taxable_amount), 0) as taxable,
-                    COALESCE(SUM(inv.vat_amount), 0) as vat
-                FROM (
-                    SELECT
-                        i.id,
-                        ((COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0)) * COALESCE(i.exchange_rate, 1)) AS taxable_amount,
-                        (COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)) AS vat_amount
-                    FROM invoices i
-                    WHERE i.invoice_type = 'purchase_return'
-                      AND i.status NOT IN ('draft', 'cancelled')
-                      AND i.invoice_date >= :start AND i.invoice_date < :end
-                      {branch_filter}
-                ) inv
-            """), params).fetchone()
-    
-            net_output_vat = _dec(output.vat) - _dec(output_returns.vat)
-            net_input_vat = _dec(input_vat.vat) - _dec(input_returns.vat)
-            taxable_amount = _dec(output.taxable) - _dec(output_returns.taxable)
+                SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
+                FROM journal_lines jl
+                JOIN journal_entries je ON je.id = jl.journal_entry_id
+                JOIN accounts a ON a.id = jl.account_id
+                WHERE a.account_type = 'revenue'
+                  AND je.status = 'posted'
+                  AND je.entry_date >= :start AND je.entry_date < :end
+                  AND EXISTS (
+                      SELECT 1
+                      FROM journal_lines tax_jl
+                      WHERE tax_jl.journal_entry_id = je.id
+                        AND tax_jl.account_id = :vat_out_id
+                  )
+                  {branch_filter}
+            """), {**params, "vat_out_id": vat_out_id}).scalar() or Decimal("0")
+            taxable_amount = _dec(taxable_amount)
             tax_amount = net_output_vat - net_input_vat
     
             return_number = generate_sequential_number(db, "TR", "tax_returns", "return_number")
@@ -284,8 +249,8 @@ def create_tax_return(
                 "period_start": start_date,
                 "period_end": end_date,
                 "branch_id": branch_id,
-                "source": "invoice_lines",
-                "method": "net_output_vat_minus_net_input_vat",
+                "source": "journal_lines",
+                "method": "posted_vat_account_lines_net_output_minus_net_input",
                 "amount_currency": base_currency,
                 "currency_method": "invoice amounts converted to company base currency using locked invoice exchange_rate",
                 "inputs": {

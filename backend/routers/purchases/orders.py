@@ -28,6 +28,7 @@ from utils.accounting import get_mapped_account_id, generate_sequential_number, 
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
+from utils.tax_precision import require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from schemas.purchases import (
@@ -360,15 +361,20 @@ def approve_purchase_order(
     current_user: dict = Depends(get_current_user)
 ):
     """اعتماد أمر الشراء"""
-    with transactional(current_user.company_id) as db:
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    with transactional(company_id) as db:
         try:
             # Check current status
             po = db.execute(text("""
-                SELECT id, status, po_number, party_id as supplier_id, branch_id, total, order_date FROM purchase_orders WHERE id = :id
+                SELECT id, status, po_number, party_id as supplier_id, branch_id, total, order_date
+                FROM purchase_orders
+                WHERE id = :id
+                FOR UPDATE
             """), {"id": id}).fetchone()
             
             if not po:
-                raise HTTPException(**http_error(404, "purchase_order_not_found"))
+                raise HTTPException(**http_error(404, "purchase_order_not_found", request))
+            validate_branch_access(current_user, po.branch_id, request)
             
             if po.status != 'draft':
                 raise HTTPException(**http_error(400, "po_approve_only_draft", request))
@@ -392,6 +398,7 @@ def approve_purchase_order(
                           AND (end_date   IS NULL OR end_date   >= :od)
                         ORDER BY (branch_id IS NULL) ASC, fiscal_year DESC NULLS LAST, id DESC
                         LIMIT 1
+                        FOR UPDATE
                     """), {"branch": po.branch_id, "yr": po_year, "od": po.order_date}).fetchone()
                     if bud and bud.total_budget and _dec(bud.total_budget) > 0:
                         remaining = _dec(bud.total_budget) - _dec(bud.used_budget or 0)
@@ -432,7 +439,7 @@ def approve_purchase_order(
                 resource_id=str(id),
                 details={"po_number": po.po_number, "supplier_name": supplier.name if supplier else None},
                 request=request,
-                branch_id=None
+                branch_id=po.branch_id
             )
     
             # Notify purchasing team about PO approval
@@ -471,8 +478,39 @@ def receive_purchase_order(
     current_user: dict = Depends(get_current_user)
 ):
     """استلام أمر الشراء (جزئي أو كامل)"""
-    with transactional(current_user.company_id) as db:
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    with transactional(company_id) as db:
         try:
+            idempotency_key = require_idempotency_key(request, operation="purchase order receipt")
+            replay = db.execute(text("""
+                SELECT pr.id AS receipt_id, po.status, po.branch_id
+                FROM po_receipts pr
+                JOIN purchase_orders po ON po.id = pr.po_id
+                WHERE pr.po_id = :po_id
+                  AND pr.idempotency_key = :key
+                LIMIT 1
+            """), {"po_id": id, "key": idempotency_key}).fetchone()
+            if replay:
+                validate_branch_access(current_user, replay.branch_id, request)
+                totals = db.execute(text("""
+                    SELECT SUM(quantity) AS total_qty,
+                           SUM(COALESCE(received_quantity, 0)) AS total_received
+                    FROM purchase_order_lines
+                    WHERE po_id = :po_id
+                """), {"po_id": id}).fetchone()
+                total_expected_dec = _dec(totals.total_qty or 0)
+                total_received_dec = _dec(totals.total_received or 0)
+                return {
+                    "message": i18n_message("stock_received_success", request),
+                    "id": int(id),
+                    "receipt_id": int(replay.receipt_id),
+                    "status": str(replay.status),
+                    "total_expected": str(total_expected_dec),
+                    "total_received": str(total_received_dec),
+                    "remaining": str(total_expected_dec - total_received_dec),
+                    "idempotent_replay": True,
+                }
+
             # T008: Lock PO header FOR UPDATE to prevent status races
             po = db.execute(text("""
                 SELECT id, status, po_number, party_id as supplier_id, branch_id, exchange_rate, currency 
@@ -486,7 +524,7 @@ def receive_purchase_order(
             if po.status not in ('approved', 'partial'):
                 raise HTTPException(**http_error(400, "po_must_be_approved", request))
 
-            validate_branch_access(current_user, po.branch_id)
+            validate_branch_access(current_user, po.branch_id, request)
             if not receive_data.items:
                 raise HTTPException(**http_error(400, "at_least_one_line_required", request))
             exchange_rate = _dec(1 if po.exchange_rate is None else po.exchange_rate)
@@ -542,10 +580,35 @@ def receive_purchase_order(
             # Create the receipt header before line processing so all stock,
             # costing, inventory transactions and GL entries share one stable id.
             receipt_row = db.execute(text("""
-                INSERT INTO po_receipts (po_id, warehouse_id, receipt_date, created_by)
-                VALUES (:po_id, :wh_id, CURRENT_DATE, :uid)
+                INSERT INTO po_receipts (po_id, warehouse_id, receipt_date, created_by, idempotency_key)
+                VALUES (:po_id, :wh_id, CURRENT_DATE, :uid, :idempotency_key)
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                DO NOTHING
                 RETURNING id
-            """), {"po_id": id, "wh_id": receive_data.warehouse_id, "uid": user_id}).fetchone()
+            """), {
+                "po_id": id,
+                "wh_id": receive_data.warehouse_id,
+                "uid": user_id,
+                "idempotency_key": idempotency_key,
+            }).fetchone()
+            if not receipt_row:
+                existing_receipt = db.execute(text("""
+                    SELECT pr.id, pr.po_id, po.branch_id, po.status
+                    FROM po_receipts pr
+                    JOIN purchase_orders po ON po.id = pr.po_id
+                    WHERE pr.idempotency_key = :key
+                    LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if existing_receipt and int(existing_receipt.po_id) == int(id):
+                    validate_branch_access(current_user, existing_receipt.branch_id, request)
+                    return {
+                        "message": i18n_message("stock_received_success", request),
+                        "id": int(id),
+                        "receipt_id": int(existing_receipt.id),
+                        "status": str(existing_receipt.status),
+                        "idempotent_replay": True,
+                    }
+                raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
             receipt_id = receipt_row.id
             
             for item in receive_data.items:
@@ -612,7 +675,7 @@ def receive_purchase_order(
                             db,
                             product_id=line.product_id,
                             warehouse_id=receive_data.warehouse_id,
-                            new_qty=float(item_qty),
+                            new_qty=str(item_qty),
                             new_price=str(unit_price_base),
                         )
 
@@ -726,7 +789,7 @@ def receive_purchase_order(
                     
                     gl_create_journal_entry(
                         db=db,
-                        company_id=current_user.company_id,
+                        company_id=company_id,
                         date=str(datetime.now().date()),
                         description=f"استحقاق توريد بضاعة - {po.po_number}",
                         reference=po.po_number,
@@ -734,9 +797,10 @@ def receive_purchase_order(
                         user_id=user_id,
                         branch_id=po.branch_id,
                         currency=po.currency,
-                        exchange_rate=1.0,  # amounts already in base currency
+                        exchange_rate=Decimal("1"),  # amounts already in base currency
                         source="purchase_order_receipt",
-                        source_id=receipt_id  # T011: receipt-level ID, not PO ID
+                        source_id=receipt_id,  # T011: receipt-level ID, not PO ID
+                        idempotency_key=idempotency_key
                     )
             
             
@@ -760,6 +824,7 @@ def receive_purchase_order(
             return {
                 "message": i18n_message("stock_received_success", request),
                 "id": int(id),
+                "receipt_id": int(receipt_id),
                 "status": str(new_status),
                 "total_expected": str(total_expected_dec),
                 "total_received": str(total_received_dec),
@@ -832,14 +897,16 @@ def get_purchases_summary(
         }
 
 @router.get("/rfq", dependencies=[Depends(require_permission("buying.view"))], response_model=List[Dict[str, Any]])
-def list_rfqs(status: Optional[str] = None, current_user=Depends(get_current_user)):
+def list_rfqs(status: Optional[str] = None, branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """List Rfqs."""
     with transactional(current_user.company_id) as db:
+        branch_scope = resolve_branch_scope(current_user, branch_id)
         q = "SELECT * FROM request_for_quotations WHERE 1=1"
         params = {}
         if status:
             q += " AND status = :status"
             params["status"] = status
+        q += branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         q += " ORDER BY created_at DESC"
         rows = db.execute(text(q), params).fetchall()
         return [dict(r._mapping) for r in rows]
@@ -850,6 +917,7 @@ def get_rfq(request: Request, rfq_id: int, current_user=Depends(get_current_user
         rfq = db.execute(text("SELECT * FROM request_for_quotations WHERE id = :id"), {"id": rfq_id}).fetchone()
         if not rfq:
             raise HTTPException(**http_error(404, "rfq_not_found", request))
+        validate_branch_access(current_user, rfq._mapping.get("branch_id"), request)
         lines = db.execute(text("SELECT * FROM rfq_lines WHERE rfq_id = :id"), {"id": rfq_id}).fetchall()
         responses = db.execute(text("SELECT * FROM rfq_responses WHERE rfq_id = :id ORDER BY total_price ASC"), {"id": rfq_id}).fetchall()
         return {
@@ -863,6 +931,11 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
     with transactional(current_user.company_id) as db:
         try:
             import uuid
+            user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+            username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
+            branch_id = validate_branch_access(current_user, data.get("branch_id"), request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
             rfq_num = f"RFQ-{uuid.uuid4().hex[:8].upper()}"
             rfq = db.execute(text("""
                 INSERT INTO request_for_quotations (rfq_number, title, description, status, deadline, branch_id, created_by)
@@ -870,7 +943,7 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
                 RETURNING *
             """), {
                 "num": rfq_num, "title": data["title"], "desc": data.get("description"),
-                "deadline": data.get("deadline"), "branch": data.get("branch_id"), "uid": current_user.id,
+                "deadline": data.get("deadline"), "branch": branch_id, "uid": user_id,
             }).fetchone()
             for line in data.get("lines", []):
                 db.execute(text("""
@@ -885,10 +958,10 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
                     VALUES (:rid, :sid, 'invited')
                 """), {"rid": rfq.id, "sid": supplier_id})
             log_activity(
-                db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
+                db, user_id=user_id, username=username,
                 action="buying.rfq.create", resource_type="rfq",
                 resource_id=str(rfq.id), details={"rfq_number": rfq_num, "title": data["title"]},
-                request=request
+                request=request, branch_id=branch_id
             )
             return dict(rfq._mapping)
         except HTTPException:
@@ -900,12 +973,25 @@ def create_rfq(data: dict, request: Request, current_user=Depends(get_current_us
 def send_rfq(rfq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Send RFQ."""
     with transactional(current_user.company_id) as db:
+        rfq = db.execute(text("""
+            SELECT id, status, branch_id
+            FROM request_for_quotations
+            WHERE id = :id
+            FOR UPDATE
+        """), {"id": rfq_id}).fetchone()
+        if not rfq:
+            raise HTTPException(**http_error(404, "rfq_not_found", request))
+        validate_branch_access(current_user, rfq.branch_id, request)
+        if rfq.status not in ("draft", "sent"):
+            raise HTTPException(**http_error(400, "invalid_status_transition", request))
         db.execute(text("UPDATE request_for_quotations SET status = 'sent', updated_at = NOW() WHERE id = :id"), {"id": rfq_id})
+        user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+        username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
         log_activity(
-            db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
+            db, user_id=user_id, username=username,
             action="buying.rfq.send", resource_type="rfq",
             resource_id=str(rfq_id), details={},
-            request=request
+            request=request, branch_id=rfq.branch_id
         )
         return {"message": i18n_message("rfq_sent_success", request)}
 @router.post("/rfq/{rfq_id}/responses", dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -913,6 +999,16 @@ def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Dep
     """Add RFQ Response."""
     with transactional(current_user.company_id) as db:
         try:
+            rfq = db.execute(text("""
+                SELECT id, branch_id
+                FROM request_for_quotations
+                WHERE id = :id
+            """), {"id": rfq_id}).fetchone()
+            if not rfq:
+                raise HTTPException(**http_error(404, "rfq_not_found", request))
+            validate_branch_access(current_user, rfq.branch_id, request)
+            user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+            username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
             result = db.execute(text("""
                 INSERT INTO rfq_responses (rfq_id, supplier_id, supplier_name, unit_price, total_price, delivery_days, notes)
                 VALUES (:rid, :sid, :sname, :uprice, :total, :days, :notes)
@@ -947,19 +1043,28 @@ def add_rfq_response(rfq_id: int, data: dict, request: Request, current_user=Dep
                     "notes": line.get("notes"),
                 })
             log_activity(
-                db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
+                db, user_id=user_id, username=username,
                 action="buying.rfq.add_response", resource_type="rfq_response",
                 resource_id=str(result.id), details={"rfq_id": rfq_id, "supplier_id": data["supplier_id"]},
-                request=request
+                request=request, branch_id=rfq.branch_id
             )
             return dict(result._mapping)
         except Exception:
             logger.exception("Internal error")
             raise HTTPException(**http_error(500, "internal_error"))
 @router.post("/rfq/{rfq_id}/compare", dependencies=[Depends(require_permission("buying.view"))], response_model=Dict[str, Any])
-def compare_rfq_responses(rfq_id: int, current_user=Depends(get_current_user)):
+def compare_rfq_responses(rfq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Compare RFQ Responses."""
     with transactional(current_user.company_id) as db:
+        rfq = db.execute(text("""
+            SELECT id, branch_id
+            FROM request_for_quotations
+            WHERE id = :id
+            FOR UPDATE
+        """), {"id": rfq_id}).fetchone()
+        if not rfq:
+            raise HTTPException(**http_error(404, "rfq_not_found", request))
+        validate_branch_access(current_user, rfq.branch_id, request)
         responses = db.execute(text("""
             SELECT * FROM rfq_responses WHERE rfq_id = :rid ORDER BY total_price ASC
         """), {"rid": rfq_id}).fetchall()
@@ -973,6 +1078,19 @@ def convert_rfq_to_po(rfq_id: int, data: dict, request: Request, current_user=De
     """T047: Convert selected RFQ response to an actual Purchase Order."""
     with transactional(current_user.company_id) as db:
         try:
+            rfq = db.execute(text("""
+                SELECT id, branch_id, status
+                FROM request_for_quotations
+                WHERE id = :id
+                FOR UPDATE
+            """), {"id": rfq_id}).fetchone()
+            if not rfq:
+                raise HTTPException(**http_error(404, "rfq_not_found", request))
+            validate_branch_access(current_user, rfq.branch_id, request)
+            if rfq.status == "converted":
+                raise HTTPException(**http_error(400, "invalid_status_transition", request))
+            user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
+            username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
             response_id = data.get("response_id")
             if not response_id:
                 response_id = db.execute(text("""
@@ -1014,10 +1132,10 @@ def convert_rfq_to_po(rfq_id: int, data: dict, request: Request, current_user=De
                 "party": resp.supplier_id,
                 "expected": data.get("expected_date"),
                 "notes": f"Converted from RFQ #{rfq_id}",
-                "branch": data.get("branch_id"),
+                "branch": rfq.branch_id,
                 "curr": data.get("currency", "SAR"),
-                "rate": data.get("exchange_rate", 1.0),
-                "uid": current_user.id,
+                "rate": _dec(data.get("exchange_rate", 1)),
+                "uid": user_id,
             }).fetchone()
 
             # Create PO lines from RFQ lines
@@ -1042,10 +1160,10 @@ def convert_rfq_to_po(rfq_id: int, data: dict, request: Request, current_user=De
             db.execute(text("UPDATE request_for_quotations SET status = 'converted', updated_at = NOW() WHERE id = :id"), {"id": rfq_id})
 
             log_activity(
-                db, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
+                db, user_id=user_id, username=username,
                 action="buying.rfq.convert", resource_type="rfq",
                 resource_id=str(rfq_id), details={"response_id": response_id, "supplier_id": resp.supplier_id, "po_id": po.id},
-                request=request
+                request=request, branch_id=rfq.branch_id
             )
             return {"message": i18n_message("po_quotation_converted", request), "po_id": po.id, "po_number": po.po_number, "supplier_id": resp.supplier_id}
         except HTTPException:

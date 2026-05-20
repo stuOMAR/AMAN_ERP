@@ -11,7 +11,7 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope
 from utils.tx import transactional
 from services.tax_engine import resolve_line_tax
 from .schemas import QuotationCreate
@@ -348,7 +348,7 @@ def send_quotation_email(id: int, request: Request, current_user: dict = Depends
         raise HTTPException(**http_error(500, "internal_error"))
 
 
-@quotations_router.post("/quotations/{id}/cancel", response_model=dict, dependencies=[Depends(require_permission("sales.edit"))])
+@quotations_router.post("/quotations/{id}/cancel", response_model=dict, dependencies=[Depends(require_sensitive_permission("sales.cancel_quotation"))])
 def cancel_quotation(id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Cancel an open sales quotation without touching inventory or GL."""
     db = get_db_connection(_company_id(current_user))

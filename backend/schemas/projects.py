@@ -32,7 +32,7 @@ class ProjectUpdate(BaseModel):
     end_date: Optional[date] = None
     planned_budget: Optional[Decimal] = None
     status: Optional[str] = None
-    progress_percentage: Optional[float] = None
+    progress_percentage: Optional[Decimal] = None
 
 
 class TaskCreate(BaseModel):
@@ -43,7 +43,7 @@ class TaskCreate(BaseModel):
     assigned_to: Optional[int] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
-    planned_hours: float = 0
+    planned_hours: Decimal = Decimal("0")
     status: str = "pending"
 
 
@@ -53,9 +53,9 @@ class TaskUpdate(BaseModel):
     assigned_to: Optional[int] = None
     start_date: Optional[date] = None
     end_date: Optional[date] = None
-    planned_hours: Optional[float] = None
-    actual_hours: Optional[float] = None
-    progress: Optional[float] = None
+    planned_hours: Optional[Decimal] = None
+    actual_hours: Optional[Decimal] = None
+    progress: Optional[Decimal] = None
     status: Optional[str] = None
 
 
@@ -80,7 +80,7 @@ class TimesheetCreate(BaseModel):
     project_id: int
     task_id: Optional[int] = None
     date: date
-    hours: float
+    hours: Decimal
     description: Optional[str] = None
     status: str = "draft"
 
@@ -88,7 +88,7 @@ class TimesheetCreate(BaseModel):
 class TimesheetUpdate(BaseModel):
     task_id: Optional[int] = None
     date: Optional[date] = None
-    hours: Optional[float] = None
+    hours: Optional[Decimal] = None
     description: Optional[str] = None
     status: Optional[str] = None
 
@@ -105,9 +105,9 @@ class ProjectDocumentCreate(BaseModel):
 class ProjectInvoiceItem(BaseModel):
     product_id: Optional[int] = None
     description: str
-    quantity: float = 1.0
+    quantity: Decimal = Decimal("1.0")
     unit_price: Decimal
-    tax_rate: float = 0.0
+    tax_rate: Decimal = Decimal("0.0")
     discount: Decimal = Decimal(0)
 
 

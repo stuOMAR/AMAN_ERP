@@ -21,6 +21,15 @@ from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_D2 = Decimal("0.01")
+
+
+def _q(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _pct(numerator, denominator) -> Decimal:
+    return _q(Decimal(str(numerator if numerator is not None else 0)) / Decimal(str(denominator)) * 100)
 
 def _period_params(from_date: Optional[date] = None, to_date: Optional[date] = None):
     """Return (from_date, to_date) defaulting to current month."""
@@ -103,9 +112,9 @@ async def food_cost_report(
         # مصاريف التشغيل = حسابات 6xxxx
         operating_exp = _gl_balance(db, "6", d1, d2, "debit")
 
-        food_cost_pct = round((cogs / revenue * 100), 2) if revenue > 0 else 0
+        food_cost_pct = _pct(cogs, revenue) if revenue > 0 else Decimal("0")
         gross_profit = revenue - cogs
-        gross_margin = round((gross_profit / revenue * 100), 2) if revenue > 0 else 0
+        gross_margin = _pct(gross_profit, revenue) if revenue > 0 else Decimal("0")
         net_profit = gross_profit - operating_exp
 
         # Top 10 most-sold items
@@ -130,7 +139,7 @@ async def food_cost_report(
             row = dict(r._mapping)
             cost = Decimal(str(row.get("total_cost") or 0))
             rev  = Decimal(str(row.get("total_revenue") or 0))
-            row["cost_pct"] = round((cost / rev * 100), 2) if rev > 0 else 0
+            row["cost_pct"] = _pct(cost, rev) if rev > 0 else Decimal("0")
             items.append(row)
 
         return {
@@ -181,16 +190,16 @@ async def production_cost_report(
             ORDER BY po.created_at DESC
         """), {"d1": d1, "d2": d2}).fetchall()
 
-        total_planned = 0
-        total_produced = 0
-        total_scrapped = 0
-        total_planned_cost = 0
+        total_planned = Decimal("0")
+        total_produced = Decimal("0")
+        total_scrapped = Decimal("0")
+        total_planned_cost = Decimal("0")
         order_list = []
         for r in orders:
             row = dict(r._mapping)
-            total_planned += float(row.get("planned_qty") or 0)
-            total_produced += float(row.get("produced_quantity") or 0)
-            total_scrapped += float(row.get("scrapped_quantity") or 0)
+            total_planned += Decimal(str(row.get("planned_qty") or 0))
+            total_produced += Decimal(str(row.get("produced_quantity") or 0))
+            total_scrapped += Decimal(str(row.get("scrapped_quantity") or 0))
             total_planned_cost += Decimal(str(row.get("planned_cost") or 0))
             order_list.append(row)
 
@@ -199,10 +208,10 @@ async def production_cost_report(
         # مصاريف التصنيع غير المباشرة (حسابات 520xx)
         overhead_cost = _gl_balance(db, "520", d1, d2, "debit")
 
-        efficiency = round((total_produced / total_planned * 100), 2) if total_planned > 0 else 0
-        scrap_rate = round((total_scrapped / (total_produced + total_scrapped) * 100), 2) if (total_produced + total_scrapped) > 0 else 0
+        efficiency = _pct(total_produced, total_planned) if total_planned > 0 else Decimal("0")
+        scrap_rate = _pct(total_scrapped, total_produced + total_scrapped) if (total_produced + total_scrapped) > 0 else Decimal("0")
         variance = actual_material_cost - total_planned_cost
-        variance_pct = round((variance / total_planned_cost * 100), 2) if total_planned_cost > 0 else 0
+        variance_pct = _pct(variance, total_planned_cost) if total_planned_cost > 0 else Decimal("0")
 
         return {
             "report_type": "production-cost",
@@ -269,12 +278,12 @@ async def progress_billing_report(
             cost = Decimal(str(row.get("total_expenses") or 0)) or Decimal(str(row.get("actual_cost") or 0))
             # Use actual_cost as billed amount (represents invoiced work in progress billing)
             invoiced = Decimal(str(row.get("actual_cost") or 0))
-            progress = float(row.get("progress_percentage") or 0)
+            progress = Decimal(str(row.get("progress_percentage") or 0))
 
             row["profit"] = invoiced - cost
-            row["profit_margin_pct"] = round((row["profit"] / invoiced * 100), 2) if invoiced > 0 else 0
-            row["billing_pct"] = round((invoiced / budget * 100), 2) if budget > 0 else 0
-            row["cost_pct"] = round((cost / budget * 100), 2) if budget > 0 else 0
+            row["profit_margin_pct"] = _pct(row["profit"], invoiced) if invoiced > 0 else Decimal("0")
+            row["billing_pct"] = _pct(invoiced, budget) if budget > 0 else Decimal("0")
+            row["cost_pct"] = _pct(cost, budget) if budget > 0 else Decimal("0")
 
             total_budget += budget
             total_invoiced += invoiced
@@ -291,7 +300,7 @@ async def progress_billing_report(
                 "total_invoiced": total_invoiced,
                 "total_cost": total_cost,
                 "overall_profit": total_invoiced - total_cost,
-                "overall_billing_pct": round((total_invoiced / total_budget * 100), 2) if total_budget > 0 else 0,
+                "overall_billing_pct": _pct(total_invoiced, total_budget) if total_budget > 0 else Decimal("0"),
             },
             "projects": project_list,
         }
@@ -342,9 +351,9 @@ async def drug_expiry_report(
         for r in batches:
             row = dict(r._mapping)
             exp_date = row.get("expiry_date")
-            qty = float(row.get("available_quantity") or 0)
+            qty = Decimal(str(row.get("available_quantity") or 0))
             cost = Decimal(str(row.get("unit_cost") or 0))
-            row["value_at_risk"] = round(qty * cost, 2)
+            row["value_at_risk"] = _q(qty * cost)
             total_value_at_risk += row["value_at_risk"]
 
             if exp_date:
@@ -375,7 +384,7 @@ async def drug_expiry_report(
                 "expiring_30_days": len(expiring_30),
                 "expiring_60_days": len(expiring_60),
                 "expiring_90_days": len(expiring_90),
-                "total_value_at_risk": round(total_value_at_risk, 2),
+                "total_value_at_risk": _q(total_value_at_risk),
             },
             "items": all_items[:50],
         }
@@ -422,7 +431,7 @@ async def fleet_tracking_report(
             row = dict(r._mapping)
             completed = int(row.get("completed") or 0)
             total = int(row.get("total_deliveries") or 0)
-            row["completion_rate"] = round((completed / total * 100), 2) if total > 0 else 0
+            row["completion_rate"] = _pct(completed, total) if total > 0 else Decimal("0")
             total_deliveries += total
             total_completed += completed
             vehicle_list.append(row)
@@ -441,7 +450,7 @@ async def fleet_tracking_report(
         """), {"d1": d1, "d2": d2}).fetchone()
 
         summary = dict(overall._mapping) if overall else {}
-        summary["on_time_rate"] = round((total_completed / total_deliveries * 100), 2) if total_deliveries > 0 else 0
+        summary["on_time_rate"] = _pct(total_completed, total_deliveries) if total_deliveries > 0 else Decimal("0")
 
         return {
             "report_type": "fleet-tracking",
@@ -492,17 +501,17 @@ async def utilization_report(
         total_planned = 0
         for r in tasks:
             row = dict(r._mapping)
-            billable = float(row.get("billable_hours") or 0)
+            billable = Decimal(str(row.get("billable_hours") or 0))
             row["available_hours"] = available_hours_per_person
-            row["utilization_pct"] = round((billable / available_hours_per_person * 100), 2) if available_hours_per_person > 0 else 0
+            row["utilization_pct"] = _pct(billable, available_hours_per_person) if available_hours_per_person > 0 else Decimal("0")
             total_billable += billable
-            total_planned += float(row.get("planned_hours") or 0)
+            total_planned += Decimal(str(row.get("planned_hours") or 0))
             employee_list.append(row)
 
         # إيراد الخدمات
         svc_revenue = _gl_balance(db, "410", d1, d2, "credit")
         svc_expenses = _gl_balance(db, "6", d1, d2, "debit")
-        effective_rate = round(svc_revenue / total_billable, 2) if total_billable > 0 else 0
+        effective_rate = _q(svc_revenue / total_billable) if total_billable > 0 else Decimal("0")
 
         return {
             "report_type": "utilization",
@@ -511,7 +520,7 @@ async def utilization_report(
                 "total_employees": len(employee_list),
                 "total_billable_hours": total_billable,
                 "total_planned_hours": total_planned,
-                "avg_utilization_pct": round((total_billable / (available_hours_per_person * max(len(employee_list), 1)) * 100), 2) if employee_list else 0,
+                "avg_utilization_pct": _pct(total_billable, available_hours_per_person * max(len(employee_list), 1)) if employee_list else Decimal("0"),
                 "service_revenue": svc_revenue,
                 "effective_hourly_rate": effective_rate,
                 "operating_expenses": svc_expenses,
@@ -566,7 +575,7 @@ async def workshop_revenue_report(
             rev = Decimal(str(row.get("total_revenue") or 0))
             cost = Decimal(str(row.get("total_cost") or 0))
             row["margin"] = rev - cost
-            row["margin_pct"] = round(((rev - cost) / rev * 100), 2) if rev > 0 else 0
+            row["margin_pct"] = _pct(rev - cost, rev) if rev > 0 else Decimal("0")
             total_revenue += rev
             total_cost += cost
             total_jobs += int(row.get("job_count") or 0)
@@ -584,10 +593,10 @@ async def workshop_revenue_report(
                 "total_revenue": total_revenue,
                 "total_cost": total_cost,
                 "gross_profit": total_revenue - total_cost,
-                "gross_margin_pct": round(((total_revenue - total_cost) / total_revenue * 100), 2) if total_revenue > 0 else 0,
+                "gross_margin_pct": _pct(total_revenue - total_cost, total_revenue) if total_revenue > 0 else Decimal("0"),
                 "parts_items": parts_count,
                 "service_items": services_count,
-                "avg_job_value": round(total_revenue / total_jobs, 2) if total_jobs > 0 else 0,
+                "avg_job_value": _q(total_revenue / total_jobs) if total_jobs > 0 else Decimal("0"),
             },
             "services": service_list[:20],
         }
@@ -629,10 +638,10 @@ async def ecom_returns_report(
               AND status != 'cancelled'
         """), {"d1": d1, "d2": d2}).fetchone()
         return_count = int(returns.return_count) if returns else 0
-        return_total = Decimal(str(returns.return_total)) if returns else 0
+        return_total = Decimal(str(returns.return_total or 0)) if returns else Decimal("0")
 
-        return_rate = round((return_count / sale_count * 100), 2) if sale_count > 0 else 0
-        value_return_rate = round((return_total / sale_total * 100), 2) if sale_total > 0 else 0
+        return_rate = _pct(return_count, sale_count) if sale_count > 0 else Decimal("0")
+        value_return_rate = _pct(return_total, sale_total) if sale_total > 0 else Decimal("0")
 
         # أكثر المنتجات مرتجعاً
         top_returns = db.execute(text("""
@@ -706,14 +715,14 @@ async def agent_performance_report(
             row = dict(r._mapping)
             sales = Decimal(str(row.get("total_sales") or 0))
             collected = Decimal(str(row.get("total_collected") or 0))
-            row["collection_rate_pct"] = round((collected / sales * 100), 2) if sales > 0 else 0
-            row["avg_invoice_value"] = round(sales / max(int(row.get("invoice_count") or 1), 1), 2)
+            row["collection_rate_pct"] = _pct(collected, sales) if sales > 0 else Decimal("0")
+            row["avg_invoice_value"] = _q(sales / max(int(row.get("invoice_count") or 1), 1))
             grand_total += sales
             agent_list.append(row)
 
         # حساب النسبة من الإجمالي
         for agent in agent_list:
-            agent["share_pct"] = round((Decimal(str(agent.get("total_sales") or 0)) / grand_total * 100), 2) if grand_total > 0 else 0
+            agent["share_pct"] = _pct(agent.get("total_sales") or 0, grand_total) if grand_total > 0 else Decimal("0")
 
         # أكبر العملاء
         top_customers = db.execute(text("""
@@ -736,7 +745,7 @@ async def agent_performance_report(
             "summary": {
                 "total_agents": len(agent_list),
                 "grand_total_sales": grand_total,
-                "avg_sales_per_agent": round(grand_total / max(len(agent_list), 1), 2),
+                "avg_sales_per_agent": _q(grand_total / max(len(agent_list), 1)),
             },
             "agents": agent_list,
             "top_customers": [dict(r._mapping) for r in top_customers],
@@ -785,7 +794,7 @@ async def crop_yield_report(
             rev = Decimal(str(row.get("total_revenue") or 0))
             cost = Decimal(str(row.get("total_cost") or 0))
             row["profit"] = rev - cost
-            row["margin_pct"] = round(((rev - cost) / rev * 100), 2) if rev > 0 else 0
+            row["margin_pct"] = _pct(rev - cost, rev) if rev > 0 else Decimal("0")
             total_revenue += rev
             total_cost += cost
             crop_list.append(row)
@@ -803,7 +812,7 @@ async def crop_yield_report(
                 "total_revenue": total_revenue,
                 "total_direct_cost": total_cost,
                 "gross_profit": total_revenue - total_cost,
-                "gross_margin_pct": round(((total_revenue - total_cost) / total_revenue * 100), 2) if total_revenue > 0 else 0,
+                "gross_margin_pct": _pct(total_revenue - total_cost, total_revenue) if total_revenue > 0 else Decimal("0"),
                 "total_operating_expenses": agri_expenses,
                 "total_input_costs": input_costs,
                 "net_farm_income": total_revenue - input_costs - agri_expenses,

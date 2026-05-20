@@ -16,25 +16,38 @@ logger = logging.getLogger(__name__)
 # Or: pending → processing → failed → dead_letter (after max_attempts)
 
 
-def enqueue(db: Any, invoice_id: int, tenant_id: int, idempotency_key: str | None = None) -> int | None:
+def enqueue(db: Any, invoice_id: int, tenant_id: int | str | None = None, idempotency_key: str | None = None) -> int | None:
     """Insert a row into zatca_outbox for the given invoice.
 
     Uses ON CONFLICT DO NOTHING for idempotency.
     Returns the outbox row id, or None if already enqueued.
     """
+    try:
+        tenant_id_value = int(tenant_id) if tenant_id is not None else None
+    except (TypeError, ValueError):
+        tenant_id_value = None
+
     result = db.execute(
         text("""
             INSERT INTO zatca_outbox (
                 tenant_id, invoice_id, state, attempts, max_attempts,
-                next_attempt_at, created_at, updated_at
+                next_attempt_at, idempotency_key, created_at, updated_at
             ) VALUES (
-                :tid, :invoice_id, 'pending', 0, 5,
-                clock_timestamp(), clock_timestamp(), clock_timestamp()
+                COALESCE(
+                    :tid,
+                    CASE
+                        WHEN current_database() ~ '^aman_[0-9]+$'
+                        THEN regexp_replace(current_database(), '^aman_', '')::BIGINT
+                        ELSE 0
+                    END
+                ),
+                :invoice_id, 'pending', 0, 5,
+                clock_timestamp(), :idempotency_key, clock_timestamp(), clock_timestamp()
             )
             ON CONFLICT (tenant_id, invoice_id) DO NOTHING
             RETURNING id
         """),
-        {"tid": tenant_id, "invoice_id": invoice_id},
+        {"tid": tenant_id_value, "invoice_id": invoice_id, "idempotency_key": idempotency_key},
     )
     row = result.fetchone()
     return row.id if row else None
@@ -81,7 +94,7 @@ def _process_one(db: Any, row: dict) -> None:
     # Mark processing
     db.execute(
         text("""
-            UPDATE zatca_outbox SET state = 'processing', updated_at = clock_timestamp()
+            UPDATE zatca_outbox SET state = 'submitting', updated_at = clock_timestamp()
             WHERE id = :id
         """),
         {"id": outbox_id},

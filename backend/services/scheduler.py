@@ -895,6 +895,25 @@ def check_zatca_csid_expiry():
             logger.error(f"ZATCA CSID check failed in {db_name}: {e}")
 
 
+def process_zatca_outbox_all_tenants():
+    """Flush pending zatca_outbox rows for every tenant database."""
+    from database import _get_all_company_db_names
+    from services.einvoicing.outbox import process_batch
+
+    for db_name in _get_all_company_db_names():
+        try:
+            eng = _get_company_engine_for_db(db_name)
+            with eng.begin() as conn:
+                exists = conn.execute(text("SELECT to_regclass('public.zatca_outbox')")).scalar()
+                if not exists:
+                    continue
+                processed = process_batch(conn)
+                if processed:
+                    logger.info("[%s] zatca_outbox processed=%s", db_name, processed)
+        except Exception as e:
+            logger.error("zatca_outbox worker failed for %s: %s", db_name, e)
+
+
 # ── T4.6 — Auto-activate cheques on due date ─────────────────────────────────
 def activate_due_cheques():
     """Mark pending cheques as 'due' when their due_date has arrived, then notify."""
@@ -969,47 +988,38 @@ def run_due_recurring_templates():
                         if tmpl.description:
                             entry_desc += f" / {tmpl.description}"
 
-                        entry_num_row = conn.execute(text(
-                            "SELECT COALESCE(MAX(CAST(SPLIT_PART(entry_number, '-', 2) AS INTEGER)), 0) + 1 "
-                            "FROM journal_entries"
-                        )).fetchone()
-                        seq = entry_num_row[0] if entry_num_row else 1
-                        entry_number = f"JE-{seq:06d}"
-
-                        entry_id_row = conn.execute(text("""
-                            INSERT INTO journal_entries
-                                (entry_number, entry_date, description, status,
-                                 currency, exchange_rate, branch_id,
-                                 source, created_at)
-                            VALUES (:num, :dt, :desc, :status,
-                                    :curr, :rate, :branch,
-                                    'recurring_template', CURRENT_TIMESTAMP)
-                            RETURNING id
-                        """), {
-                            "num": entry_number,
-                            "dt": today,
-                            "desc": entry_desc,
-                            "status": entry_status,
-                            "curr": tmpl.currency,
-                            "rate": tmpl.exchange_rate or 1,
-                            "branch": tmpl.branch_id,
-                        }).fetchone()
-                        entry_id = entry_id_row[0]
-
-                        for ln in lines:
-                            conn.execute(text("""
-                                INSERT INTO journal_lines
-                                    (journal_entry_id, account_id, debit, credit,
-                                     description, cost_center_id)
-                                VALUES (:je, :acc, :dr, :cr, :desc, :cc)
-                            """), {
-                                "je": entry_id,
-                                "acc": ln.account_id,
-                                "dr": ln.debit,
-                                "cr": ln.credit,
-                                "desc": ln.description,
-                                "cc": ln.cost_center_id,
-                            })
+                        # Audit F-NEW-017 / F-NEW-018: route through the
+                        # central GL writer so the entry passes through
+                        # fiscal-lock, idempotency, and balance-rebuild
+                        # logic. The previous raw INSERTs into
+                        # journal_entries / journal_lines bypassed all of
+                        # that (Req 8.7e — writer monopoly invariant).
+                        from services import gl_service as _gl
+                        gl_lines = [
+                            {
+                                "account_id": ln.account_id,
+                                "debit": ln.debit,
+                                "credit": ln.credit,
+                                "description": ln.description,
+                                "cost_center_id": ln.cost_center_id,
+                            }
+                            for ln in lines
+                        ]
+                        entry_id, entry_number = _gl.create_journal_entry(
+                            db=conn,
+                            company_id=db_name,
+                            date=today.isoformat(),
+                            description=entry_desc,
+                            lines=gl_lines,
+                            user_id=0,  # scheduler — system user
+                            branch_id=tmpl.branch_id,
+                            currency=tmpl.currency,
+                            exchange_rate=tmpl.exchange_rate or 1,
+                            status=entry_status,
+                            source="recurring_template",
+                            source_id=tmpl.id,
+                            username="scheduler",
+                        )
 
                         # Advance next_run_date
                         freq = tmpl.frequency or "monthly"
@@ -2266,8 +2276,14 @@ def extract_attachment_content():
 
 
 def start_scheduler():
-    # Helper: register with execution tracking wrapper
+    # Helper: register with execution tracking wrapper.
+    # R8-03: cron jobs default to misfire_grace_time=3600 (1 hour) so that
+    # monthly/yearly jobs are not silently skipped if the host is briefly
+    # busy at the scheduled time. Interval jobs keep the global default (120s)
+    # unless overridden at the call site.
     def _add(fn, trigger, job_id, **kw):
+        if trigger == "cron" and "misfire_grace_time" not in kw:
+            kw.setdefault("misfire_grace_time", 3600)
         scheduler.add_job(
             _wrap_job(fn, job_id), trigger, id=job_id,
             replace_existing=True, **kw,
@@ -2285,6 +2301,7 @@ def start_scheduler():
     _add(retry_failed_notifications,          'interval', 'notification_retry',      minutes=1)
     _add(auto_fx_revaluation,                 'cron',     'fx_monthly_reval',        day=1, hour=2, misfire_grace_time=1800)
     _add(check_zatca_csid_expiry,             'interval', 'zatca_csid_expiry',       hours=12)
+    _add(process_zatca_outbox_all_tenants,    'interval', 'zatca_outbox_flush',      seconds=5)
     # T4.6 — auto-activate due cheques
     _add(activate_due_cheques,                'cron',     'activate_due_cheques',    hour=6, minute=0)
     # T4.7 — recurring journal templates

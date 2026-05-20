@@ -10,12 +10,14 @@ from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
 import logging
 import json
+from datetime import date
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.fiscal_lock import check_fiscal_period_open
 
 router = APIRouter(prefix="/workflow", tags=["Advanced Workflow"])
 logger = logging.getLogger(__name__)
@@ -159,6 +161,10 @@ def auto_approve_below_threshold(request: Request, current_user=Depends(get_curr
     """الموافقة التلقائية على الطلبات تحت الحد الأدنى"""
     db = get_db_connection(current_user.company_id)
     try:
+        # Audit F-NEW-012: bulk approval is a dated mutation; reject if
+        # today's period is locked. Canonical guard (C-ARCH-002).
+        check_fiscal_period_open(db, date.today(), request=request)
+
         auto_approved = db.execute(text("""
             UPDATE approval_requests ar
             SET status = 'approved', action_date = NOW(),

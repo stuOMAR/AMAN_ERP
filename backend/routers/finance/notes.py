@@ -1,7 +1,7 @@
 """أوراق القبض والدفع - Notes Receivable & Payable"""
 from decimal import Decimal, ROUND_HALF_UP
 from fastapi import Request, APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, timedelta
@@ -16,6 +16,7 @@ from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from utils.treasury_gl import ensure_treasury_gl_accounts
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.idempotency import find_je_by_idempotency_key, find_je_by_source
 import logging
 logger = logging.getLogger(__name__)
 
@@ -34,9 +35,12 @@ class NoteReceivableCreate(BaseModel):
     note_number: str
     drawer_name: Optional[str] = None
     bank_name: Optional[str] = None
-    amount: float
+    # F-NEW-125 (R-FLOAT-ON-WIRE, Req 8.8): both ``amount`` and
+    # ``exchange_rate`` are monetary axes that must preserve fiscal
+    # precision through the JSON boundary.
+    amount: Decimal
     currency: Optional[str] = None
-    exchange_rate: Optional[float] = 1.0
+    exchange_rate: Optional[Decimal] = Decimal("1")
     issue_date: Optional[str] = None
     due_date: str
     maturity_date: Optional[str] = None
@@ -45,15 +49,19 @@ class NoteReceivableCreate(BaseModel):
     treasury_account_id: Optional[int] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
+
+    model_config = {"json_encoders": {Decimal: str}}
 
 
 class NotePayableCreate(BaseModel):
     note_number: str
     beneficiary_name: Optional[str] = None
     bank_name: Optional[str] = None
-    amount: float
+    # F-NEW-127 (R-FLOAT-ON-WIRE, Req 8.8): same Decimal-on-wire fix as
+    # NoteReceivableCreate above.
+    amount: Decimal
     currency: Optional[str] = None
-    exchange_rate: Optional[float] = 1.0
+    exchange_rate: Optional[Decimal] = Decimal("1")
     issue_date: Optional[str] = None
     due_date: str
     maturity_date: Optional[str] = None
@@ -62,6 +70,8 @@ class NotePayableCreate(BaseModel):
     treasury_account_id: Optional[int] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
+
+    model_config = {"json_encoders": {Decimal: str}}
 
 
 # ─── Helper: ensure GL accounts ───
@@ -133,10 +143,10 @@ def receivable_stats(branch_id: Optional[int] = None, current_user: dict = Depen
         overdue = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='pending' AND due_date < :today"), {**params, "today": today}).fetchone()
         
         return {
-            "pending": {"count": pending[0], "total": float(_dec(pending[1]).quantize(_D2, ROUND_HALF_UP))},
-            "collected": {"count": collected[0], "total": float(_dec(collected[1]).quantize(_D2, ROUND_HALF_UP))},
-            "protested": {"count": protested[0], "total": float(_dec(protested[1]).quantize(_D2, ROUND_HALF_UP))},
-            "overdue": {"count": overdue[0], "total": float(_dec(overdue[1]).quantize(_D2, ROUND_HALF_UP))},
+            "pending": {"count": pending[0], "total": str(_dec(pending[1]).quantize(_D2, ROUND_HALF_UP))},
+            "collected": {"count": collected[0], "total": str(_dec(collected[1]).quantize(_D2, ROUND_HALF_UP))},
+            "protested": {"count": protested[0], "total": str(_dec(protested[1]).quantize(_D2, ROUND_HALF_UP))},
+            "overdue": {"count": overdue[0], "total": str(_dec(overdue[1]).quantize(_D2, ROUND_HALF_UP))},
         }
 
 
@@ -169,7 +179,14 @@ def create_note_receivable(request: Request, data: NoteReceivableCreate, current
             if data.treasury_account_id:
                 validate_treasury_account_access(db, current_user, data.treasury_account_id, branch_id)
 
-            ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
+            # PR19-fix: forward commit=False so this helper does not
+            # auto-commit in the middle of the surrounding transaction.
+            # Auto-commit would land the GL-account skeleton even if the
+            # rest of the note creation fails, leaving partial state.
+            ensure_treasury_gl_accounts(
+                db, user_id=current_user.id,
+                username=current_user.username, commit=False,
+            )
             
             nr_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '1210'")).fetchone()
             ar_account = db.execute(text(
@@ -184,7 +201,7 @@ def create_note_receivable(request: Request, data: NoteReceivableCreate, current
             check_fiscal_period_open(db, data.issue_date or date.today().isoformat())
     
             # Build and validate journal lines
-            amt = float(_dec(data.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(data.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": nr_account.id, "debit": amt, "credit": 0, "description": f"ورقة قبض {data.note_number}", "currency": data.currency},
                 {"account_id": ar_account.id, "debit": 0, "credit": amt, "description": f"ورقة قبض {data.note_number}", "currency": data.currency},
@@ -217,7 +234,7 @@ def create_note_receivable(request: Request, data: NoteReceivableCreate, current
                 "issue": data.issue_date, "due": data.due_date, "mat": data.maturity_date or data.due_date,
                 "pid": data.party_id, "tid": data.treasury_account_id,
                 "je": je_id, "notes": data.notes, "bid": branch_id, "uid": current_user.id,
-                "exchange_rate": float(_dec(data.exchange_rate or 1)),
+                "exchange_rate": _dec(data.exchange_rate or 1),
                 "party_site_id": data.party_site_id,
             }).scalar()
     
@@ -247,6 +264,25 @@ def collect_note_receivable(request: Request, note_id: int, data: dict = None,
         treasury_account_id = int(treasury_account_id)
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard so retries echo a 200 instead of
+            # 400 note_not_in_pending_status.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="note_collection", source_id=note_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("note_collected_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             note = db.execute(text("SELECT * FROM notes_receivable WHERE id = :id FOR UPDATE"), {"id": note_id}).fetchone()
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
@@ -268,7 +304,7 @@ def collect_note_receivable(request: Request, note_id: int, data: dict = None,
             check_fiscal_period_open(db, coll_date)
     
             # Build and validate journal lines
-            amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(note.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": treasury["gl_account_id"], "debit": amt, "credit": 0, "description": f"تحصيل ورقة {note.note_number}", "currency": note.currency},
                 {"account_id": nr_account.id, "debit": 0, "credit": amt, "description": f"تحصيل ورقة {note.note_number}", "currency": note.currency},
@@ -283,7 +319,8 @@ def collect_note_receivable(request: Request, note_id: int, data: dict = None,
                 user_id=current_user.id,
                 branch_id=note.branch_id,
                 source="note_collection",
-                source_id=note_id
+                source_id=note_id,
+                idempotency_key=idempotency_key,
             )
     
             # Update treasury balance — T1.3a idempotent recompute
@@ -321,6 +358,24 @@ def protest_note_receivable(request: Request, note_id: int, data: dict = None,
     reason = data.get("reason")
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="note_protest", source_id=note_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("note_protest_recorded", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             note = db.execute(text("SELECT * FROM notes_receivable WHERE id = :id FOR UPDATE"), {"id": note_id}).fetchone()
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
@@ -342,7 +397,7 @@ def protest_note_receivable(request: Request, note_id: int, data: dict = None,
             check_fiscal_period_open(db, pdate)
     
             # Build and validate journal lines
-            amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(note.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": ar_account.id, "debit": amt, "credit": 0, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
                 {"account_id": nr_account.id, "debit": 0, "credit": amt, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
@@ -357,7 +412,8 @@ def protest_note_receivable(request: Request, note_id: int, data: dict = None,
                 user_id=current_user.id,
                 branch_id=note.branch_id,
                 source="note_protest",
-                source_id=note_id
+                source_id=note_id,
+                idempotency_key=idempotency_key,
             )
     
             db.execute(text("""
@@ -425,10 +481,10 @@ def payable_stats(branch_id: Optional[int] = None, current_user: dict = Depends(
         overdue = db.execute(text(f"SELECT COUNT(*), COALESCE(SUM(amount),0) {base} AND status='issued' AND due_date < :today"), {**params, "today": today}).fetchone()
 
         return {
-            "issued": {"count": issued[0], "total": float(_dec(issued[1]).quantize(_D2, ROUND_HALF_UP))},
-            "paid": {"count": paid[0], "total": float(_dec(paid[1]).quantize(_D2, ROUND_HALF_UP))},
-            "protested": {"count": protested[0], "total": float(_dec(protested[1]).quantize(_D2, ROUND_HALF_UP))},
-            "overdue": {"count": overdue[0], "total": float(_dec(overdue[1]).quantize(_D2, ROUND_HALF_UP))},
+            "issued": {"count": issued[0], "total": str(_dec(issued[1]).quantize(_D2, ROUND_HALF_UP))},
+            "paid": {"count": paid[0], "total": str(_dec(paid[1]).quantize(_D2, ROUND_HALF_UP))},
+            "protested": {"count": protested[0], "total": str(_dec(protested[1]).quantize(_D2, ROUND_HALF_UP))},
+            "overdue": {"count": overdue[0], "total": str(_dec(overdue[1]).quantize(_D2, ROUND_HALF_UP))},
         }
 
 
@@ -461,7 +517,11 @@ def create_note_payable(request: Request, data: NotePayableCreate, current_user:
             if data.treasury_account_id:
                 validate_treasury_account_access(db, current_user, data.treasury_account_id, branch_id)
 
-            ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
+            # PR19-fix: see create_note_receivable for rationale.
+            ensure_treasury_gl_accounts(
+                db, user_id=current_user.id,
+                username=current_user.username, commit=False,
+            )
     
             np_account = db.execute(text("SELECT id FROM accounts WHERE account_code = '2110'")).fetchone()
             ap_account = db.execute(text(
@@ -475,7 +535,7 @@ def create_note_payable(request: Request, data: NotePayableCreate, current_user:
             check_fiscal_period_open(db, data.issue_date or date.today().isoformat())
     
             # Build and validate journal lines
-            amt = float(_dec(data.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(data.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": ap_account.id, "debit": amt, "credit": 0, "description": f"ورقة دفع {data.note_number}", "currency": data.currency},
                 {"account_id": np_account.id, "debit": 0, "credit": amt, "description": f"ورقة دفع {data.note_number}", "currency": data.currency},
@@ -508,7 +568,7 @@ def create_note_payable(request: Request, data: NotePayableCreate, current_user:
                 "issue": data.issue_date, "due": data.due_date, "mat": data.maturity_date or data.due_date,
                 "pid": data.party_id, "tid": data.treasury_account_id,
                 "je": je_id, "notes": data.notes, "bid": branch_id, "uid": current_user.id,
-                "exchange_rate": float(_dec(data.exchange_rate or 1)),
+                "exchange_rate": _dec(data.exchange_rate or 1),
                 "party_site_id": data.party_site_id,
             }).scalar()
     
@@ -538,6 +598,24 @@ def pay_note_payable(request: Request, note_id: int, data: dict = None,
         treasury_account_id = int(treasury_account_id)
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="note_payment", source_id=note_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("note_paid_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             note = db.execute(text("SELECT * FROM notes_payable WHERE id = :id FOR UPDATE"), {"id": note_id}).fetchone()
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
@@ -559,7 +637,7 @@ def pay_note_payable(request: Request, note_id: int, data: dict = None,
             check_fiscal_period_open(db, pay_date)
     
             # Build and validate journal lines
-            amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(note.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": np_account.id, "debit": amt, "credit": 0, "description": f"سداد ورقة {note.note_number}", "currency": note.currency},
                 {"account_id": treasury["gl_account_id"], "debit": 0, "credit": amt, "description": f"سداد ورقة {note.note_number}", "currency": note.currency},
@@ -574,7 +652,8 @@ def pay_note_payable(request: Request, note_id: int, data: dict = None,
                 user_id=current_user.id,
                 branch_id=note.branch_id,
                 source="note_payment",
-                source_id=note_id
+                source_id=note_id,
+                idempotency_key=idempotency_key,
             )
     
             # Update treasury balance — T1.3a idempotent recompute
@@ -612,6 +691,26 @@ def protest_note_payable(request: Request, note_id: int, data: dict = None,
     reason = data.get("reason")
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard. The protest source key collides with
+            # notes_receivable's protest path, so we anchor on
+            # ``np-protest`` to keep the natural-key lookup unambiguous.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="np_protest", source_id=note_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("note_protest_recorded", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             note = db.execute(text("SELECT * FROM notes_payable WHERE id = :id FOR UPDATE"), {"id": note_id}).fetchone()
             if not note:
                 raise HTTPException(**http_error(404, "sheet_not_found"))
@@ -633,7 +732,7 @@ def protest_note_payable(request: Request, note_id: int, data: dict = None,
             check_fiscal_period_open(db, pdate)
     
             # Build and validate journal lines
-            amt = float(_dec(note.amount).quantize(_D2, ROUND_HALF_UP))
+            amt = _dec(note.amount).quantize(_D2, ROUND_HALF_UP)
             je_lines = [
                 {"account_id": np_account.id, "debit": amt, "credit": 0, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
                 {"account_id": ap_account.id, "debit": 0, "credit": amt, "description": f"رفض ورقة {note.note_number}", "currency": note.currency},
@@ -647,8 +746,9 @@ def protest_note_payable(request: Request, note_id: int, data: dict = None,
                 lines=je_lines,
                 user_id=current_user.id,
                 branch_id=note.branch_id,
-                source="note_protest",
-                source_id=note_id
+                source="np_protest",
+                source_id=note_id,
+                idempotency_key=idempotency_key,
             )
     
             db.execute(text("""

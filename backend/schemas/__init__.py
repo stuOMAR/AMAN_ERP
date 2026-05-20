@@ -5,6 +5,7 @@ AMAN ERP - Pydantic Schemas
 from pydantic import BaseModel, EmailStr, Field, ConfigDict
 from typing import Optional, Dict, Any, List
 from datetime import datetime, date
+from decimal import Decimal
 
 
 class CompanyCreateRequest(BaseModel):
@@ -122,7 +123,7 @@ class PartyResponse(BaseModel):
     party_type: Optional[str] = None
     phone: Optional[str] = None
     email: Optional[str] = None
-    current_balance: float = 0
+    current_balance: Decimal = Decimal("0")
     is_customer: bool = False
     is_supplier: bool = False
 
@@ -131,9 +132,9 @@ class PartyResponse(BaseModel):
 
 class AccountingEntryLine(BaseModel):
     account_id: int
-    debit: float = 0
-    credit: float = 0
-    amount_currency: float = 0
+    debit: Decimal = Decimal("0")
+    credit: Decimal = Decimal("0")
+    amount_currency: Decimal = Decimal("0")
     currency: Optional[str] = None
     description: Optional[str] = None
     cost_center_id: Optional[int] = None
@@ -233,7 +234,7 @@ class CurrencyCreate(BaseModel):
     name_en: Optional[str] = None
     symbol: Optional[str] = None
     is_base: bool = False
-    current_rate: float = 1.0
+    current_rate: Decimal = Decimal("1.0")
     is_active: bool = True
 
 
@@ -244,13 +245,13 @@ class CurrencyResponse(BaseModel):
     name_en: Optional[str] = None
     symbol: Optional[str] = None
     is_base: bool = False
-    current_rate: float = 1.0
+    current_rate: Decimal = Decimal("1.0")
     is_active: bool = True
 
 
 class ExchangeRateCreate(BaseModel):
     currency_id: int
-    rate: float
+    rate: Decimal
     rate_date: Optional[date] = None
     source: Optional[str] = "manual"
 
@@ -258,7 +259,7 @@ class ExchangeRateCreate(BaseModel):
 class ExchangeRateResponse(BaseModel):
     id: int
     currency_id: int
-    rate: float
+    rate: Decimal
     rate_date: Optional[date] = None
     source: Optional[str] = None
     created_by: Optional[int] = None

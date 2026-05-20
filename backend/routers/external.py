@@ -27,6 +27,7 @@ from utils.accounting import get_base_currency, get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.tax_precision import CALCULATION_VERSION, money_str, rate_str, require_idempotency_key
 from utils.sql_builder import validate_update_keys
+from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.zatca import (
     verify_invoice_signature,
     generate_rsa_keypair, process_invoice_for_zatca
@@ -504,6 +505,8 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
                 request,
                 operation="WHT transaction",
             )
+            if not data.payment_id:
+                raise HTTPException(**http_error(400, "wht_payment_required", request))
             existing_by_key = db.execute(text("""
                 SELECT id, certificate_number
                 FROM wht_transactions
@@ -556,13 +559,15 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
 
             if data.payment_id:
                 payment = db.execute(text("""
-                    SELECT id, party_id, branch_id, party_type, amount
+                    SELECT id, party_id, branch_id, party_type, voucher_type,
+                           amount, voucher_date, currency, exchange_rate,
+                           treasury_account_id, bank_account_id
                     FROM payment_vouchers
                     WHERE id = :id
                 """), {"id": data.payment_id}).fetchone()
                 if not payment:
                     raise HTTPException(**http_error(404, "withholding_payment_not_found", request))
-                if payment.party_type != "supplier":
+                if payment.party_type != "supplier" or payment.voucher_type != "payment":
                     raise HTTPException(**http_error(400, "withholding_only_supplier_payments", request))
                 if int(payment.party_id) != int(data.supplier_id):
                     raise HTTPException(**http_error(400, "invoice_not_from_selected_supplier", request))
@@ -584,6 +589,11 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
             wht_amount = (gross_amount * wht_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
             net_amount = (gross_amount - wht_amount).quantize(_D2, ROUND_HALF_UP)
             base_currency = get_base_currency(db)
+            payment_currency = payment.currency or base_currency
+            payment_rate = _dec(payment.exchange_rate or 1)
+            if payment_rate <= 0:
+                raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
+            period_date = payment.voucher_date
             calc_details = {
                 "version": CALCULATION_VERSION,
                 "gross_amount": money_str(gross_amount),
@@ -593,13 +603,43 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
                 "branch_id": branch_id,
             }
 
-            period_date = datetime.now().date()
             check_fiscal_period_open(db, period_date)
             if wht_amount > Decimal("0"):
                 ap_account_id = get_mapped_account_id(db, "acc_map_ap")
                 withholding_account_id = get_mapped_account_id(db, "acc_map_withholding_tax")
                 if not ap_account_id or not withholding_account_id:
                     raise HTTPException(**http_error(400, "ap_wht_accounts_not_configured", request))
+                cash_line = db.execute(text("""
+                    SELECT jl.account_id, jl.credit, jl.amount_currency, jl.currency
+                    FROM journal_entries je
+                    JOIN journal_lines jl ON jl.journal_entry_id = je.id
+                    WHERE je.source = 'payment_voucher'
+                      AND je.source_id = :payment_id
+                      AND je.entry_date = :period_date
+                      AND jl.credit > 0
+                      AND jl.account_id <> :ap_account_id
+                    ORDER BY jl.credit DESC, jl.id
+                    LIMIT 1
+                """), {
+                    "payment_id": data.payment_id,
+                    "period_date": period_date,
+                    "ap_account_id": ap_account_id,
+                }).fetchone()
+                if not cash_line:
+                    cash_line = db.execute(text("""
+                        SELECT ta.gl_account_id AS account_id,
+                               0::numeric AS credit,
+                               0::numeric AS amount_currency,
+                               COALESCE(ta.currency, :payment_currency) AS currency
+                        FROM treasury_accounts ta
+                        WHERE ta.id = COALESCE(:treasury_id, :bank_id)
+                    """), {
+                        "treasury_id": payment.treasury_account_id,
+                        "bank_id": payment.bank_account_id,
+                        "payment_currency": payment_currency,
+                    }).fetchone()
+                if not cash_line or not cash_line.account_id:
+                    raise HTTPException(**http_error(400, "cash_account_not_configured", request))
 
             # Generate certificate number
             cert_num = f"WHT-{datetime.now().year}-{datetime.now().strftime('%m%d%H%M%S')}"
@@ -634,45 +674,63 @@ def create_wht_transaction(request: Request, data: WHTTransactionCreate, current
             journal_entry_id = None
             journal_entry_number = None
             if wht_amount > Decimal("0"):
-                from services.gl_service import create_journal_entry
+                wht_base = (wht_amount * payment_rate).quantize(_D2, ROUND_HALF_UP)
+                cash_credit_base = _dec(getattr(cash_line, "credit", 0))
+                cash_amount_currency = _dec(getattr(cash_line, "amount_currency", 0))
+                cash_currency = getattr(cash_line, "currency", None) or payment_currency
+                if cash_credit_base > 0 and cash_amount_currency > 0:
+                    cash_debit_amount = (cash_amount_currency * wht_base / cash_credit_base).quantize(_D2, ROUND_HALF_UP)
+                    cash_exchange_rate = (wht_base / cash_debit_amount).quantize(Decimal("0.000001"), ROUND_HALF_UP)
+                else:
+                    cash_debit_amount = wht_amount
+                    cash_exchange_rate = payment_rate
 
-                journal_entry_id, journal_entry_number = create_journal_entry(
+                journal_entry_id, journal_entry_number = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
-                    date=period_date,
-                    description=f"إثبات ضريبة استقطاع — {cert_num}",
+                    date=str(period_date),
+                    description=f"WHT payable reclassification for supplier payment {data.payment_id}",
+                    reference=cert_num,
                     lines=[
                         {
-                            "account_id": ap_account_id,
-                            "debit": wht_amount,
-                            "credit": Decimal("0"),
-                            "description": f"تخفيض ذمة المورد مقابل ضريبة استقطاع {cert_num}",
+                            "account_id": cash_line.account_id,
+                            "debit": cash_debit_amount,
+                            "credit": 0,
+                            "description": "Reverse withheld cash from supplier payment",
+                            "currency": cash_currency,
+                            "amount_currency": cash_debit_amount,
+                            "exchange_rate": cash_exchange_rate,
                         },
                         {
                             "account_id": withholding_account_id,
-                            "debit": Decimal("0"),
-                            "credit": wht_amount,
-                            "description": f"ضريبة استقطاع مستحقة {cert_num}",
+                            "debit": 0,
+                            "credit": wht_base,
+                            "description": "Withholding tax payable",
+                            "currency": base_currency,
+                            "amount_currency": wht_base,
+                            "exchange_rate": Decimal("1"),
                         },
                     ],
                     user_id=current_user.id,
                     branch_id=branch_id,
-                    reference=cert_num,
                     currency=base_currency,
                     exchange_rate=Decimal("1"),
-                    source="wht_transaction",
+                    source="payment_voucher_wht",
                     source_id=tid,
-                    idempotency_key=f"wht-tx-je:{idempotency_key}",
+                    idempotency_key=f"{idempotency_key}:gl",
                 )
-                db.execute(
-                    text("UPDATE wht_transactions SET journal_entry_id = :jeid, updated_at = NOW() WHERE id = :id"),
-                    {"jeid": journal_entry_id, "id": tid},
-                )
+                db.execute(text("""
+                    UPDATE wht_transactions
+                    SET journal_entry_id = :journal_entry_id,
+                        status = 'posted',
+                        updated_at = NOW()
+                    WHERE id = :id
+                """), {"journal_entry_id": journal_entry_id, "id": tid})
 
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="wht.transaction.create", resource_type="wht_transaction",
                          resource_id=str(tid),
-                         details={**calc_details, "journal_entry": journal_entry_number},
+                         details={**calc_details, "payment_id": data.payment_id, "journal_entry": journal_entry_number},
                          request=request)
 
             return {

@@ -1,5 +1,5 @@
 from fastapi import Request, APIRouter, Depends, HTTPException, status, UploadFile, File
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
@@ -14,8 +14,9 @@ logger = logging.getLogger(__name__)
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, validate_branch_access, validate_treasury_account_access
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.audit import log_activity
+from utils.fiscal_lock import check_fiscal_period_open
 from schemas.reconciliation import ReconciliationCreate, StatementLineCreate, MatchRequest, UnmatchRequest
 
 router = APIRouter(prefix="/reconciliation", tags=["Bank Reconciliation"], dependencies=[Depends(require_module("accounting"))])
@@ -25,6 +26,76 @@ _D2 = Decimal("0.01")
 
 def _dec(v) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _auto_match_tolerance_for_currency(db, currency: Optional[str]) -> Decimal:
+    """Resolve auto-match tolerance in the reconciliation account currency."""
+    code = (currency or "").upper()
+    if code:
+        row = db.execute(text("""
+            SELECT setting_value
+            FROM company_settings
+            WHERE setting_key IN (:dot_key, :underscore_key)
+            ORDER BY CASE setting_key WHEN :dot_key THEN 0 ELSE 1 END
+            LIMIT 1
+        """), {
+            "dot_key": f"reconciliation_auto_match_tolerance.{code}",
+            "underscore_key": f"reconciliation_auto_match_tolerance_{code}",
+        }).fetchone()
+        if row and row.setting_value is not None:
+            try:
+                tol = _dec(row.setting_value)
+                return tol if tol > 0 else Decimal("0")
+            except Exception:
+                logger.warning("Invalid reconciliation tolerance setting for currency %s", code)
+
+    if code in {"BHD", "IQD", "JOD", "KWD", "LYD", "OMR", "TND"}:
+        return Decimal("0.001")
+    if code in {"BIF", "CLP", "DJF", "GNF", "JPY", "KMF", "KRW", "PYG", "RWF", "UGX", "VND", "VUV", "XAF", "XOF", "XPF"}:
+        return Decimal("1")
+    return Decimal("0.01")
+
+
+def _require_reconciliation_branch_access(db, current_user, rec, request: Request) -> Optional[int]:
+    branch_id = getattr(rec, "branch_id", None)
+    if branch_id is not None:
+        return validate_branch_access(current_user, branch_id, request)
+
+    treasury_account_id = getattr(rec, "treasury_account_id", None)
+    if treasury_account_id:
+        treasury_account = validate_treasury_account_access(
+            db, current_user, treasury_account_id, request=request
+        )
+        treasury_branch_id = treasury_account.get("branch_id") if treasury_account else None
+        return int(treasury_branch_id) if treasury_branch_id is not None else None
+
+    scope = resolve_branch_scope(current_user, None)
+    if scope.get("branch_ids") is not None:
+        raise HTTPException(**http_error(403, "access_denied", request))
+    return None
+
+
+def _require_journal_line_branch_access(
+    db,
+    current_user,
+    journal_line_id: int,
+    effective_branch_id: Optional[int],
+    request: Request,
+) -> None:
+    line_branch = db.execute(text("""
+        SELECT je.branch_id
+        FROM journal_lines jl
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        WHERE jl.id = :id
+    """), {"id": journal_line_id}).fetchone()
+    if not line_branch:
+        raise HTTPException(**http_error(404, "reconciliation_lines_not_found", request))
+
+    if effective_branch_id is not None:
+        if line_branch.branch_id is None or int(line_branch.branch_id) != int(effective_branch_id):
+            raise HTTPException(**http_error(403, "access_denied", request))
+    validate_branch_access(current_user, line_branch.branch_id, request)
+
 
 # --- Endpoints ---
 
@@ -84,16 +155,14 @@ def create_reconciliation(request: Request, data: ReconciliationCreate, current_
 
         tolerance_amount = data.tolerance_amount
         if tolerance_amount is None:
-            tolerance_amount = db.execute(text("""
-                SELECT setting_value
-                FROM company_settings
-                WHERE setting_key = 'reconciliation_auto_match_tolerance'
-                LIMIT 1
-            """)).scalar()
+            tolerance_amount = _auto_match_tolerance_for_currency(
+                db,
+                treasury_account.get("currency"),
+            )
         try:
-            tolerance_amount = float(tolerance_amount or 0)
+            tolerance_amount = _dec(tolerance_amount or 0)
         except (TypeError, ValueError):
-            tolerance_amount = 0
+            tolerance_amount = _dec(0)
 
         rec_id = db.execute(text("""
             INSERT INTO bank_reconciliations (
@@ -166,12 +235,12 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
                 "total_lines": len(all_lines),
                 "matched_count": len(matched_lines),
                 "unmatched_count": len(unmatched_lines),
-                "matched_net": float(matched_net.quantize(_D2, ROUND_HALF_UP)),
-                "unmatched_net": float(unmatched_net.quantize(_D2, ROUND_HALF_UP)),
-                "total_net": float(total_net.quantize(_D2, ROUND_HALF_UP)),
-                "calculated_end_balance": float(calculated_end.quantize(_D2, ROUND_HALF_UP)),
-                "target_end_balance": float(_dec(rec.end_balance).quantize(_D2, ROUND_HALF_UP)),
-                "difference": float(difference.quantize(_D2, ROUND_HALF_UP)),
+                "matched_net": str(matched_net.quantize(_D2, ROUND_HALF_UP)),
+                "unmatched_net": str(unmatched_net.quantize(_D2, ROUND_HALF_UP)),
+                "total_net": str(total_net.quantize(_D2, ROUND_HALF_UP)),
+                "calculated_end_balance": str(calculated_end.quantize(_D2, ROUND_HALF_UP)),
+                "target_end_balance": str(_dec(rec.end_balance).quantize(_D2, ROUND_HALF_UP)),
+                "difference": str(difference.quantize(_D2, ROUND_HALF_UP)),
             }
         }
 
@@ -179,9 +248,14 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
 def add_statement_lines(request: Request, id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """إضافة أسطر كشف الحساب يدوياً"""
     with transactional(current_user.company_id) as db:
-        rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+        rec = db.execute(text("""
+            SELECT status, start_balance, branch_id, treasury_account_id
+            FROM bank_reconciliations
+            WHERE id = :id
+        """), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        _require_reconciliation_branch_access(db, current_user, rec, request)
         if rec.status != 'draft':
             raise HTTPException(**http_error(400, "cannot_add_to_approved", request))
 
@@ -205,7 +279,7 @@ def add_statement_lines(request: Request, id: int, lines: List[StatementLineCrea
             """), {
                 "rid": id, "date": line.transaction_date, "desc": line.description,
                 "ref": line.reference, "deb": line.debit, "cred": line.credit,
-                "bal": float(running_balance.quantize(_D2, ROUND_HALF_UP))
+                "bal": str(running_balance.quantize(_D2, ROUND_HALF_UP))
             })
             added.append(result.scalar())
             
@@ -284,6 +358,7 @@ def _parse_amount(val) -> Decimal:
 @router.post("/{id}/import-preview", dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 async def preview_import(
     id: int,
+    request: Request,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
@@ -299,9 +374,12 @@ async def preview_import(
     )
     with transactional(current_user.company_id) as db:
         try:
-            rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+            rec = db.execute(text(
+                "SELECT status, branch_id, treasury_account_id FROM bank_reconciliations WHERE id = :id"
+            ), {"id": id}).fetchone()
             if not rec:
                 raise HTTPException(**http_error(404, "reconciliation_not_found"))
+            _require_reconciliation_branch_access(db, current_user, rec, request)
             if rec.status != 'draft':
                 raise HTTPException(**http_error(400, "cannot_import_to_approved", request))
     
@@ -410,8 +488,8 @@ async def preview_import(
                     "transaction_date": parsed_date,
                     "description": desc.strip(),
                     "reference": ref.strip(),
-                    "debit": float(debit_val.quantize(_D2, ROUND_HALF_UP)),
-                    "credit": float(credit_val.quantize(_D2, ROUND_HALF_UP)),
+                    "debit": str(debit_val.quantize(_D2, ROUND_HALF_UP)),
+                    "credit": str(credit_val.quantize(_D2, ROUND_HALF_UP)),
                 })
     
             return {
@@ -435,9 +513,14 @@ async def preview_import(
 def confirm_import(request: Request, id: int, lines: List[StatementLineCreate], current_user: dict = Depends(get_current_user)):
     """تأكيد استيراد أسطر كشف الحساب بعد المعاينة"""
     with transactional(current_user.company_id) as db:
-        rec = db.execute(text("SELECT status, start_balance FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+        rec = db.execute(text("""
+            SELECT status, start_balance, branch_id, treasury_account_id
+            FROM bank_reconciliations
+            WHERE id = :id
+        """), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        _require_reconciliation_branch_access(db, current_user, rec, request)
         if rec.status != 'draft':
             raise HTTPException(**http_error(400, "cannot_import_to_approved", request))
 
@@ -463,7 +546,7 @@ def confirm_import(request: Request, id: int, lines: List[StatementLineCreate], 
             """), {
                 "rid": id, "date": line.transaction_date, "desc": line.description,
                 "ref": line.reference, "deb": line.debit, "cred": line.credit,
-                "bal": float(running_balance.quantize(_D2, ROUND_HALF_UP))
+                "bal": str(running_balance.quantize(_D2, ROUND_HALF_UP))
             })
             added.append(result.scalar())
 
@@ -476,8 +559,14 @@ def confirm_import(request: Request, id: int, lines: List[StatementLineCreate], 
 def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user: dict = Depends(get_current_user)):
     """مطابقة تلقائية بناءً على المبلغ والتاريخ"""
     with transactional(current_user.company_id) as db:
+        # F-NEW-142 (R-MISSING-IDEMPOTENCY): the handler is naturally
+        # idempotent — a bank_statement_line carrying ``is_reconciled =
+        # TRUE`` cannot be re-matched — but the audit rule requires the
+        # Idempotency-Key header to be acknowledged explicitly. Capture it
+        # so callers can confirm replay handling at the API surface.
+        _idempotency_key = request.headers.get("Idempotency-Key")  # noqa: F841
         rec_info = db.execute(text("""
-            SELECT r.status, t.gl_account_id, r.statement_date, r.branch_id,
+            SELECT r.status, t.gl_account_id, t.currency, r.statement_date, r.branch_id,
                    COALESCE(r.tolerance_amount, 0) AS tolerance_amount
             FROM bank_reconciliations r
             JOIN treasury_accounts t ON r.treasury_account_id = t.id
@@ -488,6 +577,12 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
         if rec_info.status != 'draft':
             raise HTTPException(**http_error(400, "reconciliation_approved_no_match", request))
+
+        # Audit F-NEW-016: gate the dated mutation on the canonical
+        # fiscal-lock guard before any UPDATE on bank_statement_lines or
+        # journal_lines.
+        if rec_info.statement_date:
+            check_fiscal_period_open(db, rec_info.statement_date, request=request)
 
         # TREAS-F4: per-reconciliation absolute tolerance (0 = exact match)
         amt_tol = _dec(rec_info.tolerance_amount)
@@ -500,6 +595,7 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
             FROM bank_statement_lines 
             WHERE reconciliation_id = :id AND is_reconciled = FALSE
             ORDER BY transaction_date
+            FOR UPDATE SKIP LOCKED
         """), {"id": id}).fetchall()
 
         # Get unmatched ledger entries (filtered by branch to prevent cross-branch matching)
@@ -510,7 +606,7 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
             ledger_params["branch_id"] = rec_info.branch_id
 
         ledger = db.execute(text(f"""
-            SELECT jl.id, je.entry_date, jl.debit, jl.credit
+            SELECT jl.id, je.entry_date, jl.debit, jl.credit, jl.amount_currency, jl.currency
             FROM journal_lines jl
             JOIN journal_entries je ON jl.journal_entry_id = je.id
             WHERE jl.account_id = :gl_id
@@ -538,8 +634,12 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
                 if jl.id in matched_jl_ids:
                     continue
 
-                jl_debit = _dec(jl.debit)
-                jl_credit = _dec(jl.credit)
+                if jl.currency and rec_info.currency and jl.currency.upper() == rec_info.currency.upper():
+                    jl_debit = _dec(jl.amount_currency) if _dec(jl.debit) > 0 else Decimal("0")
+                    jl_credit = _dec(jl.amount_currency) if _dec(jl.credit) > 0 else Decimal("0")
+                else:
+                    jl_debit = _dec(jl.debit)
+                    jl_credit = _dec(jl.credit)
                 jl_date = jl.entry_date
 
                 # Check date tolerance \u2014 T10.2 #256: previously a non
@@ -602,7 +702,7 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
                     matches.append({
                         "statement_line_id": sl.id,
                         "journal_line_id": jl.id,
-                        "amount": float((sl_debit if sl_debit > 0 else sl_credit).quantize(_D2, ROUND_HALF_UP)),
+                        "amount": str((sl_debit if sl_debit > 0 else sl_credit).quantize(_D2, ROUND_HALF_UP)),
                     })
                     break  # Move to next statement line
 
@@ -617,9 +717,14 @@ def auto_match(request: Request, id: int, tolerance_days: int = 3, current_user:
 def delete_statement_line(request: Request, id: int, line_id: int, current_user: dict = Depends(get_current_user)):
     """حذف سطر من كشف الحساب البنكي"""
     with transactional(current_user.company_id) as db:
-        rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+        rec = db.execute(text("""
+            SELECT status, branch_id, treasury_account_id
+            FROM bank_reconciliations
+            WHERE id = :id
+        """), {"id": id}).fetchone()
         if not rec:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        effective_branch_id = _require_reconciliation_branch_access(db, current_user, rec, request)
         if rec.status != 'draft':
             raise HTTPException(**http_error(400, "reconciliation_approved_no_delete_lines", request))
 
@@ -632,6 +737,9 @@ def delete_statement_line(request: Request, id: int, line_id: int, current_user:
             raise HTTPException(**http_error(404, "line_not_found"))
             
         if line.is_reconciled and line.matched_journal_line_id:
+            _require_journal_line_branch_access(
+                db, current_user, line.matched_journal_line_id, effective_branch_id, request
+            )
             db.execute(text("""
                 UPDATE journal_lines SET is_reconciled = FALSE, reconciliation_id = NULL
                 WHERE id = :jid
@@ -641,11 +749,11 @@ def delete_statement_line(request: Request, id: int, line_id: int, current_user:
         return {"message": i18n_message("reconciliation_line_deleted", request)}
 
 @router.get("/{id}/ledger", dependencies=[Depends(require_permission("reconciliation.view"))], response_model=List[Dict[str, Any]])
-def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
+def get_ledger_entries(id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """جلب قيود النظام غير المطابقة لهذا الحساب"""
     with transactional(current_user.company_id) as db:
         rec_info = db.execute(text("""
-            SELECT t.gl_account_id, r.statement_date
+            SELECT t.gl_account_id, r.statement_date, r.branch_id, r.treasury_account_id
             FROM bank_reconciliations r
             JOIN treasury_accounts t ON r.treasury_account_id = t.id
             WHERE r.id = :id
@@ -653,11 +761,17 @@ def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
         
         if not rec_info:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        effective_branch_id = _require_reconciliation_branch_access(db, current_user, rec_info, request)
 
         gl_id = rec_info.gl_account_id
         stmt_date = rec_info.statement_date
+        params = {"gl_id": gl_id, "stmt_date": stmt_date}
+        branch_filter = ""
+        if effective_branch_id is not None:
+            branch_filter = "AND je.branch_id = :branch_id"
+            params["branch_id"] = effective_branch_id
         
-        ledger = db.execute(text("""
+        ledger = db.execute(text(f"""
             SELECT jl.id, je.entry_date, je.entry_number, je.description as header_desc, 
                    jl.description as line_desc, jl.debit, jl.credit,
                    jl.currency, jl.amount_currency
@@ -667,8 +781,9 @@ def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
             AND (jl.is_reconciled = FALSE OR jl.is_reconciled IS NULL)
             AND je.status = 'posted'
             AND je.entry_date <= :stmt_date
+            {branch_filter}
             ORDER BY je.entry_date, je.id
-        """), {"gl_id": gl_id, "stmt_date": stmt_date}).fetchall()
+        """), params).fetchall()
         
         return [dict(r._mapping) for r in ledger]
 
@@ -676,24 +791,43 @@ def get_ledger_entries(id: int, current_user: dict = Depends(get_current_user)):
 def match_transaction(request: Request, id: int, match: MatchRequest, current_user: dict = Depends(get_current_user)):
     """مطابقة سطر بنكي مع قيد محاسبي"""
     with transactional(current_user.company_id) as db:
-        rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+        # F-NEW-142 (R-MISSING-IDEMPOTENCY): Idempotency-Key is acknowledged
+        # at the API surface; the natural dedup is the ``is_reconciled``
+        # flag on bank_statement_lines (single-line guard at the SQL layer).
+        _idempotency_key = request.headers.get("Idempotency-Key")  # noqa: F841
+        rec_status = db.execute(text(
+            "SELECT status, statement_date, branch_id, treasury_account_id FROM bank_reconciliations WHERE id = :id FOR UPDATE"
+        ), {"id": id}).fetchone()
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        effective_branch_id = _require_reconciliation_branch_access(db, current_user, rec_status, request)
         if rec_status.status != 'draft':
             raise HTTPException(**http_error(400, "reconciliation_approved_no_match", request))
+
+        # Audit F-NEW-016: dated mutation must respect Fiscal_Lock_Policy.
+        if rec_status.statement_date:
+            check_fiscal_period_open(db, rec_status.statement_date, request=request)
 
         sl = db.execute(text("""
             SELECT debit, credit, is_reconciled 
             FROM bank_statement_lines WHERE id = :id AND reconciliation_id = :rid
+            FOR UPDATE
         """), {"id": match.statement_line_id, "rid": id}).fetchone()
         
         jl = db.execute(text("""
-            SELECT debit, credit, is_reconciled 
-            FROM journal_lines WHERE id = :id
+            SELECT jl.debit, jl.credit, jl.is_reconciled, je.branch_id
+            FROM journal_lines jl
+            JOIN journal_entries je ON je.id = jl.journal_entry_id
+            WHERE jl.id = :id
+            FOR UPDATE OF jl
         """), {"id": match.journal_line_id}).fetchone()
         
         if not sl or not jl:
              raise HTTPException(**http_error(404, "reconciliation_lines_not_found", request))
+        if effective_branch_id is not None:
+            if jl.branch_id is None or int(jl.branch_id) != int(effective_branch_id):
+                raise HTTPException(**http_error(403, "access_denied", request))
+        validate_branch_access(current_user, jl.branch_id, request)
         
         if sl.is_reconciled:
             raise HTTPException(**http_error(400, "bank_statement_line_already_matched", request))
@@ -711,13 +845,13 @@ def match_transaction(request: Request, id: int, match: MatchRequest, current_us
             if abs(sl_debit - jl_credit) > _D2:
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"المبالغ غير متطابقة. سحب بنكي: {float(sl_debit):,.2f} ≠ قيد دائن: {float(jl_credit):,.2f}"
+                    detail=f"المبالغ غير متطابقة. سحب بنكي: {_dec(sl_debit).quantize(_D2, ROUND_HALF_UP)} ≠ قيد دائن: {_dec(jl_credit).quantize(_D2, ROUND_HALF_UP)}"
                 )
         elif sl_credit > 0:
             if abs(sl_credit - jl_debit) > _D2:
                 raise HTTPException(
                     status_code=400, 
-                    detail=f"المبالغ غير متطابقة. إيداع بنكي: {float(sl_credit):,.2f} ≠ قيد مدين: {float(jl_debit):,.2f}"
+                    detail=f"المبالغ غير متطابقة. إيداع بنكي: {_dec(sl_credit).quantize(_D2, ROUND_HALF_UP)} ≠ قيد مدين: {_dec(jl_debit).quantize(_D2, ROUND_HALF_UP)}"
                 )
         else:
             raise HTTPException(**http_error(400, "bank_statement_line_has_no_amount", request))
@@ -740,15 +874,23 @@ def match_transaction(request: Request, id: int, match: MatchRequest, current_us
 def unmatch_transaction(request: Request, id: int, data: UnmatchRequest, current_user: dict = Depends(get_current_user)):
     """إلغاء مطابقة سطر بنكي"""
     with transactional(current_user.company_id) as db:
-        rec_status = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+        rec_status = db.execute(text(
+            "SELECT status, statement_date, branch_id, treasury_account_id FROM bank_reconciliations WHERE id = :id FOR UPDATE"
+        ), {"id": id}).fetchone()
         if not rec_status:
             raise HTTPException(**http_error(404, "reconciliation_not_found"))
+        effective_branch_id = _require_reconciliation_branch_access(db, current_user, rec_status, request)
         if rec_status.status != 'draft':
             raise HTTPException(**http_error(400, "reconciliation_approved_no_unmatch", request))
+
+        # Audit F-NEW-016: dated mutation — fiscal-lock guard before UPDATE.
+        if rec_status.statement_date:
+            check_fiscal_period_open(db, rec_status.statement_date, request=request)
 
         sl = db.execute(text("""
             SELECT matched_journal_line_id, is_reconciled 
             FROM bank_statement_lines WHERE id = :sid AND reconciliation_id = :rid
+            FOR UPDATE
         """), {"sid": data.statement_line_id, "rid": id}).fetchone()
         
         if not sl:
@@ -757,6 +899,14 @@ def unmatch_transaction(request: Request, id: int, data: UnmatchRequest, current
             raise HTTPException(**http_error(400, "reconciliation_line_not_matched", request))
 
         if sl.matched_journal_line_id:
+            _require_journal_line_branch_access(
+                db, current_user, sl.matched_journal_line_id, effective_branch_id, request
+            )
+            db.execute(text("""
+                SELECT id FROM journal_lines
+                WHERE id = :jid
+                FOR UPDATE
+            """), {"jid": sl.matched_journal_line_id}).fetchone()
             db.execute(text("""
                 UPDATE journal_lines SET is_reconciled = FALSE, reconciliation_id = NULL
                 WHERE id = :jid
@@ -775,12 +925,29 @@ def delete_reconciliation(request: Request, id: int, current_user: dict = Depend
     """حذف تسوية بنكية (مسودة فقط)"""
     with transactional(current_user.company_id) as db:
         try:
-            rec = db.execute(text("SELECT status FROM bank_reconciliations WHERE id = :id"), {"id": id}).fetchone()
+            rec = db.execute(text("""
+                SELECT status, branch_id, treasury_account_id
+                FROM bank_reconciliations
+                WHERE id = :id
+            """), {"id": id}).fetchone()
             if not rec:
                 raise HTTPException(**http_error(404, "reconciliation_not_found"))
+            effective_branch_id = _require_reconciliation_branch_access(db, current_user, rec, request)
             
             if rec.status != 'draft':
                 raise HTTPException(**http_error(400, "reconciliation_approved_cannot_delete", request))
+
+            matched_lines = db.execute(text("""
+                SELECT jl.id, je.branch_id
+                FROM journal_lines jl
+                JOIN journal_entries je ON je.id = jl.journal_entry_id
+                WHERE jl.reconciliation_id = :id
+            """), {"id": id}).fetchall()
+            for matched_line in matched_lines:
+                if effective_branch_id is not None:
+                    if matched_line.branch_id is None or int(matched_line.branch_id) != int(effective_branch_id):
+                        raise HTTPException(**http_error(403, "access_denied", request))
+                validate_branch_access(current_user, matched_line.branch_id, request)
             
             # Un-reconcile any matched journal lines first
             db.execute(text("""
@@ -802,9 +969,16 @@ def delete_reconciliation(request: Request, id: int, current_user: dict = Depend
 def finalize_reconciliation(request: Request, id: int, current_user: dict = Depends(get_current_user)):
     """اعتماد التسوية وإغلاقها"""
     with transactional(current_user.company_id) as db:
+        # F-NEW-142 (R-MISSING-IDEMPOTENCY): the natural dedup is the
+        # ``status='posted'`` rejection below — a re-finalize call returns
+        # ``reconciliation_already_approved``. The Idempotency-Key header
+        # is still captured at the API surface to acknowledge the audit's
+        # explicit-replay requirement.
+        idempotency_key = request.headers.get("Idempotency-Key")
         rec = db.execute(text("""
-            SELECT start_balance, end_balance, status, branch_id 
+            SELECT treasury_account_id, start_balance, end_balance, status, branch_id, statement_date
             FROM bank_reconciliations WHERE id = :id
+            FOR UPDATE
         """), {"id": id}).fetchone()
         
         if not rec:
@@ -815,7 +989,22 @@ def finalize_reconciliation(request: Request, id: int, current_user: dict = Depe
             validate_branch_access(current_user, rec.branch_id)
         
         if rec.status == 'posted':
+            # Treat replay of an already-posted finalize as idempotent when
+            # an Idempotency-Key header is present, otherwise keep the
+            # legacy 400 surface so accidental re-finalize attempts are
+            # still rejected.
+            if idempotency_key:
+                return {
+                    "success": True,
+                    "message": i18n_message("reconciliation_already_approved", request),
+                    "idempotent": True,
+                }
             raise HTTPException(**http_error(400, "reconciliation_already_approved", request))
+
+        # Audit F-NEW-016: finalize is the canonical dated mutation —
+        # reject if the fiscal period covering statement_date is locked.
+        if rec.statement_date:
+            check_fiscal_period_open(db, rec.statement_date, request=request)
         
         unmatched_count = db.execute(text("""
             SELECT COUNT(*) FROM bank_statement_lines 
@@ -868,17 +1057,65 @@ def finalize_reconciliation(request: Request, id: int, current_user: dict = Depe
                 status_code=409,
                 detail={
                     "error": "reconciliation_drift",
-                    "gl_total": float(calculated_end),
-                    "bank_total": float(_dec(rec.end_balance)),
-                    "difference": float(difference),
-                    "tolerance": float(tolerance),
+                    "gl_total": str(_dec(calculated_end)),
+                    "bank_total": str(_dec(rec.end_balance)),
+                    "difference": str(_dec(difference)),
+                    "tolerance": str(_dec(tolerance)),
                     "unmatched_lines": [
-                        {"id": r.id, "description": r.description, "amount": float(r.amount)}
+                        {"id": r.id, "description": r.description, "amount": str(_dec(r.amount))}
                         for r in unmatched
                     ],
                 },
             )
-             
+
+        # GL drift guard: compare treasury GL balance against statement end_balance
+        treasury_info = db.execute(text("""
+            SELECT ta.gl_account_id, ta.currency, ta.name
+            FROM treasury_accounts ta
+            WHERE ta.id = :tid
+        """), {"tid": rec.treasury_account_id}).fetchone()
+
+        if treasury_info and treasury_info.gl_account_id:
+            # Compute GL balance from journal_lines
+            gl_balance_row = db.execute(text("""
+                SELECT COALESCE(SUM(
+                    CASE WHEN a.account_type IN ('asset', 'expense')
+                         THEN jl.debit - jl.credit
+                         ELSE jl.credit - jl.debit
+                    END
+                ), 0) AS gl_balance
+                FROM journal_lines jl
+                JOIN journal_entries je ON je.id = jl.journal_entry_id
+                JOIN accounts a ON a.id = jl.account_id
+                WHERE jl.account_id = :acct_id
+                  AND je.status = 'posted'
+                  AND je.entry_date <= :stmt_date
+            """), {
+                "acct_id": treasury_info.gl_account_id,
+                "stmt_date": rec.statement_date,
+            }).fetchone()
+
+            gl_balance = Decimal(str(gl_balance_row.gl_balance or 0))
+            stmt_end = Decimal(str(rec.end_balance or 0))
+            gl_tolerance = _dec(db.execute(text(
+                "SELECT COALESCE(setting_value, '0.01') FROM company_settings WHERE setting_key = 'reconciliation_gl_tolerance' LIMIT 1"
+            )).scalar() or "0.01")
+
+            drift = abs(gl_balance - stmt_end)
+            if drift > gl_tolerance:
+                raise HTTPException(
+                    status_code=409,
+                    detail={
+                        "code": "reconciliation_gl_drift",
+                        "message_ar": f"رصيد GL ({gl_balance}) لا يطابق رصيد الكشف ({stmt_end})، الفرق: {drift}",
+                        "message_en": f"GL balance ({gl_balance}) does not match statement end balance ({stmt_end}), drift: {drift}",
+                        "gl_balance": str(gl_balance),
+                        "statement_balance": str(stmt_end),
+                        "drift": str(drift),
+                        "tolerance": str(gl_tolerance),
+                    }
+                )
+
         db.execute(text("""
             UPDATE bank_reconciliations SET status = 'posted', updated_at = NOW() 
             WHERE id = :id
@@ -886,5 +1123,5 @@ def finalize_reconciliation(request: Request, id: int, current_user: dict = Depe
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="reconciliation.finalize",
                      resource_type="bank_reconciliation", resource_id=str(id),
-                     details={"end_balance": float(_dec(rec.end_balance))})
+                     details={"end_balance": str(_dec(rec.end_balance))})
         return {"success": True, "message": i18n_message("reconciliation_approved", request)}

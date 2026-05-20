@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 class EntityGroupCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=255)
     parent_id: Optional[int] = None
+    branch_id: Optional[int] = None
     company_id: str = Field(..., min_length=1, max_length=100)
     group_currency: str = Field(default="SAR", max_length=10)
 
@@ -19,6 +20,7 @@ class EntityGroupCreate(BaseModel):
 class EntityGroupUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=255)
     parent_id: Optional[int] = None
+    branch_id: Optional[int] = None
     group_currency: Optional[str] = Field(default=None, max_length=10)
 
 
@@ -26,6 +28,7 @@ class EntityGroupRead(BaseModel):
     id: int
     name: str
     parent_id: Optional[int] = None
+    branch_id: Optional[int] = None
     company_id: str
     group_currency: str
     consolidation_level: int
@@ -55,6 +58,7 @@ class IntercompanyTransactionCreate(BaseModel):
     transaction_currency: Optional[str] = Field(default=None, max_length=10)
     transaction_amount: Optional[Decimal] = Field(default=None, ge=0, decimal_places=4)
     exchange_rate: Decimal = Field(default=Decimal("1"), gt=0, decimal_places=8)
+    description: Optional[str] = Field(default=None, max_length=255)
     reference_document: Optional[str] = Field(default=None, max_length=255)
 
     @model_validator(mode="after")
@@ -87,6 +91,7 @@ class IntercompanyTransactionRead(BaseModel):
     elimination_status: str
     elimination_journal_entry_id: Optional[int] = None
     reference_document: Optional[str] = None
+    idempotency_key: Optional[str] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     source_entity_name: Optional[str] = None

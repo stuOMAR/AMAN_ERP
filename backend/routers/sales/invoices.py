@@ -345,9 +345,11 @@ def create_sales_invoice(
         def to_base(amount):
             return (_dec(amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
 
+        _branch_id = validated_branch_id or invoice.branch_id
+
         # --- 1. Generate Sequential Invoice Number ---
         from utils.accounting import generate_sequential_number
-        inv_num = generate_sequential_number(db, f"INV-{datetime.now().year}", "invoices", "invoice_number")
+        inv_num = generate_sequential_number(db, f"INV-{datetime.now().year}", "invoices", "invoice_number", branch_id=_branch_id)
 
         # --- FISCAL-LOCK: Reject if accounting period is closed ---
         check_fiscal_period_open(db, invoice.invoice_date)
@@ -360,7 +362,6 @@ def create_sales_invoice(
         from utils.accounting import compute_invoice_totals, compute_line_amounts
 
         # Resolve tax per line via tax engine (branch-aware, no hardcoded rates)
-        _branch_id = validated_branch_id or invoice.branch_id
         _doc_date = invoice.invoice_date if hasattr(invoice, 'invoice_date') and invoice.invoice_date else None
         items_to_save = []
         for item in invoice.items:
@@ -567,6 +568,15 @@ def create_sales_invoice(
                         "idempotent_replay": True}
             raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
 
+        from services.sales.invoice_state import transition as transition_invoice_state
+        transition_invoice_state(
+            db,
+            {"id": invoice_id, "state": "draft"},
+            "posted",
+            actor={"id": user_id},
+            dispatch_side_effects=False,
+        )
+
         # Update Sales Order status if linked
         if invoice.sales_order_id:
             db.execute(text("UPDATE sales_orders SET status = 'invoiced' WHERE id = :id"), {"id": invoice.sales_order_id})
@@ -632,7 +642,8 @@ def create_sales_invoice(
                     item_cogs = (unit_cost * qty).quantize(_D2, ROUND_HALF_UP)
             except ValueError as e:
                 # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
-                raise HTTPException(status_code=400, detail=str(e))
+                logger.exception("FIFO/LIFO layer exhaustion on invoice create")
+                raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 
             # T026: Atomic deduction with authoritative available formula
             inv_row = db.execute(text("""
@@ -724,7 +735,7 @@ def create_sales_invoice(
 
         # --- 6.5 Update Customer Balance via party_site_balances ---
         update_party_site_balance(db, party_id=invoice.customer_id, branch_id=validated_branch_id or invoice.branch_id,
-                           currency=inv_currency, amount=float(remaining_balance))
+                           currency=inv_currency, amount=remaining_balance)
 
         # --- 6.7 Payment Voucher (if paid on creation) ---
         if paid_amount > 0:
@@ -741,24 +752,37 @@ def create_sales_invoice(
                 from utils.accounting import generate_sequential_number as gen_seq
                 pv_num = gen_seq(db, f"PV-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
+                pv_idem_key = f"{idempotency_key}:pv" if idempotency_key else None
                 pv_id = db.execute(text("""
                     INSERT INTO payment_vouchers (
                         voucher_number, voucher_type, voucher_date, party_type, party_id,
                         amount, payment_method, treasury_account_id, reference, status, created_by, branch_id,
-                        currency, exchange_rate
+                        currency, exchange_rate, idempotency_key
                     ) VALUES (
                         :vnum, 'receipt', :vdate, 'customer', :cust,
                         :amt, :method, :treasury_id, :ref, 'posted', :user, :branch,
-                        :currency, :rate
-                    ) RETURNING id
+                        :currency, :rate, :pv_idem_key
+                    )
+                    ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
                 """), {
                     "vnum": pv_num, "vdate": invoice.invoice_date, "cust": invoice.customer_id,
                     "amt": paid_amount, "method": actual_method,
                     "treasury_id": invoice.treasury_id,
                     "ref": inv_num,
                     "user": user_id, "branch": validated_branch_id or invoice.branch_id,
-                    "currency": inv_currency, "rate": exchange_rate
+                    "currency": inv_currency, "rate": exchange_rate,
+                    "pv_idem_key": pv_idem_key,
                 }).scalar()
+
+                # If DO NOTHING triggered (idempotent replay), fetch existing voucher
+                if pv_id is None and pv_idem_key:
+                    existing_pv = db.execute(text("""
+                        SELECT id FROM payment_vouchers WHERE idempotency_key = :key LIMIT 1
+                    """), {"key": pv_idem_key}).fetchone()
+                    if existing_pv:
+                        pv_id = existing_pv.id
 
                 # Link payment allocation to invoice
                 db.execute(text("""
@@ -853,7 +877,7 @@ def create_sales_invoice(
                 branch_id=validated_branch_id or invoice.branch_id,
                 reference=inv_num,
                 currency=inv_currency,
-                exchange_rate=float(exchange_rate),
+                exchange_rate=exchange_rate,
                 source="Sales-Invoice",
                 source_id=invoice_id
             )
@@ -934,6 +958,14 @@ def create_sales_invoice(
                     "uuid": inv_num,
                 },
             )
+            if (jurisdiction or "").upper() == "SA" and clr["status"] in ("not_required", "pending_clearance"):
+                from services.einvoicing.outbox import enqueue as enqueue_zatca_outbox
+                enqueue_zatca_outbox(
+                    db,
+                    invoice_id=invoice_id,
+                    tenant_id=company_id,
+                    idempotency_key=idempotency_key,
+                )
             if clr["status"] == "rejected":
                 raise HTTPException(
                     status_code=422,
@@ -1052,7 +1084,7 @@ def cancel_invoice(
 
         # 1. Get invoice
         inv = db.execute(text("""
-            SELECT id, invoice_number, party_id, total, paid_amount, status,
+            SELECT id, invoice_number, party_id, total, paid_amount, status, state,
                    currency, exchange_rate, branch_id, invoice_type, sales_order_id
             FROM invoices WHERE id = :id AND invoice_type = 'sales'
             FOR UPDATE
@@ -1062,6 +1094,11 @@ def cancel_invoice(
             raise HTTPException(**http_error(404, "invoice_not_found"))
         if inv.status == 'cancelled':
             raise HTTPException(**http_error(400, "invoice_already_cancelled", request))
+
+        # Block cancellation of ZATCA-cleared invoices (Constitution §5: cleared = irrevocable)
+        zatca_status = getattr(inv, 'zatca_clearance_status', None) or ''
+        if zatca_status.startswith('cleared'):
+            raise HTTPException(**http_error(400, "zatca_cleared_invoice_must_credit_note", request))
         linked_returns = db.execute(text("""
             SELECT COUNT(*)
             FROM sales_returns
@@ -1126,7 +1163,7 @@ def cancel_invoice(
         remaining_balance = (_dec(inv.total) - _dec(inv.paid_amount or 0)).quantize(_D4, ROUND_HALF_UP)
         if remaining_balance > _D2:
             update_party_site_balance(db, party_id=inv.party_id, branch_id=inv.branch_id,
-                                      currency=inv.currency or base_currency, amount=-float(remaining_balance))
+                                      currency=inv.currency or base_currency, amount=-remaining_balance)
 
         # 3. Reverse inventory (add back the items)
         inv_lines = db.execute(text("""
@@ -1175,7 +1212,7 @@ def cancel_invoice(
                             product_id=line.product_id,
                             warehouse_id=wh_id_row.warehouse_id,
                             quantity=line.quantity,
-                            unit_cost=float(orig_unit_cost),
+                            unit_cost=orig_unit_cost,
                             source_document_type="sales_cancellation",
                             source_document_id=invoice_id,
                             costing_method=costing_method,
@@ -1191,8 +1228,8 @@ def cancel_invoice(
                             db,
                             product_id=line.product_id,
                             warehouse_id=wh_id_row.warehouse_id,
-                            new_qty=float(line.quantity),
-                            new_price=float(orig_unit_cost),
+                            new_qty=_dec(line.quantity),
+                            new_price=orig_unit_cost,
                         )
 
                     # Now add stock back (after handle_return succeeded)
@@ -1206,7 +1243,7 @@ def cancel_invoice(
                         "qty": line.quantity,
                         "pid": line.product_id,
                         "wh": wh_id_row.warehouse_id,
-                        "cost": float(restored_cost),
+                        "cost": str(restored_cost),
                     })
 
                     # T034: Create reverse inventory transaction with proper reference
@@ -1223,8 +1260,8 @@ def cancel_invoice(
                     """), {
                         "pid": line.product_id, "wh": wh_id_row.warehouse_id,
                         "inv_id": invoice_id, "inv_num": inv.invoice_number,
-                        "qty": line.quantity, "cost": float(restored_cost),
-                        "total_cost": float(restored_total),
+                        "qty": line.quantity, "cost": str(restored_cost),
+                        "total_cost": str(restored_total),
                         "user": user_id
                     })
 
@@ -1292,8 +1329,31 @@ def cancel_invoice(
                 WHERE id = :voucher_id
             """), {"voucher_id": voucher_id})
 
-        # 5. Mark invoice as cancelled
-        db.execute(text("UPDATE invoices SET status = 'cancelled' WHERE id = :id"), {"id": invoice_id})
+        # 5. Mark invoice as cancelled through the state machine, then sync
+        # the legacy status field used by older screens and reports.
+        from services.sales.invoice_state import (
+            InvalidInvoiceTransition,
+            StaleInvoiceState,
+            transition as transition_invoice_state,
+        )
+        try:
+            transition_invoice_state(
+                db,
+                {"id": invoice_id, "state": inv.state},
+                "cancelled",
+                actor={"id": user_id},
+                reason="cancelled_with_reversal",
+                dispatch_side_effects=False,
+            )
+        except (InvalidInvoiceTransition, StaleInvoiceState):
+            raise HTTPException(**http_error(400, "invalid_invoice_state_transition", request))
+
+        db.execute(text("""
+            UPDATE invoices
+            SET status = 'cancelled',
+                updated_at = NOW()
+            WHERE id = :id
+        """), {"id": invoice_id})
         if inv.sales_order_id:
             db.execute(text("""
                 UPDATE sales_orders

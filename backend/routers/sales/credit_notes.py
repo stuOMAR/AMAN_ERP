@@ -388,7 +388,7 @@ def create_sales_credit_note(
         total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
 
         # Generate number & insert
-        inv_num = generate_sequential_number(db, "SCN", "invoices", "invoice_number")
+        inv_num = generate_sequential_number(db, "SCN", "invoices", "invoice_number", branch_id=branch_id)
         result = db.execute(text("""
             INSERT INTO invoices (
                 invoice_number, invoice_type, party_id, invoice_date, 
@@ -488,7 +488,7 @@ def create_sales_credit_note(
             currency=currency,
             exchange_rate=1.0,  # amounts already in base currency
             source="SalesCreditNote",
-            source_id=related_invoice_id,
+            source_id=note_id,  # Fix 8: use note_id (the CN document) not related_invoice_id
             username=getattr(current_user, "username", None),
             idempotency_key=f"scn-{inv_num}",
         )
@@ -506,9 +506,8 @@ def create_sales_credit_note(
             """), {"amt": total, "id": related_invoice_id})
 
         # Update customer balance via party_site_balances (credit note REDUCES what customer owes)
-        gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
         update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
-                                  currency=currency, amount=-float(gl_total_base))
+                                  currency=currency, amount=-total)
 
         db.commit()
 
@@ -526,6 +525,7 @@ def create_sales_credit_note(
             "message": i18n_message("credit_note_created_number", request),
         }
     except HTTPException:
+        db.rollback()
         raise
     except Exception as e:
         db.rollback()
@@ -727,7 +727,7 @@ def create_sales_debit_note(
 
         total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
 
-        inv_num = generate_sequential_number(db, "SDN", "invoices", "invoice_number")
+        inv_num = generate_sequential_number(db, "SDN", "invoices", "invoice_number", branch_id=branch_id)
         result = db.execute(text("""
             INSERT INTO invoices (
                 invoice_number, invoice_type, party_id, invoice_date,
@@ -820,9 +820,8 @@ def create_sales_debit_note(
         )
 
         # Update customer balance via party_site_balances (debit note INCREASES what customer owes)
-        gl_total_base = (total * exchange_rate).quantize(_D4, ROUND_HALF_UP)
         update_party_site_balance(db, party_id=party_id, branch_id=branch_id,
-                                  currency=currency, amount=float(gl_total_base))
+                                  currency=currency, amount=total)
 
         db.commit()
 

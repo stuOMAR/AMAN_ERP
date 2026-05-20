@@ -57,7 +57,20 @@ def create_asset_transfer(request: Request, data: AssetTransferCreate, current_u
     """Create Asset Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
-            asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
+            # F-NEW-065 (R-MISSING-IDEMPOTENCY): a retried POST must not
+            # create two pending transfer requests for the same asset.
+            # Dedup on the natural pending key (asset_id, to_branch_id).
+            existing = conn.execute(text(
+                "SELECT id FROM asset_transfers "
+                "WHERE asset_id = :aid AND to_branch_id = :tb "
+                "AND status = 'pending' LIMIT 1"
+            ), {"aid": data.asset_id, "tb": data.to_branch_id}).fetchone()
+            if existing:
+                row = conn.execute(text(
+                    "SELECT * FROM asset_transfers WHERE id = :id"
+                ), {"id": existing.id}).fetchone()
+                return {**dict(row._mapping), "idempotent": True}
+            asset = conn.execute(text("SELECT * FROM assets WHERE id = :id FOR UPDATE"), {"id": data.asset_id}).fetchone()
             if not asset:
                 raise HTTPException(**http_error(404, "asset_not_found", request))
             dep_sum = conn.execute(text(
@@ -89,9 +102,10 @@ def approve_transfer(request: Request, transfer_id: int, current_user: dict = De
     """Approve Transfer."""
     with transactional(current_user.company_id) as conn:
         try:
-            t = conn.execute(text("SELECT * FROM asset_transfers WHERE id = :id"), {"id": transfer_id}).fetchone()
+            t = conn.execute(text("SELECT * FROM asset_transfers WHERE id = :id FOR UPDATE"), {"id": transfer_id}).fetchone()
             if not t or t.status != 'pending':
                 raise HTTPException(**http_error(404, "pending_transfer_not_found", request))
+            conn.execute(text("SELECT id FROM assets WHERE id = :id FOR UPDATE"), {"id": t.asset_id}).fetchone()
             conn.execute(text("UPDATE asset_transfers SET status = 'approved', approved_by = :uid WHERE id = :id"),
                          {"uid": current_user.id, "id": transfer_id})
             conn.execute(text("UPDATE assets SET branch_id = :bid WHERE id = :aid"),
@@ -194,4 +208,3 @@ def transfer_asset(request: Request, asset_id: int, transfer: AssetTransfer, cur
 # ═══════════════════════════════════════════════════════════
 # GL-007: Asset Revaluation
 # ═══════════════════════════════════════════════════════════
-

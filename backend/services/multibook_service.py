@@ -24,6 +24,7 @@ actual differences.
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
 from sqlalchemy import text
@@ -72,7 +73,7 @@ def post_multibook_journal_entry(
     branch_id: Optional[int] = None,
     reference: Optional[str] = None,
     currency: Optional[str] = None,
-    exchange_rate: float = 1.0,
+    exchange_rate: Decimal = Decimal("1"),
     source: str = "manual",
     source_id: Optional[int] = None,
     username: Optional[str] = None,
@@ -110,7 +111,7 @@ def post_multibook_journal_entry(
                 username=username, idempotency_key=lk, ledger_id=ledger_id,
             )
             results.append({"ledger_id": ledger_id, "journal_id": jid, "entry_number": num})
-        except Exception as e:
-            logger.exception("multibook: posting to ledger %s failed", ledger_id)
-            results.append({"ledger_id": ledger_id, "error": str(e)})
+        except Exception:
+            logger.exception("multibook: posting to ledger %s failed; rolling back all ledgers", ledger_id)
+            raise
     return results

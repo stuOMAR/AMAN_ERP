@@ -95,7 +95,7 @@ async def generate_retainer_invoices(
                 continue
             
             # Generate invoice
-            inv_num = generate_sequential_number(db, f"RET-{target_date.year}", "invoices", "invoice_number")
+            inv_num = generate_sequential_number(db, f"RET-{target_date.year}", "invoices", "invoice_number", branch_id=p.get("branch_id"))
             bill_to = p.get("bill_to_id") or p.get("customer_id")
             
             inv_id = db.execute(text("""
@@ -328,7 +328,7 @@ async def create_project_expense(
             db, user_id=current_user.id, username=current_user.username,
             action="project.expense", resource_type="project_expense",
             resource_id=str(exp_id),
-            details={"project_id": project_id, "amount": float(amount), "type": expense.expense_type},
+            details={"project_id": project_id, "amount": str(amount), "type": expense.expense_type},
             request=request
         )
 
@@ -499,4 +499,3 @@ async def get_project_revenues(project_id: int, current_user: dict = Depends(get
 # ═══════════════════════════════════════════════════════════
 # Project Financial Report
 # ═══════════════════════════════════════════════════════════
-

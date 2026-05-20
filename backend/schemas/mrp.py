@@ -6,6 +6,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from typing import Optional
+from decimal import Decimal
 
 
 class MrpRunRequest(BaseModel):
@@ -23,7 +24,7 @@ class RecommendationView(BaseModel):
     run_id: str
     item_id: int
     warehouse_id: int
-    recommended_qty: float
+    recommended_qty: Decimal
     state: str
     source: Optional[str] = None
     created_at: str
@@ -33,7 +34,7 @@ class AcceptResponse(BaseModel):
     id: int
     item_id: int
     warehouse_id: int
-    recommended_qty: float
+    recommended_qty: Decimal
 
 
 class BomCycleErrorBody(BaseModel):

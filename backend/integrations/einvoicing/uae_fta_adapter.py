@@ -33,11 +33,25 @@ import logging
 import os
 import uuid as _uuid
 from datetime import datetime, timezone
+from decimal import Decimal
 from typing import Any, Callable, List, Optional
 
 import requests
 
 from .base import EInvoiceAdapter, SubmissionResult
+from utils.masking import redact_token
+# F-NEW-025 (R-FLOAT-MONEY, Req 8.5): money/tax/quantity helpers — every
+# monetary value rendered into the PINT-AE UBL travels through these so
+# the wire bytes are deterministic and ROUND_HALF_UP-correct.
+from utils.tax_precision import (
+    dec as _dec,
+    money_str,
+    qty_str,
+    q_money,
+    q_qty,
+    q_rate,
+    rate_str,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -83,31 +97,38 @@ def build_pint_ae_xml(
     customer_name = invoice.get("customer_name") or ""
     customer_country = invoice.get("customer_country") or "AE"
 
-    line_total = 0.0
-    tax_total = 0.0
+    line_total = Decimal("0")
+    tax_total = Decimal("0")
     line_xml = []
     for idx, ln in enumerate(invoice.get("lines") or [], start=1):
-        qty = float(ln.get("quantity") or 0)
-        unit_price = float(ln.get("unit_price") or 0)
-        tax_amt = float(ln.get("tax_amount") or 0)
-        tax_rate = float(ln.get("tax_rate") or 5)        # default UAE VAT 5%
-        net = qty * unit_price - float(ln.get("discount") or 0)
+        # F-NEW-025 / PR16-fix: Decimal_Money_Rule says "compute first,
+        # quantize last". The previous version called ``q_money`` on
+        # ``unit_price`` *before* multiplying by quantity, which lost
+        # precision for prices carrying more than 2 decimals (e.g.
+        # 1.2345). Keep ``unit_price`` as a high-precision Decimal for
+        # the multiplication and only quantize the final per-axis
+        # totals (line_extension, tax_amount, etc.) to wire format.
+        qty = q_qty(ln.get("quantity") or 0)
+        unit_price = _dec(ln.get("unit_price") or 0)
+        tax_amt = q_money(ln.get("tax_amount") or 0)
+        tax_rate = q_rate(ln.get("tax_rate") or 5)        # default UAE VAT 5%
+        net = q_money(qty * unit_price - _dec(ln.get("discount") or 0))
         line_total += net
         tax_total += tax_amt
         desc = _xml_escape(ln.get("description") or ln.get("item_name") or f"Item {idx}")
         line_xml.append(f"""<cac:InvoiceLine>
   <cbc:ID>{idx}</cbc:ID>
-  <cbc:InvoicedQuantity unitCode="EA">{qty:.4f}</cbc:InvoicedQuantity>
-  <cbc:LineExtensionAmount currencyID="{currency}">{net:.2f}</cbc:LineExtensionAmount>
+  <cbc:InvoicedQuantity unitCode="EA">{qty_str(qty)}</cbc:InvoicedQuantity>
+  <cbc:LineExtensionAmount currencyID="{currency}">{money_str(net)}</cbc:LineExtensionAmount>
   <cac:Item><cbc:Name>{desc}</cbc:Name>
     <cac:ClassifiedTaxCategory><cbc:ID>S</cbc:ID>
-      <cbc:Percent>{tax_rate:.2f}</cbc:Percent>
+      <cbc:Percent>{rate_str(tax_rate)}</cbc:Percent>
       <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme>
     </cac:ClassifiedTaxCategory></cac:Item>
-  <cac:Price><cbc:PriceAmount currencyID="{currency}">{unit_price:.4f}</cbc:PriceAmount></cac:Price>
+  <cac:Price><cbc:PriceAmount currencyID="{currency}">{money_str(unit_price)}</cbc:PriceAmount></cac:Price>
 </cac:InvoiceLine>""")
 
-    grand_total = float(invoice.get("total") or (line_total + tax_total))
+    grand_total = q_money(invoice.get("total")) if invoice.get("total") is not None else q_money(line_total + tax_total)
 
     return f"""<?xml version="1.0" encoding="UTF-8"?>
 <Invoice xmlns="urn:oasis:names:specification:ubl:schema:xsd:Invoice-2"
@@ -135,19 +156,19 @@ def build_pint_ae_xml(
     <cac:Country><cbc:IdentificationCode>{_xml_escape(customer_country)}</cbc:IdentificationCode></cac:Country>
   </cac:Party></cac:AccountingCustomerParty>
   <cac:TaxTotal>
-    <cbc:TaxAmount currencyID="{currency}">{tax_total:.2f}</cbc:TaxAmount>
+    <cbc:TaxAmount currencyID="{currency}">{money_str(tax_total)}</cbc:TaxAmount>
     <cac:TaxSubtotal>
-      <cbc:TaxableAmount currencyID="{currency}">{line_total:.2f}</cbc:TaxableAmount>
-      <cbc:TaxAmount currencyID="{currency}">{tax_total:.2f}</cbc:TaxAmount>
+      <cbc:TaxableAmount currencyID="{currency}">{money_str(line_total)}</cbc:TaxableAmount>
+      <cbc:TaxAmount currencyID="{currency}">{money_str(tax_total)}</cbc:TaxAmount>
       <cac:TaxCategory><cbc:ID>S</cbc:ID><cbc:Percent>5.00</cbc:Percent>
         <cac:TaxScheme><cbc:ID>VAT</cbc:ID></cac:TaxScheme></cac:TaxCategory>
     </cac:TaxSubtotal>
   </cac:TaxTotal>
   <cac:LegalMonetaryTotal>
-    <cbc:LineExtensionAmount currencyID="{currency}">{line_total:.2f}</cbc:LineExtensionAmount>
-    <cbc:TaxExclusiveAmount currencyID="{currency}">{line_total:.2f}</cbc:TaxExclusiveAmount>
-    <cbc:TaxInclusiveAmount currencyID="{currency}">{grand_total:.2f}</cbc:TaxInclusiveAmount>
-    <cbc:PayableAmount currencyID="{currency}">{grand_total:.2f}</cbc:PayableAmount>
+    <cbc:LineExtensionAmount currencyID="{currency}">{money_str(line_total)}</cbc:LineExtensionAmount>
+    <cbc:TaxExclusiveAmount currencyID="{currency}">{money_str(line_total)}</cbc:TaxExclusiveAmount>
+    <cbc:TaxInclusiveAmount currencyID="{currency}">{money_str(grand_total)}</cbc:TaxInclusiveAmount>
+    <cbc:PayableAmount currencyID="{currency}">{money_str(grand_total)}</cbc:PayableAmount>
   </cac:LegalMonetaryTotal>
   {''.join(line_xml)}
 </Invoice>"""
@@ -216,10 +237,13 @@ class UAEFTAAdapter(EInvoiceAdapter):
             "internalId": str(invoice.get("invoice_number") or invoice.get("id") or ""),
         }
         try:
+            # Audit F-NEW-004: never echo the raw API key in logs.
+            logger.debug("[UAE-FTA] submit invoice=%s auth=%s",
+                         invoice.get("id"), redact_token(self.api_key))
             resp = requests.post(url, json=payload, headers=self._auth_headers(),
                                  timeout=self._timeout)
         except requests.RequestException as e:
-            logger.exception("[UAE-FTA] HTTP error during submission")
+            logger.warning("[UAE-FTA] HTTP error during submission: %s", str(e)[:500])
             return SubmissionResult(status="error", error_message=str(e))
         if resp.status_code >= 400:
             logger.warning("[UAE-FTA] ASP rejected (%s): %s",

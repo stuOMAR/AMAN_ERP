@@ -6,6 +6,7 @@ GET    /api/fsm/pricelists/resolve   — resolve price for an item
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
 from fastapi import Request, APIRouter, HTTPException
@@ -15,8 +16,10 @@ from typing import Optional
 
 from database import get_db_connection
 from services.fsm.pricelists import resolve_price, upsert_pricelist_entry
+from utils.i18n import http_error, i18n_message
 
 router = APIRouter(prefix="/api/fsm/pricelists", tags=["FSM Pricelists"])
+logger = logging.getLogger(__name__)
 
 
 class PricelistEntryCreate(BaseModel):
@@ -85,6 +88,7 @@ def list_pricelists(
 
 @router.post("")
 def create_pricelist_entry(
+    request: Request,
     body: PricelistEntryCreate,
     current_user=None,
 ):
@@ -105,7 +109,8 @@ def create_pricelist_entry(
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Error creating pricelist entry")
+        raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
         conn.close()
 

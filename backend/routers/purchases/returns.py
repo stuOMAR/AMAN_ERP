@@ -9,6 +9,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
+import hashlib
 import logging
 
 from utils.cache import invalidate_company_cache
@@ -24,6 +25,7 @@ from utils.permissions import (
     resolve_branch_scope,
     validate_branch_access,
     validate_treasury_account_access,
+    check_permission,
 )
 from utils.accounting import (
     compute_invoice_totals,
@@ -35,6 +37,7 @@ from utils.accounting import (
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
+from utils.tax_precision import require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
 from utils.party_balance import update_party_site_balance
@@ -83,6 +86,10 @@ def _reversal_discount_amount(original_line, quantity) -> Decimal:
         return Decimal("0")
     ratio = _dec(quantity) / original_qty
     return (_dec(getattr(original_line, "discount", 0)) * ratio).quantize(_D2, ROUND_HALF_UP)
+
+
+def _derived_idempotency_key(key: str, suffix: str) -> str:
+    return hashlib.sha256(f"{key}:{suffix}".encode("utf-8")).hexdigest()
 
 
 def _load_original_purchase_invoice_for_return(db, invoice_id: int, supplier_id: int):
@@ -244,6 +251,27 @@ def create_purchase_return(
 
     with transactional(company_id) as db:
         try:
+            idempotency_key = require_idempotency_key(request, operation="purchase return")
+            replay = db.execute(text("""
+                SELECT id, invoice_number, branch_id
+                FROM invoices
+                WHERE idempotency_key = :key
+                  AND invoice_type = 'purchase_return'
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if replay:
+                validate_branch_access(current_user, replay.branch_id, request)
+                return {
+                    "id": replay.id,
+                    "message": i18n_message("purchase_return_created_success", request),
+                    "idempotent_replay": True,
+                }
+
+            if invoice.paid_amount and _dec(invoice.paid_amount) > 0:
+                permissions = current_user.get("permissions", []) if isinstance(current_user, dict) else getattr(current_user, "permissions", [])
+                if not check_permission(list(permissions or []), "treasury.create"):
+                    raise HTTPException(**http_error(403, "permission_denied", request))
+
             # Resolve base currency
             from utils.accounting import get_base_currency
             base_currency = get_base_currency(db)
@@ -401,8 +429,7 @@ def create_purchase_return(
                 # We will enforce logic: Must have stock to return it.
                 qty_to_check = abs(item.quantity)
                 if qty_to_check > current_stock:
-                    product_name = db.execute(text("SELECT product_name FROM products WHERE id=:id"), {"id": item.product_id}).scalar()
-                    raise ValueError(f"الكمية المراد إرجاعها '{product_name}' ({qty_to_check}) غير متوفرة في المخزون الحالي ({current_stock})")
+                    raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
     
             # Create Invoice
             # Note: If paid_amount > 0, we mark as 'paid' or 'partial'.
@@ -418,22 +445,43 @@ def create_purchase_return(
                     invoice_number, party_id, invoice_date, due_date,
                     subtotal, tax_amount, total, paid_amount,
                     status, invoice_type, notes, created_by, related_invoice_id, branch_id,
-                    currency, exchange_rate, party_site_id
+                    currency, exchange_rate, party_site_id, idempotency_key
                 ) VALUES (
                     :num, :pid, :date, :due,
                     :sub, :tax, :total, :paid,
                     :status, 'purchase_return', :notes, :uid, :rel_id, :bid,
-                    :currency, :exchange_rate, :party_site_id
-                ) RETURNING id
+                    :currency, :exchange_rate, :party_site_id, :idempotency_key
+                )
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                DO NOTHING
+                RETURNING id
             """), {
                 "num": return_number, "pid": invoice.supplier_id, "date": invoice.invoice_date,
                 "due": invoice.due_date, "sub": subtotal, "tax": tax_total, "total": total,
                 "paid": invoice.paid_amount or 0,
                 "status": return_status, "notes": invoice.notes, "uid": user_id,
                 "rel_id": invoice.original_invoice_id, "bid": branch_id,
-                "currency": invoice.currency or base_currency, "exchange_rate": 1.0 if invoice.exchange_rate is None else invoice.exchange_rate,
+                "currency": invoice.currency or base_currency, "exchange_rate": Decimal("1") if invoice.exchange_rate is None else invoice.exchange_rate,
                 "party_site_id": invoice.party_site_id,
-            }).fetchone()[0]
+                "idempotency_key": idempotency_key,
+            }).fetchone()
+            if not new_invoice_row:
+                existing_return = db.execute(text("""
+                    SELECT id, branch_id
+                    FROM invoices
+                    WHERE idempotency_key = :key
+                      AND invoice_type = 'purchase_return'
+                    LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if existing_return:
+                    validate_branch_access(current_user, existing_return.branch_id, request)
+                    return {
+                        "id": existing_return.id,
+                        "message": i18n_message("purchase_return_created_success", request),
+                        "idempotent_replay": True,
+                    }
+                raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+            new_invoice_id = new_invoice_row[0]
     
             # 4. Add Items & Update Stock (DEDUCT)
             return_lines_data = []  # T024: Track actual costs per line
@@ -494,7 +542,7 @@ def create_purchase_return(
                                 product_id=item.product_id,
                                 warehouse_id=wh_id,
                                 quantity=return_qty,
-                                unit_cost=float(return_unit_cost),
+                                unit_cost=str(return_unit_cost),
                                 source_document_type="purchase_return",
                                 source_document_id=new_invoice_id,
                                 costing_method=costing_method,
@@ -516,7 +564,7 @@ def create_purchase_return(
                             )
                             return_unit_cost = (_dec(consumed_value) / return_qty).quantize(_D4, ROUND_HALF_UP) if return_qty else Decimal("0")
                     except ValueError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc))
+                        raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
                 else:
                     inv_cost_row = db.execute(text("""
                         SELECT average_cost
@@ -533,7 +581,7 @@ def create_purchase_return(
                     WHERE product_id = :pid AND warehouse_id = :wh
                       AND quantity - COALESCE(reserved_quantity, 0) >= :qty
                     RETURNING id
-                """), {"qty": float(return_qty), "pid": item.product_id, "wh": wh_id}).fetchone()
+                """), {"qty": return_qty, "pid": item.product_id, "wh": wh_id}).fetchone()
                 if not inv_update:
                     raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
 
@@ -555,9 +603,9 @@ def create_purchase_return(
                     "pid": item.product_id,
                     "wh": wh_id,
                     "ref_id": new_invoice_id,
-                    "qty": -float(return_qty),
-                    "unit_cost": float(return_unit_cost),
-                    "total_cost": float(return_total_cost),
+                    "qty": -return_qty,
+                    "unit_cost": str(return_unit_cost),
+                    "total_cost": str(return_total_cost),
                     "uid": user_id,
                 })
     
@@ -642,9 +690,10 @@ def create_purchase_return(
                     user_id=user_id,
                     branch_id=branch_id,
                     currency=invoice.currency or base_currency,
-                    exchange_rate=1.0,  # amounts already in base currency
+                    exchange_rate=Decimal("1"),  # amounts already in base currency
                     source="purchase_return",
-                    source_id=new_invoice_id
+                    source_id=new_invoice_id,
+                    idempotency_key=_derived_idempotency_key(idempotency_key, "purchase-return")
                 )
     
             # 7. INTEGRATED REFUND (If paid_amount > 0)
@@ -659,19 +708,27 @@ def create_purchase_return(
                     INSERT INTO payment_vouchers (
                         voucher_number, voucher_type, voucher_date, party_type, party_id,
                 amount, payment_method, notes, status, created_by,
-                        currency, exchange_rate, treasury_account_id
+                        currency, exchange_rate, treasury_account_id, branch_id, idempotency_key
                     ) VALUES (
                         :vnum, 'refund', :vdate, 'supplier', :supp,
                         :amt, :method, :notes, 'posted', :user,
-                        :currency, :exchange_rate, :treasury_id
-                    ) RETURNING id
+                        :currency, :exchange_rate, :treasury_id, :branch_id, :idempotency_key
+                    )
+                    ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                    DO NOTHING
+                    RETURNING id
                 """), {
                     "vnum": voucher_num, "vdate": invoice.invoice_date, "supp": invoice.supplier_id,
                     "amt": invoice.paid_amount, "method": invoice.payment_method or 'cash',
                     "notes": f"استرداد نقدي عن مردود {return_number}", "user": user_id,
                     "currency": invoice.currency or base_currency, "exchange_rate": exchange_rate,
                     "treasury_id": invoice.treasury_id,
-                }).fetchone()[0]
+                    "branch_id": branch_id,
+                    "idempotency_key": idempotency_key,
+                }).fetchone()
+                if not voucher_row:
+                    raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+                vid = voucher_row[0]
     
                 # Allocation
                 db.execute(text("""
@@ -717,9 +774,10 @@ def create_purchase_return(
                         user_id=user_id,
                         branch_id=branch_id,
                         currency=invoice.currency or base_currency,
-                        exchange_rate=1.0,  # amounts already in base currency
+                        exchange_rate=Decimal("1"),  # amounts already in base currency
                         source="payment_voucher",
-                        source_id=vid
+                        source_id=vid,
+                        idempotency_key=_derived_idempotency_key(idempotency_key, "purchase-return-refund")
                     )
 
                     if refund_treasury_id:
@@ -741,8 +799,10 @@ def create_purchase_return(
     
             return {"id": new_invoice_id, "message": i18n_message("purchase_return_created_success", request)}
     
-        except ValueError as ve:
-            raise HTTPException(status_code=400, detail=str(ve))
+        except HTTPException:
+            raise
+        except ValueError:
+            raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
         except Exception as e:
             logger.exception("Error creating return")
             raise HTTPException(**http_error(500, "return_creation_error", request))

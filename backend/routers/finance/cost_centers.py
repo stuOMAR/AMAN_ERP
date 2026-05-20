@@ -8,6 +8,7 @@ from routers.auth import get_current_user
 from utils.permissions import require_permission, require_module
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.tx import transactional
 from schemas.cost_centers import CostCenterCreate, CostCenterUpdate, CostCenterResponse
 import logging
 logger = logging.getLogger(__name__)
@@ -74,63 +75,59 @@ def create_cost_center(request: Request, cc: CostCenterCreate, current_user: dic
 @limiter.limit("100/minute")
 def update_cost_center(request: Request, cc_id: int, cc: CostCenterUpdate, current_user: dict = Depends(get_current_user)):
     """Update a cost center"""
-    conn = get_db_connection(current_user.company_id)
-    try:
-        # Check existence
-        existing = conn.execute(text("SELECT 1 FROM cost_centers WHERE id = :id"), {"id": cc_id}).fetchone()
-        if not existing:
-            raise HTTPException(**http_error(404, "cost_center_not_found", request))
+    with transactional(current_user.company_id) as db:
+        try:
+            # Check existence
+            existing = db.execute(text("SELECT 1 FROM cost_centers WHERE id = :id"), {"id": cc_id}).fetchone()
+            if not existing:
+                raise HTTPException(**http_error(404, "cost_center_not_found", request))
 
-        # Check duplicate code
-        if cc.center_code:
-            dup = conn.execute(text("SELECT 1 FROM cost_centers WHERE center_code = :code AND id != :id"), 
-                               {"code": cc.center_code, "id": cc_id}).fetchone()
-            if dup:
-                raise HTTPException(**http_error(400, "cost_center_code_already_exists", request))
+            # Check duplicate code
+            if cc.center_code:
+                dup = db.execute(text("SELECT 1 FROM cost_centers WHERE center_code = :code AND id != :id"), 
+                                 {"code": cc.center_code, "id": cc_id}).fetchone()
+                if dup:
+                    raise HTTPException(**http_error(400, "cost_center_code_already_exists", request))
 
-        # Dynamic Update
-        update_fields = []
-        params = {"id": cc_id}
+            # Dynamic Update
+            update_fields = []
+            params = {"id": cc_id}
         
-        if cc.center_code is not None:
-            update_fields.append("center_code = :code")
-            params["code"] = cc.center_code
-        if cc.center_name is not None:
-            update_fields.append("center_name = :name")
-            params["name"] = cc.center_name
-        if cc.center_name_en is not None:
-            update_fields.append("center_name_en = :name_en")
-            params["name_en"] = cc.center_name_en
-        if cc.department_id is not None:
-            update_fields.append("department_id = :dept")
-            params["dept"] = cc.department_id
-        if cc.manager_id is not None:
-            update_fields.append("manager_id = :mgr")
-            params["mgr"] = cc.manager_id
-        if cc.is_active is not None:
-            update_fields.append("is_active = :active")
-            params["active"] = cc.is_active
+            if cc.center_code is not None:
+                update_fields.append("center_code = :code")
+                params["code"] = cc.center_code
+            if cc.center_name is not None:
+                update_fields.append("center_name = :name")
+                params["name"] = cc.center_name
+            if cc.center_name_en is not None:
+                update_fields.append("center_name_en = :name_en")
+                params["name_en"] = cc.center_name_en
+            if cc.department_id is not None:
+                update_fields.append("department_id = :dept")
+                params["dept"] = cc.department_id
+            if cc.manager_id is not None:
+                update_fields.append("manager_id = :mgr")
+                params["mgr"] = cc.manager_id
+            if cc.is_active is not None:
+                update_fields.append("is_active = :active")
+                params["active"] = cc.is_active
 
-        if not update_fields:
-            raise HTTPException(**http_error(400, "pos_no_fields", request))
+            if not update_fields:
+                raise HTTPException(**http_error(400, "pos_no_fields", request))
 
-        sql = f"UPDATE cost_centers SET {', '.join(update_fields)} WHERE id = :id RETURNING id, center_code, center_name, center_name_en, department_id, manager_id, is_active"
+            sql = f"UPDATE cost_centers SET {', '.join(update_fields)} WHERE id = :id RETURNING id, center_code, center_name, center_name_en, department_id, manager_id, is_active"
         
-        result = conn.execute(text(sql), params).fetchone()
-        conn.commit()
-        log_activity(conn, user_id=current_user.id, username=current_user.username,
-                     action="update_cost_center", resource_type="cost_center",
-                     resource_id=str(cc_id),
-                     details={"fields": list(params.keys())}, request=request)
-        return dict(result._mapping)
-    except HTTPException:
-        raise
-    except Exception:
-        conn.rollback()
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        conn.close()
+            result = db.execute(text(sql), params).fetchone()
+            log_activity(db, user_id=current_user.id, username=current_user.username,
+                         action="update_cost_center", resource_type="cost_center",
+                         resource_id=str(cc_id),
+                         details={"fields": list(params.keys())}, request=request)
+            return dict(result._mapping)
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Internal error")
+            raise HTTPException(**http_error(500, "internal_error"))
 
 @router.delete("/{cc_id}", dependencies=[Depends(require_permission("accounting.cost_centers.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")

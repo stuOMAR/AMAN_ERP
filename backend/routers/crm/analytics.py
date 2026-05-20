@@ -8,6 +8,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
 from pydantic import BaseModel
+from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -251,7 +252,7 @@ def crm_dashboard(current_user=Depends(get_current_user)):
         """)).fetchall()
 
         kpis_dict = dict(kpis._mapping) if kpis else {}
-        kpis_dict['win_rate'] = float(win_rate_row.win_rate) if win_rate_row else 0
+        kpis_dict['win_rate'] = Decimal(str(win_rate_row.win_rate)) if win_rate_row else Decimal('0')
 
         return {
             "kpis": kpis_dict,
@@ -315,9 +316,9 @@ def conversion_analytics(current_user=Depends(get_current_user)):
         """)).fetchall()
 
         return {
-            "win_rate": float(rates.win_rate) if rates else 0,
-            "loss_rate": float(rates.loss_rate) if rates else 0,
-            "avg_days_to_close": float(rates.avg_days_to_close) if rates else 0,
+            "win_rate": Decimal(str(rates.win_rate)) if rates else Decimal('0'),
+            "loss_rate": Decimal(str(rates.loss_rate)) if rates else Decimal('0'),
+            "avg_days_to_close": Decimal(str(rates.avg_days_to_close)) if rates else Decimal('0'),
             "total_closed": rates.total_closed if rates else 0,
             "won": rates.won if rates else 0,
             "lost": rates.lost if rates else 0,

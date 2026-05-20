@@ -6,12 +6,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from typing import Optional
+from decimal import Decimal
 
 
 class OfflineBatchLine(BaseModel):
     product_id: int
-    quantity: float
-    unit_price: float
+    quantity: Decimal
+    unit_price: Decimal
 
 
 class OfflineBatchSubmit(BaseModel):

@@ -78,16 +78,18 @@ def prepare_je_lines(je_lines: List[Dict], source: str = "auto", request=None) -
 validate_je_lines = prepare_je_lines
 
 
-def generate_sequential_number(db, prefix: str, table: str, column: str) -> str:
+def generate_sequential_number(db, prefix: str, table: str, column: str, branch_id: Optional[int] = None) -> str:
     """
     Generate a sequential document number.
     Example: prefix='SINV-2026' → 'SINV-2026-00001'
+    If branch_id is supplied, the visible prefix becomes branch-scoped:
+    prefix='SINV-2026', branch_id=1 → 'SINV-2026-B1-00001'.
 
     Uses MAX extraction of trailing digits from existing numbers to determine next.
     table and column are developer-defined constants (not user input).
 
     Concurrency: uses a PostgreSQL transaction-scoped advisory lock keyed by
-    (table, column, prefix) to serialize concurrent callers without violating
+    (table, column, prefix, branch_id) to serialize concurrent callers without violating
     PG's restriction against FOR UPDATE on aggregate queries.
     """
     # SEC-003: Validate table/column identifiers to prevent SQL injection
@@ -95,21 +97,29 @@ def generate_sequential_number(db, prefix: str, table: str, column: str) -> str:
     validate_sql_identifier(table, "table")
     validate_sql_identifier(column, "column")
 
-    # Serialize concurrent number generation for this (table.column, prefix)
+    effective_prefix = f"{prefix}-B{int(branch_id)}" if branch_id is not None else prefix
+
+    # Serialize concurrent number generation for this (table.column, prefix, branch)
     # pair. pg_advisory_xact_lock releases automatically at COMMIT/ROLLBACK.
-    lock_key = f"{table}.{column}:{prefix}"
+    lock_key = f"{table}.{column}:{effective_prefix}:branch:{branch_id if branch_id is not None else 'global'}"
     db.execute(
         text("SELECT pg_advisory_xact_lock(hashtextextended(:k, 0))"),
         {"k": lock_key},
     )
 
+    branch_clause = ""
+    params = {"pattern": f"{effective_prefix}-%"}
+    if branch_id is not None:
+        branch_clause = " AND branch_id = :branch_id"
+        params["branch_id"] = int(branch_id)
+
     result = db.execute(text( # noqa: sql-lint
                 f"""
         SELECT MAX(CAST(SUBSTRING({column} FROM '[0-9]+$') AS INTEGER))
-        FROM {table} WHERE {column} LIKE :pattern
-    """), {"pattern": f"{prefix}-%"}).scalar()
+        FROM {table} WHERE {column} LIKE :pattern{branch_clause}
+    """), params).scalar()
     next_num = (result or 0) + 1
-    return f"{prefix}-{str(next_num).zfill(5)}"
+    return f"{effective_prefix}-{str(next_num).zfill(5)}"
 
 
 def get_mapped_account_id(db, mapping_key: str) -> Optional[int]:
@@ -161,7 +171,9 @@ def update_account_balance(db, account_id: int, debit_base, credit_base, debit_c
     credit_curr = _to_decimal(credit_curr)
 
     # 1. Get account type and currency
-    acct_data = db.execute(text("SELECT account_type, currency FROM accounts WHERE id = :id"), {"id": account_id}).fetchone()
+    acct_data = db.execute(text(
+        "SELECT account_type, currency FROM accounts WHERE id = :id FOR UPDATE"
+    ), {"id": account_id}).fetchone()
     if not acct_data:
         return
         
@@ -272,4 +284,3 @@ def compute_invoice_totals(
         "total_tax": total_tax.quantize(_D2, ROUND_HALF_UP),
         "grand_total": grand_total,
     }
-

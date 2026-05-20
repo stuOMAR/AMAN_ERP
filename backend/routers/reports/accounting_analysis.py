@@ -22,6 +22,12 @@ from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_D1 = Decimal("0.1")
+_D2 = Decimal("0.01")
+
+
+def _q(value, places: Decimal = _D2) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(places, rounding=ROUND_HALF_UP)
 
 
 def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None):
@@ -497,10 +503,10 @@ def get_fx_gain_loss_report(
                 "party": inv.party_name,
                 "invoice_type": inv.invoice_type,
                 "currency": inv.currency,
-                "open_fc_amount": round(open_fc, 2),
+                "open_fc_amount": _q(open_fc),
                 "booked_rate": booked,
                 "current_rate": current,
-                "unrealized_fx": round(diff, 2),
+                "unrealized_fx": _q(diff),
             })
             if diff >= 0:
                 total_unrealized_gain += diff
@@ -535,14 +541,14 @@ def get_fx_gain_loss_report(
             "currency_exposure": exposure_list,
             "unrealized": {
                 "invoices": unrealized_list,
-                "total_unrealized_gain": round(total_unrealized_gain, 2),
-                "total_unrealized_loss": round(total_unrealized_loss, 2),
-                "net_unrealized": round(total_unrealized_gain - total_unrealized_loss, 2),
+                "total_unrealized_gain": _q(total_unrealized_gain),
+                "total_unrealized_loss": _q(total_unrealized_loss),
+                "net_unrealized": _q(total_unrealized_gain - total_unrealized_loss),
             },
             "summary": {
-                "total_fx_gain": round(total_gain + total_unrealized_gain, 2),
-                "total_fx_loss": round(total_loss + total_unrealized_loss, 2),
-                "net_fx": round((total_gain + total_unrealized_gain) - (total_loss + total_unrealized_loss), 2),
+                "total_fx_gain": _q(total_gain + total_unrealized_gain),
+                "total_fx_loss": _q(total_loss + total_unrealized_loss),
+                "net_fx": _q((total_gain + total_unrealized_gain) - (total_loss + total_unrealized_loss)),
             }
         }
     finally:
@@ -597,13 +603,26 @@ def horizontal_analysis(request: Request,
                 """), params).fetchall()
                 for r in rows:
                     balance_map[(r.account_id, idx)] = Decimal(str(r.net))
+            except HTTPException:
+                # F-NEW-294 (R-RECOVERABLE-500, Req 8.10): keep
+                # caller-recoverable errors at their original 4xx status
+                # rather than collapsing through to 500.
+                raise
             except Exception as exc:
                 # P1 #110h — surface the failure in the response instead
                 # of silently producing a partial report.
                 logger.exception("horizontal_analysis: period %s failed: %s", idx, exc)
+                # F-NEW-294: a per-period SQL failure is a recoverable
+                # validation/data error from the caller's viewpoint (bad
+                # date range, missing branch, etc.). Map to HTTP 400
+                # with a structured body instead of leaking 500.
                 raise HTTPException(
-                    status_code=500,
-                    detail=f"تعذّر حساب الفترة {idx + 1}: {exc}",
+                    status_code=400,
+                    detail={
+                        "error": "horizontal_analysis_period_failed",
+                        "period_index": idx + 1,
+                        "reason": str(exc),
+                    },
                 )
 
         results = []
@@ -737,28 +756,28 @@ def financial_ratios(
         # Ratios
         ratios = {
             "liquidity": {
-                "current_ratio": round(current_assets / current_liabilities, 2) if current_liabilities else None,
-                "quick_ratio": round((current_assets - abs(inventory)) / current_liabilities, 2) if current_liabilities else None,
-                "cash_ratio": round(code_sum("1101%") / current_liabilities, 2) if current_liabilities else None,
+                "current_ratio": _q(current_assets / current_liabilities) if current_liabilities else None,
+                "quick_ratio": _q((current_assets - abs(inventory)) / current_liabilities) if current_liabilities else None,
+                "cash_ratio": _q(code_sum("1101%") / current_liabilities) if current_liabilities else None,
             },
             "profitability": {
-                "gross_profit_margin": round(gross_profit / revenue * 100, 2) if revenue else None,
-                "net_profit_margin": round(net_income / revenue * 100, 2) if revenue else None,
-                "return_on_assets": round(net_income / total_assets * 100, 2) if total_assets else None,
-                "return_on_equity": round(net_income / equity * 100, 2) if equity else None,
+                "gross_profit_margin": _q(gross_profit / revenue * 100) if revenue else None,
+                "net_profit_margin": _q(net_income / revenue * 100) if revenue else None,
+                "return_on_assets": _q(net_income / total_assets * 100) if total_assets else None,
+                "return_on_equity": _q(net_income / equity * 100) if equity else None,
             },
             "solvency": {
-                "debt_to_equity": round(total_liabilities / equity, 2) if equity else None,
-                "debt_to_assets": round(total_liabilities / total_assets, 2) if total_assets else None,
-                "equity_ratio": round(equity / total_assets * 100, 2) if total_assets else None,
+                "debt_to_equity": _q(total_liabilities / equity) if equity else None,
+                "debt_to_assets": _q(total_liabilities / total_assets) if total_assets else None,
+                "equity_ratio": _q(equity / total_assets * 100) if total_assets else None,
             },
             "activity": {
-                "ar_turnover": round(revenue / ar, 2) if ar else None,
-                "ar_days": round(365 / (revenue / ar), 1) if ar and revenue else None,
-                "ap_turnover": round(cogs / ap, 2) if ap else None,
-                "ap_days": round(365 / (cogs / ap), 1) if ap and cogs else None,
-                "inventory_turnover": round(cogs / abs(inventory), 2) if inventory else None,
-                "inventory_days": round(365 / (cogs / abs(inventory)), 1) if inventory and cogs else None,
+                "ar_turnover": _q(revenue / ar) if ar else None,
+                "ar_days": _q(Decimal("365") / (revenue / ar), _D1) if ar and revenue else None,
+                "ap_turnover": _q(cogs / ap) if ap else None,
+                "ap_days": _q(Decimal("365") / (cogs / ap), _D1) if ap and cogs else None,
+                "inventory_turnover": _q(cogs / abs(inventory)) if inventory else None,
+                "inventory_days": _q(Decimal("365") / (cogs / abs(inventory)), _D1) if inventory and cogs else None,
             }
         }
 
@@ -766,9 +785,9 @@ def financial_ratios(
             "report_name": "تحليل النسب المالية",
             "as_of_date": str(d),
             "summary": {
-                "total_assets": round(total_assets, 2), "current_assets": round(current_assets, 2),
-                "total_liabilities": round(total_liabilities, 2), "equity": round(equity, 2),
-                "revenue_ytd": round(revenue, 2), "net_income_ytd": round(net_income, 2),
+                "total_assets": _q(total_assets), "current_assets": _q(current_assets),
+                "total_liabilities": _q(total_liabilities), "equity": _q(equity),
+                "revenue_ytd": _q(revenue), "net_income_ytd": _q(net_income),
             },
             "ratios": ratios,
         }
@@ -886,23 +905,23 @@ def detailed_profit_loss(request: Request,
             revenue = Decimal(str(r.revenue or 0))
             cogs = Decimal(str(r.cogs or 0))
             gross_profit = revenue - cogs
-            margin = round((gross_profit / revenue * 100), 1) if revenue > 0 else 0
+            margin = _q((gross_profit / revenue * 100), _D1) if revenue > 0 else Decimal("0")
 
             total_revenue += revenue
             total_cogs += cogs
 
             report_rows.append({
                 group_label: r.group_name or "غير محدد",
-                "revenue": round(revenue, 2),
-                "cogs": round(cogs, 2),
-                "gross_profit": round(gross_profit, 2),
+                "revenue": _q(revenue),
+                "cogs": _q(cogs),
+                "gross_profit": _q(gross_profit),
                 "gross_margin_pct": margin,
                 "invoice_count": r.invoice_count or 0,
-                "total_qty": float(r.total_qty or 0),
+                "total_qty": Decimal(str(r.total_qty or 0)),
             })
 
         total_gp = total_revenue - total_cogs
-        overall_margin = round((total_gp / total_revenue * 100), 1) if total_revenue > 0 else 0
+        overall_margin = _q((total_gp / total_revenue * 100), _D1) if total_revenue > 0 else Decimal("0")
 
         result = {
             "report_name": f"Detailed P&L by {group_by.title()} — أرباح وخسائر تفصيلي",
@@ -910,9 +929,9 @@ def detailed_profit_loss(request: Request,
             "group_by": group_by,
             "details": report_rows,
             "totals": {
-                "total_revenue": round(total_revenue, 2),
-                "total_cogs": round(total_cogs, 2),
-                "total_gross_profit": round(total_gp, 2),
+                "total_revenue": _q(total_revenue),
+                "total_cogs": _q(total_cogs),
+                "total_gross_profit": _q(total_gp),
                 "overall_gross_margin_pct": overall_margin,
             }
         }
@@ -971,4 +990,3 @@ def detailed_profit_loss(request: Request,
 # ═══════════════════════════════════════════════════════════
 # RPT-105: Sales Commission Report (تقرير عمولات المبيعات)
 # ═══════════════════════════════════════════════════════════
-

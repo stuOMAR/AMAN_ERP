@@ -470,14 +470,15 @@ def generate_contract_invoice(
             
             from datetime import date as dt_date
             from utils.accounting import generate_sequential_number
-            
-            inv_num = generate_sequential_number(db, f"INV-CTR-{dt_date.today().year}", "invoices", "invoice_number")
     
             # Get user's default branch for tax resolution
             user_branch = db.execute(text(
                 "SELECT branch_id FROM user_branches WHERE user_id = :uid ORDER BY branch_id LIMIT 1"
             ), {"uid": current_user.id}).fetchone()
             _branch_id = user_branch.branch_id if user_branch else None
+            inv_num = generate_sequential_number(
+                db, f"INV-CTR-{dt_date.today().year}", "invoices", "invoice_number", branch_id=_branch_id
+            )
 
             # Centralized Decimal calculation (Constitution: no inline float math)
             line_dicts = []

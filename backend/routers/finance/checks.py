@@ -3,7 +3,7 @@ Checks Management Router - TRS-001 & TRS-002
 إدارة الشيكات تحت التحصيل والدفع
 """
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -13,6 +13,7 @@ from utils.permissions import branch_scope_filter, require_permission, validate_
 from utils.accounting import get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.idempotency import find_je_by_idempotency_key, find_je_by_source
 from utils.treasury_gl import ensure_treasury_gl_accounts
 from decimal import Decimal, ROUND_HALF_UP
 from datetime import date
@@ -101,7 +102,7 @@ def list_checks_receivable(
                 items.append({
                     "id": r.id, "check_number": r.check_number,
                     "drawer_name": r.drawer_name, "bank_name": r.bank_name,
-                    "branch_name": r.branch_name, "amount": float(_dec(r.amount)),
+                    "branch_name": r.branch_name, "amount": str(_dec(r.amount)),
                     "currency": r.currency,
                     "issue_date": str(r.issue_date) if r.issue_date else None,
                     "due_date": str(r.due_date) if r.due_date else None,
@@ -140,10 +141,10 @@ def checks_receivable_stats(branch_id: Optional[int] = None, current_user=Depend
                 FROM checks_receivable WHERE 1=1 {cond}
             """), params).fetchone()
             return {
-                "pending": {"count": stats.pending_count, "amount": float(_dec(stats.pending_amount))},
-                "collected": {"count": stats.collected_count, "amount": float(_dec(stats.collected_amount))},
-                "bounced": {"count": stats.bounced_count, "amount": float(_dec(stats.bounced_amount))},
-                "overdue": {"count": stats.overdue_count, "amount": float(_dec(stats.overdue_amount))},
+                "pending": {"count": stats.pending_count, "amount": str(_dec(stats.pending_amount))},
+                "collected": {"count": stats.collected_count, "amount": str(_dec(stats.collected_amount))},
+                "bounced": {"count": stats.bounced_count, "amount": str(_dec(stats.bounced_amount))},
+                "overdue": {"count": stats.overdue_count, "amount": str(_dec(stats.overdue_amount))},
             }
         except Exception:
             logger.exception("Internal error")
@@ -171,7 +172,7 @@ def get_check_receivable(check_id: int, current_user=Depends(get_current_user)):
             return {
                 "id": r.id, "check_number": r.check_number,
                 "drawer_name": r.drawer_name, "bank_name": r.bank_name,
-                "branch_name": r.branch_name, "amount": float(_dec(r.amount)),
+                "branch_name": r.branch_name, "amount": str(_dec(r.amount)),
                 "currency": r.currency,
                 "issue_date": str(r.issue_date) if r.issue_date else None,
                 "due_date": str(r.due_date) if r.due_date else None,
@@ -218,12 +219,19 @@ def create_check_receivable(data: dict, request: Request, current_user=Depends(g
             if dup:
                 raise HTTPException(
                     409,
-                    detail=f"شيك بنفس الرقم موجود مسبقاً (ID={dup.id}, الحالة={dup.status}, المبلغ={float(dup.amount):,.2f})"
+                    detail=f"شيك بنفس الرقم موجود مسبقاً (ID={dup.id}, الحالة={dup.status}, المبلغ={_dec(dup.amount).quantize(_D2, ROUND_HALF_UP)})"
                 )
     
             _ensure_checks_accounts(db)
             # Also ensure all 4 treasury GL accounts exist (1205, 2105, 1210, 2110)
-            ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
+            # PR19-fix: commit=False — the surrounding transactional()
+            # block owns commit/rollback. Without this flag the helper
+            # auto-committed mid-flight, breaking atomicity for the
+            # rest of the check-creation path.
+            ensure_treasury_gl_accounts(
+                db, user_id=current_user.id,
+                username=current_user.username, commit=False,
+            )
     
             amount = _dec(data["amount"]).quantize(_D2, ROUND_HALF_UP)
     
@@ -241,8 +249,8 @@ def create_check_receivable(data: dict, request: Request, current_user=Depends(g
             check_fiscal_period_open(db, data.get("issue_date", str(date.today())))
             
             je_lines = [
-                {"account_id": checks_account.id, "debit": float(amount), "credit": 0, "description": f"شيك تحت التحصيل {data['check_number']}"},
-                {"account_id": ar_account.id, "debit": 0, "credit": float(amount), "description": f"شيك تحت التحصيل {data['check_number']}"},
+                {"account_id": checks_account.id, "debit": _dec(amount), "credit": 0, "description": f"شيك تحت التحصيل {data['check_number']}"},
+                {"account_id": ar_account.id, "debit": 0, "credit": _dec(amount), "description": f"شيك تحت التحصيل {data['check_number']}"},
             ]
     
             je_id, _ = gl_create_journal_entry(
@@ -271,7 +279,7 @@ def create_check_receivable(data: dict, request: Request, current_user=Depends(g
                 "drawer_name": data.get("drawer_name", ""),
                 "bank_name": data.get("bank_name", ""),
                 "branch_name": data.get("branch_name", ""),
-                "amount": float(amount),
+                "amount": str(amount),
                 "currency": data.get("currency", get_base_currency(db)),
                 "issue_date": data.get("issue_date"),
                 "due_date": data["due_date"],
@@ -282,12 +290,12 @@ def create_check_receivable(data: dict, request: Request, current_user=Depends(g
                 "notes": data.get("notes", ""),
                 "branch_id": branch_id,
                 "user_id": current_user.id,
-                "exchange_rate": float(_dec(data.get("exchange_rate", 1))),
+                "exchange_rate": str(_dec(data.get("exchange_rate", 1))),
                 "party_site_id": data.get("party_site_id"),
             }).fetchone()
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_receivable", str(result.id),
-                         {"check_number": data["check_number"], "amount": float(amount)})
+                         {"check_number": data["check_number"], "amount": str(amount)})
             return {"id": result.id, "message": i18n_message("check_registered", request)}
         except HTTPException:
             raise
@@ -305,6 +313,31 @@ def collect_check_receivable(check_id: int, data: dict, request: Request, curren
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before the state guard. The previous implementation
+            # rejected retries with 400 ``check_not_pending`` because
+            # the first call had already flipped the row to
+            # ``collected``; a network retry then had no idempotent
+            # surface. We probe both the header (header-based replay)
+            # and ``(source='check_collection', source_id)`` (natural
+            # anchor) so retries collapse even when the client forgets
+            # to send Idempotency-Key.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_collection", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_collected_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_receivable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -331,8 +364,8 @@ def collect_check_receivable(check_id: int, data: dict, request: Request, curren
             check_fiscal_period_open(db, collection_date)
             
             je_lines = [
-                {"account_id": treasury["gl_account_id"], "debit": float(amount), "credit": 0, "description": f"تحصيل شيك {check.check_number}"},
-                {"account_id": checks_account.id, "debit": 0, "credit": float(amount), "description": f"تحصيل شيك {check.check_number}"},
+                {"account_id": treasury["gl_account_id"], "debit": _dec(amount), "credit": 0, "description": f"تحصيل شيك {check.check_number}"},
+                {"account_id": checks_account.id, "debit": 0, "credit": _dec(amount), "description": f"تحصيل شيك {check.check_number}"},
             ]
             
             coll_je_id, _ = gl_create_journal_entry(
@@ -344,7 +377,8 @@ def collect_check_receivable(check_id: int, data: dict, request: Request, curren
                 user_id=current_user.id,
                 branch_id=check.branch_id,
                 source="check_collection",
-                source_id=check_id
+                source_id=check_id,
+                idempotency_key=idempotency_key,
             )
     
             # Update treasury balance — T1.3a idempotent recompute
@@ -377,6 +411,28 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard so retries collapse to a 200 instead
+            # of failing with check_cannot_bounce. We probe both by
+            # Idempotency-Key header (header-based replay) and by
+            # ``(source='check_bounce', source_id)`` (natural anchor)
+            # because a bounce is a one-shot event per check.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_bounce", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_bounced_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_receivable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -409,8 +465,8 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
                     raise HTTPException(**http_error(400, "treasury_not_linked_to_check", request))
     
                 je_lines = [
-                    {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
-                    {"account_id": treasury["gl_account_id"], "debit": 0, "credit": float(amount), "description": f"ارتجاع شيك {check.check_number}"},
+                    {"account_id": ar_account.id, "debit": _dec(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
+                    {"account_id": treasury["gl_account_id"], "debit": 0, "credit": _dec(amount), "description": f"ارتجاع شيك {check.check_number}"},
                 ]
                 bounce_je_id, _ = gl_create_journal_entry(
                     db=db,
@@ -421,7 +477,8 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
                     user_id=current_user.id,
                     branch_id=check.branch_id,
                     source="check_bounce",
-                    source_id=check_id
+                    source_id=check_id,
+                    idempotency_key=idempotency_key,
                 )
     
                 # Treasury balance decreases — T1.3a idempotent recompute
@@ -432,8 +489,8 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
                     raise HTTPException(**http_error(500, "checks_receivable_account_not_found", request))
     
                 je_lines = [
-                    {"account_id": ar_account.id, "debit": float(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
-                    {"account_id": checks_account.id, "debit": 0, "credit": float(amount), "description": f"ارتجاع شيك {check.check_number}"},
+                    {"account_id": ar_account.id, "debit": _dec(amount), "credit": 0, "description": f"ارتجاع شيك {check.check_number}"},
+                    {"account_id": checks_account.id, "debit": 0, "credit": _dec(amount), "description": f"ارتجاع شيك {check.check_number}"},
                 ]
                 bounce_je_id, _ = gl_create_journal_entry(
                     db=db,
@@ -444,7 +501,8 @@ def bounce_check_receivable(check_id: int, data: dict, request: Request, current
                     user_id=current_user.id,
                     branch_id=check.branch_id,
                     source="check_bounce",
-                    source_id=check_id
+                    source_id=check_id,
+                    idempotency_key=idempotency_key,
                 )
     
             db.execute(text("""
@@ -474,6 +532,25 @@ def represent_check_receivable(check_id: int, request: Request, data: dict = Non
         data = {}
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before the state guard so a retry collapses to a 200
+            # echo instead of 400 check_cannot_represent.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_re_presentation", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_represented_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_receivable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -496,8 +573,8 @@ def represent_check_receivable(check_id: int, request: Request, data: dict = Non
             check_fiscal_period_open(db, represent_date)
     
             je_lines = [
-                {"account_id": checks_account.id, "debit": float(amount), "credit": 0, "description": f"إعادة تقديم شيك {check.check_number}"},
-                {"account_id": ar_account.id, "debit": 0, "credit": float(amount), "description": f"إعادة تقديم شيك {check.check_number}"},
+                {"account_id": checks_account.id, "debit": _dec(amount), "credit": 0, "description": f"إعادة تقديم شيك {check.check_number}"},
+                {"account_id": ar_account.id, "debit": 0, "credit": _dec(amount), "description": f"إعادة تقديم شيك {check.check_number}"},
             ]
     
             je_id, _ = gl_create_journal_entry(
@@ -509,7 +586,8 @@ def represent_check_receivable(check_id: int, request: Request, data: dict = Non
                 user_id=current_user.id,
                 branch_id=check.branch_id,
                 source="check_re_presentation",
-                source_id=check_id
+                source_id=check_id,
+                idempotency_key=idempotency_key,
             )
     
             new_count = (check.re_presentation_count or 0) + 1
@@ -582,7 +660,7 @@ def list_checks_payable(
                 items.append({
                     "id": r.id, "check_number": r.check_number,
                     "beneficiary_name": r.beneficiary_name, "bank_name": r.bank_name,
-                    "branch_name": r.branch_name, "amount": float(_dec(r.amount)),
+                    "branch_name": r.branch_name, "amount": str(_dec(r.amount)),
                     "currency": r.currency,
                     "issue_date": str(r.issue_date) if r.issue_date else None,
                     "due_date": str(r.due_date) if r.due_date else None,
@@ -621,10 +699,10 @@ def checks_payable_stats(branch_id: Optional[int] = None, current_user=Depends(g
                 FROM checks_payable WHERE 1=1 {cond}
             """), params).fetchone()
             return {
-                "issued": {"count": stats.issued_count, "amount": float(_dec(stats.issued_amount))},
-                "cleared": {"count": stats.cleared_count, "amount": float(_dec(stats.cleared_amount))},
-                "bounced": {"count": stats.bounced_count, "amount": float(_dec(stats.bounced_amount))},
-                "overdue": {"count": stats.overdue_count, "amount": float(_dec(stats.overdue_amount))},
+                "issued": {"count": stats.issued_count, "amount": str(_dec(stats.issued_amount))},
+                "cleared": {"count": stats.cleared_count, "amount": str(_dec(stats.cleared_amount))},
+                "bounced": {"count": stats.bounced_count, "amount": str(_dec(stats.bounced_amount))},
+                "overdue": {"count": stats.overdue_count, "amount": str(_dec(stats.overdue_amount))},
             }
         except Exception:
             logger.exception("Internal error")
@@ -652,7 +730,7 @@ def get_check_payable(check_id: int, current_user=Depends(get_current_user)):
             return {
                 "id": r.id, "check_number": r.check_number,
                 "beneficiary_name": r.beneficiary_name, "bank_name": r.bank_name,
-                "branch_name": r.branch_name, "amount": float(_dec(r.amount)),
+                "branch_name": r.branch_name, "amount": str(_dec(r.amount)),
                 "currency": r.currency,
                 "issue_date": str(r.issue_date) if r.issue_date else None,
                 "due_date": str(r.due_date) if r.due_date else None,
@@ -718,8 +796,8 @@ def create_check_payable(data: dict, request: Request, current_user=Depends(get_
             check_fiscal_period_open(db, data["issue_date"])
             
             je_lines = [
-                {"account_id": ap_account.id, "debit": float(amount), "credit": 0, "description": f"شيك صادر {data['check_number']}"},
-                {"account_id": checks_pay_account.id, "debit": 0, "credit": float(amount), "description": f"شيك صادر {data['check_number']}"},
+                {"account_id": ap_account.id, "debit": _dec(amount), "credit": 0, "description": f"شيك صادر {data['check_number']}"},
+                {"account_id": checks_pay_account.id, "debit": 0, "credit": _dec(amount), "description": f"شيك صادر {data['check_number']}"},
             ]
     
             je_id, _ = gl_create_journal_entry(
@@ -748,7 +826,7 @@ def create_check_payable(data: dict, request: Request, current_user=Depends(get_
                 "beneficiary_name": data.get("beneficiary_name", ""),
                 "bank_name": data.get("bank_name", ""),
                 "branch_name": data.get("branch_name", ""),
-                "amount": float(amount),
+                "amount": str(amount),
                 "currency": data.get("currency", get_base_currency(db)),
                 "issue_date": data["issue_date"],
                 "due_date": data["due_date"],
@@ -759,12 +837,12 @@ def create_check_payable(data: dict, request: Request, current_user=Depends(get_
                 "notes": data.get("notes", ""),
                 "branch_id": branch_id,
                 "user_id": current_user.id,
-                "exchange_rate": float(_dec(data.get("exchange_rate", 1))),
+                "exchange_rate": str(_dec(data.get("exchange_rate", 1))),
                 "party_site_id": data.get("party_site_id"),
             }).fetchone()
     
             log_activity(db, current_user.id, current_user.username, "create", "checks_payable", str(result.id),
-                         {"check_number": data["check_number"], "amount": float(amount)})
+                         {"check_number": data["check_number"], "amount": str(amount)})
             return {"id": result.id, "message": i18n_message("check_registered", request)}
         except HTTPException:
             raise
@@ -782,6 +860,25 @@ def clear_check_payable(check_id: int, data: dict, request: Request, current_use
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard so retries echo a 200 instead of 400
+            # check_not_issued.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_clearance", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_cleared_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_payable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -809,14 +906,14 @@ def clear_check_payable(check_id: int, data: dict, request: Request, current_use
             je_lines = [
                 {
                     "account_id": checks_pay_account.id,
-                    "debit": float(amount),
+                    "debit": _dec(amount),
                     "credit": 0,
                     "description": f"صرف شيك {check.check_number}"
                 },
                 {
                     "account_id": treasury["gl_account_id"],
                     "debit": 0,
-                    "credit": float(amount),
+                    "credit": _dec(amount),
                     "description": f"صرف شيك {check.check_number}"
                 },
             ]
@@ -831,6 +928,7 @@ def clear_check_payable(check_id: int, data: dict, request: Request, current_use
                 branch_id=check.branch_id,
                 source="check_clearance",
                 source_id=check_id,
+                idempotency_key=idempotency_key,
             )
     
             # T1.3a idempotent recompute
@@ -862,6 +960,24 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_payable_bounce", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_bounced_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_payable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -898,14 +1014,14 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
                 je_lines = [
                     {
                         "account_id": treasury["gl_account_id"],
-                        "debit": float(amount),
+                        "debit": _dec(amount),
                         "credit": 0,
                         "description": f"ارتجاع شيك مصروف {check.check_number}"
                     },
                     {
                         "account_id": ap_account.id,
                         "debit": 0,
-                        "credit": float(amount),
+                        "credit": _dec(amount),
                         "description": f"ارتجاع شيك مصروف {check.check_number}"
                     },
                 ]
@@ -920,6 +1036,7 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
                     branch_id=check.branch_id,
                     source="check_payable_bounce",
                     source_id=check_id,
+                    idempotency_key=idempotency_key,
                 )
     
                 # Treasury balance increases (money came back) — T1.3a idempotent recompute
@@ -931,14 +1048,14 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
                 je_lines = [
                     {
                         "account_id": checks_pay_account.id,
-                        "debit": float(amount),
+                        "debit": _dec(amount),
                         "credit": 0,
                         "description": f"ارتجاع شيك صادر {check.check_number}"
                     },
                     {
                         "account_id": ap_account.id,
                         "debit": 0,
-                        "credit": float(amount),
+                        "credit": _dec(amount),
                         "description": f"ارتجاع شيك صادر {check.check_number}"
                     },
                 ]
@@ -953,6 +1070,7 @@ def bounce_check_payable(check_id: int, data: dict, request: Request, current_us
                     branch_id=check.branch_id,
                     source="check_payable_bounce",
                     source_id=check_id,
+                    idempotency_key=idempotency_key,
                 )
     
             db.execute(text("""
@@ -980,6 +1098,24 @@ def represent_check_payable(check_id: int, request: Request, data: dict = {}, cu
     """
     with transactional(current_user.company_id) as db:
         try:
+            # F-NEW-085 (R-MISSING-IDEMPOTENCY) — PR16-fix: replay probe
+            # before state guard.
+            idempotency_key = request.headers.get("Idempotency-Key")
+            prior = (
+                find_je_by_idempotency_key(db, idempotency_key)
+                if idempotency_key
+                else None
+            ) or find_je_by_source(
+                db, source="check_payable_represent", source_id=check_id
+            )
+            if prior is not None:
+                return {
+                    "message": i18n_message("check_represented_success", request),
+                    "idempotent": True,
+                    "journal_id": prior[0],
+                    "entry_number": prior[1],
+                }
+
             check = db.execute(text("SELECT * FROM checks_payable WHERE id = :id FOR UPDATE"), {"id": check_id}).fetchone()
             if not check:
                 raise HTTPException(**http_error(404, "check_not_found"))
@@ -1003,9 +1139,9 @@ def represent_check_payable(check_id: int, request: Request, data: dict = {}, cu
             check_fiscal_period_open(db, represent_date)
     
             je_lines = [
-                {"account_id": ap_account.id, "debit": float(amount), "credit": 0,
+                {"account_id": ap_account.id, "debit": _dec(amount), "credit": 0,
                  "description": f"إعادة تقديم شيك صادر {check.check_number}"},
-                {"account_id": checks_pay_account.id, "debit": 0, "credit": float(amount),
+                {"account_id": checks_pay_account.id, "debit": 0, "credit": _dec(amount),
                  "description": f"إعادة تقديم شيك صادر {check.check_number}"},
             ]
     
@@ -1019,6 +1155,7 @@ def represent_check_payable(check_id: int, request: Request, data: dict = {}, cu
                 branch_id=check.branch_id,
                 source="check_payable_represent",
                 source_id=check_id,
+                idempotency_key=idempotency_key,
             )
     
             new_count = (check.re_presentation_count or 0) + 1
@@ -1075,13 +1212,13 @@ def get_due_checks_alerts(days_ahead: int = Query(7, ge=1, le=90), branch_id: Op
             for r in receivable:
                 alerts.append({
                     "id": r.id, "check_number": r.check_number, "party": r.party,
-                    "amount": float(_dec(r.amount)), "due_date": str(r.due_date),
+                    "amount": str(_dec(r.amount)), "due_date": str(r.due_date),
                     "type": "receivable", "is_overdue": r.due_date <= date.today()
                 })
             for r in payable:
                 alerts.append({
                     "id": r.id, "check_number": r.check_number, "party": r.party,
-                    "amount": float(_dec(r.amount)), "due_date": str(r.due_date),
+                    "amount": str(_dec(r.amount)), "due_date": str(r.due_date),
                     "type": "payable", "is_overdue": r.due_date <= date.today()
                 })
     
@@ -1136,7 +1273,7 @@ def checks_aging_report(
                     results.append({
                         "id": r.id, "check_number": r.check_number,
                         "party_name": r.party_name, "bank_name": r.bank_name,
-                        "amount": float(_dec(r.amount)), "currency": r.currency or "",
+                        "amount": str(_dec(r.amount)), "currency": r.currency or "",
                         "issue_date": str(r.issue_date) if r.issue_date else None,
                         "due_date": str(r.due_date) if r.due_date else None,
                         "status": r.status, "days_old": days, "bucket": bucket,
@@ -1170,7 +1307,7 @@ def checks_aging_report(
                     results.append({
                         "id": r.id, "check_number": r.check_number,
                         "party_name": r.party_name, "bank_name": r.bank_name,
-                        "amount": float(_dec(r.amount)), "currency": r.currency or "",
+                        "amount": str(_dec(r.amount)), "currency": r.currency or "",
                         "issue_date": str(r.issue_date) if r.issue_date else None,
                         "due_date": str(r.due_date) if r.due_date else None,
                         "status": r.status, "days_old": days, "bucket": bucket,
@@ -1184,8 +1321,10 @@ def checks_aging_report(
                        "61-90": {"receivable": _dec(0), "payable": _dec(0)}, "90+": {"receivable": _dec(0), "payable": _dec(0)}}
             for r in results:
                 buckets[r["bucket"]][r["check_type"]] += _dec(r["amount"])
-            # Serialize bucket summary to float for JSON
-            bucket_summary = {k: {"receivable": float(v["receivable"]), "payable": float(v["payable"])} for k, v in buckets.items()}
+            # F-NEW-083 (R-FLOAT-MONEY, Req 8.5): emit Decimal as canonical
+            # strings — both ``receivable`` and ``payable`` aggregates are
+            # money axes that must preserve cent precision over the wire.
+            bucket_summary = {k: {"receivable": str(v["receivable"]), "payable": str(v["payable"])} for k, v in buckets.items()}
     
             return {
                 "checks": results,

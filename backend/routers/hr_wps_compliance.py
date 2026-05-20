@@ -135,11 +135,13 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
             wps_query = """
                 SELECT pe.*,
                        e.first_name, e.last_name, e.employee_code,
-                       e.national_id, e.bank_name, e.bank_account_number,
-                       e.iban_number, e.id_number, e.nationality,
+                       COALESCE(e.iqama_number, e.tax_id, e.social_security) as national_id,
+                       ta.bank_name, ta.account_number as bank_account_number,
+                       ta.iban as iban_number, e.nationality,
                        COALESCE(e.nationality, 'SA') as nat_code
                 FROM payroll_entries pe
                 JOIN employees e ON pe.employee_id = e.id
+                LEFT JOIN treasury_accounts ta ON e.bank_account_id = ta.id
                 WHERE pe.period_id = :pid AND pe.net_salary > 0
             """
             wps_params = {"pid": body.period_id}
@@ -163,13 +165,28 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
             employer_bank = body.bank_code or (getattr(company, 'bank_short_name', 'RJHI') if company else 'RJHI')
             employer_iban = getattr(company, 'bank_account_iban', '') if company else ''
     
+            from utils.pii_encryption import decrypt_pii
+            tenant_id_str = str(company_id)
+            export_format = (body.format or "sif").lower()
+
             for entry in entries:
                 net = _dec(entry.net_salary)
                 total_amount += net
                 record_count += 1
     
-                iban = entry.iban_number or entry.bank_account_number or ''
-                nat_id = entry.national_id or entry.id_number or ''
+                raw_iban = decrypt_pii(entry.iban_number, tenant_id=tenant_id_str) or entry.iban_number
+                raw_account = decrypt_pii(entry.bank_account_number, tenant_id=tenant_id_str) or entry.bank_account_number
+                raw_national_id = decrypt_pii(entry.national_id, tenant_id=tenant_id_str) or entry.national_id
+
+                iban = raw_iban or raw_account or ''
+                nat_id = raw_national_id or ''
+                
+                if export_format == "sif":
+                    if not iban:
+                        raise HTTPException(**http_error(400, "wps_missing_iban_for_employee", request))
+                    if not nat_id:
+                        raise HTTPException(**http_error(400, "wps_missing_national_id_for_employee", request))
+
                 emp_name = f"{entry.first_name} {entry.last_name}".strip()
     
                 other_earnings = (_dec(entry.other_allowances) + _dec(entry.overtime_amount)).quantize(_D2, ROUND_HALF_UP)
@@ -190,8 +207,6 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
                 })
     
             # ── Build output ──
-            export_format = (body.format or "sif").lower()
-    
             if export_format == "sif":
                 # SAMA WPS-SIF fixed-width format (bank-acceptance ready).
                 #

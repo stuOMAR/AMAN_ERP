@@ -129,7 +129,9 @@ def run_depreciation(request: Request,
         conn.commit()
         return {
             "posted_count": posted_count,
-            "total_amount": float(total_amount.quantize(_D2, ROUND_HALF_UP)),
+            # F-NEW-055: serialise as Decimal-string instead of float to
+            # preserve fiscal precision at the wire boundary.
+            "total_amount": str(total_amount.quantize(_D2, ROUND_HALF_UP)),
             "schedule_ids": posted_ids,
             "through_date": cutoff.isoformat(),
             "message": i18n_message("depreciation_posted_count", request),
@@ -158,13 +160,14 @@ def post_depreciation(request: Request, asset_id: int, schedule_id: int, current
         item = conn.execute(text("""
             SELECT * FROM asset_depreciation_schedule 
             WHERE id = :sid AND asset_id = :aid AND posted = FALSE
+            FOR UPDATE
         """), {"sid": schedule_id, "aid": asset_id}).fetchone()
         
         if not item:
             raise HTTPException(**http_error(400, "schedule_item_not_found_or_already_posted", request))
             
         # Get Asset info for name/code
-        asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+        asset = conn.execute(text("SELECT * FROM assets WHERE id = :id FOR UPDATE"), {"id": asset_id}).fetchone()
             
         # Create Journal Entry
         # Dr Depreciation Expense (5210)
@@ -233,6 +236,7 @@ def calc_declining_balance(request: Request, asset_id: int, data: DecliningBalan
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         life = int(asset.life_years or 5)
@@ -244,10 +248,18 @@ def calc_declining_balance(request: Request, asset_id: int, data: DecliningBalan
             if book_value - dep < residual:
                 dep = (book_value - residual).quantize(_D2, ROUND_HALF_UP)
             book_value -= dep
-            schedule.append({"year": year, "depreciation": float(dep), "book_value": float(book_value.quantize(_D2, ROUND_HALF_UP))})
+            # F-NEW-055 (R-FLOAT-MONEY, Req 8.5): preview rows must serialise
+            # the Decimal book/depreciation values as strings rather than
+            # demote to float — otherwise 4-dp Decimal precision is lost
+            # at the JSON boundary.
+            schedule.append({
+                "year": year,
+                "depreciation": str(dep),
+                "book_value": str(book_value.quantize(_D2, ROUND_HALF_UP)),
+            })
             if book_value <= residual:
                 break
-        return {"asset_id": asset_id, "method": "declining_balance", "rate": float(rate), "schedule": schedule}
+        return {"asset_id": asset_id, "method": "declining_balance", "rate": str(rate), "schedule": schedule}
 
 
 @router.post("/{asset_id}/depreciation/units-of-production", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
@@ -257,6 +269,11 @@ def calc_units_of_production(request: Request, asset_id: int, data: UnitsOfProdu
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found", request))
+        # F-NEW-056 (CC-BRANCH_SCOPE): the handler reads ``assets`` and
+        # writes ``assets.used_units`` — both are branch-scoped tables,
+        # so the caller must have access to the asset's branch before
+        # any side effect runs.
+        validate_branch_access(current_user, asset.branch_id, request)
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         total_units = _dec(data.total_units if data.total_units is not None else (asset.total_units or 1))
@@ -268,8 +285,9 @@ def calc_units_of_production(request: Request, asset_id: int, data: UnitsOfProdu
                      {"u": units_used, "id": asset_id})
         return {
             "asset_id": asset_id, "method": "units_of_production",
-            "dep_per_unit": float(dep_per_unit.quantize(_D4, ROUND_HALF_UP)),
-            "units_used": float(units_used), "depreciation": float(depreciation),
+            # F-NEW-055 (R-FLOAT-MONEY): Decimal-string serialisation.
+            "dep_per_unit": str(dep_per_unit.quantize(_D4, ROUND_HALF_UP)),
+            "units_used": str(units_used), "depreciation": str(depreciation),
         }
 
 
@@ -280,6 +298,7 @@ def calc_sum_of_years_digits(request: Request, asset_id: int, current_user: dict
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found", request))
+        validate_branch_access(current_user, asset.branch_id, request)
         cost = _dec(asset.cost)
         residual = _dec(asset.residual_value or 0)
         life = int(asset.life_years or 5)
@@ -289,11 +308,15 @@ def calc_sum_of_years_digits(request: Request, asset_id: int, current_user: dict
         for year in range(1, life + 1):
             fraction = _dec(life - year + 1) / syd
             dep = (depreciable * fraction).quantize(_D2, ROUND_HALF_UP)
-            schedule.append({"year": year, "fraction": float(fraction.quantize(_D4, ROUND_HALF_UP)), "depreciation": float(dep)})
+            schedule.append({
+                "year": year,
+                # F-NEW-055: Decimal-string serialisation.
+                "fraction": str(fraction.quantize(_D4, ROUND_HALF_UP)),
+                "depreciation": str(dep),
+            })
         return {"asset_id": asset_id, "method": "sum_of_years_digits", "schedule": schedule}
 
 
 
 
 # ---------- ASSET-004: Insurance & Maintenance ----------
-

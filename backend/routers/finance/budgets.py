@@ -2,6 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from typing import Any, Dict, List, Optional
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import text
 from database import get_db_connection
 from schemas import UserResponse
@@ -10,11 +11,37 @@ from utils.tx import transactional
 from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, require_module
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.fiscal_lock import check_fiscal_period_open
 from schemas.budgets import BudgetItemCreate, BudgetCreate, BudgetResponse, BudgetReportItem
 import logging
 
 router = APIRouter(prefix="/accounting/budgets", tags=["Budgets"], dependencies=[Depends(require_module("budgets"))])
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
+
+
+def _q_pct(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _get_budget_for_branch_scope(
+    conn,
+    current_user: UserResponse,
+    budget_id: int,
+    request: Request,
+    columns: str = "id, status, branch_id",
+    for_update: bool = False,
+):
+    params = {"id": budget_id}
+    branch_filter = branch_scope_filter(current_user, None, "branch_id", params)
+    lock_clause = " FOR UPDATE" if for_update else ""
+    budget = conn.execute(text(
+        f"SELECT {columns} FROM budgets WHERE id = :id {branch_filter}{lock_clause}"  # noqa: sql-lint
+    ), params).fetchone()
+    if not budget:
+        raise HTTPException(**http_error(404, "budget_not_found", request))
+    return budget
+
 
 # --- Endpoints ---
 
@@ -102,9 +129,7 @@ def delete_budget(budget_id: int, request: Request, current_user: UserResponse =
     with transactional(current_user.company_id) as conn:
         try:
             # Verify budget exists
-            budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-            if not budget:
-                raise HTTPException(**http_error(404, "budget_not_found", request))
+            budget = _get_budget_for_branch_scope(conn, current_user, budget_id, request)
             if budget.status == 'active':
                 raise HTTPException(**http_error(400, "cannot_delete_active_budget", request))
                 
@@ -133,9 +158,7 @@ def set_budget_items(
     with transactional(current_user.company_id) as conn:
         try:
             # Verify budget exists
-            budget = conn.execute(text("SELECT id FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-            if not budget:
-                raise HTTPException(**http_error(404, "budget_not_found", request))
+            _get_budget_for_branch_scope(conn, current_user, budget_id, request, "id, branch_id")
                 
             # Insert or Update items
             for item in items:
@@ -164,6 +187,8 @@ def set_budget_items(
                          resource_id=str(budget_id), details={"items_count": len(items)},
                          request=request)
             return {"message": i18n_message("budget_items_updated", request)}
+        except HTTPException:
+            raise
         except Exception:
             pass
             logger.exception("Internal error")
@@ -346,9 +371,7 @@ def activate_budget(budget_id: int, request: Request, current_user: UserResponse
     """Activate a draft budget"""
     with transactional(current_user.company_id) as conn:
         try:
-            budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-            if not budget:
-                raise HTTPException(**http_error(404, "budget_not_found", request))
+            budget = _get_budget_for_branch_scope(conn, current_user, budget_id, request)
             if budget.status != 'draft':
                 raise HTTPException(**http_error(400, "only_draft_budgets_can_be_activated", request))
             
@@ -377,9 +400,12 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
     """Close an active budget"""
     with transactional(current_user.company_id) as conn:
         try:
-            budget = conn.execute(text("SELECT id, status FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-            if not budget:
-                raise HTTPException(**http_error(404, "budget_not_found", request))
+            budget = _get_budget_for_branch_scope(conn, current_user, budget_id, request, for_update=True)
+
+            # Audit F-NEW-013: closing a budget is a dated mutation that
+            # affects period reporting; reject if today's period is locked.
+            check_fiscal_period_open(conn, date.today(), request=request)
+
             if budget.status not in ('active', 'draft'):
                 raise HTTPException(**http_error(400, "budget_is_already_closed", request))
             
@@ -402,9 +428,7 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
 def get_budget_items(request: Request, budget_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Get all budget items with account details"""
     with transactional(current_user.company_id) as conn:
-        budget = conn.execute(text("SELECT id FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-        if not budget:
-            raise HTTPException(**http_error(404, "budget_not_found", request))
+        _get_budget_for_branch_scope(conn, current_user, budget_id, request)
         
         rows = conn.execute(text("""
             SELECT bi.id, bi.account_id, bi.planned_amount, bi.notes,
@@ -648,7 +672,7 @@ def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_
                 "total_planned": total_planned,
                 "total_actual": total_actual,
                 "total_variance": total_planned - total_actual,
-                "overall_usage_pct": round((total_actual / total_planned * 100), 2) if total_planned > 0 else 0,
+                "overall_usage_pct": _q_pct(Decimal(str(total_actual)) / Decimal(str(total_planned)) * 100) if total_planned > 0 else Decimal("0"),
                 "overrun_items_count": overruns
             }
         except Exception as e:
@@ -669,13 +693,15 @@ def list_all_cc_budgets(request: Request, current_user: UserResponse = Depends(g
     """List all budgets that have a cost center assigned."""
     with transactional(current_user.company_id) as conn:
         try:
-            rows = conn.execute(text("""
+            params: Dict[str, Any] = {}
+            branch_filter = branch_scope_filter(current_user, None, "b.branch_id", params)
+            rows = conn.execute(text(f"""
                 SELECT b.*, COALESCE(SUM(bi.planned_amount),0) as total_planned
                 FROM budgets b
                 LEFT JOIN budget_items bi ON bi.budget_id = b.id
-                WHERE b.cost_center_id IS NOT NULL
+                WHERE b.cost_center_id IS NOT NULL {branch_filter}
                 GROUP BY b.id ORDER BY b.start_date DESC
-            """)).fetchall()
+            """), params).fetchall()
             return [dict(r._mapping) for r in rows]
         except Exception as e:
             logger.error(f"Error listing cost center budgets: {e}")
@@ -692,10 +718,11 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
             exists = conn.execute(text("SELECT 1 FROM budgets WHERE name = :name"), {"name": data["name"]}).fetchone()
             if exists:
                 raise HTTPException(**http_error(400, "budget_name_exists", request))
+            branch_id = validate_branch_access(current_user, data.get("branch_id"), request)
             result = conn.execute(text("""
                 INSERT INTO budgets (name, start_date, end_date, description, status, created_by,
-                    cost_center_id, budget_type, fiscal_year)
-                VALUES (:name, :start, :end, :desc, 'draft', :uid, :ccid, :btype, :fy)
+                    cost_center_id, budget_type, fiscal_year, branch_id)
+                VALUES (:name, :start, :end, :desc, 'draft', :uid, :ccid, :btype, :fy, :branch_id)
                 RETURNING id, created_at, status
             """), {
                 "name": data["name"], "start": data["start_date"], "end": data["end_date"],
@@ -703,6 +730,7 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
                 "ccid": data["cost_center_id"],
                 "btype": data.get("budget_type", "annual"),
                 "fy": data.get("fiscal_year"),
+                "branch_id": branch_id,
             }).fetchone()
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.create_by_cost_center", resource_type="budget",
@@ -710,7 +738,7 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
                          details={"name": data["name"], "cost_center_id": data["cost_center_id"]},
                          request=request)
             return {"id": result.id, "name": data["name"], "status": "draft",
-                    "cost_center_id": data["cost_center_id"]}
+                    "cost_center_id": data["cost_center_id"], "branch_id": branch_id}
         except HTTPException:
             raise
         except Exception:
@@ -724,13 +752,15 @@ def create_budget_by_cost_center(request: Request, data: dict, current_user: Use
 def list_budgets_by_cc(request: Request, cc_id: int, current_user: UserResponse = Depends(get_current_user)):
     """List Budgets By Cc."""
     with transactional(current_user.company_id) as conn:
-        rows = conn.execute(text("""
+        params: Dict[str, Any] = {"cc": cc_id}
+        branch_filter = branch_scope_filter(current_user, None, "b.branch_id", params)
+        rows = conn.execute(text(f"""
             SELECT b.*, COALESCE(SUM(bi.planned_amount),0) as total_planned
             FROM budgets b
             LEFT JOIN budget_items bi ON bi.budget_id = b.id
-            WHERE b.cost_center_id = :cc
+            WHERE b.cost_center_id = :cc {branch_filter}
             GROUP BY b.id ORDER BY b.start_date DESC
-        """), {"cc": cc_id}).fetchall()
+        """), params).fetchall()
         return [dict(r._mapping) for r in rows]
 
 
@@ -748,6 +778,7 @@ def list_multi_year_budgets(
     with transactional(current_user.company_id) as conn:
         q = "SELECT * FROM budgets WHERE budget_type IN ('multi_year','quarterly')"
         params = {}
+        q += " " + branch_scope_filter(current_user, None, "branch_id", params)
         if fiscal_year:
             q += " AND fiscal_year = :fy"
             params["fy"] = fiscal_year
@@ -774,13 +805,14 @@ def compare_budgets(
                 raise HTTPException(**http_error(400, "need_at_least_2_budget_ids", request))
             placeholders = ",".join([f":id{i}" for i in range(len(ids))])
             params = {f"id{i}": v for i, v in enumerate(ids)}
+            branch_filter = branch_scope_filter(current_user, None, "b.branch_id", params)
             budgets = conn.execute(text(f"""
                 SELECT b.id, b.name, b.start_date, b.end_date, b.fiscal_year, b.budget_type,
                        COALESCE(SUM(bi.planned_amount),0) as total_planned,
                        COALESCE(SUM(bi.actual_amount),0) as total_actual
                 FROM budgets b
                 LEFT JOIN budget_items bi ON bi.budget_id = b.id
-                WHERE b.id IN ({placeholders})
+                WHERE b.id IN ({placeholders}) {branch_filter}
                 GROUP BY b.id ORDER BY b.start_date
             """), params).fetchall()
             return [dict(r._mapping) for r in budgets]
@@ -797,9 +829,13 @@ def compare_budgets(
 def get_budget_detail(request: Request, budget_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Get budget with summary info"""
     with transactional(current_user.company_id) as conn:
-        budget = conn.execute(text("SELECT * FROM budgets WHERE id = :id"), {"id": budget_id}).fetchone()
-        if not budget:
-            raise HTTPException(**http_error(404, "budget_not_found", request))
+        budget = _get_budget_for_branch_scope(
+            conn,
+            current_user,
+            budget_id,
+            request,
+            columns="id, name, start_date, end_date, description, status, created_at, branch_id",
+        )
         
         # Summary: total planned, items count
         summary = conn.execute(text("""

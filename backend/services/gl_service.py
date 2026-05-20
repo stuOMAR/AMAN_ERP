@@ -70,12 +70,15 @@ def validate_je_lines(lines: List[Dict[str, Any]], request=None) -> tuple[Decima
     for i, line in enumerate(lines):
         d = _dec(line.get("debit", 0)).quantize(_D2, ROUND_HALF_UP)
         c = _dec(line.get("credit", 0)).quantize(_D2, ROUND_HALF_UP)
+        rate = _dec(line.get("exchange_rate", 1))
         if d < 0 or c < 0:
             raise HTTPException(status_code=400, detail=i18n_message("negative_amounts_not_allowed", request))
+        if rate <= 0:
+            raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
         if d > 0 and c > 0:
             raise HTTPException(status_code=400, detail=i18n_message("line_debit_credit_same", request))
-        total_debit += d
-        total_credit += c
+        total_debit += (d * rate).quantize(_D2, ROUND_HALF_UP)
+        total_credit += (c * rate).quantize(_D2, ROUND_HALF_UP)
 
     if total_debit == 0 and total_credit == 0:
         raise HTTPException(**http_error(400, "zero_amounts_not_allowed", request))
@@ -133,6 +136,7 @@ def create_journal_entry(
     idempotency_key: Optional[str] = None,
     ledger_id: Optional[int] = None,
     request=None,
+    entry_number_override: Optional[str] = None,
 ) -> tuple[int, str]:
     """
     Centralized function to create a journal entry, validate it, insert lines, 
@@ -215,7 +219,18 @@ def create_journal_entry(
         validate_period(db, date, status)
 
     # 2. Header
-    entry_number = generate_sequential_number(db, "JE", "journal_entries", "entry_number")
+    # F-NEW-110: callers (e.g. expenses.py) used to issue a follow-up
+    # ``UPDATE journal_entries SET entry_number`` to swap the JV- prefix
+    # for an EXP-/PMT- prefix. That mutated a row gl_service had just
+    # inserted (and possibly posted) — a posted-immutability breach
+    # (GL-4.4). The supported path is now an opt-in ``entry_number_override``
+    # parameter: callers pre-allocate the desired prefix via
+    # ``generate_sequential_number(...)`` and pass the value here, so the
+    # row is born with the correct number and never re-UPDATEd.
+    if entry_number_override:
+        entry_number = entry_number_override
+    else:
+        entry_number = generate_sequential_number(db, "JE", "journal_entries", "entry_number")
 
     # Multi-book: resolve ledger_id. If caller didn't specify, pick the tenant's
     # primary ledger (prefer local_gaap framework). Silent no-op if ledgers
@@ -315,15 +330,22 @@ def create_journal_entry(
 
         # Reject postings on header/group accounts. ``is_header`` may be missing
         # on legacy CoA rows — tolerate NULL.
-        is_header = db.execute(
-            text("SELECT COALESCE(is_header, FALSE) FROM accounts WHERE id = :id"),
+        account_meta = db.execute(
+            text("SELECT COALESCE(is_header, FALSE) AS is_header, currency FROM accounts WHERE id = :id"),
             {"id": account_id},
-        ).scalar()
-        if is_header:
+        ).fetchone()
+        if account_meta and account_meta.is_header:
             raise HTTPException(
                 status_code=400,
                 detail=f"لا يمكن الترحيل على حساب إجمالي (header) رقم {account_id}",
             )
+        if (
+            account_meta
+            and account_meta.currency
+            and line_currency
+            and str(account_meta.currency).upper() != str(line_currency).upper()
+        ):
+            raise HTTPException(**http_error(400, "journal_line_account_currency_mismatch", request))
         
         if line.get("amount_currency"):
             line_amount_currency = _dec(line["amount_currency"]).quantize(_D2, ROUND_HALF_UP)
@@ -500,6 +522,7 @@ def reverse_journal_entry(
     reversal_date: Optional[str] = None,
     reason: Optional[str] = None,
     request=None,
+    idempotency_key: Optional[str] = None,
 ) -> tuple[int, str]:
     """Create a reversing JE for an existing posted JE.
 
@@ -507,7 +530,25 @@ def reverse_journal_entry(
     posted with `source='reversal'`, `source_id=<original je_id>`. The
     original entry is left untouched (audit-friendly), but its
     `reversed_by_je_id` column (if present) is updated.
+
+    Audit batch 11 (R-MISSING-IDEMPOTENCY): when ``idempotency_key`` is
+    supplied, the underlying ``create_journal_entry`` call dedupes against
+    its partial unique index on ``journal_entries.idempotency_key`` so the
+    handler's retry surface is preserved.
     """
+    # Idempotency short-circuit — if the caller already received a
+    # reversal for this key (network retry), return it without raising
+    # `reversal_already_exists`.
+    if idempotency_key:
+        prior = db.execute(
+            text(
+                "SELECT id, entry_number FROM journal_entries "
+                "WHERE idempotency_key = :k LIMIT 1"
+            ),
+            {"k": idempotency_key},
+        ).fetchone()
+        if prior:
+            return int(prior.id), str(prior.entry_number)
     head = db.execute(text(
         "SELECT id, status, source, entry_date, entry_number, branch_id, currency, exchange_rate "
         "FROM journal_entries WHERE id = :id FOR UPDATE"
@@ -566,6 +607,7 @@ def reverse_journal_entry(
         exchange_rate=head.exchange_rate or Decimal("1"),
         source="reversal",
         source_id=je_id,
+        idempotency_key=idempotency_key,
     )
 
     # Mark the original entry as reversed so it cannot be reversed again

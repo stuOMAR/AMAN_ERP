@@ -82,15 +82,15 @@ class SupplierCreate(BaseModel):
 
 class SupplierResponse(SupplierCreate):
     id: int
-    current_balance: float
-    balance: Optional[float] = None
-    balance_bc: Optional[float] = None
+    current_balance: Decimal
+    balance: Optional[Decimal] = None
+    balance_bc: Optional[Decimal] = None
     is_active: bool
     currency: Optional[str] = None
     created_at: datetime
     display_currency: Optional[str] = None
-    balance_display: Optional[float] = None
-    balance_sar: Optional[float] = None
+    balance_display: Optional[Decimal] = None
+    balance_sar: Optional[Decimal] = None
     balances: Optional[list] = None
     sites: Optional[list] = None
     site_id: Optional[int] = None

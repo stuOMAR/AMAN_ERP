@@ -4,7 +4,7 @@ AMAN ERP - Treasury Router
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date
@@ -14,12 +14,14 @@ from decimal import Decimal, ROUND_HALF_UP
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access, validate_treasury_account_access, check_permission
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, validate_branch_access, validate_treasury_account_access, check_permission
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.cache import cache
 from utils.treasury_gl import ensure_treasury_gl_accounts
 from utils.pii_encryption import encrypt_pii, decrypt_pii
+from utils.masking import mask_pii
+from utils.tx import transactional
 from fastapi import Request
 from schemas.treasury import TreasuryAccountCreate, TreasuryAccountResponse, TransactionCreate, TransactionResponse
 
@@ -76,11 +78,10 @@ def _auto_create_capital_account(db, currency_code: str, current_user):
             "name_en": f"Capital - {currency_code}",
             "pid": parent_id, "curr": currency_code,
         })
-        db.commit()
         logger.info(f"Auto-created capital account {next_num} for {currency_code}")
     except Exception as e:
         logger.warning(f"Failed to auto-create capital account for {currency_code}: {e}")
-        db.rollback()
+        raise
 
 
 def _is_branch_privileged(current_user) -> bool:
@@ -102,6 +103,28 @@ def _normalized_allowed_branches(current_user) -> List[int]:
         except (TypeError, ValueError):
             continue
     return sorted(set(branch_ids))
+
+
+def _has_treasury_bank_details_access(current_user) -> bool:
+    if isinstance(current_user, dict):
+        permissions = current_user.get("permissions", []) or []
+        role = current_user.get("role", "")
+    else:
+        permissions = getattr(current_user, "permissions", []) or []
+        role = getattr(current_user, "role", "") or ""
+    if role in {"admin", "system_admin", "superuser", "owner", "ceo", "chairman"}:
+        return True
+    return "*" in permissions or check_permission(permissions, "treasury.bank_details.view")
+
+
+def _mask_bank_details(record: Dict[str, Any], current_user) -> Dict[str, Any]:
+    if _has_treasury_bank_details_access(current_user):
+        record["bank_details_masked"] = False
+        return record
+    record["iban"] = mask_pii(record.get("iban"), visible_chars=4)
+    record["account_number"] = mask_pii(record.get("account_number"), visible_chars=4)
+    record["bank_details_masked"] = True
+    return record
 
 
 def _treasury_account_scope(current_user, requested_branch_id: Optional[int] = None):
@@ -160,25 +183,26 @@ def list_treasury_accounts(request: Request, branch_id: Optional[int] = None, cu
         base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
         base_currency = base_cur_row[0] if base_cur_row else "SAR"
         rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
-        rate_map = {r[0]: float(r[1]) for r in rate_rows}
-        rate_map[base_currency] = 1.0
+        rate_map = {r[0]: _dec(r[1]) for r in rate_rows}
+        rate_map[base_currency] = Decimal("1")
 
         rows = []
         for row in result:
             d = dict(row._mapping)
             d["iban"]           = decrypt_pii(d.get("iban"),           tenant_id=tid)
             d["account_number"] = decrypt_pii(d.get("account_number"), tenant_id=tid)
+            d = _mask_bank_details(d, current_user)
 
             # current_balance from accounts.balance is already in base currency
             # balance_in_currency from treasury_accounts.current_balance is in original currency
             acc_currency = d.get("currency", "") or ""
-            raw_balance = float(d.get("current_balance", 0) or 0)
-            balance_in_cur = float(d.get("balance_in_currency", 0) or 0)
-            rate = rate_map.get(acc_currency, 1.0)
+            raw_balance = _dec(d.get("current_balance", 0) or 0).quantize(_D2, ROUND_HALF_UP)
+            balance_in_cur = _dec(d.get("balance_in_currency", 0) or 0).quantize(_D2, ROUND_HALF_UP)
+            rate = rate_map.get(acc_currency, Decimal("1")).quantize(Decimal("0.000001"), ROUND_HALF_UP)
 
-            d["current_balance"] = raw_balance  # Already in base currency
-            d["balance_in_currency"] = balance_in_cur  # Original currency
-            d["exchange_rate"] = rate
+            d["current_balance"] = str(raw_balance)  # Already in base currency
+            d["balance_in_currency"] = str(balance_in_cur)  # Original currency
+            d["exchange_rate"] = str(rate)
             d["base_currency"] = base_currency
 
             rows.append(d)
@@ -187,7 +211,13 @@ def list_treasury_accounts(request: Request, branch_id: Optional[int] = None, cu
         db.close()
 
 @router.get("/transactions", response_model=List[TransactionResponse], dependencies=[Depends(require_permission("treasury.view"))])
-def list_transactions(request: Request, branch_id: Optional[int] = None, limit: int = 50, current_user = Depends(get_current_user)):
+def list_transactions(
+    request: Request,
+    branch_id: Optional[int] = None,
+    treasury_account_id: Optional[int] = None,
+    limit: int = 50,
+    current_user = Depends(get_current_user),
+):
     """عرض سجل العمليات الأخيرة"""
     if not current_user.company_id:
          raise HTTPException(**http_error(400, "company_required", request))
@@ -213,6 +243,10 @@ def list_transactions(request: Request, branch_id: Optional[int] = None, limit: 
             WHERE 1=1
         """
         params = {"limit": limit}
+        if treasury_account_id:
+            validate_treasury_account_access(db, current_user, treasury_account_id, branch_id, request=request)
+            query_str += " AND (t.treasury_id = :treasury_account_id OR t.target_treasury_id = :treasury_account_id)"
+            params["treasury_account_id"] = treasury_account_id
         if branch_id:
             query_str += " AND (ta.branch_id = :bid OR t.branch_id = :bid)"
             params["bid"] = branch_id
@@ -236,10 +270,9 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
     إنشاء حساب خزينة جديد
     يقوم تلقائياً بإنشاء حساب في دليل الحسابات (GL Account) تحت الأصول المتداولة
     """
-    if hasattr(account, 'branch_id') and account.branch_id:
-        validate_branch_access(current_user, account.branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
+        if hasattr(account, 'branch_id') and account.branch_id:
+            validate_branch_access(current_user, account.branch_id)
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
         # Check for duplicate treasury account name
@@ -264,7 +297,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
         # 1. Determine Parent Account from Chart of Accounts
         # 1101 = Cash & Equivalents
         # Also ensure standard treasury GL accounts (1205, 2105, 1210, 2110) exist
-        ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username)
+        ensure_treasury_gl_accounts(db, user_id=current_user.id, username=current_user.username, commit=False)
         parent_account = db.execute(text("SELECT id FROM accounts WHERE account_number = '1101'")).fetchone()
         if not parent_account:
             # Fallback: Check code column
@@ -376,8 +409,8 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             if capital_gl_id:
                 # opening_balance is in the account's original currency
                 # gl_service will convert to base currency using exchange_rate
-                opening_balance = float(account.opening_balance)
-                exchange_rate = float(account.exchange_rate or 1)
+                opening_balance = _dec(account.opening_balance).quantize(_D2, ROUND_HALF_UP)
+                exchange_rate = _dec(account.exchange_rate or 1)
 
                 # Build journal lines — debit/credit in ORIGINAL currency
                 # gl_service converts to base: debit_base = debit * exchange_rate
@@ -418,8 +451,6 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
                 # T1.3a: recompute current_balance now that the opening JE is posted
                 from utils.treasury_balance import recalc_treasury_from_gl
                 recalc_treasury_from_gl(db, new_treasury[0])
-        
-        db.commit()
 
         # AUDIT LOG
         log_activity(
@@ -447,20 +478,10 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
         out = dict(final_treasury._mapping)
         out["iban"]           = decrypt_pii(out.get("iban"),           tenant_id=current_user.company_id)
         out["account_number"] = decrypt_pii(out.get("account_number"), tenant_id=current_user.company_id)
+        out = _mask_bank_details(out, current_user)
         return out
-        
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error creating treasury account: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
-@router.put("/accounts/{id}", dependencies=[Depends(require_permission("treasury.edit"))], response_model=Dict[str, Any])
+@router.put("/accounts/{id}", dependencies=[Depends(require_sensitive_permission("treasury.edit"))], response_model=Dict[str, Any])
 def update_treasury_account(
     id: int,
     account: TreasuryAccountCreate,
@@ -468,14 +489,13 @@ def update_treasury_account(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث حساب خزينة"""
-    if account.branch_id:
-        validate_branch_access(current_user, account.branch_id)
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
+        if account.branch_id:
+            validate_branch_access(current_user, account.branch_id)
         # Check existence
         existing = db.execute(text("SELECT id, gl_account_id FROM treasury_accounts WHERE id = :id"), {"id": id}).fetchone()
         if not existing:
-            raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            raise HTTPException(**http_error(404, "treasury_account_not_found", request))
         
         old_gl_account_id = existing.gl_account_id
 
@@ -539,8 +559,6 @@ def update_treasury_account(
                 "curr": account.currency
             })
         
-        db.commit()
-        
         # AUDIT LOG
         audit_details = {"name": account.name}
         # Track GL account linkage changes
@@ -561,33 +579,23 @@ def update_treasury_account(
         )
         
         return {"id": id, "message": i18n_message("treasury_account_updated", request)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating treasury account: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
-@router.delete("/accounts/{id}", dependencies=[Depends(require_permission("treasury.delete"))], response_model=Dict[str, Any])
+@router.delete("/accounts/{id}", dependencies=[Depends(require_sensitive_permission("treasury.delete"))], response_model=Dict[str, Any])
 def delete_treasury_account(
     id: int,
     request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """حذف حساب خزينة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         # Check existence
         account = db.execute(text("SELECT id, name, current_balance, gl_account_id FROM treasury_accounts WHERE id = :id"), 
                            {"id": id}).fetchone()
         if not account:
-            raise HTTPException(**http_error(404, "treasury_account_not_found"))
+            raise HTTPException(**http_error(404, "treasury_account_not_found", request))
         
         # Check if account has balance
-        if account.current_balance and abs(account.current_balance) > 0.01:
+        if abs(_dec(account.current_balance)) > _D2:
             raise HTTPException(**http_error(400, "cannot_delete_treasury_with_balance", request))
         
         # Check if account has transactions
@@ -605,8 +613,6 @@ def delete_treasury_account(
         if account.gl_account_id:
             db.execute(text("UPDATE accounts SET is_active = FALSE WHERE id = :id"), {"id": account.gl_account_id})
         
-        db.commit()
-        
         # AUDIT LOG
         log_activity(
             db,
@@ -621,17 +627,8 @@ def delete_treasury_account(
         )
         
         return {"message": i18n_message("treasury_account_deleted", request)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error deleting treasury account: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
-@router.post("/transactions/expense", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))], response_model=Dict[str, Any])
+@router.post("/transactions/expense", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_sensitive_permission("treasury.manage"))], response_model=Dict[str, Any])
 async def create_expense(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
     """تسجيل مصروف جديد عبر الخزينة.
 
@@ -650,7 +647,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
     if data.transaction_type != 'expense':
         raise HTTPException(**http_error(400, "invalid_transaction_type", request))
     if data.amount is None or data.amount <= 0:
-        raise HTTPException(**http_error(400, "amount_must_be_positive"))
+        raise HTTPException(**http_error(400, "amount_must_be_positive", request))
     if not data.target_account_id:
         raise HTTPException(**http_error(400, "expense_account_required", request))
 
@@ -692,7 +689,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
         payment_method="cash",
         treasury_id=data.treasury_id,
         expense_account_id=data.target_account_id,
-        cost_center_id=None,
+        cost_center_id=data.cost_center_id,
         project_id=None,
         branch_id=data.branch_id,
         receipt_number=data.reference_number,
@@ -712,7 +709,7 @@ async def create_expense(request: Request, data: TransactionCreate, current_user
         "expense_number": result.get("expense_number") if isinstance(result, dict) else None,
     }
 
-@router.post("/transactions/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("treasury.manage"))], response_model=Dict[str, Any])
+@router.post("/transactions/transfer", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_sensitive_permission("treasury.manage"))], response_model=Dict[str, Any])
 def create_transfer(request: Request, data: TransactionCreate, current_user: dict = Depends(get_current_user)):
     """تحويل بين الخزائن/البنوك"""
     if data.transaction_type != 'transfer':
@@ -720,7 +717,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
     
     # Validate amount
     if data.amount is None or data.amount <= 0:
-        raise HTTPException(**http_error(400, "amount_must_be_positive"))
+        raise HTTPException(**http_error(400, "amount_must_be_positive", request))
     
     # Prevent self-transfer
     if data.treasury_id == data.target_treasury_id:
@@ -728,9 +725,30 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
     
     if not data.target_treasury_id:
         raise HTTPException(**http_error(400, "receiving_account_required", request))
-        
-    db = get_db_connection(current_user.company_id)
-    try:
+
+    # F-NEW-162 (R-MISSING-IDEMPOTENCY): treasury transfers post a JE AND
+    # an audit row in treasury_transactions. Both stores expose
+    # ``idempotency_key`` (the latter via Batch 10's alembic migration
+    # 0030_audit_h_ddl_sync) so a network retry returns the same pair
+    # rather than double-debiting the source treasury.
+    idempotency_key = request.headers.get("Idempotency-Key")
+
+    with transactional(current_user.company_id) as db:
+        if idempotency_key:
+            existing = db.execute(
+                text(
+                    "SELECT id, transaction_number FROM treasury_transactions "
+                    "WHERE idempotency_key = :k LIMIT 1"
+                ),
+                {"k": idempotency_key},
+            ).fetchone()
+            if existing:
+                return {
+                    "success": True,
+                    "message": i18n_message("transfer_successful", request),
+                    "transaction_id": int(existing.id),
+                    "idempotent": True,
+                }
         import uuid
         trans_num = f"TRF-{str(uuid.uuid4())[:8].upper()}"
         validate_treasury_account_access(db, current_user, data.treasury_id)
@@ -770,7 +788,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             if not is_bank and not allow_od:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"رصيد حساب المصدر غير كافٍ. الرصيد الحالي: {float(source.current_balance):,.2f}"
+                    detail=f"رصيد حساب المصدر غير كافٍ. الرصيد الحالي: {_dec(source.current_balance):,.2f}"
                 )
 
         # 1. Create Journal Entry — GL-first
@@ -778,8 +796,16 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
 
         # Cross-currency: convert amount to target currency before adding to target treasury
         if source_currency != target_currency and exchange_rate != Decimal('1'):
-            target_rate_row = db.execute(text("SELECT current_rate FROM currencies WHERE code = :code"), {"code": target_currency}).fetchone()
-            target_rate = _dec(target_rate_row.current_rate) if target_rate_row else Decimal('1')
+            target_rate_row = db.execute(text("""
+                SELECT er.rate
+                FROM exchange_rates er
+                JOIN currencies c ON c.id = er.currency_id
+                WHERE c.code = :code
+                  AND er.rate_date <= :transaction_date
+                ORDER BY er.rate_date DESC
+                LIMIT 1
+            """), {"code": target_currency, "transaction_date": data.transaction_date}).fetchone()
+            target_rate = _dec(target_rate_row.rate) if target_rate_row else Decimal('1')
             target_amount = ((_dec(data.amount) * exchange_rate) / target_rate).quantize(_D2, ROUND_HALF_UP) if target_rate else _dec(data.amount)
         else:
             target_amount = data.amount
@@ -788,12 +814,14 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
         
         je_lines = [
             {
-                "account_id": target_gl, "debit": float(target_amount), "credit": 0, 
-                "currency": target_currency, "exchange_rate": float(target_rate), "description": "Transfer In"
+                "account_id": target_gl, "debit": _dec(target_amount), "credit": Decimal("0"),
+                "currency": target_currency, "exchange_rate": _dec(target_rate), "description": "Transfer In",
+                "cost_center_id": data.cost_center_id,
             },
             {
-                "account_id": source_gl, "debit": 0, "credit": float(data.amount), 
-                "currency": source_currency, "exchange_rate": float(exchange_rate), "description": "Transfer Out"
+                "account_id": source_gl, "debit": Decimal("0"), "credit": _dec(data.amount),
+                "currency": source_currency, "exchange_rate": exchange_rate, "description": "Transfer Out",
+                "cost_center_id": data.cost_center_id,
             },
         ]
 
@@ -808,19 +836,20 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             branch_id=branch_id,
             reference=trans_num,
             currency=source_currency,
-            exchange_rate=float(exchange_rate),
+            exchange_rate=exchange_rate,
             source="treasury_transfer",
+            idempotency_key=idempotency_key,
         )
 
-        # 2. Insert Transaction Log — with exchange_rate and currency
+        # 2. Insert Transaction Log — with exchange_rate, currency, and idempotency_key
         trans_id = db.execute(text("""
             INSERT INTO treasury_transactions (
                 transaction_number, transaction_date, transaction_type, amount, 
                 treasury_id, target_treasury_id, description, reference_number,
-                created_by, exchange_rate, currency
+                branch_id, created_by, exchange_rate, currency, idempotency_key
             ) VALUES (
                 :num, :date, :type, :amount, :src, :dst, :desc, :ref,
-                :uid, :exr, :cur
+                :branch_id, :uid, :exr, :cur, :idem
             ) RETURNING id
         """), {
             "num": trans_num,
@@ -831,17 +860,17 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             "dst": data.target_treasury_id,
             "desc": data.description or f"Transfer from {source_name} to {target_name}",
             "ref": data.reference_number,
+            "branch_id": branch_id,
             "uid": current_user.id,
-            "exr": float(exchange_rate),
+            "exr": exchange_rate,
             "cur": source_currency,
+            "idem": idempotency_key,
         }).scalar()
         
         # 3. Update Treasury Balances — T1.3a idempotent recompute (after GL entry posted)
         from utils.treasury_balance import recalc_treasury_from_gl
         recalc_treasury_from_gl(db, data.treasury_id)
         recalc_treasury_from_gl(db, data.target_treasury_id)
-        
-        db.commit()
 
         # AUDIT LOG
         log_activity(
@@ -857,22 +886,13 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
         )
 
         return {"success": True, "message": i18n_message("transfer_successful", request), "transaction_id": trans_id}
-        
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Transfer Error: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
 
 # ────────────────────────── Treasury Reports ──────────────────────────
 
 @router.get("/reports/balances", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_treasury_balances_report(
+    request: Request,
     branch_id: Optional[int] = None,
     as_of_date: Optional[str] = None,
     current_user=Depends(get_current_user)
@@ -898,23 +918,33 @@ def get_treasury_balances_report(
         """)
         rows = db.execute(q, params).fetchall()
 
-        # T033: Batch-fetch GL balances for all treasury GL accounts
+        # Batch-fetch point-in-time GL balances for all treasury GL accounts.
         gl_account_ids = [r.gl_account_id for r in rows if r.gl_account_id]
         gl_balances: dict = {}
+        gl_currency_balances: dict = {}
         if gl_account_ids:
-            gl_params = {"ids": gl_account_ids}
+            gl_params = {"ids": gl_account_ids, "as_of_date": target_date}
             gl_branch_filter = branch_scope_filter(current_user, branch_id, "je.branch_id", gl_params)
             gl_rows = db.execute(text(f"""
                 SELECT jl.account_id,
-                       COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS gl_balance
+                       COALESCE(SUM(jl.debit), 0) - COALESCE(SUM(jl.credit), 0) AS gl_balance,
+                       COALESCE(SUM(
+                           CASE
+                               WHEN jl.debit > 0 THEN COALESCE(jl.amount_currency, jl.debit)
+                               WHEN jl.credit > 0 THEN -COALESCE(jl.amount_currency, jl.credit)
+                               ELSE 0
+                           END
+                       ), 0) AS gl_balance_currency
                 FROM journal_lines jl
                 JOIN journal_entries je ON jl.journal_entry_id = je.id
                 WHERE jl.account_id = ANY(:ids) AND je.status = 'posted'
+                  AND je.entry_date <= :as_of_date
                 {gl_branch_filter}
                 GROUP BY jl.account_id
             """), gl_params).fetchall()
             for gr in gl_rows:
                 gl_balances[gr.account_id] = _dec(gr.gl_balance)
+                gl_currency_balances[gr.account_id] = _dec(gr.gl_balance_currency)
 
         accounts = []
         total_cash = Decimal('0')
@@ -937,19 +967,26 @@ def get_treasury_balances_report(
             pass
 
         for r in rows:
-            bal = _dec(r.current_balance or 0)
+            if r.gl_account_id and r.gl_account_id in gl_balances:
+                bal_base_raw = gl_balances[r.gl_account_id]
+                bal = gl_currency_balances.get(r.gl_account_id, bal_base_raw)
+            else:
+                bal = _dec(r.current_balance or 0)
+                bal_base_raw = None
             currency = r.currency or base_currency
             rate = fx_rates.get(currency, Decimal('1')) if currency != base_currency else Decimal('1')
-            bal_base = (bal * rate).quantize(_D2, ROUND_HALF_UP)
+            bal_base = (
+                bal_base_raw if bal_base_raw is not None else (bal * rate)
+            ).quantize(_D2, ROUND_HALF_UP)
 
             acc = {
                 "id": r.id, "name": r.name, "name_en": r.name_en,
                 "account_type": r.account_type, "currency": currency,
-                "current_balance": float(bal),
-                "balance_in_currency": float(bal),
-                "balance_in_base": float(bal_base),
-                "gl_balance": float(gl_balances.get(r.gl_account_id, Decimal('0')).quantize(_D2, ROUND_HALF_UP)) if r.gl_account_id else None,
-                "exchange_rate": float(rate),
+                "current_balance": str(bal.quantize(_D2, ROUND_HALF_UP)),
+                "balance_in_currency": str(bal.quantize(_D2, ROUND_HALF_UP)),
+                "balance_in_base": str(bal_base.quantize(_D2, ROUND_HALF_UP)),
+	                "gl_balance": str(gl_balances.get(r.gl_account_id, Decimal('0')).quantize(_D2, ROUND_HALF_UP)) if r.gl_account_id else None,
+                "exchange_rate": str(rate.quantize(Decimal("0.000001"), ROUND_HALF_UP)),
                 "base_currency": base_currency,
                 "branch_name": r.branch_name
             }
@@ -967,12 +1004,15 @@ def get_treasury_balances_report(
             FROM treasury_transactions tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
             WHERE 1=1
+              AND tt.transaction_date <= :recent_as_of_date
             """ + f" {branch_filter}" + """
-            ORDER BY tt.created_at DESC LIMIT 10
-        """)
-        txns = db.execute(txn_q, params).fetchall()
+	            ORDER BY tt.transaction_date DESC, tt.created_at DESC LIMIT 10
+	        """)
+        recent_params = dict(params)
+        recent_params["recent_as_of_date"] = target_date
+        txns = db.execute(txn_q, recent_params).fetchall()
         recent = [{
-            "id": t.id, "type": t.transaction_type, "amount": float(t.amount),
+            "id": t.id, "type": t.transaction_type, "amount": str(_dec(t.amount).quantize(_D2, ROUND_HALF_UP)),
             "description": t.description, "date": str(t.created_at)[:10],
             "account_name": t.account_name
         } for t in txns]
@@ -980,9 +1020,9 @@ def get_treasury_balances_report(
         return {
             "accounts": accounts,
             "summary": {
-                "total_cash": float(total_cash),
-                "total_bank": float(total_bank),
-                "total_all": float(total_all),
+                "total_cash": str(total_cash.quantize(_D2, ROUND_HALF_UP)),
+                "total_bank": str(total_bank.quantize(_D2, ROUND_HALF_UP)),
+                "total_all": str(total_all.quantize(_D2, ROUND_HALF_UP)),
                 "cash_count": sum(1 for a in accounts if a["account_type"] == "cash"),
                 "bank_count": sum(1 for a in accounts if a["account_type"] == "bank"),
             },
@@ -994,13 +1034,14 @@ def get_treasury_balances_report(
     except Exception as e:
         logger.error(f"Treasury balances report error: {e}")
         logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         db.close()
 
 
 @router.get("/reports/cashflow", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
 def get_treasury_cashflow_report(
+    request: Request,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -1018,15 +1059,36 @@ def get_treasury_cashflow_report(
         params = {"start_date": start_date, "end_date": end_date}
         branch_filter = branch_scope_filter(current_user, branch_id, "ta.branch_id", params)
 
-        # Inflows (receipts, deposits, transfers in)
+        movement_cte = """
+            WITH movements AS (
+                SELECT tt.id, tt.transaction_type, tt.transaction_date, tt.amount,
+                       tt.treasury_id AS treasury_id, 'inflow' AS direction
+                FROM treasury_transactions tt
+                WHERE tt.transaction_type IN ('receipt', 'deposit', 'transfer_in', 'pos_sale')
+                UNION ALL
+                SELECT tt.id, tt.transaction_type, tt.transaction_date, tt.amount,
+                       tt.treasury_id AS treasury_id, 'outflow' AS direction
+                FROM treasury_transactions tt
+                WHERE tt.transaction_type IN ('expense', 'withdrawal', 'transfer_out', 'payment', 'transfer')
+                UNION ALL
+                SELECT tt.id, 'transfer_in' AS transaction_type, tt.transaction_date, tt.amount,
+                       tt.target_treasury_id AS treasury_id, 'inflow' AS direction
+                FROM treasury_transactions tt
+                WHERE tt.transaction_type = 'transfer'
+                  AND tt.target_treasury_id IS NOT NULL
+            )
+        """
+
+        # Inflows (receipts, deposits, POS sales, and transfer target legs)
         inflow_q = text(f"""
+            {movement_cte}
             SELECT COALESCE(SUM(tt.amount), 0) as total,
                    tt.transaction_type,
                    COUNT(*) as count
-            FROM treasury_transactions tt
+            FROM movements tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
-            WHERE tt.transaction_type IN ('receipt', 'deposit', 'transfer_in', 'pos_sale')
-              AND tt.created_at::date BETWEEN :start_date AND :end_date
+            WHERE tt.direction = 'inflow'
+              AND tt.transaction_date BETWEEN :start_date AND :end_date
               {branch_filter}
             GROUP BY tt.transaction_type
         """)
@@ -1034,13 +1096,14 @@ def get_treasury_cashflow_report(
 
         # Outflows (expense, withdrawal, transfer out)
         outflow_q = text(f"""
+            {movement_cte}
             SELECT COALESCE(SUM(tt.amount), 0) as total,
                    tt.transaction_type,
                    COUNT(*) as count
-            FROM treasury_transactions tt
+            FROM movements tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
-            WHERE tt.transaction_type IN ('expense', 'withdrawal', 'transfer_out', 'payment')
-              AND tt.created_at::date BETWEEN :start_date AND :end_date
+            WHERE tt.direction = 'outflow'
+              AND tt.transaction_date BETWEEN :start_date AND :end_date
               {branch_filter}
             GROUP BY tt.transaction_type
         """)
@@ -1048,43 +1111,58 @@ def get_treasury_cashflow_report(
 
         # Daily trend
         daily_q = text(f"""
-            SELECT tt.created_at::date as day,
-                   SUM(CASE WHEN tt.transaction_type IN ('receipt','deposit','transfer_in','pos_sale') THEN tt.amount ELSE 0 END) as inflow,
-                   SUM(CASE WHEN tt.transaction_type IN ('expense','withdrawal','transfer_out','payment') THEN tt.amount ELSE 0 END) as outflow
-            FROM treasury_transactions tt
+            {movement_cte}
+            SELECT tt.transaction_date as day,
+                   SUM(CASE WHEN tt.direction = 'inflow' THEN tt.amount ELSE 0 END) as inflow,
+                   SUM(CASE WHEN tt.direction = 'outflow' THEN tt.amount ELSE 0 END) as outflow
+            FROM movements tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
-            WHERE tt.created_at::date BETWEEN :start_date AND :end_date
+            WHERE tt.transaction_date BETWEEN :start_date AND :end_date
               {branch_filter}
-            GROUP BY tt.created_at::date
+            GROUP BY tt.transaction_date
             ORDER BY day
         """)
         daily = db.execute(daily_q, params).fetchall()
 
         # By account breakdown
         by_account_q = text(f"""
+            {movement_cte}
             SELECT ta.id, ta.name, ta.account_type,
-                   SUM(CASE WHEN tt.transaction_type IN ('receipt','deposit','transfer_in','pos_sale') THEN tt.amount ELSE 0 END) as inflow,
-                   SUM(CASE WHEN tt.transaction_type IN ('expense','withdrawal','transfer_out','payment') THEN tt.amount ELSE 0 END) as outflow
-            FROM treasury_transactions tt
+                   SUM(CASE WHEN tt.direction = 'inflow' THEN tt.amount ELSE 0 END) as inflow,
+                   SUM(CASE WHEN tt.direction = 'outflow' THEN tt.amount ELSE 0 END) as outflow
+            FROM movements tt
             JOIN treasury_accounts ta ON ta.id = tt.treasury_id
-            WHERE tt.created_at::date BETWEEN :start_date AND :end_date
+            WHERE tt.transaction_date BETWEEN :start_date AND :end_date
               {branch_filter}
             GROUP BY ta.id, ta.name, ta.account_type
             ORDER BY ta.name
         """)
         by_account = db.execute(by_account_q, params).fetchall()
 
-        total_in = sum(float(r.total) for r in inflows)
-        total_out = sum(float(r.total) for r in outflows)
+        def _money(value) -> str:
+            return str(_dec(value).quantize(_D2, ROUND_HALF_UP))
+
+        total_in = sum((_dec(r.total) for r in inflows), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
+        total_out = sum((_dec(r.total) for r in outflows), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
 
         return {
-            "inflows": [{"type": r.transaction_type, "total": float(r.total), "count": r.count} for r in inflows],
-            "outflows": [{"type": r.transaction_type, "total": float(r.total), "count": r.count} for r in outflows],
-            "total_inflow": total_in,
-            "total_outflow": total_out,
-            "net_flow": total_in - total_out,
-            "daily_trend": [{"date": str(d.day), "inflow": float(d.inflow), "outflow": float(d.outflow)} for d in daily],
-            "by_account": [{"id": a.id, "name": a.name, "type": a.account_type, "inflow": float(a.inflow), "outflow": float(a.outflow), "net": float(a.inflow) - float(a.outflow)} for a in by_account],
+            "inflows": [{"type": r.transaction_type, "total": _money(r.total), "count": r.count} for r in inflows],
+            "outflows": [{"type": r.transaction_type, "total": _money(r.total), "count": r.count} for r in outflows],
+            "total_inflow": str(total_in),
+            "total_outflow": str(total_out),
+            "net_flow": str((total_in - total_out).quantize(_D2, ROUND_HALF_UP)),
+            "daily_trend": [{"date": str(d.day), "inflow": _money(d.inflow), "outflow": _money(d.outflow)} for d in daily],
+            "by_account": [
+                {
+                    "id": a.id,
+                    "name": a.name,
+                    "type": a.account_type,
+                    "inflow": _money(a.inflow),
+                    "outflow": _money(a.outflow),
+                    "net": _money(_dec(a.inflow) - _dec(a.outflow)),
+                }
+                for a in by_account
+            ],
             "start_date": start_date,
             "end_date": end_date
         }
@@ -1093,6 +1171,6 @@ def get_treasury_cashflow_report(
     except Exception as e:
         logger.error(f"Treasury cashflow report error: {e}")
         logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         db.close()

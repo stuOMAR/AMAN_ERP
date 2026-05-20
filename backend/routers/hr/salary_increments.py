@@ -4,17 +4,20 @@ POST /api/hr/employees/bulk-salary-increment — apply salary changes to multipl
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
 from decimal import Decimal
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import List, Optional
 
 from database import get_db_connection
 from services.hr.bulk_salary_increment import apply_bulk_salary_increment
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import i18n_message
 
 router = APIRouter(prefix="/api/hr/employees", tags=["HR Salary"])
+logger = logging.getLogger(__name__)
 
 
 class SalaryIncrementRow(BaseModel):
@@ -48,6 +51,7 @@ def _get_user_id(current_user) -> int:
 
 @router.post("/bulk-salary-increment")
 def bulk_salary_increment(
+    request: Request,
     body: BulkSalaryIncrementRequest,
     current_user=Depends(require_sensitive_permission("hr.salary.write")),
 ):
@@ -66,6 +70,7 @@ def bulk_salary_increment(
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Error applying bulk salary increment")
+        raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
         conn.close()

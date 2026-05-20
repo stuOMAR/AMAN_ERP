@@ -2,7 +2,7 @@
 Inventory Module - Stock Adjustments
 """
 
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -177,11 +177,13 @@ def post_inventory_adjustment(
             INSERT INTO inventory_transactions (
                 product_id, warehouse_id, transaction_type,
                 reference_type, reference_id, reference_document,
-                quantity, unit_cost, total_cost, notes, created_by
+                quantity, unit_cost, total_cost, notes, created_by,
+                balance_before, balance_after
             ) VALUES (
                 :pid, :wh, :type,
                 'adjustment', :ref_id, :doc_num,
-                :qty, :uc, :tc, :notes, :uid
+                :qty, :uc, :tc, :notes, :uid,
+                :bal_before, :bal_after
             )
         """), {
             "pid": pid, "wh": wh, "type": trans_type,
@@ -191,6 +193,8 @@ def post_inventory_adjustment(
             "tc": str((abs(qty_delta) * wh_cost).quantize(_D2, ROUND_HALF_UP)),
             "notes": item_reason or notes or "Stock Adjustment",
             "uid": user_id,
+            "bal_before": str(current_qty),
+            "bal_after": str(new_qty),
         })
 
         net_value_delta += qty_delta * wh_cost
@@ -283,46 +287,61 @@ def post_inventory_adjustment(
     }
 
 
-@adjustments_router.get("/adjustments", response_model=List[dict], dependencies=[Depends(require_permission("stock.view"))])
+@adjustments_router.get("/adjustments", response_model=Dict[str, Any], dependencies=[Depends(require_permission("stock.view"))])
 def list_adjustments(
     branch_id: Optional[int] = None,
-    skip: int = 0,
-    limit: int = 100,
+    page: int = 1,
+    limit: int = 25,
     current_user: dict = Depends(get_current_user)
 ):
-    """عرض قائمة تسويات الجرد"""
+    """عرض قائمة تسويات الجرد — INV-19: paginated, default 25, max 100."""
+    if limit > 100:
+        limit = 100
+    skip = (page - 1) * limit
     db = get_db_connection(current_user.company_id)
     try:
         branch_scope = resolve_branch_scope(current_user, branch_id)
-        query = """
-            SELECT sa.id, sa.adjustment_number, sa.adjustment_type, sa.reason, 
-                   sa.created_at, sa.status, sa.difference,
-                   w.warehouse_name, p.product_name
+        base_query = """
             FROM stock_adjustments sa
             JOIN warehouses w ON sa.warehouse_id = w.id
             JOIN products p ON sa.product_id = p.id
             WHERE 1=1
         """
-        params = {"limit": limit, "skip": skip}
-        query += branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
+        params: Dict[str, Any] = {}
+        filter_clause = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params)
 
-        query += " ORDER BY sa.created_at DESC LIMIT :limit OFFSET :skip"
-        result = db.execute(text(query), params).fetchall()
+        total = db.execute(text(f"SELECT COUNT(*) {base_query} {filter_clause}"), params).scalar() or 0
 
-        adjustments = []
-        for row in result:
-            adjustments.append({
-                "id": row.id,
-                "adjustment_number": row.adjustment_number,
-                "type": row.adjustment_type,
-                "reason": row.reason,
-                "created_at": row.created_at,
-                "status": row.status,
-                "difference": row.difference,
-                "warehouse_name": row.warehouse_name,
-                "product_name": row.product_name
-            })
-        return adjustments
+        params["limit"] = limit
+        params["skip"] = skip
+        result = db.execute(text(f"""
+            SELECT sa.id, sa.adjustment_number, sa.adjustment_type, sa.reason,
+                   sa.created_at, sa.status, sa.difference,
+                   w.warehouse_name, p.product_name
+            {base_query} {filter_clause}
+            ORDER BY sa.created_at DESC LIMIT :limit OFFSET :skip
+        """), params).fetchall()
+
+        return {
+            "items": [
+                {
+                    "id": row.id,
+                    "adjustment_number": row.adjustment_number,
+                    "type": row.adjustment_type,
+                    "reason": row.reason,
+                    "created_at": row.created_at,
+                    "status": row.status,
+                    "difference": row.difference,
+                    "warehouse_name": row.warehouse_name,
+                    "product_name": row.product_name,
+                }
+                for row in result
+            ],
+            "total": total,
+            "page": page,
+            "limit": limit,
+            "pages": (total + limit - 1) // limit,
+        }
     finally:
         db.close()
 
@@ -331,6 +350,9 @@ def list_adjustments(
 def create_adjustment(
     data: StockAdjustmentCreate,
     request: Request,
+    # INV-15: Idempotency-Key prevents double-submit (double-click, network retry).
+    # Same key returns the original response without re-processing.
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء تسوية جردية (تعديل الكمية يدوياً) — T049: calls shared helper."""
@@ -339,6 +361,14 @@ def create_adjustment(
         user_id = current_user.id if hasattr(current_user, 'id') else current_user.get('id')
         username = current_user.username if hasattr(current_user, 'username') else current_user.get('username')
         company_id = current_user.company_id if hasattr(current_user, 'company_id') else current_user.get('company_id')
+
+        # INV-15: Idempotency check — return existing adjustment if key already used
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id FROM stock_adjustments WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "message": i18n_message("adjustment_saved", request), "idempotent_replay": True}
 
         # INV-005: Check warehouse branch access
         wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": data.warehouse_id}).scalar()
@@ -382,16 +412,16 @@ def create_adjustment(
             INSERT INTO stock_adjustments (
                 adjustment_number, warehouse_id, product_id,
                 adjustment_type, reason, old_quantity, new_quantity, difference,
-                notes, status, created_by
+                notes, status, created_by, idempotency_key
             ) VALUES (
                 :num, :wh, :pid, :type, :reason, :old, :new, :diff,
-                :notes, 'approved', :uid
+                :notes, 'approved', :uid, :idem_key
             ) RETURNING id
         """), {
             "num": adj_number, "wh": data.warehouse_id, "pid": data.product_id,
             "type": adjustment_type, "reason": data.reason,
             "old": str(current_qty), "new": str(new_qty_dec), "diff": str(difference),
-            "notes": data.notes, "uid": user_id
+            "notes": data.notes, "uid": user_id, "idem_key": idempotency_key
         }).fetchone()
 
         if not adj_id_result:

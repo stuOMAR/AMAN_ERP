@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 from typing import Optional
+from decimal import Decimal
 
 
 class OrderToInvoiceRequest(BaseModel):
@@ -29,8 +30,8 @@ class OrderToInvoiceResponse(BaseModel):
 class Shortage(BaseModel):
     item_id: int
     warehouse_id: int
-    required: float
-    available: float
+    required: Decimal
+    available: Decimal
 
 
 class CancellationRequest(BaseModel):

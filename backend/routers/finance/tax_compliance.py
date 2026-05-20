@@ -12,7 +12,7 @@ from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timezone
 from decimal import Decimal
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
@@ -23,6 +23,7 @@ from utils.tax_reporting import adjusted_line_taxable_cte
 from utils.tax_precision import CALCULATION_VERSION, display_money_str, money_str, rate_str
 from decimal import Decimal, ROUND_HALF_UP
 import logging
+import re
 
 router = APIRouter(prefix="/tax-compliance", tags=["Tax Compliance"], dependencies=[Depends(require_module("taxes"))])
 logger = logging.getLogger(__name__)
@@ -32,6 +33,12 @@ _D2 = Decimal("0.01")
 
 def _dec(v: Any) -> Decimal:
     return Decimal(str(v or 0))
+
+
+def _validate_company_vat_settings(data: "CompanyTaxSettingsUpdate", request: Request) -> None:
+    vat_number = (data.vat_number or "").strip()
+    if data.country_code.upper() == "SA" and vat_number and not re.fullmatch(r"3\d{14}", vat_number):
+        raise HTTPException(**http_error(422, "invalid_saudi_vat_number", request))
 
 
 def _adjusted_tax_totals(
@@ -67,16 +74,6 @@ class CompanyTaxSettingsUpdate(BaseModel):
     fiscal_year_start: str = "01-01"
     default_filing_frequency: str = "quarterly"
     zatca_phase: str = "none"
-
-    @validator('vat_number')
-    def validate_vat_number(cls, v, values):
-        if v is not None and v.strip():
-            cc = values.get('country_code', '')
-            if cc == 'SA':
-                import re
-                if not re.fullmatch(r'3\d{14}', v.strip()):
-                    raise ValueError('Saudi VAT number must be 15 digits starting with 3')
-        return v
 
 class BranchTaxSettingUpdate(BaseModel):
     branch_id: int
@@ -603,8 +600,8 @@ def update_company_tax_settings(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث إعدادات الضرائب للشركة"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    _validate_company_vat_settings(data, request)
+    with transactional(current_user.company_id) as db:
         db.execute(text("""
             INSERT INTO company_tax_settings 
                 (country_code, is_vat_registered, vat_number, zakat_number, 
@@ -625,7 +622,6 @@ def update_company_tax_settings(
             "fy": data.fiscal_year_start, "freq": data.default_filing_frequency,
             "zatca": data.zatca_phase, "now": datetime.now(timezone.utc)
         })
-        db.commit()
 
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="tax_compliance.company_settings.update",
@@ -634,13 +630,6 @@ def update_company_tax_settings(
                      details=data.model_dump(), request=request)
 
         return {"success": True, "message": i18n_message("tax_settings_updated_success", request)}
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating company tax settings: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -694,8 +683,7 @@ def update_branch_tax_setting(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث إعداد ضريبي لفرع معين"""
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
         branch_id = validate_branch_access(current_user, data.branch_id)
         # Verify branch exists
         branch = db.execute(text("SELECT 1 FROM branches WHERE id = :id"), {"id": branch_id}).fetchone()
@@ -726,7 +714,6 @@ def update_branch_tax_setting(
             "reason": data.exemption_reason, "cert": data.exemption_certificate,
             "expiry": data.exemption_expiry, "now": datetime.now(timezone.utc)
         })
-        db.commit()
 
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="tax_compliance.branch_settings.update",
@@ -735,15 +722,6 @@ def update_branch_tax_setting(
                      details=data.model_dump(mode="json"), request=request)
 
         return {"success": True, "message": i18n_message("tax_settings_updated_branch", request)}
-    except HTTPException:
-        raise
-    except Exception as e:
-        db.rollback()
-        logger.error(f"Error updating branch tax settings: {e}")
-        logger.exception("Internal error")
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

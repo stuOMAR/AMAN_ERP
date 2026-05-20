@@ -64,6 +64,7 @@ def create_revaluation(request: Request, data: AssetRevaluationCreate, current_u
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
             if not asset:
                 raise HTTPException(**http_error(404, "asset_not_found", request))
+            validate_branch_access(current_user, asset.branch_id, request)
             dep_sum = conn.execute(text(
                 "SELECT COALESCE(SUM(amount),0) FROM asset_depreciation_schedule WHERE asset_id = :id AND posted = true"
             ), {"id": data.asset_id}).scalar()
@@ -209,4 +210,3 @@ def revalue_asset(request: Request, asset_id: int, reval: AssetRevaluation, curr
 # =====================================================
 
 # ---------- ASSET-001: Additional Depreciation Methods ----------
-

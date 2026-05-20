@@ -740,6 +740,7 @@
   "accounting_period_not_found": "Accounting period not found",
   "fiscal_period_created": "Accounting period created",
   "fiscal_period_opened": "Accounting period opened",
+  "invalid_saudi_vat_number": "Saudi VAT number must be 15 digits starting with 3",
   "tax_settings_updated_success": "Tax settings updated successfully",
   "rate_link_deactivated_success": "Rate link deactivated",
   "treasury_name_duplicate": "A treasury account with this name already exists",
@@ -1808,6 +1809,7 @@
   "no_inventory_transactions_for_invoice": "No inventory transactions linked to this invoice",
   "invoice_has_payments_use_credit_note": "Invoice has payments — issue a credit note rather than amending",
   "zatca_cleared_invoice_no_amend": "ZATCA-cleared invoice cannot be amended; use credit note + reissue",
+  "zatca_cleared_invoice_must_credit_note": "This invoice has been cleared by ZATCA and cannot be cancelled. Please issue a credit note instead.",
   "pos_conflict_already_resolved": "Conflict already resolved (status={status})",
   "branch_country_code_required": "Branch country_code is required for tax calculation",
   "branch_has_linked_records": "Cannot delete branch because it is linked to {count} record(s)",
@@ -1974,5 +1976,15 @@
   "commission_or_bank_account_not_configured": "Commission expense or bank account is not configured",
   "invoice_has_sales_returns": "Cannot cancel an invoice that has approved sales returns",
   "voucher_cancelled": "Cannot allocate a cancelled voucher",
-  "supplier_overpayment_not_allowed": "Supplier payment exceeds the outstanding balance; enable buying.allow_overpayment to allow prepayments"
+  "supplier_overpayment_not_allowed": "Supplier payment exceeds the outstanding balance; enable buying.allow_overpayment to allow prepayments",
+  "wht_payment_required": "Withholding tax must be linked to a supplier payment",
+  "product_tax_rate_inactive_or_missing": "The product tax rate is inactive or missing",
+  "product_tax_rate_not_yet_effective": "The product tax rate is not effective yet",
+  "product_tax_rate_expired": "The product tax rate has expired",
+  "product_tax_rate_wrong_country": "The product tax rate does not apply to this branch country",
+  "journal_line_account_currency_mismatch": "Journal line currency must match the posting account currency",
+  "invalid_invoice_state_transition": "Invoice cannot move to the requested state",
+  "duplicate_idempotency_key": "This idempotency key was already used for another operation",
+  "credit_note_exceeds_remaining_invoice": "Credit note total exceeds the remaining amount on the linked invoice",
+  "purchase_invoice_payment_requires_treasury_permission": "Creating a paid purchase invoice requires treasury payment permission"
 }

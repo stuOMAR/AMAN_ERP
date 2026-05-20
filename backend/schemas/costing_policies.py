@@ -2,6 +2,7 @@
 from pydantic import BaseModel
 from typing import Optional
 from datetime import datetime
+from decimal import Decimal
 
 
 class CostingPolicySet(BaseModel):
@@ -16,5 +17,5 @@ class CostingPolicyHistoryResponse(BaseModel):
     reason: Optional[str]
     changed_by_name: Optional[str]
     affected_products_count: Optional[int]
-    total_cost_impact: Optional[float]
+    total_cost_impact: Optional[Decimal]
     status: str

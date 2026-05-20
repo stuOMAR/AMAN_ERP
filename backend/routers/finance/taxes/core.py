@@ -60,6 +60,19 @@ def create_tax_settlement(
             params = {"start": start, "end": end}
             branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
+            def lock_invoice_vat_rows(invoice_type: str) -> None:
+                row_params = {**params, "invoice_type": invoice_type}
+                db.execute(text(  # noqa: sql-lint
+                    f"""
+                    SELECT i.id
+                    FROM invoices i
+                    WHERE i.invoice_type = :invoice_type
+                      AND i.status NOT IN ('draft','cancelled')
+                      AND i.invoice_date BETWEEN :start AND :end
+                      {branch_filter}
+                    FOR UPDATE
+                """), row_params).fetchall()
+
             def invoice_vat(invoice_type: str) -> Decimal:
                 row_params = {**params, "invoice_type": invoice_type}
                 return _dec(db.execute(text(  # noqa: sql-lint
@@ -71,6 +84,9 @@ def create_tax_settlement(
                       AND i.invoice_date BETWEEN :start AND :end
                       {branch_filter}
                 """), row_params).scalar() or 0)
+
+            for invoice_type in ("sales", "sales_return", "purchase", "purchase_return"):
+                lock_invoice_vat_rows(invoice_type)
 
             output = invoice_vat("sales")
     

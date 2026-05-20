@@ -4,7 +4,7 @@ This file is auto-generated when purchases.py was split. Endpoints here
 are mounted under the parent /buying prefix via purchases/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, date
@@ -16,9 +16,16 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module
+from utils.permissions import (
+    branch_scope_filter_from_scope,
+    require_permission,
+    require_module,
+    resolve_branch_scope,
+    validate_branch_access,
+)
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from schemas.purchases import (
     PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
@@ -48,6 +55,9 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
         try:
             username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
             user_id = current_user.get("id") if isinstance(current_user, dict) else getattr(current_user, "id", None)
+            branch_id = validate_branch_access(current_user, payload.branch_id, request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
     
             total_qty = _dec(payload.total_quantity)
             unit_price = _dec(payload.unit_price)
@@ -70,7 +80,7 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
                 "total_amount": str(total_amount),
                 "valid_from": payload.valid_from,
                 "valid_to": payload.valid_to,
-                "branch_id": payload.branch_id,
+                "branch_id": branch_id,
                 "currency": payload.currency or "SAR",
                 "notes": payload.notes,
                 "created_by": username,
@@ -81,7 +91,7 @@ def create_blanket_po(payload: BlanketPOCreate, request: Request, current_user: 
             log_activity(db, user_id=user_id, username=username, action="blanket_po_created",
                          resource_type="blanket_purchase_order", resource_id=str(bpo_id),
                          details={"agreement_number": agr_number, "supplier_id": payload.supplier_id},
-                         request=request)
+                         request=request, branch_id=branch_id)
             return {"id": bpo_id, "agreement_number": agr_number, "message": i18n_message("blanket_po_created_success", request)}
         except HTTPException:
             raise
@@ -100,6 +110,7 @@ def list_blanket_pos(
 ):
     """List blanket purchase orders with remaining balance."""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         conditions = []
         params = {"skip": skip, "limit": limit}
@@ -110,9 +121,9 @@ def list_blanket_pos(
         if supplier_id:
             conditions.append("b.supplier_id = :supplier_id")
             params["supplier_id"] = supplier_id
-        if branch_id:
-            conditions.append("b.branch_id = :branch_id")
-            params["branch_id"] = branch_id
+        branch_clause = branch_scope_filter_from_scope(branch_scope, "b.branch_id", params, prefix="")
+        if branch_clause:
+            conditions.append(branch_clause.strip())
 
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
@@ -154,6 +165,7 @@ def get_blanket_po(request: Request, bpo_id: int, current_user: dict = Depends(g
 
         if not bpo:
             raise HTTPException(**http_error(404, "blanket_po_not_found", request))
+        validate_branch_access(current_user, bpo._mapping.get("branch_id"), request)
 
         d = dict(bpo._mapping)
         d["remaining_quantity"] = str(_dec(d["total_quantity"]) - _dec(d["released_quantity"]))
@@ -176,11 +188,12 @@ def activate_blanket_po(bpo_id: int, request: Request, current_user: dict = Depe
     with transactional(company_id) as db:
         try:
             bpo = db.execute(text(
-                "SELECT id, status FROM blanket_purchase_orders WHERE id = :id"
+                "SELECT id, status, branch_id FROM blanket_purchase_orders WHERE id = :id FOR UPDATE"
             ), {"id": bpo_id}).fetchone()
     
             if not bpo:
                 raise HTTPException(**http_error(404, "blanket_po_not_found", request))
+            validate_branch_access(current_user, bpo._mapping.get("branch_id"), request)
             if bpo._mapping["status"] != "draft":
                 raise HTTPException(**http_error(400, "only_draft_blanket_pos_can_be_activated", request))
     
@@ -192,7 +205,8 @@ def activate_blanket_po(bpo_id: int, request: Request, current_user: dict = Depe
             username = current_user.get("username", "unknown") if isinstance(current_user, dict) else getattr(current_user, "username", "unknown")
             log_activity(db, user_id=user_id, username=username, action="blanket_po_activated",
                          resource_type="blanket_purchase_order", resource_id=str(bpo_id),
-                         details={"blanket_po_id": bpo_id}, request=request)
+                         details={"blanket_po_id": bpo_id}, request=request,
+                         branch_id=bpo._mapping.get("branch_id"))
             return {"message": i18n_message("blanket_po_activated_success", request)}
         except HTTPException:
             raise
@@ -206,14 +220,34 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     with transactional(company_id) as db:
         try:
+            idempotency_key = require_idempotency_key(request, operation="blanket purchase release")
+            replay = db.execute(text("""
+                SELECT r.id, r.release_quantity, r.release_amount, b.branch_id
+                FROM blanket_po_release_orders r
+                JOIN blanket_purchase_orders b ON b.id = r.blanket_po_id
+                WHERE r.blanket_po_id = :bpo_id
+                  AND r.idempotency_key = :key
+                LIMIT 1
+            """), {"bpo_id": bpo_id, "key": idempotency_key}).fetchone()
+            if replay:
+                validate_branch_access(current_user, replay.branch_id, request)
+                return {
+                    "id": replay.id,
+                    "release_quantity": str(replay.release_quantity),
+                    "release_amount": str(replay.release_amount),
+                    "message": i18n_message("release_order_created_success", request),
+                    "idempotent_replay": True,
+                }
+
             bpo = db.execute(text("""
-                SELECT * FROM blanket_purchase_orders WHERE id = :id
+                SELECT * FROM blanket_purchase_orders WHERE id = :id FOR UPDATE
             """), {"id": bpo_id}).fetchone()
     
             if not bpo:
                 raise HTTPException(**http_error(404, "blanket_po_not_found", request))
     
             bpo_data = dict(bpo._mapping)
+            validate_branch_access(current_user, bpo_data.get("branch_id"), request)
             if bpo_data["status"] != "active":
                 raise HTTPException(**http_error(400, "blanket_po_must_be_active_to_release_orders", request))
     
@@ -237,8 +271,10 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
     
             result = db.execute(text("""
                 INSERT INTO blanket_po_release_orders
-                    (blanket_po_id, release_quantity, release_amount, release_date, created_by)
-                VALUES (:bpo_id, :qty, :amount, :rel_date, :created_by)
+                    (blanket_po_id, release_quantity, release_amount, release_date, created_by, idempotency_key)
+                VALUES (:bpo_id, :qty, :amount, :rel_date, :created_by, :idempotency_key)
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                DO NOTHING
                 RETURNING id
             """), {
                 "bpo_id": bpo_id,
@@ -246,8 +282,28 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
                 "amount": str(release_amount),
                 "rel_date": release_dt,
                 "created_by": username,
+                "idempotency_key": idempotency_key,
             })
-            release_id = result.fetchone()[0]
+            release_row = result.fetchone()
+            if not release_row:
+                existing_release = db.execute(text("""
+                    SELECT r.id, r.blanket_po_id, r.release_quantity, r.release_amount, b.branch_id
+                    FROM blanket_po_release_orders r
+                    JOIN blanket_purchase_orders b ON b.id = r.blanket_po_id
+                    WHERE r.idempotency_key = :key
+                    LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if existing_release and int(bpo_id) == int(getattr(existing_release, "blanket_po_id", bpo_id)):
+                    validate_branch_access(current_user, existing_release.branch_id, request)
+                    return {
+                        "id": existing_release.id,
+                        "release_quantity": str(existing_release.release_quantity),
+                        "release_amount": str(existing_release.release_amount),
+                        "message": i18n_message("release_order_created_success", request),
+                        "idempotent_replay": True,
+                    }
+                raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+            release_id = release_row[0]
     
             # Update blanket PO consumed totals
             new_released_qty = released_qty + release_qty
@@ -269,7 +325,7 @@ def create_release_order(bpo_id: int, payload: ReleaseOrderCreate, request: Requ
             log_activity(db, user_id=user_id, username=username, action="blanket_po_release",
                          resource_type="blanket_po_release_order", resource_id=str(release_id),
                          details={"blanket_po_id": bpo_id, "release_quantity": str(release_qty)},
-                         request=request)
+                         request=request, branch_id=bpo_data.get("branch_id"))
     
             response = {
                 "id": release_id,
@@ -294,14 +350,16 @@ def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Req
         try:
             bpo = db.execute(text("""
                 SELECT id, unit_price, total_quantity, released_quantity, released_amount,
-                       price_amendment_history, status
+                       price_amendment_history, status, branch_id
                 FROM blanket_purchase_orders WHERE id = :id
+                FOR UPDATE
             """), {"id": bpo_id}).fetchone()
     
             if not bpo:
                 raise HTTPException(**http_error(404, "blanket_po_not_found", request))
     
             bpo_data = dict(bpo._mapping)
+            validate_branch_access(current_user, bpo_data.get("branch_id"), request)
             if bpo_data["status"] not in ("draft", "active"):
                 raise HTTPException(**http_error(400, "cannot_amend_price_on_a_completedcancelledexpired_", request))
     
@@ -338,7 +396,7 @@ def amend_blanket_po_price(bpo_id: int, payload: PriceAmendRequest, request: Req
             log_activity(db, user_id=user_id, username=username, action="blanket_po_price_amended",
                          resource_type="blanket_purchase_order", resource_id=str(bpo_id),
                          details={"old_price": str(old_price), "new_price": str(new_price)},
-                         request=request)
+                         request=request, branch_id=bpo_data.get("branch_id"))
     
             return {
                 "message": i18n_message("price_amended_success", request),

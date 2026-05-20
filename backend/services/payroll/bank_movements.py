@@ -6,6 +6,7 @@ exactly once per (period_id, run_id).
 from __future__ import annotations
 
 import logging
+from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import text
@@ -20,7 +21,7 @@ def record_payroll_bank_movements(
     period_id: int,
     run_id: int,
     treasury_account_id: int,
-    total_amount: float,
+    total_amount: Decimal | str | int,
     currency: str = "SAR",
     description: Optional[str] = None,
 ) -> dict:
@@ -44,7 +45,7 @@ def record_payroll_bank_movements(
     if existing:
         return {
             "id": existing[0],
-            "total_amount": float(existing[1]),
+            "total_amount": str(existing[1]),
             "created_at": existing[2].isoformat() if existing[2] else None,
             "already_recorded": True,
         }
@@ -65,7 +66,7 @@ def record_payroll_bank_movements(
             "pid": period_id,
             "rid": run_id,
             "treasury_id": treasury_account_id,
-            "amount": total_amount,
+            "amount": Decimal(str(total_amount)),
             "currency": currency,
             "desc": description or f"Payroll disbursement for period {period_id}, run {run_id}",
         },
@@ -75,7 +76,7 @@ def record_payroll_bank_movements(
 
     return {
         "id": row[0],
-        "total_amount": float(row[1]),
+        "total_amount": str(row[1]),
         "created_at": row[2].isoformat() if row[2] else None,
         "already_recorded": False,
     }
@@ -117,7 +118,7 @@ def get_bank_movements(
             "period_id": r[1],
             "run_id": r[2],
             "treasury_account_id": r[3],
-            "total_amount": float(r[4]),
+            "total_amount": str(r[4]),
             "currency": r[5],
             "description": r[6],
             "created_at": r[7].isoformat() if r[7] else None,

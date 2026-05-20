@@ -7,8 +7,9 @@ POST /api/fsm/technicians/match      — find matching technicians
 from __future__ import annotations
 
 import json
+import logging
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from typing import List, Optional
@@ -18,8 +19,10 @@ from services.fsm.technicians import (
     upsert_technician,
     technician_assignment_matcher,
 )
+from utils.i18n import i18n_message
 
 router = APIRouter(prefix="/api/fsm/technicians", tags=["FSM Technicians"])
+logger = logging.getLogger(__name__)
 
 
 class TechnicianProfileCreate(BaseModel):
@@ -75,6 +78,7 @@ def list_technicians(current_user=None):
 
 @router.post("")
 def create_technician(
+    request: Request,
     body: TechnicianProfileCreate,
     current_user=None,
 ):
@@ -93,7 +97,8 @@ def create_technician(
         )
         return result
     except Exception as e:
-        raise HTTPException(status_code=400, detail=str(e))
+        logger.exception("Error creating technician profile")
+        raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
         conn.close()
 

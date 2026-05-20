@@ -2,7 +2,7 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from utils.i18n import http_error
 from sqlalchemy import text
 from pydantic import BaseModel
@@ -52,6 +52,10 @@ async def preview_custom_report(
     try:
         data = _generate_custom_report_data(db, config, current_user.id)
         return data
+    except HTTPException:
+        # F-NEW-299: do not collapse caller-supplied validation errors
+        # (HTTP 400/404/etc.) into HTTP 500.
+        raise
     except Exception as e:
         logger.error(f"Error previewing report: {e}")
         logger.exception("Internal error")
@@ -62,6 +66,7 @@ async def preview_custom_report(
 @router.post("/custom", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reports.create"))], response_model=Dict[str, Any])
 async def create_custom_report(
     report: CustomReportCreate,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """حفظ تقرير مخصص"""
@@ -81,6 +86,10 @@ async def create_custom_report(
         
         db.commit()
         return {"success": True, "id": report_id, "message": i18n_message("report_saved_success", request)}
+    except HTTPException:
+        # F-NEW-299: re-raise structured 4xx instead of collapsing to 500.
+        db.rollback()
+        raise
     except Exception as e:
         db.rollback()
         logger.error(f"Error saving report: {e}")
@@ -105,7 +114,7 @@ async def list_custom_reports(current_user: dict = Depends(get_current_user)):
         db.close()
 
 @router.get("/custom/{report_id}", dependencies=[Depends(require_permission("reports.view"))], response_model=Dict[str, Any])
-async def get_custom_report(report_id: int, current_user: dict = Depends(get_current_user)):
+async def get_custom_report(report_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """تشغيل تقرير مخصص محفوظ"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -118,6 +127,10 @@ async def get_custom_report(report_id: int, current_user: dict = Depends(get_cur
         
         data = _generate_custom_report_data(db, config, current_user.id)
         return {"report": dict(report._mapping), "results": data}
+    except HTTPException:
+        # F-NEW-299: keep caller-recoverable errors (404/400/etc.) at
+        # their original status code rather than collapsing to 500.
+        raise
     except Exception as e:
         logger.error(f"Error executing saved report: {e}")
         logger.exception("Internal error")
@@ -126,7 +139,7 @@ async def get_custom_report(report_id: int, current_user: dict = Depends(get_cur
         db.close()
 
 @router.delete("/custom/{report_id}", dependencies=[Depends(require_permission("reports.delete"))], response_model=Dict[str, Any])
-async def delete_custom_report(report_id: int, current_user: dict = Depends(get_current_user)):
+async def delete_custom_report(report_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """حذف تقرير مخصص"""
     db = get_db_connection(current_user.company_id)
     try:
@@ -267,7 +280,17 @@ def _generate_custom_report_data(db, config: CustomReportConfig, user_id: int):
     
     src = source_map.get(config.resolved_source)
     if not src:
-        raise ValueError(f"Invalid Data Source: {config.resolved_source}")
+        # F-NEW-299 (R-RECOVERABLE-500, Req 8.10): an unknown data source
+        # is a caller-supplied validation error, not an internal failure.
+        # Raise HTTP 400 with a structured error body so the FE can map
+        # the case to a friendly message instead of a generic 500.
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "invalid_data_source",
+                "data_source": config.resolved_source,
+            },
+        )
         
     # 2. Build Query
     select_cols = []

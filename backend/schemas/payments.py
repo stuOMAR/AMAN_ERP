@@ -13,12 +13,13 @@ discriminator ('customer' or 'supplier').
 from pydantic import BaseModel
 from typing import List, Optional
 from datetime import date
+from decimal import Decimal
 
 
 class PaymentAllocation(BaseModel):
     """Allocation of a payment to a specific invoice."""
     invoice_id: int
-    allocated_amount: float
+    allocated_amount: Decimal
 
 
 # Alias for backward compatibility
@@ -41,7 +42,7 @@ class PaymentVoucherCreate(BaseModel):
 
     # Core
     voucher_date: date
-    amount: float
+    amount: Decimal
     payment_method: str
 
     # Bank/Check details
@@ -60,8 +61,8 @@ class PaymentVoucherCreate(BaseModel):
 
     # Currency
     currency: Optional[str] = None
-    exchange_rate: Optional[float] = 1.0
-    transaction_rate: Optional[float] = None
+    exchange_rate: Optional[Decimal] = Decimal("1.0")
+    transaction_rate: Optional[Decimal] = None
 
     # Allocations
     allocations: List[PaymentAllocation] = []

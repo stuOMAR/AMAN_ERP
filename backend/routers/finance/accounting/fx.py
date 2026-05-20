@@ -113,10 +113,10 @@ def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: di
 
             adjustments.append({
                 "account_id": m["account_id"], "account_number": m["account_number"], "name": m["name"],
-                "fc_balance": float(fc.quantize(_D2, ROUND_HALF_UP)),
-                "old_base": float(old_base.quantize(_D2, ROUND_HALF_UP)),
-                "new_base": float(new_base.quantize(_D2, ROUND_HALF_UP)),
-                "difference": float(diff.quantize(_D2, ROUND_HALF_UP)),
+                "fc_balance": str(fc.quantize(_D2, ROUND_HALF_UP)),
+                "old_base": str(old_base.quantize(_D2, ROUND_HALF_UP)),
+                "new_base": str(new_base.quantize(_D2, ROUND_HALF_UP)),
+                "difference": str(diff.quantize(_D2, ROUND_HALF_UP)),
             })
 
         # Post the offsetting FX gain/loss
@@ -164,7 +164,7 @@ def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: di
         return {
             "success": True, "journal_entry": je_num,
             "currency": req.currency_code, "new_rate": req.new_rate,
-            "total_adjustment": float(total_diff.quantize(_D2, ROUND_HALF_UP)),
+            "total_adjustment": str(total_diff.quantize(_D2, ROUND_HALF_UP)),
             "adjustments": adjustments,
         }
     except HTTPException:

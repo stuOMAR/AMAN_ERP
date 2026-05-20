@@ -21,6 +21,11 @@ from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_D2 = Decimal("0.01")
+
+
+def _q_money(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
 
 
 def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None, branch_param="branch_id"):
@@ -31,12 +36,34 @@ def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None, branc
         return f"AND {column} = :{branch_param}"
     return ""
 
+
+def _resolve_report_ledger_id(db, ledger_id: Optional[int] = None) -> Optional[int]:
+    if ledger_id is not None:
+        return ledger_id
+    try:
+        row = db.execute(text(
+            "SELECT id FROM ledgers "
+            "WHERE is_active = TRUE "
+            "ORDER BY CASE framework WHEN 'local_gaap' THEN 0 WHEN 'ifrs' THEN 1 ELSE 2 END, id "
+            "LIMIT 1"
+        )).fetchone()
+        return row[0] if row else None
+    except Exception:
+        return None
+
+
+def _ledger_filter(ledger_id: Optional[int], params: dict, column: str = "je.ledger_id") -> str:
+    if ledger_id is None:
+        return ""
+    params["ledger_id"] = ledger_id
+    return f"AND {column} = :ledger_id"
+
 def _get_rate_map(db):
     """Get exchange rate map: currency_code -> rate to base currency."""
     base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
     base_currency = base_cur_row[0] if base_cur_row else "SAR"
     rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
-    rate_map = {r[0]: float(r[1]) for r in rate_rows}
+    rate_map = {r[0]: Decimal(str(r[1])) for r in rate_rows}
     rate_map[base_currency] = 1.0
     return rate_map, base_currency
 
@@ -44,10 +71,10 @@ def _get_rate_map(db):
 def _convert_amount(amount, currency, rate_map):
     """Convert amount from account currency to base currency."""
     rate = rate_map.get(currency, 1.0)
-    return float(Decimal(str(amount)) * Decimal(str(rate)))
+    return Decimal(str(amount)) * Decimal(str(rate))
 
 
-def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None, branch_scope=None) -> Decimal:
+def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None, branch_scope=None, ledger_id=None) -> Decimal:
     """
     Single source of truth for net income = Revenue − Expense from journal_lines.
     Used by both the income statement and the balance sheet (retained earnings).
@@ -62,6 +89,7 @@ def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None
     else:
         date_clause = "je.entry_date <= :as_of"
     branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope, branch_param="branch")
+    ledger_filter = _ledger_filter(ledger_id, params)
 
     rows = db.execute(text(f"""
         SELECT
@@ -74,7 +102,9 @@ def _compute_net_income_from_gl(db, *, end_date, start_date=None, branch_id=None
         WHERE a.account_type IN ('revenue', 'expense')
           AND {date_clause}
           AND je.status = 'posted'
+          AND COALESCE(je.source, '') <> 'reversal'
           {branch_filter}
+          {ledger_filter}
         GROUP BY a.account_type, a.currency
     """), params).fetchall()
 
@@ -123,17 +153,18 @@ class FinancialStatementResponse(BaseModel):
     data: List[FinancialStatementItem]
     total: Decimal
 
-def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_scope=None):
+def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_scope=None, ledger_id=None):
     """Internal helper: returns trial balance data for programmatic use."""
     params = {"start": start_date, "end": end_date}
     
     branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
+    ledger_filter = _ledger_filter(ledger_id, params)
 
     # Get base currency and exchange rates
     base_cur_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
     base_currency = base_cur_row[0] if base_cur_row else "SAR"
     rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
-    rate_map = {r[0]: float(r[1]) for r in rate_rows}
+    rate_map = {r[0]: Decimal(str(r[1])) for r in rate_rows}
     rate_map[base_currency] = 1.0
 
     query = f"""
@@ -148,6 +179,7 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
             WHERE je.entry_date < :start
             AND je.status = 'posted'
             {branch_filter}
+            {ledger_filter}
             GROUP BY jl.account_id
         ),
         movement AS (
@@ -160,6 +192,7 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
             WHERE je.entry_date BETWEEN :start AND :end
             AND je.status = 'posted'
             {branch_filter}
+            {ledger_filter}
             GROUP BY jl.account_id
         )
         SELECT 
@@ -251,6 +284,7 @@ def get_trial_balance(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    ledger_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب ميزان المراجعة لفترة محددة"""
@@ -261,15 +295,17 @@ def get_trial_balance(
             start_date = date.today().replace(day=1, month=1) # Start of year
         if not end_date:
             end_date = date.today()
-        return _get_trial_balance_data(db, start_date, end_date, branch_scope=branch_scope)
+        resolved_ledger_id = _resolve_report_ledger_id(db, ledger_id)
+        return _get_trial_balance_data(db, start_date, end_date, branch_scope=branch_scope, ledger_id=resolved_ledger_id)
     finally:
         db.close()
 
-def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope=None):
+def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope=None, ledger_id=None):
     """Internal helper to get profit loss data — amounts in base currency"""
     rate_map, base_currency = _get_rate_map(db)
     params = {"start": start_date, "end": end_date}
     branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
+    ledger_filter = _ledger_filter(ledger_id, params)
 
     # Fetch all accounts and their period balances (with currency)
     query = f"""
@@ -281,7 +317,7 @@ def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope
         LEFT JOIN journal_lines jl ON a.id = jl.account_id
         LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
         WHERE a.account_type IN ('revenue', 'expense')
-        AND (je.id IS NULL OR (je.entry_date BETWEEN :start AND :end AND je.status = 'posted' {branch_filter}))
+        AND (je.id IS NULL OR (je.entry_date BETWEEN :start AND :end AND je.status = 'posted' AND COALESCE(je.source, '') <> 'reversal' {branch_filter} {ledger_filter}))
         GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency
         ORDER BY a.account_number
     """
@@ -344,6 +380,7 @@ def get_profit_loss(
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    ledger_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب قائمة الدخل (الأرباح والخسائر) الهيكلية"""
@@ -354,16 +391,17 @@ def get_profit_loss(
             start_date = date.today().replace(day=1, month=1)
         if not end_date:
             end_date = date.today()
-            
-        return _get_profit_loss_data(db, start_date, end_date, branch_scope=branch_scope)
+        resolved_ledger_id = _resolve_report_ledger_id(db, ledger_id)
+        return _get_profit_loss_data(db, start_date, end_date, branch_scope=branch_scope, ledger_id=resolved_ledger_id)
     finally:
         db.close()
 
-def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None):
+def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None, ledger_id=None):
     """Internal helper to get balance sheet data — amounts in base currency"""
     rate_map, base_currency = _get_rate_map(db)
     params = {"as_of": as_of_date}
     branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
+    ledger_filter = _ledger_filter(ledger_id, params)
 
     # Balance Sheet follows Assets = Liabilities + Equity
     query = f"""
@@ -375,7 +413,7 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None):
         LEFT JOIN journal_lines jl ON a.id = jl.account_id
         LEFT JOIN journal_entries je ON jl.journal_entry_id = je.id
         WHERE a.account_type IN ('asset', 'liability', 'equity')
-        AND (je.id IS NULL OR (je.entry_date <= :as_of AND je.status = 'posted' {branch_filter}))
+        AND (je.id IS NULL OR (je.entry_date <= :as_of AND je.status = 'posted' {branch_filter} {ledger_filter}))
         GROUP BY a.id, a.account_number, a.name, a.name_en, a.account_type, a.parent_id, a.currency
         ORDER BY a.account_number
     """
@@ -421,7 +459,7 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None):
     # Calculate Retained Earnings (Net Income) using the shared helper
     # This ensures Balance Sheet balances: Assets = Liabilities + Equity + Retained Earnings
     retained_earnings = _compute_net_income_from_gl(
-        db, end_date=as_of_date, branch_id=branch_id, branch_scope=branch_scope,
+        db, end_date=as_of_date, branch_id=branch_id, branch_scope=branch_scope, ledger_id=ledger_id,
     )
     
     # Add retained earnings as a virtual equity item
@@ -458,6 +496,7 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None):
 def get_balance_sheet(
     as_of_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    ledger_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب الميزانية العمومية الهيكلية"""
@@ -466,12 +505,12 @@ def get_balance_sheet(
     try:
         if not as_of_date:
             as_of_date = date.today()
-            
-        return _get_balance_sheet_data(db, as_of_date, branch_scope=branch_scope)
+        resolved_ledger_id = _resolve_report_ledger_id(db, ledger_id)
+        return _get_balance_sheet_data(db, as_of_date, branch_scope=branch_scope, ledger_id=resolved_ledger_id)
     finally:
         db.close()
 
-def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=None, branch_scope=None):
+def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=None, branch_scope=None, ledger_id=None):
     """Internal helper: returns general ledger data for programmatic use."""
     # ── Recursive CTE: collect selected account + all descendants ──
     tree_rows = db.execute(text("""
@@ -499,6 +538,7 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
 
     params: dict = {"start": start_date, "end": end_date}
     branch_filter = _scoped_branch_filter(branch_id, "je.branch_id", params, branch_scope=branch_scope)
+    ledger_filter = _ledger_filter(ledger_id, params)
 
     # Compute opening balance across all descendant accounts
     opening_query = f"""
@@ -510,6 +550,7 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
         AND je.entry_date < :start
         AND je.status = 'posted'
         {branch_filter}
+        {ledger_filter}
     """
     opening_row = db.execute(text(opening_query), params).fetchone()
     opening_debit = Decimal(str(opening_row.total_debit)) if opening_row else 0
@@ -536,6 +577,7 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
         AND je.entry_date BETWEEN :start AND :end
         AND je.status = 'posted'
         {branch_filter}
+        {ledger_filter}
         ORDER BY je.entry_date ASC, je.id ASC, jl.id ASC
     """
     
@@ -557,16 +599,16 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
             "reference": row.reference,
             "debit": debit,
             "credit": credit,
-            "running_balance": round(running_balance, 2),
+            "running_balance": _q_money(running_balance),
             "account_name": account_map.get(row.account_id, "") if is_aggregated else None,
         })
     
     return {
         "account_id": account_id,
         "period": {"start": start_date, "end": end_date},
-        "opening_balance": round(opening_balance, 2),
+        "opening_balance": _q_money(opening_balance),
         "entries": entries,
-        "closing_balance": round(running_balance, 2),
+        "closing_balance": _q_money(running_balance),
         "is_aggregated": is_aggregated,
         "child_accounts_count": len(account_ids) - 1,
     }
@@ -577,6 +619,7 @@ def get_general_ledger(request: Request,
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
+    ledger_id: Optional[int] = None,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب دفتر الأستاذ العام - حركات حساب محدد مع كل حساباته الفرعية"""
@@ -590,10 +633,10 @@ def get_general_ledger(request: Request,
             start_date = date.today().replace(day=1, month=1)
         if not end_date:
             end_date = date.today()
-        return _get_general_ledger_data(db, account_id, start_date, end_date, branch_scope=branch_scope)
+        resolved_ledger_id = _resolve_report_ledger_id(db, ledger_id)
+        return _get_general_ledger_data(db, account_id, start_date, end_date, branch_scope=branch_scope, ledger_id=resolved_ledger_id)
     finally:
         db.close()
 
 
 # ==================== ACC-004: Period Comparison Reports ====================
-

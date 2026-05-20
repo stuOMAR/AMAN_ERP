@@ -489,8 +489,83 @@ def add_service_cost(request_id: int, data: ServiceCostCreate, request: Request,
                         "UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW() "
                         "WHERE product_id = :pid AND warehouse_id = :wid"
                     ),
-                    {"qty": qty, "pid": product_id, "wid": warehouse_id},
+                    {"qty": str(qty), "pid": product_id, "wid": warehouse_id},
                 )
+
+                # INV-09 fix: consume cost layers and post GL entry for parts consumption.
+                # Constitution §3 [CRITICAL] — every inventory movement must produce a JE.
+                from services.costing_service import CostingService
+                from services.gl_service import create_journal_entry as gl_create_journal_entry
+                from utils.accounting import get_base_currency, get_mapped_account_id
+                from utils.inventory_accounts import resolve_warehouse_inventory_account
+                from utils.fiscal_lock import check_fiscal_period_open
+                from datetime import datetime as _dt
+
+                today_str = _dt.utcnow().strftime("%Y-%m-%d")
+                check_fiscal_period_open(db, today_str)
+
+                costing_method = CostingService._get_product_costing_method(db, product_id, warehouse_id)
+                if costing_method in ("fifo", "lifo"):
+                    try:
+                        item_cogs = CostingService.consume_layers(
+                            db,
+                            product_id=product_id,
+                            warehouse_id=warehouse_id,
+                            quantity=qty,
+                            sale_document_type="service_consumption",
+                            sale_document_id=request_id,
+                            costing_method=costing_method,
+                        )
+                        unit_cost_for_gl = (Decimal(str(item_cogs)) / qty).quantize(_D2, ROUND_HALF_UP) if qty else Decimal("0")
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc))
+                else:
+                    unit_cost_for_gl = CostingService.get_cogs_cost(db, product_id, warehouse_id)
+                    item_cogs = (qty * unit_cost_for_gl).quantize(_D2, ROUND_HALF_UP)
+
+                # Log inventory transaction
+                db.execute(text("""
+                    INSERT INTO inventory_transactions (
+                        product_id, warehouse_id, transaction_type,
+                        reference_type, reference_id, quantity,
+                        unit_cost, total_cost, notes, created_by
+                    ) VALUES (
+                        :pid, :wid, 'service_consumption',
+                        'service_request', :rid, :qty,
+                        :uc, :tc, :notes, :uid
+                    )
+                """), {
+                    "pid": product_id, "wid": warehouse_id,
+                    "rid": request_id, "qty": str(-qty),
+                    "uc": str(unit_cost_for_gl), "tc": str(item_cogs),
+                    "notes": data.description or f"Service request #{request_id} parts consumption",
+                    "uid": current_user.id,
+                })
+
+                # Post GL: Dr COGS/Expense / Cr Inventory
+                base_currency = get_base_currency(db)
+                inv_acc = resolve_warehouse_inventory_account(db, warehouse_id)
+                cogs_acc = get_mapped_account_id(db, "acc_map_cogs") or get_mapped_account_id(db, "acc_map_service_expense")
+                if inv_acc and cogs_acc and item_cogs > Decimal("0.005"):
+                    wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": warehouse_id}).scalar()
+                    gl_create_journal_entry(
+                        db=db,
+                        company_id=current_user.company_id,
+                        date=today_str,
+                        description=f"استهلاك قطع غيار — طلب خدمة #{request_id}",
+                        lines=[
+                            {"account_id": cogs_acc, "debit": str(item_cogs), "credit": 0,
+                             "description": f"Service parts cost — request #{request_id}"},
+                            {"account_id": inv_acc, "debit": 0, "credit": str(item_cogs),
+                             "description": f"Inventory reduction — service #{request_id}"},
+                        ],
+                        user_id=current_user.id,
+                        branch_id=wh_branch,
+                        currency=base_currency,
+                        source="service_consumption",
+                        source_id=request_id,
+                        idempotency_key=f"svc_parts:{request_id}:{product_id}",
+                    )
                 db.execute(
                     text(
                         "INSERT INTO stock_movements (product_id, warehouse_id, movement_type, quantity, reference_type, reference_id, notes, created_by) "

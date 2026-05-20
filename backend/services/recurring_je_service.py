@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
 
+from dateutil.relativedelta import relativedelta
 from sqlalchemy import text
 
 from services.audit_writer import log_activity
@@ -129,6 +130,38 @@ def run_template(conn, tenant_id: int, template_id: int, *, run_date: date) -> R
     if can_auto_post:
         # Post directly via gl_service
         from services.gl_service import create_journal_entry
+
+        # Check fiscal period before posting (Constitution §3: skipped periods must be flagged)
+        from utils.fiscal_lock import check_fiscal_period_open
+        period_open = check_fiscal_period_open(conn, str(run_date), raise_error=False)
+        if not period_open:
+            # Write a pending review row for the skipped period
+            try:
+                conn.execute(text("""
+                    INSERT INTO recurring_je_pending_review
+                        (tenant_id, template_id, amount, expense_category_id, lines, run_date, status, created_at)
+                    VALUES (:tnt, :tid, :amt, :cat, CAST(:lines AS JSONB), :rdate, 'skipped_closed_period', now())
+                    ON CONFLICT DO NOTHING
+                """), {
+                    "tnt": tenant_id,
+                    "tid": template_id,
+                    "amt": str(amount),
+                    "cat": expense_category_id,
+                    "lines": __import__("json").dumps(template.get("lines") or []),
+                    "rdate": run_date,
+                })
+                # Advance next_run_date so we don't retry the same closed period
+                next_run = run_date + relativedelta(months=1)
+                conn.execute(text("""
+                    UPDATE recurring_journal_templates
+                       SET last_run = :run_date, next_run_date = :next_run, updated_at = now()
+                     WHERE id = :tid
+                """), {"run_date": run_date, "next_run": next_run, "tid": template_id})
+            except Exception as skip_err:
+                logger.warning("recurring: failed to record skipped period for template %s: %s", template_id, skip_err)
+
+            logger.info("Recurring template %s skipped: fiscal period %s is closed", template_id, run_date)
+            return RunResult(posted=False, pending_review_id=None, journal_entry_id=None)
 
         lines = template.get("lines") or []
         je_id, je_number = create_journal_entry(

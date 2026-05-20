@@ -22,11 +22,20 @@ from services.sales_service import get_sales_total, get_gl_profit_breakdown
 logger = logging.getLogger(__name__)
 router = APIRouter()
 _D2 = Decimal('0.01')
+_D1 = Decimal('0.1')
 
 
 def _dec(v) -> Decimal:
     """Convert any numeric value to Decimal safely."""
     return Decimal(str(v)) if v is not None else Decimal('0')
+
+
+def _q(value, places: Decimal = _D2) -> Decimal:
+    return _dec(value).quantize(places, rounding=ROUND_HALF_UP)
+
+
+def _pct(numerator, denominator) -> Decimal:
+    return _q(_dec(numerator) / _dec(denominator) * 100)
 
 @router.get("/inventory/valuation", dependencies=[Depends(require_permission(["stock.view", "reports.view"]))], response_model=Dict[str, Any])
 def inventory_valuation_report(
@@ -102,12 +111,12 @@ def inventory_valuation_report(
             grand_total_sell += val_sell
             items.append({
                 "product_id": pid, "sku": m["sku"], "product_name": m["product_name"],
-                "warehouse": m["warehouse_name"], "quantity": float(qty),
+                "warehouse": m["warehouse_name"], "quantity": str(qty),
                 "cost_price": cost_price,
                 "selling_price": Decimal(str(m["selling_price"] or 0)),
-                "total_value_cost": round(val_cost, 2),
-                "total_value_sell": round(val_sell, 2),
-                "potential_profit": round(val_sell - val_cost, 2),
+                "total_value_cost": _q(val_cost),
+                "total_value_sell": _q(val_sell),
+                "potential_profit": _q(val_sell - val_cost),
             })
 
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
@@ -116,9 +125,9 @@ def inventory_valuation_report(
             "currency": base_cur,
             "items": items,
             "totals": {
-                "cost_value": round(grand_total_cost, 2),
-                "sell_value": round(grand_total_sell, 2),
-                "potential_profit": round(grand_total_sell - grand_total_cost, 2),
+                "cost_value": _q(grand_total_cost),
+                "sell_value": _q(grand_total_sell),
+                "potential_profit": _q(grand_total_sell - grand_total_cost),
             }
         }
     finally:
@@ -160,17 +169,17 @@ def inventory_turnover_report(
         items = []
         for r in rows:
             m = r._mapping
-            avg_inv = float(m["current_qty"] or 0)
-            sold = float(m["sold_qty"] or 0)
+            avg_inv = _dec(m["current_qty"] or 0)
+            sold = _dec(m["sold_qty"] or 0)
             cogs_val = sold * Decimal(str(m["cost_price"] or 0))
             turnover = cogs_val / (avg_inv * Decimal(str(m["cost_price"] or 1))) if avg_inv > 0 and m["cost_price"] else 0
-            days_on_hand = round(days_in_period / turnover, 1) if turnover > 0 else None
+            days_on_hand = _q(_dec(days_in_period) / turnover, _D1) if turnover > 0 else None
 
             items.append({
                 "product_id": m["id"], "sku": m["sku"], "product_name": m["product_name"],
                 "current_stock": avg_inv, "sold_qty": sold,
-                "cogs_value": round(cogs_val, 2),
-                "turnover_ratio": round(turnover, 2),
+                "cogs_value": _q(cogs_val),
+                "turnover_ratio": _q(turnover),
                 "days_on_hand": days_on_hand,
             })
 
@@ -210,9 +219,9 @@ def dead_stock_report(
             total_val += val
             items.append({
                 "product_id": m["id"], "sku": m["sku"], "product_name": m["product_name"],
-                "stock_qty": float(m["stock_qty"]),
+                "stock_qty": str(_dec(m["stock_qty"])),
                 "cost_price": Decimal(str(m["cost_price"] or 0)),
-                "stock_value": round(val, 2),
+                "stock_value": _q(val),
                 "last_movement": str(m["last_movement"]) if m["last_movement"] else "لا توجد حركة",
             })
 
@@ -220,7 +229,7 @@ def dead_stock_report(
             "report_name": f"المخزون الراكد (>{days_threshold} يوم)",
             "days_threshold": days_threshold,
             "items": items,
-            "total_dead_stock_value": round(total_val, 2),
+            "total_dead_stock_value": _q(total_val),
             "count": len(items),
         }
     finally:
@@ -281,18 +290,18 @@ def cogs_report(
             rev = Decimal(str(m["revenue_total"] or 0))
             # Convert to display currency if needed
             if branch_rate != 1:
-                cogs = (cogs / branch_rate).quantize(_D2)
-                rev = (rev / branch_rate).quantize(_D2)
+                cogs = (cogs / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP)
+                rev = (rev / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP)
             gross = rev - cogs
             margin = (gross / rev * 100) if rev > 0 else 0
             total_cogs += cogs
             total_rev += rev
             items.append({
                 "product_id": m["id"], "sku": m["sku"], "product_name": m["product_name"],
-                "sold_qty": float(m["sold_qty"] or 0),
+                "sold_qty": str(_dec(m["sold_qty"] or 0)),
                 "unit_cost": Decimal(str(m["cost_price"] or 0)),
-                "cogs": round(cogs, 2), "revenue": round(rev, 2),
-                "gross_profit": round(gross, 2), "margin_pct": round(margin, 2),
+                "cogs": _q(cogs), "revenue": _q(rev),
+                "gross_profit": _q(gross), "margin_pct": _q(margin),
             })
 
         return {
@@ -301,8 +310,8 @@ def cogs_report(
             "branch_id": branch_id,
             "currency": branch_cur,
             "items": items,
-            "totals": {"cogs": round(total_cogs, 2), "revenue": round(total_rev, 2),
-                       "gross_profit": round(total_rev - total_cogs, 2)},
+            "totals": {"cogs": _q(total_cogs), "revenue": _q(total_rev),
+                       "gross_profit": _q(total_rev - total_cogs)},
         }
     finally:
         db.close()
@@ -385,10 +394,10 @@ def product_profitability_report(
             total_profit = Decimal('0')
 
             for pid, d in product_data.items():
-                rev = (d["revenue_sar"] / branch_rate).quantize(_D2) if branch_rate != 1 else d["revenue_sar"]
-                cogs = (d["cogs_sar"] / branch_rate).quantize(_D2) if branch_rate != 1 else d["cogs_sar"]
+                rev = (d["revenue_sar"] / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP) if branch_rate != 1 else d["revenue_sar"]
+                cogs = (d["cogs_sar"] / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP) if branch_rate != 1 else d["cogs_sar"]
                 profit = rev - cogs
-                margin = round((profit / rev * 100), 2) if rev > 0 else 0
+                margin = _pct(profit, rev) if rev > 0 else Decimal("0")
 
                 total_revenue += rev
                 total_cogs += cogs
@@ -398,10 +407,10 @@ def product_profitability_report(
                     "product_id": pid,
                     "product_name": d["product_name"],
                     "sku": d["sku"],
-                    "sold_qty": float(d["sold_qty"]),
-                    "revenue": float(rev),
-                    "cogs": float(cogs),
-                    "gross_profit": float(profit),
+                    "sold_qty": str(_dec(d["sold_qty"])),
+                    "revenue": str(_dec(rev)),
+                    "cogs": str(_dec(cogs)),
+                    "gross_profit": str(_dec(profit)),
                     "margin_pct": margin,
                 })
 
@@ -437,7 +446,7 @@ def product_profitability_report(
                 rev = _dec(r.revenue_sar)
                 cogs = _dec(r.cogs_sar)
                 profit = rev - cogs
-                margin = round((profit / rev * 100), 2) if rev > 0 else 0
+                margin = _pct(profit, rev) if rev > 0 else Decimal("0")
 
                 total_revenue += rev
                 total_cogs += cogs
@@ -447,16 +456,16 @@ def product_profitability_report(
                     "product_id": r.product_id,
                     "product_name": r.product_name,
                     "sku": r.sku,
-                    "sold_qty": float(r.sold_qty or 0),
-                    "revenue": float(rev),
-                    "cogs": float(cogs),
-                    "gross_profit": float(profit),
+                    "sold_qty": str(_dec(r.sold_qty or 0)),
+                    "revenue": str(_dec(rev)),
+                    "cogs": str(_dec(cogs)),
+                    "gross_profit": str(_dec(profit)),
                     "margin_pct": margin,
                 })
 
             display_currency = base_cur
 
-        overall_margin = round((total_profit / total_revenue * 100), 2) if total_revenue > 0 else 0
+        overall_margin = _pct(total_profit, total_revenue) if total_revenue > 0 else Decimal("0")
 
         # Sort by gross_profit descending
         items.sort(key=lambda x: x["gross_profit"], reverse=True)
@@ -469,9 +478,9 @@ def product_profitability_report(
             "currency": display_currency,
             "items": items,
             "totals": {
-                "revenue": float(total_revenue),
-                "cogs": float(total_cogs),
-                "gross_profit": float(total_profit),
+                "revenue": str(_dec(total_revenue)),
+                "cogs": str(_dec(total_cogs)),
+                "gross_profit": str(_dec(total_profit)),
                 "margin_pct": overall_margin,
             }
         }
@@ -527,21 +536,21 @@ def profitability_summary(
 
         # Convert to display currency
         if branch_rate != 1:
-            revenue = (revenue / branch_rate).quantize(_D2)
-            cogs = (cogs / branch_rate).quantize(_D2)
+            revenue = (revenue / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP)
+            cogs = (cogs / branch_rate).quantize(_D2, rounding=ROUND_HALF_UP)
 
         profit = revenue - cogs
-        margin = round((profit / revenue * 100), 2) if revenue > 0 else 0
+        margin = _pct(profit, revenue) if revenue > 0 else Decimal("0")
 
         return {
             "period": {"start": str(s), "end": str(e)},
             "branch_id": branch_id,
             "currency": branch_cur,
             "invoice_count": result.invoice_count or 0,
-            "total_qty": float(result.total_qty or 0),
-            "total_revenue": float(revenue),
-            "total_cogs": float(cogs),
-            "gross_profit": float(profit),
+            "total_qty": str(_dec(result.total_qty or 0)),
+            "total_revenue": str(_dec(revenue)),
+            "total_cogs": str(_dec(cogs)),
+            "gross_profit": str(_dec(profit)),
             "margin_pct": margin,
         }
     finally:
@@ -551,4 +560,3 @@ def profitability_summary(
 # ═══════════════════════════════════════════════════════════
 # RPT-105: Sales & Purchases Reports
 # ═══════════════════════════════════════════════════════════
-

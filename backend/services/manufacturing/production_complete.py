@@ -1,17 +1,22 @@
 """Production completion — partial, actual cost.
 
 Feature 023 — T081.  Contract: contracts/production-completion.md
+
+INV-03 fix: added WIP→FG GL journal entry via gl_service (Constitution §3 [CRITICAL]).
+INV-18 fix: replaced all float() SQL params with str(Decimal) (Constitution §1 [CRITICAL]).
 """
 from __future__ import annotations
 
 import logging
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Any
+from datetime import date
 
 from sqlalchemy import text
 from fastapi import HTTPException
 
 logger = logging.getLogger(__name__)
+_D4 = Decimal("0.0001")
 
 
 def complete_production(
@@ -105,7 +110,7 @@ def complete_production(
         try:
             from services.manufacturing.workstation_overhead import get_rate
             rate = get_rate(db, workstation_id=workstation_id, tenant_id=tenant_id)
-            overhead_cost = (rate * qty).quantize(Decimal("0.0001"))
+            overhead_cost = (rate * qty).quantize(_D4, rounding=ROUND_HALF_UP)
         except Exception:
             # Fallback to global rate
             try:
@@ -115,7 +120,7 @@ def complete_production(
                 ).fetchone()
                 if oh_row and oh_row.setting_value:
                     rate = Decimal(str(oh_row.setting_value))
-                    overhead_cost = (rate * qty).quantize(Decimal("0.0001"))
+                    overhead_cost = (rate * qty).quantize(_D4, rounding=ROUND_HALF_UP)
             except Exception:
                 pass
 
@@ -145,20 +150,85 @@ def complete_production(
     except ImportError:
         pass
 
-    # 6. Insert completion record
+    # 6. GL posting: Dr FG Inventory / Cr WIP  (Constitution §3 [CRITICAL])
+    # Only post when there is a real cost to transfer.
+    wip_to_fg_je_id = 0
+    if total_cost > Decimal("0"):
+        try:
+            from services.gl_service import create_journal_entry
+            from utils.accounting import get_mapped_account_id
+            from utils.fiscal_lock import check_fiscal_period_open
+            from utils.inventory_accounts import resolve_warehouse_inventory_account
+
+            today_str = str(date.today())
+            check_fiscal_period_open(db, today_str)
+
+            # Resolve accounts: prefer warehouse-mapped FG account, fall back to
+            # acc_map_finished_goods then acc_map_inventory (mirrors orders.py pattern).
+            fg_acc = (
+                resolve_warehouse_inventory_account(db, warehouse_id, fallback_to_global=False)
+                or get_mapped_account_id(db, "acc_map_finished_goods")
+                or get_mapped_account_id(db, "acc_map_inventory")
+            )
+            wip_acc = get_mapped_account_id(db, "acc_map_wip")
+
+            if fg_acc and wip_acc:
+                company_id = mo.get("company_id") or str(tenant_id)
+                user_id = (actor or {}).get("id") or 0
+                je_id, _ = create_journal_entry(
+                    db=db,
+                    company_id=str(company_id),
+                    date=today_str,
+                    description=f"إنتاج أمر تصنيع #{mo_id} — تحويل WIP إلى مخزون نهائي",
+                    lines=[
+                        {
+                            "account_id": int(fg_acc),
+                            "debit": str(total_cost.quantize(_D4, ROUND_HALF_UP)),
+                            "credit": 0,
+                            "description": "Finished Goods — production completion",
+                        },
+                        {
+                            "account_id": int(wip_acc),
+                            "debit": 0,
+                            "credit": str(total_cost.quantize(_D4, ROUND_HALF_UP)),
+                            "description": "WIP — transferred to FG",
+                        },
+                    ],
+                    user_id=user_id,
+                    source="mfg_completion",
+                    source_id=mo_id,
+                    idempotency_key=f"mfg_completion:{mo_id}:{str(qty)}",
+                )
+                wip_to_fg_je_id = je_id
+            else:
+                logger.warning(
+                    "production_complete: GL accounts not configured "
+                    "(acc_map_wip=%s, fg_acc=%s) — skipping WIP→FG journal entry for MO %s",
+                    wip_acc, fg_acc, mo_id,
+                )
+        except Exception:
+            logger.exception("production_complete: GL posting failed for MO %s — rolling back", mo_id)
+            raise
+
+    # 7. Insert completion record
+    # INV-18: use str(Decimal) for all SQL params — never float.
     db.execute(text("""
         INSERT INTO production_completions (
             tenant_id, mo_id, qty, actual_material_cost, actual_labor_cost,
             actual_overhead_cost, wip_to_fg_je_id, qc_state, completed_at
-        ) VALUES (:tid, :mo, :qty, :mat, :labor, :oh, 0, :qc, clock_timestamp())
+        ) VALUES (:tid, :mo, :qty, :mat, :labor, :oh, :je_id, :qc, clock_timestamp())
     """), {
-        "tid": tenant_id, "mo": mo_id, "qty": float(qty),
-        "mat": float(material_cost), "labor": float(labor_cost),
-        "oh": float(overhead_cost),
+        "tid": tenant_id,
+        "mo": mo_id,
+        "qty": str(qty),
+        "mat": str(material_cost.quantize(_D4, ROUND_HALF_UP)),
+        "labor": str(labor_cost.quantize(_D4, ROUND_HALF_UP)),
+        "oh": str(overhead_cost.quantize(_D4, ROUND_HALF_UP)),
+        "je_id": wip_to_fg_je_id,
         "qc": "pending" if mo.get("qc_required") else "n/a",
     })
 
-    # 7. Update remaining qty
+    # 8. Update remaining qty
     new_remaining = remaining - qty
     new_state = "qc_pending" if mo.get("qc_required") and new_remaining == 0 else (
         "completed" if new_remaining == 0 else "in_progress"
@@ -167,23 +237,29 @@ def complete_production(
         UPDATE manufacturing_orders
         SET remaining_qty = :rem, state = :state, updated_at = clock_timestamp()
         WHERE id = :id
-    """), {"rem": float(new_remaining), "state": new_state, "id": mo_id})
+    """), {"rem": str(new_remaining.quantize(_D4, ROUND_HALF_UP)), "state": new_state, "id": mo_id})
 
-    # 8. Audit
+    # 9. Audit
     try:
         from services.audit_writer import log_activity
         log_activity(
             db, action="mfg.order.completed",
             entity_type="manufacturing_order", entity_id=mo_id,
-            details={"qty": float(qty), "material_cost": float(material_cost)},
+            details={
+                "qty": str(qty),
+                "material_cost": str(material_cost),
+                "wip_to_fg_je_id": wip_to_fg_je_id,
+            },
         )
     except Exception:
         pass
 
     return {
-        "mo_id": mo_id, "qty": float(qty),
-        "remaining_qty": float(new_remaining),
-        "material_cost": float(material_cost),
-        "unit_cost": float(unit_cost),
+        "mo_id": mo_id,
+        "qty": str(qty),
+        "remaining_qty": str(new_remaining),
+        "material_cost": str(material_cost),
+        "unit_cost": str(unit_cost),
+        "wip_to_fg_je_id": wip_to_fg_je_id,
         "state": new_state,
     }

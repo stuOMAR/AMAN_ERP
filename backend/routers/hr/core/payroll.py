@@ -189,6 +189,10 @@ def get_payroll_entries(period_id: int, branch_id: Optional[int] = None, current
                 "salary_components_earning": str(row.salary_components_earning or 0),
                 "salary_components_deduction": str(row.salary_components_deduction or 0)
             })
+            
+        if not has_pii_access(current_user):
+            entries = mask_pii_list(entries, PAYROLL_PII_FIELDS)
+            
         return entries
 
 # --- LOAN ENDPOINTS ---
@@ -641,8 +645,8 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
     conn = get_db_connection(company_id)
     trans = conn.begin()
     try:
-        # 1. Check Status
-        period = conn.execute(text("SELECT * FROM payroll_periods WHERE id = :id"), {"id": period_id}).fetchone()
+        # 1. Check Status — PAY-02 fix: lock row to prevent concurrent posting
+        period = conn.execute(text("SELECT * FROM payroll_periods WHERE id = :id FOR UPDATE"), {"id": period_id}).fetchone()
         if not period or period.status != 'draft':
             raise HTTPException(**http_error(400, "invalid_period_status", request))
 
@@ -661,7 +665,9 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
                 SUM(overtime_amount * COALESCE(exchange_rate, 1)) as total_overtime_base,
                 SUM(violation_deduction * COALESCE(exchange_rate, 1)) as total_violations_base,
                 SUM(loan_deduction * COALESCE(exchange_rate, 1)) as total_loans_base,
-                SUM(salary_components_deduction * COALESCE(exchange_rate, 1)) as total_comp_ded_base
+                SUM(salary_components_deduction * COALESCE(exchange_rate, 1)) as total_comp_ded_base,
+                SUM(COALESCE(absence_deduction, 0) * COALESCE(exchange_rate, 1)) as total_absence_base,
+                SUM(COALESCE(advance_deduction, 0) * COALESCE(exchange_rate, 1)) as total_advance_base
             FROM payroll_entries WHERE period_id = :id
         """), {"id": period_id}).fetchone()
         
@@ -672,6 +678,8 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
         total_violations = _dec(totals.total_violations_base)
         total_loans = _dec(totals.total_loans_base)
         total_comp_ded = _dec(totals.total_comp_ded_base)
+        total_absence = _dec(totals.total_absence_base)
+        total_advance = _dec(totals.total_advance_base)
         
         # Get net salary grouped by currency for bank payout lines
         net_by_currency = conn.execute(text("""
@@ -866,6 +874,30 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
                     "currency": base_currency, "exchange_rate": 1.0
                 })
 
+        # PAY-01 fix: Line 6b — Cr Absence Deductions (reduces gross expense effectively)
+        # Absence deductions reduce the employee's net pay. Accounting treatment:
+        # credit a contra-expense or payable account so the JE balances.
+        if total_absence > Decimal('0'):
+            acc_absence = get_mapped_account_id(conn, "acc_map_absence_deduction") or get_mapped_account_id(conn, "acc_map_other_payable")
+            if acc_absence:
+                lines.append({
+                    "account_id": acc_absence, "debit": 0, "credit": total_absence,
+                    "description": 'استقطاع غياب - Absence Deductions',
+                    "currency": base_currency, "exchange_rate": 1.0
+                })
+
+        # PAY-01 fix: Line 6c — Cr Employee Advances Receivable (recovery)
+        # When payroll recovers an advance, the employee's receivable balance
+        # must decrease. Credit the advances receivable account.
+        if total_advance > Decimal('0'):
+            acc_adv_recv = get_mapped_account_id(conn, "acc_map_employee_advances") or get_mapped_account_id(conn, "acc_map_loans_adv")
+            if acc_adv_recv:
+                lines.append({
+                    "account_id": acc_adv_recv, "debit": 0, "credit": total_advance,
+                    "description": 'استرداد سلف موظفين - Advance Recovery',
+                    "currency": base_currency, "exchange_rate": 1.0
+                })
+
         # Line 7: Cr Bank (Net Payout) — one line per currency for proper tracking
         total_net_all = Decimal('0')
         acc_bank = get_mapped_account_id(conn, "acc_map_bank")
@@ -901,7 +933,9 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
                 source="payroll",
                 source_id=period_id,
                 lines=lines,
-                user_id=user_id
+                user_id=user_id,
+                # PAY-02 fix: deterministic idempotency key prevents duplicate posting
+                idempotency_key=f"payroll:{company_id}:{period_id}:post",
             )
 
         # 7a. Update Treasury (bank) balance to keep treasury in sync with GL

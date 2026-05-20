@@ -4,16 +4,19 @@ POST /api/fsm/service-contracts/{id}/renew — renew a service contract.
 """
 from __future__ import annotations
 
+import logging
 from datetime import date
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from typing import Optional
 
 from database import get_db_connection
 from services.fsm.contract_renew import renew_contract
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import i18n_message
 
 router = APIRouter(prefix="/api/fsm/service-contracts", tags=["FSM Contracts"])
+logger = logging.getLogger(__name__)
 
 
 class RenewRequest(BaseModel):
@@ -42,6 +45,7 @@ def _get_user_id(current_user) -> int:
 def renew(
     contract_id: int,
     body: RenewRequest,
+    request: Request,
     current_user=Depends(require_sensitive_permission("contract.renew")),
 ):
     """Renew a service contract."""
@@ -59,8 +63,10 @@ def renew(
         )
         return result
     except LookupError as e:
-        raise HTTPException(status_code=404, detail=str(e))
+        logger.exception("Contract not found for renewal")
+        raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
     except ValueError as e:
-        raise HTTPException(status_code=422, detail=str(e))
+        logger.exception("Validation error in contract renewal")
+        raise HTTPException(status_code=422, detail=i18n_message("validation_error", request) if request else "Validation error")
     finally:
         conn.close()

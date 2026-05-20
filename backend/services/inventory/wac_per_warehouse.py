@@ -11,6 +11,7 @@ from typing import Any
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D4 = Decimal("0.0001")
 
 
 class NegativeBalanceForbidden(Exception):
@@ -109,19 +110,25 @@ def read_wac(db: Any, *, item_id: int, warehouse_id: int, tenant_id: int | None 
 
 
 def _get_current_stock(db: Any, item_id: int, warehouse_id: int, tenant_id: int | None) -> dict:
-    """Get current stock qty and WAC for an item at a warehouse."""
-    # Calculate from transactions
+    """Get current stock qty and WAC for an item at a warehouse.
+
+    INV-07 fix: reads from the ``inventory`` table (maintained running balance)
+    instead of re-summing all historical inbound transactions, which was both
+    incorrect (ignored outbound) and O(n) in transaction count.
+    """
     row = db.execute(text("""
-        SELECT
-            COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity ELSE 0 END), 0) as inbound_qty,
-            COALESCE(SUM(CASE WHEN quantity > 0 THEN quantity * unit_cost ELSE 0 END), 0) as inbound_value
-        FROM inventory_transactions
+        SELECT COALESCE(quantity, 0)      AS qty,
+               COALESCE(average_cost, 0) AS wac
+        FROM inventory
         WHERE product_id = :item AND warehouse_id = :wid
     """), {"item": item_id, "wid": warehouse_id}).fetchone()
 
-    qty = Decimal(str(row.inbound_qty or 0))
-    value = Decimal(str(row.inbound_value or 0))
-    wac = (value / qty).quantize(Decimal("0.0001")) if qty > 0 else Decimal(0)
+    if row:
+        qty = Decimal(str(row.qty or 0))
+        wac = Decimal(str(row.wac or 0))
+    else:
+        qty = Decimal(0)
+        wac = Decimal(0)
 
     return {"qty": qty, "wac": wac}
 
@@ -131,7 +138,11 @@ def _insert_transaction(
     qty: Decimal, unit_cost: Decimal,
     direction: str, source: str, tenant_id: int | None,
 ) -> None:
-    """Insert an inventory transaction."""
+    """Insert an inventory transaction.
+
+    INV-01 fix: use str(Decimal) for SQL params — never float — to preserve
+    NUMERIC(18,4) precision as required by Constitution §1 [CRITICAL].
+    """
     db.execute(text("""
         INSERT INTO inventory_transactions (
             product_id, warehouse_id, quantity, unit_cost,
@@ -142,6 +153,6 @@ def _insert_transaction(
         )
     """), {
         "item": item_id, "wid": warehouse_id,
-        "qty": float(qty), "cost": float(unit_cost),
+        "qty": str(qty), "cost": str(unit_cost),
         "type": "purchase" if direction == "inbound" else "sale",
     })

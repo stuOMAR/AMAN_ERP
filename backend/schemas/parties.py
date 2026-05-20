@@ -1,6 +1,7 @@
 """Parties module Pydantic schemas - unified Customer/Supplier model."""
 from pydantic import BaseModel, ConfigDict
 from typing import Optional
+from decimal import Decimal
 
 
 class PartyCreate(BaseModel):
@@ -17,7 +18,7 @@ class PartyCreate(BaseModel):
     country: Optional[str] = None
     tax_number: Optional[str] = None
     contact_person: Optional[str] = None
-    credit_limit: float = 0
+    credit_limit: Decimal = Decimal("0")
     payment_terms: Optional[int] = 30
     notes: Optional[str] = None
     group_id: Optional[int] = None
@@ -34,8 +35,8 @@ class PartyResponse(BaseModel):
     phone: Optional[str] = None
     tax_number: Optional[str] = None
     address: Optional[str] = None
-    balance: float
-    credit_limit: Optional[float] = None
+    balance: Decimal
+    credit_limit: Optional[Decimal] = None
     is_active: bool
 
     model_config = ConfigDict(from_attributes=True)

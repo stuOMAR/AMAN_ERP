@@ -373,43 +373,35 @@ def seed_journal_entries(conn):
             entry_num = f"JE-SEED-{start_num:07d}"
             branch_id = random.choice(branch_ids)
             entry_date = datetime.now() - timedelta(days=random.randint(0, 365))
-            
-            # Insert Header
-            res = conn.execute(text("""
-                INSERT INTO journal_entries (entry_number, entry_date, description, reference, status, branch_id, created_at, posted_at, currency, exchange_rate)
-                VALUES (:num, :date, :desc, :ref, 'posted', :branch, NOW(), NOW(), 'SAR', 1.0)
-                RETURNING id
-            """), {
-                "num": entry_num,
-                "date": entry_date,
-                "desc": f"Seeded Entry {start_num}",
-                "ref": f"REF-{start_num}",
-                "branch": branch_id
-            })
-            je_id = res.fetchone()[0]
-            
-            # Prepare Lines (Balanced)
+
+            # INV-21 fix: route through gl_service instead of direct INSERT
+            # so the balance trigger and all GL guards are respected.
             amount = round(random.uniform(10.0, 10000.0), 2)
             acc1 = random.choice(account_ids)
             acc2 = random.choice(account_ids)
             while acc2 == acc1:
                 acc2 = random.choice(account_ids)
-            
-            lines_batch.append({
-                "jid": je_id, "aid": acc1, "deb": amount, "cred": 0, "desc": "Debit Line"
-            })
-            lines_batch.append({
-                "jid": je_id, "aid": acc2, "deb": 0, "cred": amount, "desc": "Credit Line"
-            })
-            
+
+            from services.gl_service import create_journal_entry as _gl_create
+            _gl_create(
+                conn,
+                company_id="seed",
+                date=entry_date.strftime("%Y-%m-%d"),
+                description=f"Seeded Entry {start_num}",
+                lines=[
+                    {"account_id": acc1, "debit": amount, "credit": 0, "description": "Debit Line"},
+                    {"account_id": acc2, "debit": 0, "credit": amount, "description": "Credit Line"},
+                ],
+                user_id=1,
+                branch_id=branch_id,
+                reference=f"REF-{start_num}",
+                status="posted",
+                currency="SAR",
+                entry_number_override=entry_num,
+            )
+
             start_num += 1
-            
-        # Insert Lines Batch
-        conn.execute(text("""
-            INSERT INTO journal_lines (journal_entry_id, account_id, debit, credit, description, amount_currency, currency)
-            VALUES (:jid, :aid, :deb, :cred, :desc, 0, 'SAR')
-        """), lines_batch)
-        
+
         conn.commit()
         total_seeded += JE_BATCH_SIZE
         if total_seeded % 10000 == 0:
@@ -419,7 +411,14 @@ def seed_journal_entries(conn):
     
 def main():
     logger.info("🚀 Starting Data Seeding Script...")
-    
+
+    import os as _os
+    if _os.environ.get("AMAN_ENV", "").lower() == "production":
+        raise RuntimeError(
+            "seed_data.py must NOT be run in production (AMAN_ENV=production). "
+            "This script uses raw SQL inserts that bypass GL service constraints."
+        )
+
     teardown_company()
     setup_company()
     

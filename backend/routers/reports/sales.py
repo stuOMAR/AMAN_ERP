@@ -22,6 +22,11 @@ from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_D2 = Decimal("0.01")
+
+
+def _q_money(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
 
 @router.get("/sales/summary", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["sales.reports", "reports.view"]))])
 def get_sales_summary(
@@ -712,9 +717,9 @@ def sales_by_cashier(
             "data": [{
                 "user_id": r.id, "name": r.full_name,
                 "invoice_count": r.invoice_count,
-                "total_sales": round(Decimal(str(r.total_sales)), 2),
-                "total_collected": round(Decimal(str(r.total_collected)), 2),
-                "avg_invoice": round(Decimal(str(r.avg_invoice)), 2),
+                "total_sales": _q_money(r.total_sales),
+                "total_collected": _q_money(r.total_collected),
+                "avg_invoice": _q_money(r.avg_invoice),
             } for r in rows],
         }
     finally:
@@ -850,7 +855,10 @@ def sales_commission_report(
                 "invoice_number": rm.get("invoice_number", ""),
                 "invoice_date": str(rm.get("invoice_date", "")),
                 "invoice_total": Decimal(str(rm.get("invoice_total", 0))),
-                "commission_rate": float(rm.get("commission_rate", 0)),
+                # F-NEW-172 (R-FLOAT-MONEY, Req 8.5): commission_rate is
+                # a rate axis — keep it Decimal so 0.075 doesn't drift to
+                # 0.07499999... at the JSON boundary.
+                "commission_rate": Decimal(str(rm.get("commission_rate", 0))),
                 "commission_amount": Decimal(str(rm.get("commission_amount", 0))),
                 "status": rm.get("status", "pending"),
             })
@@ -881,9 +889,9 @@ def sales_commission_report(
                 {"salesperson_id": k, **v} for k, v in sp_summary.items()
             ],
             "totals": {
-                "total_commission": round(total_commission, 2),
-                "total_pending": round(total_pending, 2),
-                "total_paid": round(total_paid, 2),
+                "total_commission": _q_money(total_commission),
+                "total_pending": _q_money(total_pending),
+                "total_paid": _q_money(total_paid),
                 "salesperson_count": len(sp_summary),
                 "record_count": len(report_rows),
             }
@@ -939,4 +947,3 @@ def sales_commission_report(
 
 
 # ===================== B8: KPI Dashboard =====================
-

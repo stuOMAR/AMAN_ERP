@@ -15,6 +15,7 @@ from utils.currency_display import base_to_display_decimal
 
 MONEY_PLACES = Decimal("0.01")
 RATE_PLACES = Decimal("0.0001")
+QTY_PLACES = Decimal("0.001")
 CALCULATION_VERSION = "tax-v1.1.0"
 
 
@@ -33,12 +34,22 @@ def q_rate(value: Any) -> Decimal:
     return dec(value).quantize(RATE_PLACES, ROUND_HALF_UP)
 
 
+def q_qty(value: Any) -> Decimal:
+    """Quantize a quantity to 3 decimals (UBL invoice line precision)."""
+    return dec(value).quantize(QTY_PLACES, ROUND_HALF_UP)
+
+
 def money_str(value: Any) -> str:
     return str(q_money(value))
 
 
 def rate_str(value: Any) -> str:
     return str(q_rate(value))
+
+
+def qty_str(value: Any) -> str:
+    """3-dp quantity rendering for UBL InvoicedQuantity."""
+    return str(q_qty(value))
 
 
 def display_money_str(value: Any, display_meta: Mapping[str, Any]) -> str:

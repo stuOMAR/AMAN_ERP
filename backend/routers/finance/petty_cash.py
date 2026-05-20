@@ -41,6 +41,8 @@ from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.i18n import http_error
 from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access, validate_treasury_account_access
+from utils.treasury_balance import recalc_treasury_from_gl
+from utils.tx import transactional
 
 router = APIRouter(
     prefix="/petty-cash",
@@ -192,24 +194,32 @@ def create_fund(payload: PettyCashFundCreate, request: Request,
 
 
 def _post_je(db, *, company_id, user_id, branch_id, fund_id, txn_date,
-             dr_acc, cr_acc, amount, description, source, source_id):
+             dr_acc, cr_acc, amount, description, source, source_id,
+             idempotency_key=None):
     """Thin wrapper around services.gl_service.create_journal_entry that
-    builds a balanced 2-line JE and returns the new ``je_id``."""
+    builds a balanced 2-line JE and returns the new ``je_id``.
+
+    Audit PR16-fix: the central writer returns ``(je_id, entry_number)``;
+    the previous implementation stored the tuple verbatim into
+    ``petty_cash_transactions.je_id`` (an INTEGER column), corrupting the
+    foreign-key value. We now unpack the tuple and return only the int.
+    """
     from services.gl_service import create_journal_entry
-    je_id = create_journal_entry(
+    je_id, _entry_number = create_journal_entry(
         db=db, company_id=company_id,
         date=txn_date.isoformat() if hasattr(txn_date, "isoformat") else str(txn_date),
         description=description,
         lines=[
-            {"account_id": dr_acc, "debit": float(amount), "credit": 0,
+            {"account_id": dr_acc, "debit": amount, "credit": 0,
              "currency": None, "exchange_rate": 1.0},
-            {"account_id": cr_acc, "debit": 0, "credit": float(amount),
+            {"account_id": cr_acc, "debit": 0, "credit": amount,
              "currency": None, "exchange_rate": 1.0},
         ],
         user_id=user_id, branch_id=branch_id,
         source=source, source_id=source_id,
+        idempotency_key=idempotency_key,
     )
-    return je_id
+    return int(je_id)
 
 
 @router.post("/funds/{fund_id}/replenish",
@@ -221,8 +231,9 @@ def replenish_fund(fund_id: int, payload: PettyCashOp, request: Request,
 
     JE: Dr Petty-Cash GL    Cr Treasury GL
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
+        # F-NEW-085 (R-MISSING-IDEMPOTENCY): forward Idempotency-Key.
+        idempotency_key = request.headers.get("Idempotency-Key")
         # Lock the fund row to serialise concurrent ops on the same fund.
         fund = db.execute(
             text("SELECT * FROM petty_cash_funds WHERE id = :id FOR UPDATE"),
@@ -252,7 +263,15 @@ def replenish_fund(fund_id: int, payload: PettyCashOp, request: Request,
             dr_acc=petty_gl, cr_acc=treasury_gl, amount=payload.amount,
             description=payload.description or f"Petty cash replenishment — {fund.name}",
             source="petty_cash_replenish", source_id=fund_id,
+            idempotency_key=idempotency_key,
         )
+
+        # Audit F-NEW-015: after every JE that affects a treasury_account,
+        # recompute treasury_accounts.current_balance from the GL so the
+        # Treasury_Balance ≡ Cash/Bank GL parity invariant (Req 5.2 / 8.8)
+        # is preserved. The petty-cash credit lands on fund.treasury_account_id
+        # (the source bank).
+        recalc_treasury_from_gl(db, fund.treasury_account_id)
 
         txn = db.execute(text("""
             INSERT INTO petty_cash_transactions
@@ -269,21 +288,12 @@ def replenish_fund(fund_id: int, payload: PettyCashOp, request: Request,
             "updated_at = NOW() WHERE id = :id"
         ), {"amt": payload.amount, "id": fund_id})
 
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="petty_cash.replenish", resource_type="petty_cash_fund",
                      resource_id=str(fund_id),
-                     details={"amount": float(payload.amount), "je_id": je_id, "txn_id": txn},
+                     details={"amount": str(payload.amount), "je_id": je_id, "txn_id": txn},
                      request=request, branch_id=branch_id)
-        return {"txn_id": txn, "je_id": je_id, "new_balance": float(fund.current_balance + payload.amount)}
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+        return {"txn_id": txn, "je_id": je_id, "new_balance": str(fund.current_balance + payload.amount)}
 
 
 @router.post("/funds/{fund_id}/disburse",
@@ -295,8 +305,9 @@ def disburse_fund(fund_id: int, payload: PettyCashOp, request: Request,
 
     JE: Dr Expense GL    Cr Petty-Cash GL
     """
-    db = get_db_connection(current_user.company_id)
-    try:
+    with transactional(current_user.company_id) as db:
+        # F-NEW-085 (R-MISSING-IDEMPOTENCY): forward Idempotency-Key.
+        idempotency_key = request.headers.get("Idempotency-Key")
         fund = db.execute(
             text("SELECT * FROM petty_cash_funds WHERE id = :id FOR UPDATE"),
             {"id": fund_id},
@@ -320,7 +331,14 @@ def disburse_fund(fund_id: int, payload: PettyCashOp, request: Request,
             dr_acc=expense_gl, cr_acc=petty_gl, amount=payload.amount,
             description=payload.description or f"Petty cash expense — {fund.name}",
             source="petty_cash_disburse", source_id=fund_id,
+            idempotency_key=idempotency_key,
         )
+
+        # Audit F-NEW-015: disburse credits petty-cash GL — the linked
+        # treasury_account (fund.treasury_account_id) sees the change
+        # indirectly via accounts.balance, so recompute to stay in sync
+        # with the Treasury_Balance ≡ GL invariant.
+        recalc_treasury_from_gl(db, fund.treasury_account_id)
 
         txn = db.execute(text("""
             INSERT INTO petty_cash_transactions
@@ -337,22 +355,13 @@ def disburse_fund(fund_id: int, payload: PettyCashOp, request: Request,
             "updated_at = NOW() WHERE id = :id"
         ), {"amt": payload.amount, "id": fund_id})
 
-        db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
                      action="petty_cash.disburse", resource_type="petty_cash_fund",
                      resource_id=str(fund_id),
-                     details={"amount": float(payload.amount), "je_id": je_id, "txn_id": txn},
+                     details={"amount": str(payload.amount), "je_id": je_id, "txn_id": txn},
                      request=request, branch_id=branch_id)
         return {"txn_id": txn, "je_id": je_id,
-                "new_balance": float(fund.current_balance - payload.amount)}
-    except HTTPException:
-        db.rollback()
-        raise
-    except Exception:
-        db.rollback()
-        raise HTTPException(**http_error(500, "internal_error"))
-    finally:
-        db.close()
+                "new_balance": str(fund.current_balance - payload.amount)}
 
 
 @router.get("/funds/{fund_id}/transactions",

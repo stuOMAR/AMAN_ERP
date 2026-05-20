@@ -3,6 +3,7 @@
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
 from datetime import datetime
+from decimal import Decimal
 
 
 class CampaignCreate(BaseModel):
@@ -12,8 +13,8 @@ class CampaignCreate(BaseModel):
     subject: Optional[str] = Field(None, max_length=500)
     content: Optional[str] = None
     scheduled_date: Optional[datetime] = None
-    estimated_cost: Optional[float] = Field(None, ge=0)
-    budget: Optional[float] = Field(None, ge=0)
+    estimated_cost: Optional[Decimal] = Field(None, ge=0)
+    budget: Optional[Decimal] = Field(None, ge=0)
     target_audience: Optional[str] = None
     branch_id: Optional[int] = None
     description: Optional[str] = None
@@ -35,8 +36,8 @@ class CampaignRead(BaseModel):
     total_opened: int = 0
     total_clicked: int = 0
     total_responded: int = 0
-    estimated_cost: Optional[float] = None
-    actual_cost: Optional[float] = None
+    estimated_cost: Optional[Decimal] = None
+    actual_cost: Optional[Decimal] = None
     created_at: Optional[datetime] = None
 
     model_config = ConfigDict(from_attributes=True)
@@ -50,13 +51,13 @@ class CampaignMetrics(BaseModel):
     total_opened: int = 0
     total_clicked: int = 0
     total_responded: int = 0
-    delivery_rate: float = 0.0
-    open_rate: float = 0.0
-    click_rate: float = 0.0
-    response_rate: float = 0.0
-    estimated_cost: Optional[float] = None
-    actual_cost: Optional[float] = None
-    cost_per_lead: Optional[float] = None
+    delivery_rate: Decimal = Decimal("0.0")
+    open_rate: Decimal = Decimal("0.0")
+    click_rate: Decimal = Decimal("0.0")
+    response_rate: Decimal = Decimal("0.0")
+    estimated_cost: Optional[Decimal] = None
+    actual_cost: Optional[Decimal] = None
+    cost_per_lead: Optional[Decimal] = None
 
 
 class RecipientStatusRead(BaseModel):

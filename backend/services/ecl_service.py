@@ -12,12 +12,13 @@ from __future__ import annotations
 import json
 import logging
 from datetime import date
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from typing import Optional
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
 
 
 def compute_ecl_provision(
@@ -72,7 +73,7 @@ def compute_ecl_provision(
                 break
         if not matched:
             continue
-        provision = (exposure * Decimal(str(matched.loss_rate))).quantize(Decimal("0.01"))
+        provision = (exposure * Decimal(str(matched.loss_rate))).quantize(_D2, rounding=ROUND_HALF_UP)
         bucket_summary[matched.bucket_label]["exposure"] += exposure
         bucket_summary[matched.bucket_label]["provision"] += provision
         total_exposure += exposure
@@ -101,10 +102,10 @@ def compute_ecl_provision(
             description=f"IFRS 9 ECL provision as of {as_of}",
             lines=[
                 {"account_id": expense_account_id,
-                 "debit": float(total_provision), "credit": 0,
+                 "debit": total_provision, "credit": Decimal("0"),
                  "description": "ECL expense (IFRS 9)"},
                 {"account_id": provision_account_id,
-                 "debit": 0, "credit": float(total_provision),
+                 "debit": Decimal("0"), "credit": total_provision,
                  "description": "Allowance for credit losses"},
             ],
             user_id=user_id,

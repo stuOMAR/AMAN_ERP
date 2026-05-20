@@ -55,6 +55,7 @@ from db_ddl.tenant_schema import (
     get_audit_security_finance_tables_sql,
     get_feature023_tables_sql,
     get_feature024_tables_sql,
+    get_audit_h_ddl_sync_sql,
 )
 
 logger = logging.getLogger(__name__)
@@ -284,6 +285,7 @@ def _ordered_sql_blocks() -> list[str]:
         get_audit_security_finance_tables_sql(),   # 24 Feature 022 audit/security/finance
         get_feature023_tables_sql(),               # 25 Feature 023 sales/inventory/mfg
         get_feature024_tables_sql(),               # 26 Feature 024 workforce/service/comms
+        get_audit_h_ddl_sync_sql(),                # 27 Audit H Batch 10 — DDL sync (F-NEW-019..022)
     ]
 
 
