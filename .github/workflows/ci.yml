@@ -18,9 +18,9 @@ jobs:
     name: backend · lint + import-smoke
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -98,9 +98,9 @@ jobs:
     name: backend · sql-safety + gl-discipline
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
@@ -149,9 +149,9 @@ jobs:
     name: frontend · static-analysis gates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
@@ -208,9 +208,9 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       ENVIRONMENT: test
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -308,8 +308,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       ENVIRONMENT: test
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -392,8 +392,8 @@ jobs:
       REDIS_URL: redis://localhost:6379/0
       ENVIRONMENT: test
     steps:
-      - uses: actions/checkout@v6
-      - uses: actions/setup-python@v6
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
           cache: 'pip'
@@ -434,9 +434,9 @@ jobs:
     name: frontend · build + vitest
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
           cache: 'npm'
@@ -468,13 +468,13 @@ jobs:
     if: github.event_name == 'pull_request'
     continue-on-error: true
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
-      - uses: actions/setup-python@v6
+      - uses: actions/setup-python@v4
         with:
           python-version: '3.12'
 
-      - uses: actions/setup-node@v6
+      - uses: actions/setup-node@v4
         with:
           node-version: '24'
 
