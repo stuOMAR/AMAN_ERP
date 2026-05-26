@@ -63,7 +63,7 @@ function CRMHome() {
     const [selectedOppId, setSelectedOppId] = useState(null)
     const [filterStage, setFilterStage] = useState('')
     const [deleteOppConfirm, setDeleteOppConfirm] = useState(null)
-    const emptyOppForm = { title: '', customer_id: '', stage: 'lead', probability: 50, expected_value: 0, expected_close_date: '', source: '', notes: '' }
+    const emptyOppForm = { title: '', customer_id: '', stage: 'lead', probability: 50, expected_value: '0.00', expected_close_date: '', source: '', notes: '' }
     const [oppForm, setOppForm] = useState({ ...emptyOppForm })
 
     // ── Support Tickets state ───────────────────────────────────────────────
@@ -143,13 +143,13 @@ function CRMHome() {
     // ── Opportunity handlers ────────────────────────────────────────────────
     const openCreateOpp = () => { setOppForm({ ...emptyOppForm }); setIsOppEdit(false); setSelectedOppId(null); setShowOppModal(true) }
     const openEditOpp = (opp) => {
-        setOppForm({ title: opp.title || '', customer_id: opp.customer_id || '', stage: opp.stage || 'lead', probability: opp.probability ?? 50, expected_value: opp.expected_value || 0, expected_close_date: opp.expected_close_date || '', source: opp.source || '', notes: opp.notes || '' })
+        setOppForm({ title: opp.title || '', customer_id: opp.customer_id || '', stage: opp.stage || 'lead', probability: opp.probability ?? 50, expected_value: opp.expected_value || '0.00', expected_close_date: opp.expected_close_date || '', source: opp.source || '', notes: opp.notes || '' })
         setIsOppEdit(true); setSelectedOppId(opp.id); setShowOppModal(true)
     }
     const handleOppSubmit = async (e) => {
         e.preventDefault()
         try {
-            const payload = { ...oppForm, probability: Number(oppForm.probability), expected_value: Number(oppForm.expected_value), customer_id: oppForm.customer_id ? Number(oppForm.customer_id) : null }
+            const payload = { ...oppForm, probability: Number(oppForm.probability), expected_value: oppForm.expected_value || '0.00', customer_id: oppForm.customer_id ? Number(oppForm.customer_id) : null }
             if (isOppEdit) { await crmAPI.updateOpportunity(selectedOppId, payload) } else { await crmAPI.createOpportunity(payload) }
             setShowOppModal(false); fetchOpportunities()
         } catch (err) { showToast(err.response?.data?.detail || t('crm.save_error', 'error')) }

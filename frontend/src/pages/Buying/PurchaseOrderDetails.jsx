@@ -9,7 +9,6 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
-import Decimal from 'decimal.js';
 
 
 function PurchaseOrderDetails() {
@@ -82,7 +81,7 @@ function PurchaseOrderDetails() {
         return <div className="workspace fade-in p-8 text-center">{t('buying.orders.not_found')}</div>;
     }
 
-    const hasRemainingToInvoice = order.items?.some(item => new Decimal(item.remaining_to_invoice || 0).gt(0));
+    const hasRemainingToInvoice = Boolean(order.has_remaining_to_invoice);
 
     return (
         <div className="workspace fade-in">
@@ -147,9 +146,9 @@ function PurchaseOrderDetails() {
                     {/* Financial Summary (New) */}
                     <div>
                         <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t('buying.orders.item.received_value')}</div>
-                        <div style={{ fontWeight: '600', fontSize: '18px', color: order.received_value ? 'var(--success)' : 'var(--text-muted)' }}>
+                        <div style={{ fontWeight: '600', fontSize: '18px', color: order.has_received_value ? 'var(--success)' : 'var(--text-muted)' }}>
                             {order.received_value != null ? formatNumber(order.received_value) : '—'} {currency}
-                            {order.received_value != null && new Decimal(order.received_value || 0).gt(0) && <span style={{ fontSize: '12px', marginRight: '8px', color: 'var(--text-secondary)', fontWeight: 'normal' }}>({t('buying.orders.item.accrued')})</span>}
+                            {order.has_received_value && <span style={{ fontSize: '12px', marginRight: '8px', color: 'var(--text-secondary)', fontWeight: 'normal' }}>({t('buying.orders.item.accrued')})</span>}
                         </div>
                     </div>
                 </div>
@@ -173,21 +172,21 @@ function PurchaseOrderDetails() {
                     <tbody>
                         {order.items?.map((item, idx) => {
                             const received = item.received_quantity || 0;
-                            const remaining = item.quantity - received;
-                            const remainingToInvoice = new Decimal(item.remaining_to_invoice || 0).toString();
+                            const remaining = item.remaining_to_receive || '0';
+                            const remainingToInvoice = item.remaining_to_invoice || '0';
                             return (
                                 <tr key={idx}>
                                     <td>
                                         <div style={{ fontWeight: '500' }}>{item.product_name || item.description}</div>
                                     </td>
                                     <td style={{ textAlign: 'center' }}>{item.quantity}</td>
-                                    <td style={{ textAlign: 'center', color: received > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
+                                    <td style={{ textAlign: 'center', color: item.has_received ? 'var(--success)' : 'var(--text-muted)' }}>
                                         {received}
                                     </td>
-                                    <td style={{ textAlign: 'center', color: remaining > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                                    <td style={{ textAlign: 'center', color: item.has_remaining_to_receive ? 'var(--warning)' : 'var(--success)' }}>
                                         {remaining}
                                     </td>
-                                    <td style={{ textAlign: 'center', color: remainingToInvoice > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                                    <td style={{ textAlign: 'center', color: item.has_remaining_to_invoice ? 'var(--warning)' : 'var(--success)' }}>
                                         {remainingToInvoice}
                                     </td>
                                     <td>{formatNumber(item.unit_price)} <small>{currency}</small></td>

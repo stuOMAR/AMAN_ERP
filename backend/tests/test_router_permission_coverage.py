@@ -4,9 +4,9 @@ Constitution §4: Protected router endpoints require require_permission(...).
 
 Public exceptions: login, refresh, health, docs.
 """
-import ast
 import pathlib
 import re
+import sys
 
 BACKEND = pathlib.Path(__file__).resolve().parents[1]
 ROUTERS = BACKEND / "routers"
@@ -75,7 +75,7 @@ def test_no_detail_str_e_regression():
     # This is a cross-check — the main test is in test_no_detail_str_e.py
     import subprocess
     result = subprocess.run(
-        ["python", "-m", "pytest", "tests/test_no_detail_str_e.py", "-q", "--tb=no"],
+        [sys.executable, "-m", "pytest", "tests/test_no_detail_str_e.py", "-q", "--tb=no"],
         capture_output=True, text=True,
         cwd=str(BACKEND)
     )

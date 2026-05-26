@@ -37,9 +37,8 @@ def check_quota(
         text("""
             SELECT COALESCE(SUM(file_size), 0)
             FROM documents
-            WHERE tenant_id = :tnt AND deleted_at IS NULL
+            WHERE COALESCE(is_deleted, FALSE) = FALSE
         """),
-        {"tnt": tenant_id},
     ).fetchone()
 
     current_bytes = int(usage[0]) if usage else 0
@@ -63,14 +62,13 @@ def check_quota(
 
 def recompute_quotas(conn: Any, *, tenant_id: int) -> dict:
     """Recompute storage quotas for a tenant (nightly job)."""
-    result = conn.execute(
+    conn.execute(
         text("""
             INSERT INTO storage_quotas (tenant_id, scope, scope_ref_id, used_bytes, quota_bytes, last_recalculated_at)
-            SELECT tenant_id, 'tenant', NULL, COALESCE(SUM(file_size), 0),
+            SELECT :tnt, 'tenant', 0, COALESCE(SUM(file_size), 0),
                    51200 * 1024 * 1024, now()
             FROM documents
-            WHERE tenant_id = :tnt AND deleted_at IS NULL
-            GROUP BY tenant_id
+            WHERE COALESCE(is_deleted, FALSE) = FALSE
             ON CONFLICT (tenant_id, scope, scope_ref_id)
             DO UPDATE SET used_bytes = EXCLUDED.used_bytes,
                           last_recalculated_at = now()

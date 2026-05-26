@@ -65,8 +65,26 @@ const REPORT_CONFIG = {
 }
 
 // ─── Formatting helpers ───
-const fmtNum  = (n) => formatNumber ? formatNumber(n) : Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 2 })
-const fmtPct  = (n) => `${Number(n || 0).toFixed(1)}%`
+// display-only — compares backend report strings for colors and labels.
+const compareDecimal = (left, right) => {
+  const normalize = (value) => {
+    const raw = String(value ?? '0').trim()
+    const negative = raw.startsWith('-')
+    const unsigned = negative ? raw.slice(1) : raw
+    const [whole = '0', fraction = ''] = unsigned.split('.')
+    return { negative, whole: whole.replace(/^0+(?=\d)/, '') || '0', fraction }
+  }
+  const a = normalize(left)
+  const b = normalize(right)
+  const scale = Math.max(a.fraction.length, b.fraction.length)
+  const ai = BigInt(`${a.negative ? '-' : ''}${a.whole}${a.fraction.padEnd(scale, '0')}`)
+  const bi = BigInt(`${b.negative ? '-' : ''}${b.whole}${b.fraction.padEnd(scale, '0')}`)
+  return ai === bi ? 0 : ai > bi ? 1 : -1
+}
+const gt = (left, right) => compareDecimal(left, right) > 0
+const gte = (left, right) => compareDecimal(left, right) >= 0
+const fmtNum  = (n) => formatNumber(n)
+const fmtPct  = (n) => `${formatNumber(n, 1)}%`
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-CA') : '—'
 
 // ─── Metric card ───
@@ -117,8 +135,8 @@ function renderFoodCost(data, t, color) {
       <MetricCard color={color} label={t('industry_reports.revenue')} value={fmtNum(s.revenue)} />
       <MetricCard color={color} label={t('industry_reports.cogs')} value={fmtNum(s.cogs)} />
       <MetricCard color="#EF4444" label={t('industry_reports.food_cost_pct')}
-        value={fmtPct(s.food_cost_pct)} alert={s.food_cost_pct > 35 ? '⚠️' : '✅'}
-        sub={s.food_cost_pct > 35 ? t('industry_reports.above_benchmark') : t('industry_reports.within_benchmark')} />
+        value={fmtPct(s.food_cost_pct)} alert={gt(s.food_cost_pct, '35') ? '⚠️' : '✅'}
+        sub={gt(s.food_cost_pct, '35') ? t('industry_reports.above_benchmark') : t('industry_reports.within_benchmark')} />
       <MetricCard color="#10B981" label={t('industry_reports.gross_margin')} value={fmtPct(s.gross_margin_pct)} />
       <MetricCard color={color} label={t('industry_reports.gross_profit')} value={fmtNum(s.gross_profit)} />
       <MetricCard color={color} label={t('industry_reports.net_profit')} value={fmtNum(s.net_profit)} />
@@ -131,7 +149,7 @@ function renderFoodCost(data, t, color) {
           { key: 'qty_sold', label: t('industry_reports.qty'), align: 'center', render: r => fmtNum(r.qty_sold) },
           { key: 'total_revenue', label: t('industry_reports.revenue_col'), align: 'right', render: r => fmtNum(r.total_revenue) },
           { key: 'total_cost', label: t('industry_reports.cost'), align: 'right', render: r => fmtNum(r.total_cost) },
-          { key: 'cost_pct', label: t('industry_reports.cost_pct'), align: 'center', render: r => <span style={{ color: r.cost_pct > 35 ? '#EF4444' : '#10B981', fontWeight: 600 }}>{fmtPct(r.cost_pct)}</span> },
+          { key: 'cost_pct', label: t('industry_reports.cost_pct'), align: 'center', render: r => <span style={{ color: gt(r.cost_pct, '35') ? '#EF4444' : '#10B981', fontWeight: 600 }}>{fmtPct(r.cost_pct)}</span> },
         ]} />
       </div>
     )}
@@ -145,11 +163,11 @@ function renderProductionCost(data, t, color) {
       <MetricCard color={color} label={t('industry_reports.production_orders')} value={s.total_orders} />
       <MetricCard color={color} label={t('industry_reports.produced')} value={fmtNum(s.produced_qty)} sub={`${t('industry_reports.planned')}: ${fmtNum(s.planned_qty)}`} />
       <MetricCard color="#10B981" label={t('industry_reports.efficiency')} value={fmtPct(s.efficiency_pct)} />
-      <MetricCard color="#EF4444" label={t('industry_reports.scrap_rate')} value={fmtPct(s.scrap_rate_pct)} alert={s.scrap_rate_pct > 5 ? '⚠️' : ''} />
+      <MetricCard color="#EF4444" label={t('industry_reports.scrap_rate')} value={fmtPct(s.scrap_rate_pct)} alert={gt(s.scrap_rate_pct, '5') ? '⚠️' : ''} />
       <MetricCard color={color} label={t('industry_reports.planned_cost')} value={fmtNum(s.planned_cost)} />
       <MetricCard color={color} label={t('industry_reports.actual_cost')} value={fmtNum(s.total_actual_cost)} />
-      <MetricCard color={s.variance > 0 ? '#EF4444' : '#10B981'} label={t('industry_reports.variance')}
-        value={fmtNum(s.variance)} sub={`${fmtPct(s.variance_pct)} ${s.variance > 0 ? (t('industry_reports.over')) : (t('industry_reports.under'))}`} />
+      <MetricCard color={gt(s.variance, '0') ? '#EF4444' : '#10B981'} label={t('industry_reports.variance')}
+        value={fmtNum(s.variance)} sub={`${fmtPct(s.variance_pct)} ${gt(s.variance, '0') ? (t('industry_reports.over')) : (t('industry_reports.under'))}`} />
     </div>
     {data.orders?.length > 0 && (
       <div className="card" style={{ padding: 20, marginTop: 16 }}>
@@ -175,7 +193,7 @@ function renderProgressBilling(data, t, color) {
       <MetricCard color={color} label={t('industry_reports.total_budgets')} value={fmtNum(s.total_budget)} />
       <MetricCard color="#10B981" label={t('industry_reports.total_invoiced')} value={fmtNum(s.total_invoiced)} sub={fmtPct(s.overall_billing_pct)} />
       <MetricCard color={color} label={t('industry_reports.total_costs')} value={fmtNum(s.total_cost)} />
-      <MetricCard color={s.overall_profit >= 0 ? '#10B981' : '#EF4444'} label={t('industry_reports.overall_profit')} value={fmtNum(s.overall_profit)} />
+      <MetricCard color={gte(s.overall_profit, '0') ? '#10B981' : '#EF4444'} label={t('industry_reports.overall_profit')} value={fmtNum(s.overall_profit)} />
     </div>
     {data.projects?.length > 0 && (
       <div className="card" style={{ padding: 20, marginTop: 16 }}>
@@ -196,7 +214,7 @@ function renderProgressBilling(data, t, color) {
           },
           { key: 'planned_budget', label: t('industry_reports.budget'), align: 'right', render: r => fmtNum(r.planned_budget) },
           { key: 'invoiced_amount', label: t('industry_reports.invoiced'), align: 'right', render: r => fmtNum(r.invoiced_amount) },
-          { key: 'profit', label: t('industry_reports.profit'), align: 'right', render: r => <span style={{ color: r.profit >= 0 ? '#10B981' : '#EF4444' }}>{fmtNum(r.profit)}</span> },
+          { key: 'profit', label: t('industry_reports.profit'), align: 'right', render: r => <span style={{ color: gte(r.profit, '0') ? '#10B981' : '#EF4444' }}>{fmtNum(r.profit)}</span> },
         ]} />
       </div>
     )}
@@ -264,11 +282,11 @@ function renderUtilization(data, t, color) {
     <div className="metrics-grid">
       <MetricCard color={color} label={t('industry_reports.employees')} value={s.total_employees} />
       <MetricCard color={color} label={t('industry_reports.billable_hours')} value={fmtNum(s.total_billable_hours)} />
-      <MetricCard color={s.avg_utilization_pct >= 70 ? '#10B981' : '#F59E0B'} label={t('industry_reports.avg_utilization')}
-        value={fmtPct(s.avg_utilization_pct)} alert={s.avg_utilization_pct >= 70 ? '✅' : '⚠️'} />
+      <MetricCard color={gte(s.avg_utilization_pct, '70') ? '#10B981' : '#F59E0B'} label={t('industry_reports.avg_utilization')}
+        value={fmtPct(s.avg_utilization_pct)} alert={gte(s.avg_utilization_pct, '70') ? '✅' : '⚠️'} />
       <MetricCard color={color} label={t('industry_reports.eff_hourly_rate')} value={fmtNum(s.effective_hourly_rate)} />
       <MetricCard color={color} label={t('industry_reports.service_revenue')} value={fmtNum(s.service_revenue)} />
-      <MetricCard color={s.net_profit >= 0 ? '#10B981' : '#EF4444'} label={t('industry_reports.net_profit')} value={fmtNum(s.net_profit)} />
+      <MetricCard color={gte(s.net_profit, '0') ? '#10B981' : '#EF4444'} label={t('industry_reports.net_profit')} value={fmtNum(s.net_profit)} />
     </div>
     {data.employees?.length > 0 && (
       <div className="card" style={{ padding: 20, marginTop: 16 }}>
@@ -278,7 +296,7 @@ function renderUtilization(data, t, color) {
           { key: 'billable_hours', label: t('industry_reports.billable_col'), align: 'center', render: r => fmtNum(r.billable_hours) },
           { key: 'available_hours', label: t('industry_reports.available'), align: 'center' },
           { key: 'utilization_pct', label: t('industry_reports.utilization_pct'), align: 'center',
-            render: r => <span style={{ fontWeight: 600, color: r.utilization_pct >= 70 ? '#10B981' : '#F59E0B' }}>{fmtPct(r.utilization_pct)}</span> },
+            render: r => <span style={{ fontWeight: 600, color: gte(r.utilization_pct, '70') ? '#10B981' : '#F59E0B' }}>{fmtPct(r.utilization_pct)}</span> },
           { key: 'tasks_count', label: t('industry_reports.tasks'), align: 'center' },
           { key: 'completed_tasks', label: t('industry_reports.done'), align: 'center' },
         ]} />
@@ -307,7 +325,7 @@ function renderWorkshopRevenue(data, t, color) {
           { key: 'job_count', label: t('industry_reports.jobs'), align: 'center' },
           { key: 'total_revenue', label: t('industry_reports.revenue_col'), align: 'right', render: r => fmtNum(r.total_revenue) },
           { key: 'margin', label: t('industry_reports.margin'), align: 'right', render: r => fmtNum(r.margin) },
-          { key: 'margin_pct', label: '%', align: 'center', render: r => <span style={{ color: r.margin_pct >= 30 ? '#10B981' : '#EF4444' }}>{fmtPct(r.margin_pct)}</span> },
+          { key: 'margin_pct', label: '%', align: 'center', render: r => <span style={{ color: gte(r.margin_pct, '30') ? '#10B981' : '#EF4444' }}>{fmtPct(r.margin_pct)}</span> },
         ]} />
       </div>
     )}
@@ -320,8 +338,8 @@ function renderEcomReturns(data, t, color) {
     <div className="metrics-grid">
       <MetricCard color={color} label={t('industry_reports.total_sales')} value={s.total_sales} sub={fmtNum(s.total_sales_value)} />
       <MetricCard color="#EF4444" label={t('industry_reports.returns')} value={s.total_returns} sub={fmtNum(s.total_return_value)} />
-      <MetricCard color={s.return_rate_pct > 10 ? '#EF4444' : '#10B981'} label={t('industry_reports.return_rate_count')}
-        value={fmtPct(s.return_rate_pct)} alert={s.return_rate_pct > 10 ? '⚠️' : '✅'} />
+      <MetricCard color={gt(s.return_rate_pct, '10') ? '#EF4444' : '#10B981'} label={t('industry_reports.return_rate_count')}
+        value={fmtPct(s.return_rate_pct)} alert={gt(s.return_rate_pct, '10') ? '⚠️' : '✅'} />
       <MetricCard color={color} label={t('industry_reports.return_rate_value')} value={fmtPct(s.value_return_rate_pct)} />
       <MetricCard color="#10B981" label={t('industry_reports.net_sales')} value={fmtNum(s.net_sales)} />
     </div>
@@ -357,7 +375,7 @@ function renderAgentPerformance(data, t, color) {
           { key: 'total_sales', label: t('industry_reports.sales'), align: 'right', render: r => fmtNum(r.total_sales) },
           { key: 'total_collected', label: t('industry_reports.collected'), align: 'right', render: r => fmtNum(r.total_collected) },
           { key: 'collection_rate_pct', label: t('industry_reports.collection'), align: 'center',
-            render: r => <span style={{ color: r.collection_rate_pct >= 80 ? '#10B981' : '#EF4444' }}>{fmtPct(r.collection_rate_pct)}</span> },
+            render: r => <span style={{ color: gte(r.collection_rate_pct, '80') ? '#10B981' : '#EF4444' }}>{fmtPct(r.collection_rate_pct)}</span> },
           { key: 'customer_count', label: t('industry_reports.customers'), align: 'center' },
           { key: 'share_pct', label: t('industry_reports.share'), align: 'center', render: r => fmtPct(r.share_pct) },
         ]} />
@@ -385,7 +403,7 @@ function renderCropYield(data, t, color) {
       <MetricCard color={color} label={t('industry_reports.direct_cost')} value={fmtNum(s.total_direct_cost)} />
       <MetricCard color="#10B981" label={t('industry_reports.gross_margin_col')} value={fmtPct(s.gross_margin_pct)} />
       <MetricCard color={color} label={t('industry_reports.operating_exp')} value={fmtNum(s.total_operating_expenses)} />
-      <MetricCard color={s.net_farm_income >= 0 ? '#10B981' : '#EF4444'} label={t('industry_reports.net_farm_income')} value={fmtNum(s.net_farm_income)} />
+      <MetricCard color={gte(s.net_farm_income, '0') ? '#10B981' : '#EF4444'} label={t('industry_reports.net_farm_income')} value={fmtNum(s.net_farm_income)} />
     </div>
     {data.crops?.length > 0 && (
       <div className="card" style={{ padding: 20, marginTop: 16 }}>
@@ -395,7 +413,7 @@ function renderCropYield(data, t, color) {
           { key: 'total_qty_sold', label: t('industry_reports.qty'), align: 'center', render: r => fmtNum(r.total_qty_sold) },
           { key: 'total_revenue', label: t('industry_reports.revenue_col'), align: 'right', render: r => fmtNum(r.total_revenue) },
           { key: 'total_cost', label: t('industry_reports.cost'), align: 'right', render: r => fmtNum(r.total_cost) },
-          { key: 'profit', label: t('industry_reports.profit'), align: 'right', render: r => <span style={{ color: r.profit >= 0 ? '#10B981' : '#EF4444' }}>{fmtNum(r.profit)}</span> },
+          { key: 'profit', label: t('industry_reports.profit'), align: 'right', render: r => <span style={{ color: gte(r.profit, '0') ? '#10B981' : '#EF4444' }}>{fmtNum(r.profit)}</span> },
           { key: 'margin_pct', label: '%', align: 'center', render: r => fmtPct(r.margin_pct) },
         ]} />
       </div>

@@ -2,7 +2,7 @@
 
 Mounted under the parent router via pos/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy.orm import Session
 from sqlalchemy import text
@@ -10,15 +10,15 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, require_module, check_permission
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, check_permission
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
-from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
+from schemas.pos import OrderCreate, OrderResponse, ReturnCreate
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from services.tax_engine import resolve_line_tax
+from utils.accounting import compute_invoice_totals, compute_line_amounts
 
 logger = logging.getLogger(__name__)
 
@@ -27,30 +27,24 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-def get_db(current_user: UserResponse = Depends(get_current_user)):
-    yield from get_company_db(current_user.company_id)
-
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, get_db
+from .core import _D2, _D4, _dec, get_db  # noqa: E402
 
-@router.post("/orders", response_model=OrderResponse, dependencies=[Depends(require_permission("pos.create"))])
-def create_order(
-    order_in: OrderCreate,
-    request: Request,
-    current_user: UserResponse = Depends(get_current_user),
-    db: Session = Depends(get_db)
-):
-    """Create Order."""
-    # Get base currency
-    from utils.accounting import get_base_currency
-    base_currency = get_base_currency(db)
 
-    # UOM Validation: Discrete units must have integer quantities
-    from utils.quantity_validation import validate_quantity_for_product
-    for item in order_in.items:
-        validate_quantity_for_product(db, item.product_id, item.quantity)
+def _line_discount_pct(qty, unit_price, disc_amt) -> Decimal:
+    gross = (_dec(qty) * _dec(unit_price)).quantize(_D2, ROUND_HALF_UP)
+    if gross <= 0:
+        return Decimal("0")
+    amt = _dec(disc_amt)
+    if amt <= 0:
+        return Decimal("0")
+    if amt > gross:
+        amt = gross
+    return (amt * Decimal("100") / gross).quantize(Decimal("0.000001"), ROUND_HALF_UP)
 
+
+def _validate_pos_price_overrides(db: Session, order_in: OrderCreate, current_user: UserResponse, request: Request) -> None:
     user_perms = current_user.permissions or []
     can_override_price = check_permission(user_perms, "pos.price_override") or check_permission(user_perms, "pos.manage")
     for item in order_in.items:
@@ -71,52 +65,35 @@ def create_order(
                 if max_price > 0 and requested_price > max_price:
                     raise HTTPException(**http_error(400, "price_above_maximum", request))
 
-    # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
-    # produces the same numbers as routers/sales/invoices for the same
-    # inputs. Per-line OrderLineCreate.discount_amount is an *absolute*
-    # currency amount, while compute_line_amounts expects a percentage —
-    # convert per line so the unified helper sees consistent semantics.
-    from utils.accounting import compute_invoice_totals, compute_line_amounts
 
-    def _line_discount_pct(qty, unit_price, disc_amt) -> Decimal:
-        gross = (_dec(qty) * _dec(unit_price)).quantize(_D2, ROUND_HALF_UP)
-        if gross <= 0:
-            return Decimal("0")
-        amt = _dec(disc_amt)
-        if amt <= 0:
-            return Decimal("0")
-        if amt > gross:
-            amt = gross
-        return (amt * Decimal("100") / gross).quantize(Decimal("0.000001"), ROUND_HALF_UP)
-
-    # Resolve branch early so tax engine can use it
-    pos_session = db.execute(text("SELECT branch_id, warehouse_id, treasury_account_id FROM pos_sessions WHERE id = :id"), {"id": order_in.session_id}).fetchone()
+def _resolve_pos_order_context(db: Session, order_in: OrderCreate, current_user: UserResponse):
+    pos_session = db.execute(
+        text("SELECT branch_id, warehouse_id, treasury_account_id FROM pos_sessions WHERE id = :id"),
+        {"id": order_in.session_id},
+    ).fetchone()
     branch_id = order_in.branch_id or (pos_session.branch_id if pos_session else None)
     warehouse_id = order_in.warehouse_id or (pos_session.warehouse_id if pos_session else None)
     treasury_id = pos_session.treasury_account_id if pos_session else None
     branch_id = validate_branch_access(current_user, branch_id)
+    return pos_session, branch_id, warehouse_id, treasury_id
 
-    # Resolve tax per line via engine (branch-aware, no hardcoded rates)
-    _resolved_taxes = {}
+
+def _build_pos_order_preview(db: Session, order_in: OrderCreate, branch_id: int, request: Request):
+    resolved_taxes = {}
     for item in order_in.items:
-        tax_info = resolve_line_tax(branch_id, item.product_id, db, customer_id=getattr(order_in, 'customer_id', None))
-        _resolved_taxes[item.product_id] = tax_info
+        tax_info = resolve_line_tax(branch_id, item.product_id, db, customer_id=getattr(order_in, "customer_id", None))
+        resolved_taxes[item.product_id] = tax_info
 
     line_dicts = [
         {
             "quantity": item.quantity,
             "unit_price": item.unit_price,
-            "tax_rate": _resolved_taxes[item.product_id]["tax_rate"],
+            "tax_rate": resolved_taxes[item.product_id]["tax_rate"],
             "discount": _line_discount_pct(item.quantity, item.unit_price, item.discount_amount),
         }
         for item in order_in.items
     ]
 
-    # T3.10: resolve backend-side promotion/coupon. Either coupon_code or
-    # promotion_id may be provided; server validates and converts the
-    # promotion into a header discount percentage so the unified ZATCA
-    # rule (proportional tax reduction) applies — exactly like
-    # routers/sales/invoices uses header_discount_pct.
     promotion_row = None
     if order_in.promotion_id:
         promotion_row = db.execute(text("""
@@ -139,9 +116,6 @@ def create_order(
         if promotion_row is None:
             raise HTTPException(**http_error(400, "pos_coupon_invalid", request))
 
-    # Pre-compute the gross subtotal (qty*price summed) to translate any
-    # absolute header discount into a percentage and to enforce
-    # min_order_amount on promotions.
     gross_subtotal = sum(
         (_dec(it.quantity) * _dec(it.unit_price)).quantize(_D2, ROUND_HALF_UP)
         for it in order_in.items
@@ -159,28 +133,148 @@ def create_order(
         pvalue = _dec(promotion_row.value or 0)
         if ptype == "percentage":
             header_discount_pct = pvalue
-        elif ptype in ("amount", "fixed", "fixed_amount"):
-            if gross_subtotal > 0:
-                header_discount_pct = (pvalue * Decimal("100") / gross_subtotal)
-        # Other promo shapes (BOGO etc.) are not supported here yet.
+        elif ptype in ("amount", "fixed", "fixed_amount") and gross_subtotal > 0:
+            header_discount_pct = (pvalue * Decimal("100") / gross_subtotal)
     elif _dec(order_in.discount_amount) > 0 and gross_subtotal > 0:
-        # Manual header discount: treat the absolute amount as the
-        # equivalent percentage so tax is reduced proportionally
-        # (ZATCA), matching routers/sales/invoices.
-        header_discount_pct = (
-            _dec(order_in.discount_amount) * Decimal("100") / gross_subtotal
-        )
+        header_discount_pct = _dec(order_in.discount_amount) * Decimal("100") / gross_subtotal
 
     if header_discount_pct < 0:
         header_discount_pct = Decimal("0")
     if header_discount_pct > Decimal("100"):
         header_discount_pct = Decimal("100")
 
-    _totals = compute_invoice_totals(line_dicts, header_discount_pct=header_discount_pct)
-    subtotal = _totals["subtotal"] - _totals["total_discount"]  # net taxable base after all discounts
-    tax_total = _totals["total_tax"]
-    total = _totals["grand_total"]
-    effective_discount_amount = _totals["total_discount"].quantize(_D2, ROUND_HALF_UP)
+    totals = compute_invoice_totals(line_dicts, header_discount_pct=header_discount_pct)
+    subtotal = totals["subtotal"] - totals["total_discount"]
+    tax_total = totals["total_tax"]
+    total = totals["grand_total"]
+    effective_discount_amount = totals["total_discount"].quantize(_D2, ROUND_HALF_UP)
+
+    lines = []
+    for item in order_in.items:
+        tax_info = resolved_taxes[item.product_id]
+        item_subtotal = (_dec(item.quantity) * _dec(item.unit_price)).quantize(_D2, ROUND_HALF_UP)
+        line_discount_pct = _line_discount_pct(item.quantity, item.unit_price, item.discount_amount)
+        line_amounts = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], line_discount_pct)
+        lines.append({
+            "product_id": item.product_id,
+            "quantity": str(_dec(item.quantity)),
+            "unit_price": str(_dec(item.unit_price).quantize(_D2, ROUND_HALF_UP)),
+            "subtotal": str(item_subtotal),
+            "tax_rate": str(_dec(tax_info["tax_rate"])),
+            "tax_rate_id": tax_info["tax_rate_id"],
+            "tax_amount": str(_dec(line_amounts["tax_amount"]).quantize(_D2, ROUND_HALF_UP)),
+            "total": str(_dec(line_amounts["line_total"]).quantize(_D2, ROUND_HALF_UP)),
+        })
+
+    return {
+        "resolved_taxes": resolved_taxes,
+        "subtotal": subtotal.quantize(_D2, ROUND_HALF_UP),
+        "tax_total": tax_total.quantize(_D2, ROUND_HALF_UP),
+        "total": total.quantize(_D2, ROUND_HALF_UP),
+        "effective_discount_amount": effective_discount_amount,
+        "lines": lines,
+    }
+
+
+@router.post("/orders/preview", response_model=Dict[str, Any], dependencies=[Depends(require_permission("pos.view"))])
+def preview_order(
+    order_in: OrderCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Return backend-authoritative POS order totals without creating an order."""
+    from utils.quantity_validation import validate_quantity_for_product
+    for item in order_in.items:
+        validate_quantity_for_product(db, item.product_id, item.quantity)
+
+    _validate_pos_price_overrides(db, order_in, current_user, request)
+    _, branch_id, warehouse_id, _ = _resolve_pos_order_context(db, order_in, current_user)
+
+    if order_in.branch_id:
+        validate_branch_access(current_user, order_in.branch_id)
+    if order_in.warehouse_id:
+        wh_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": order_in.warehouse_id}).scalar()
+        if wh_branch:
+            validate_branch_access(current_user, wh_branch)
+
+    preview = _build_pos_order_preview(db, order_in, branch_id, request)
+    total_paid = sum(_dec(p.amount) for p in order_in.payments).quantize(_D2, ROUND_HALF_UP)
+    remaining_amount = (preview["total"] - total_paid).quantize(_D2, ROUND_HALF_UP)
+    if remaining_amount < 0:
+        remaining_amount = Decimal("0.00")
+    return {
+        "branch_id": branch_id,
+        "warehouse_id": warehouse_id,
+        "subtotal": str(preview["subtotal"]),
+        "tax_amount": str(preview["tax_total"]),
+        "discount_amount": str(preview["effective_discount_amount"]),
+        "total_amount": str(preview["total"]),
+        "total_paid": str(total_paid),
+        "remaining_amount": str(remaining_amount),
+        "lines": preview["lines"],
+    }
+
+
+@router.post("/orders", response_model=OrderResponse, dependencies=[Depends(require_permission("pos.create"))])
+def create_order(
+    order_in: OrderCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    db: Session = Depends(get_db),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+):
+    """Create Order."""
+    # Idempotency pre-check
+    if idempotency_key:
+        existing = db.execute(text("""
+            SELECT id, order_number, total_amount, status, created_at
+            FROM pos_orders
+            WHERE idempotency_key = :key
+            LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing:
+            return OrderResponse(
+                id=existing.id,
+                order_number=existing.order_number,
+                total_amount=existing.total_amount,
+                status=existing.status,
+                created_at=existing.created_at,
+            )
+
+    if order_in.client_order_id and not idempotency_key:
+        raise HTTPException(**http_error(400, "idempotency_key_required", request))
+
+    # Get base currency
+    from utils.accounting import get_base_currency
+    base_currency = get_base_currency(db)
+
+    # UOM Validation: Discrete units must have integer quantities
+    from utils.quantity_validation import validate_quantity_for_product
+    for item in order_in.items:
+        validate_quantity_for_product(db, item.product_id, item.quantity)
+
+    _validate_pos_price_overrides(db, order_in, current_user, request)
+
+    # TASK-027 / T3.10: unified totals via compute_invoice_totals so POS
+    # produces the same numbers as routers/sales/invoices for the same
+    # inputs. Per-line OrderLineCreate.discount_amount is an *absolute*
+    # currency amount, while compute_line_amounts expects a percentage —
+    # convert per line so the unified helper sees consistent semantics.
+    # Resolve branch early so tax engine can use it
+    pos_session, branch_id, warehouse_id, treasury_id = _resolve_pos_order_context(db, order_in, current_user)
+    preview = _build_pos_order_preview(db, order_in, branch_id, request)
+    _resolved_taxes = preview["resolved_taxes"]
+    subtotal = preview["subtotal"]
+    tax_total = preview["tax_total"]
+    total = preview["total"]
+    effective_discount_amount = preview["effective_discount_amount"]
+
+    # Strict validation: compare client-submitted grand total with authoritative backend grand total
+    if order_in.submitted_grand_total is not None:
+        _D2 = Decimal("0.01")
+        if abs(total - order_in.submitted_grand_total) > _D2:
+            raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
     # FISCAL-LOCK: Reject if accounting period is closed
     check_fiscal_period_open(db, datetime.now().date())
@@ -215,13 +309,15 @@ def create_order(
                 created_at=existing_order.created_at,
             )
 
+    total_payments = sum(_dec(p.amount) for p in order_in.payments).quantize(_D2, ROUND_HALF_UP)
+
     # Validate payments cover total for paid orders
     if order_in.status == 'paid':
-        total_payments = sum(_dec(p.amount) for p in order_in.payments)
         if total_payments < total:
             if len(order_in.payments) == 1 and abs(total_payments - total) < _D2:
                 # Auto-adjust only for rounding differences
                 order_in.payments[0].amount = total
+                total_payments = total
             elif total_payments < total:
                 raise HTTPException(status_code=400, detail=i18n_message("payment_amount_less_than_total", request))
 
@@ -239,10 +335,12 @@ def create_order(
         INSERT INTO pos_orders (
             order_number, session_id, customer_id, walk_in_customer_name,
             warehouse_id, branch_id, status, subtotal, tax_amount,
-            discount_amount, total_amount, paid_amount, note, client_order_id, created_by, party_site_id
+            discount_amount, total_amount, paid_amount, note, client_order_id, created_by, party_site_id,
+            idempotency_key
         ) VALUES (
             :num, :sess, :cust, :walkin, :wh, :branch, :status, :subtotal, :tax,
-            :disc, :total, :paid, :note, :client_order_id, :uid, :party_site_id
+            :disc, :total, :paid, :note, :client_order_id, :uid, :party_site_id,
+            :idempotency_key
         ) RETURNING id
     """), {
         "num": order_number,
@@ -256,11 +354,12 @@ def create_order(
         "tax": tax_total,
         "disc": effective_discount_amount,
         "total": total,
-        "paid": _dec(order_in.paid_amount).quantize(_D2, ROUND_HALF_UP),
+        "paid": total_payments if order_in.status == 'paid' else Decimal("0.00"),
         "note": order_in.note,
         "client_order_id": order_in.client_order_id,
         "uid": current_user.id,
         "party_site_id": order_in.party_site_id,
+        "idempotency_key": idempotency_key,
     }).fetchone()
 
     order_id = result.id
@@ -328,7 +427,7 @@ def create_order(
                 else:
                     cost_price = _dec(db.execute(text("SELECT cost_price FROM products WHERE id = :id"), {"id": item.product_id}).scalar() or 0)
                     total_cogs += (cost_price * _dec(item.quantity)).quantize(_D2, ROUND_HALF_UP)
-            except ValueError as e:
+            except ValueError:
                 # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
                 logger.exception("FIFO/LIFO layer exhaustion on POS order create")
                 raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
@@ -502,7 +601,6 @@ def create_order(
                 raise
 
             import uuid
-            je_num = f"JE-POS-{order_number}"
             # Get treasury currency
             pos_currency = selected_treasury.get("currency") if selected_treasury else base_currency
 
@@ -539,7 +637,7 @@ def create_order(
                     # Update party_site_balances (positive = increases customer balance)
                     from utils.party_balance import update_party_site_balance
                     update_party_site_balance(db, party_id=order_in.customer_id, branch_id=branch_id,
-                                              currency=pos_currency, amount=float(credit_amt))
+                                              currency=pos_currency, amount=credit_amt)
             except Exception:
                 # SEC-T2.11: silently dropping a credit-balance UPDATE leaves the
                 # customer ledger out of sync with the GL. Surface the failure
@@ -580,7 +678,7 @@ def get_held_orders(
         branch_scope = resolve_branch_scope(current_user, branch_id)
         params = {}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT po.id, po.order_number, po.total_amount, po.status, po.created_at,
                    COALESCE(c.name, po.walk_in_customer_name, 'عميل نقدي') as customer_name,
@@ -821,7 +919,7 @@ def create_return(
                         product_id=orig_item.product_id,
                         warehouse_id=order.warehouse_id,
                         quantity=item.quantity,
-                        unit_cost=float(orig_cost),
+                        unit_cost=orig_cost,
                         source_document_type="pos_return",
                         source_document_id=return_id,
                         costing_method=costing_method,
@@ -830,8 +928,8 @@ def create_return(
                     )
                     restored_cost = _dec(return_result.get("restored_unit_cost", orig_cost))
                     restored_total = _dec(return_result.get("restored_total_cost", orig_cost * _dec(item.quantity)))
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc))
+                except ValueError:
+                    raise HTTPException(**http_error(400, "invalid_request", request))
             else:
                 restored_cost = orig_cost
                 restored_total = (orig_cost * _dec(item.quantity)).quantize(_D4, ROUND_HALF_UP)
@@ -839,8 +937,8 @@ def create_return(
                     db,
                     product_id=orig_item.product_id,
                     warehouse_id=order.warehouse_id,
-                    new_qty=float(item.quantity),
-                    new_price=float(orig_cost),
+                    new_qty=item.quantity,
+                    new_price=orig_cost,
                 )
 
             db.execute(text("""
@@ -853,7 +951,7 @@ def create_return(
                 "qty": item.quantity,
                 "pid": orig_item.product_id,
                 "wid": order.warehouse_id,
-                "cost": float(restored_cost),
+                "cost": restored_cost,
             })
 
             total_cogs_return += _dec(restored_total)
@@ -874,8 +972,8 @@ def create_return(
                 "wid": order.warehouse_id,
                 "qty": item.quantity,
                 "order_id": return_id,
-                "cost": float(restored_cost),
-                "total_cost": float(restored_total),
+                "cost": restored_cost,
+                "total_cost": restored_total,
                 "uid": current_user.id
             })
 

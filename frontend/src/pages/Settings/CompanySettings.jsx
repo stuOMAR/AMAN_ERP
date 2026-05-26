@@ -8,7 +8,7 @@ import {
     Settings, Wallet, Palette, ShoppingCart, Truck, Users, Box, FileText,
     Heart, Monitor, Bell, BarChart3, ShieldCheck, Link, Zap, Receipt,
     Briefcase, CheckSquare, Share2, GitBranch, History, Database,
-    Sparkles, Key, Globe, Scale, Building2, Upload, Layers
+    Sparkles, Key, Globe, Scale, Building2, Upload, Layers, HardDrive
 } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
 import GeneralSettings from './tabs/GeneralSettings';
@@ -272,7 +272,7 @@ const CompanySettings = () => {
                         </div>
 
                         {/* Advanced Tools */}
-                        {(hasPermission('settings.view') || hasPermission('admin.companies') || hasPermission('audit.view') || hasPermission('admin.roles') || hasPermission('data_import.view') || hasPermission('branches.view')) && (
+                        {(hasPermission('settings.view') || hasPermission('admin.companies') || hasPermission('audit.view') || hasPermission('admin.roles') || hasPermission('data_import.view') || hasPermission('dms.audit_admin') || hasPermission('branches.view')) && (
                             <div style={{ marginTop: '2.5rem' }}>
                                 <h2 style={{ fontSize: '18px', fontWeight: '700', marginBottom: '1rem', color: 'var(--text-secondary, #6b7280)' }}>
                                     {t('settings.advanced_tools') || 'أدوات متقدمة'}
@@ -283,6 +283,7 @@ const CompanySettings = () => {
                                         { icon: Building2, label: t('nav.branches') || 'الفروع', desc: t('settings.advanced_tools_desc.branches'), path: '/settings/branches', permission: 'branches.view' },
                                         { icon: Scale, label: t('nav.costingPolicy') || 'سياسة التكلفة', desc: t('settings.advanced_tools_desc.costing_policy'), path: '/settings/costing-policy' },
                                         { icon: Upload, label: t('nav.dataImport') || 'استيراد البيانات', desc: t('settings.advanced_tools_desc.data_import'), path: '/data-import', permission: 'data_import.view' },
+                                        { icon: HardDrive, label: t('nav.dms') || 'DMS', desc: t('settings.advanced_tools_desc.dms'), path: '/settings/dms', permission: 'dms.audit_admin' },
                                         { icon: History, label: t('nav.auditLogs') || 'سجلات المراقبة', desc: t('settings.advanced_tools_desc.audit_logs') || 'مراجعة وتتبع جميع عمليات النظام', path: '/admin/audit-logs', permission: 'audit.view' },
                                         { icon: ShieldCheck, label: t('nav.roles') || 'إدارة الأدوار', desc: t('settings.advanced_tools_desc.roles') || 'إدارة الأدوار والصلاحيات', path: '/admin/roles', permission: 'admin.roles' },
                                         { icon: Key, label: t('nav.api_keys') || 'مفاتيح API', desc: t('settings.advanced_tools_desc.api_keys'), path: '/settings/api-keys' },

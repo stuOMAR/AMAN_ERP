@@ -3,24 +3,21 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import Request, APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    AssetTransferCreate,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +30,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import AssetTransfer, _D2, _D4, _dec
+from .core import AssetTransfer, _D2, _dec  # noqa: E402
 
 @router.get("/transfers", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_asset_transfers(status: Optional[str] = None, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
@@ -55,6 +52,7 @@ def list_asset_transfers(status: Optional[str] = None, branch_id: Optional[int] 
 @router.post("/transfers", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_asset_transfer(request: Request, data: AssetTransferCreate, current_user: dict = Depends(get_current_user)):
     """Create Asset Transfer."""
+    require_idempotency_key(request, operation="asset transfer request")
     with transactional(current_user.company_id) as conn:
         try:
             # F-NEW-065 (R-MISSING-IDEMPOTENCY): a retried POST must not
@@ -124,6 +122,7 @@ def approve_transfer(request: Request, transfer_id: int, current_user: dict = De
 @router.post("/{asset_id}/transfer", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def transfer_asset(request: Request, asset_id: int, transfer: AssetTransfer, current_user: dict = Depends(get_current_user)):
     """نقل أصل بين فروع مع قيد محاسبي تلقائي عبر الحساب البيني"""
+    idempotency_key = require_idempotency_key(request, operation="asset branch transfer")
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -186,7 +185,8 @@ def transfer_asset(request: Request, asset_id: int, transfer: AssetTransfer, cur
                 currency=base_currency,
                 exchange_rate=Decimal("1"),
                 source="asset_transfer",
-                source_id=asset_id
+                source_id=asset_id,
+                idempotency_key=f"{idempotency_key}:asset-transfer:{asset_id}:{je_type}",
             )
 
         # Update asset branch

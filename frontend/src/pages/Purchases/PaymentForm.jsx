@@ -9,7 +9,6 @@ import { useToast } from '../../context/ToastContext';
 import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
-import { Decimal } from 'decimal.js';
 import { formatNumber } from '../../utils/format';
 
 function PaymentForm() {
@@ -45,12 +44,9 @@ function PaymentForm() {
         allocations: []
     });
 
-    const isPositiveDecimal = (value) => {
-        try {
-            return new Decimal(value || '0').gt(0);
-        } catch {
-            return false;
-        }
+    const hasNonZeroDecimalInput = (value) => {
+        const normalized = String(value || '').trim();
+        return /^\d*(?:\.\d*)?$/.test(normalized) && !/^0*(?:\.0*)?$/.test(normalized);
     };
 
     const moneyOrDash = (value) => value !== null && value !== undefined && value !== '' ? formatNumber(value) : '—';
@@ -74,7 +70,7 @@ function PaymentForm() {
         bank_account_id: nextForm.bank_account_id ? parseInt(nextForm.bank_account_id, 10) : null,
         transaction_rate: transactionRate ? String(transactionRate) : null,
         allocations: (nextForm.allocations || [])
-            .filter(a => isPositiveDecimal(a.allocated_amount))
+            .filter(a => hasNonZeroDecimalInput(a.allocated_amount))
             .map(a => ({
                 invoice_id: parseInt(a.invoice_id, 10),
                 allocated_amount: String(a.allocated_amount),
@@ -184,13 +180,9 @@ function PaymentForm() {
                 setExchangeRate(nextRate);
                 setTransactionRate('');
 
-                if (isPositiveDecimal(nextForm.amount)) {
-                    const result = await refreshPaymentPreview(nextForm, { auto_allocate: true, currency: nextCurrency, exchange_rate: nextRate, transaction_rate: null });
-                    if (result) {
-                        setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
-                    }
-                } else {
-                    await refreshPaymentPreview(nextForm, { currency: nextCurrency, exchange_rate: nextRate, transaction_rate: null });
+                const result = await refreshPaymentPreview(nextForm, { auto_allocate: true, currency: nextCurrency, exchange_rate: nextRate, transaction_rate: null });
+                if (result) {
+                    setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
                 }
             } catch (error) {
                 showToast(t('common.error'), 'error');
@@ -262,7 +254,7 @@ function PaymentForm() {
         const nextForm = { ...formData, amount: newAmount };
         setFormData(nextForm);
 
-        if (outstandingInvoices.length > 0 && isPositiveDecimal(newAmount)) {
+        if (outstandingInvoices.length > 0) {
             const result = await refreshPaymentPreview(nextForm, { auto_allocate: true });
             if (result) {
                 setFormData(prev => ({ ...prev, amount: newAmount, allocations: result.allocations || [] }));
@@ -273,11 +265,9 @@ function PaymentForm() {
     };
 
     const handleAutoAllocate = async () => {
-        if (isPositiveDecimal(formData.amount) && outstandingInvoices.length > 0) {
-            const result = await refreshPaymentPreview(formData, { auto_allocate: true });
-            if (result) {
-                setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
-            }
+        const result = await refreshPaymentPreview(formData, { auto_allocate: true });
+        if (result) {
+            setFormData(prev => ({ ...prev, allocations: result.allocations || [] }));
         }
     };
 
@@ -320,7 +310,7 @@ function PaymentForm() {
             return;
         }
 
-        if (!isPositiveDecimal(formData.amount)) {
+        if (!hasNonZeroDecimalInput(formData.amount)) {
             showToast(t('buying.payments.form.validation.invalid_amount'), 'error');
             return;
         }
@@ -347,7 +337,7 @@ function PaymentForm() {
                 check_number: formData.check_number || null,
                 reference: formData.reference || null,
                 notes: formData.notes || null,
-                allocations: formData.allocations.filter(a => isPositiveDecimal(a.allocated_amount)).map(a => ({
+                allocations: formData.allocations.filter(a => hasNonZeroDecimalInput(a.allocated_amount)).map(a => ({
                     invoice_id: parseInt(a.invoice_id),
                     allocated_amount: String(a.allocated_amount)
                 })),
@@ -466,7 +456,7 @@ function PaymentForm() {
                                         >
                                             {t('buying.payments.form.pay_all')}
                                         </button>
-                                        {isPositiveDecimal(formData.amount) && (
+                                        {paymentPreview?.can_auto_allocate && (
                                             <button
                                                 type="button"
                                                 onClick={handleAutoAllocate}
@@ -745,7 +735,7 @@ function PaymentForm() {
                             <div style={{ borderTop: '1px solid var(--border-color)', margin: '12px 0' }}></div>
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px' }}>
                                 <span style={{ fontWeight: 'bold' }}>{t('buying.payments.form.summary.remaining')}</span>
-                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={isPositiveDecimal(unallocatedAmount) ? 'text-orange-600' : ''}>
+                                <span style={{ fontWeight: 'bold', fontSize: '1.2rem' }} className={paymentPreview?.has_unallocated_amount ? 'text-orange-600' : ''}>
                                     {recordCurrency} {moneyOrDash(unallocatedAmount)}
                                 </span>
                             </div>
@@ -767,7 +757,7 @@ function PaymentForm() {
                                 {t('buying.payments.form.cancel')}
                             </button>
 
-                            {isPositiveDecimal(unallocatedAmount) && (
+                            {paymentPreview?.has_unallocated_amount && (
                                 <div className="mt-4 p-3 bg-orange-50 border border-orange-100 rounded text-[10px] text-orange-800">
                                     {t('buying.payments.form.accounting_note')}
                                 </div>

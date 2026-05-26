@@ -5,18 +5,18 @@ POST /pos/offline/batches/{id}/retry
 """
 from __future__ import annotations
 
-import uuid
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
-from typing import Optional
 
 from database import get_company_db
 from routers.auth import get_current_user
 from schemas import UserResponse
+from utils.i18n import http_error, i18n_message
+from utils.permissions import require_module, require_permission
 
-router = APIRouter()
+router = APIRouter(dependencies=[Depends(require_module("pos"))])
 
 
 def get_db(current_user: UserResponse = Depends(get_current_user)):
@@ -30,7 +30,7 @@ class OfflineBatchSubmit(BaseModel):
     lines: list[dict]
 
 
-@router.post("/pos/offline/batches")
+@router.post("/pos/offline/batches", dependencies=[Depends(require_permission("pos.create"))])
 async def submit_batch(body: OfflineBatchSubmit, request: Request,
                        current_user: UserResponse = Depends(get_current_user),
                        db: Session = Depends(get_db)):
@@ -58,7 +58,7 @@ async def submit_batch(body: OfflineBatchSubmit, request: Request,
         return {"status": "duplicate", "message": i18n_message("batch_already_submitted", request)}
 
 
-@router.get("/pos/offline/batches")
+@router.get("/pos/offline/batches", dependencies=[Depends(require_permission("pos.view"))])
 async def list_batches(
     request: Request,
     device_id: str = Query(...),
@@ -80,7 +80,7 @@ async def list_batches(
     return [dict(r._mapping) for r in rows]
 
 
-@router.post("/pos/offline/batches/{batch_id}/retry")
+@router.post("/pos/offline/batches/{batch_id}/retry", dependencies=[Depends(require_permission("pos.manage"))])
 async def retry_batch(batch_id: int, request: Request,
                       current_user: UserResponse = Depends(get_current_user),
                       db: Session = Depends(get_db)):

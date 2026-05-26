@@ -24,7 +24,7 @@ const StockShipmentForm = () => {
 
     const [currentItem, setCurrentItem] = useState({
         product_id: '',
-        quantity: 1
+        quantity: '1'
     });
 
     useEffect(() => {
@@ -44,7 +44,7 @@ const StockShipmentForm = () => {
     }, []);
 
     const addItem = () => {
-        if (!currentItem.product_id || currentItem.quantity <= 0) return;
+        if (!currentItem.product_id || !String(currentItem.quantity ?? '').trim()) return;
 
         const exists = formData.items.find(i => i.product_id === parseInt(currentItem.product_id));
         if (exists) {
@@ -63,7 +63,7 @@ const StockShipmentForm = () => {
             }]
         }));
 
-        setCurrentItem({ product_id: '', quantity: 1 });
+        setCurrentItem({ product_id: '', quantity: '1' });
     };
 
     const removeItem = (idx) => {
@@ -197,7 +197,7 @@ const StockShipmentForm = () => {
                         <button
                             className="btn btn-primary"
                             onClick={addItem}
-                            disabled={!currentItem.product_id || currentItem.quantity <= 0}
+                            disabled={!currentItem.product_id || !String(currentItem.quantity ?? '').trim()}
                         >
                             {t('stock.shipments.form.add')}
                         </button>

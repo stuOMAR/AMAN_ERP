@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
+import api from '../../services/apiClient';
 
 /**
  * TechnicianProfileAdmin — CRUD + match preview for technician profiles.
@@ -22,21 +23,15 @@ export default function TechnicianProfileAdmin() {
   const { data: technicians, isLoading } = useQuery({
     queryKey: ['technicians'],
     queryFn: async () => {
-      const res = await fetch('/api/fsm/technicians');
-      if (!res.ok) throw new Error('Failed to load');
-      return res.json();
+      const res = await api.get('/fsm/technicians');
+      return res.data;
     },
   });
 
   const createMutation = useMutation({
     mutationFn: async (data) => {
-      const res = await fetch('/api/fsm/technicians', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) throw new Error('Failed to create');
-      return res.json();
+      const res = await api.post('/fsm/technicians', data);
+      return res.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['technicians']);
@@ -46,13 +41,8 @@ export default function TechnicianProfileAdmin() {
 
   const matchMutation = useMutation({
     mutationFn: async (skills) => {
-      const res = await fetch('/api/fsm/technicians/match', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ required_skills: skills.split(',').map(s => s.trim()) }),
-      });
-      if (!res.ok) throw new Error('Match failed');
-      return res.json();
+      const res = await api.post('/fsm/technicians/match', { required_skills: skills.split(',').map(s => s.trim()) });
+      return res.data;
     },
     onSuccess: (data) => setMatchResults(data.candidates),
   });

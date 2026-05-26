@@ -329,18 +329,18 @@ function FiscalYears() {
                                 </div>
                                 <div className="card" style={{
                                     padding: '1rem', textAlign: 'center',
-                                    background: preview.net_income >= 0 ? 'var(--success-bg, #d4edda)' : 'var(--danger-bg, #f8d7da)'
+                                    background: preview.result_type === 'profit' ? 'var(--success-bg, #d4edda)' : 'var(--danger-bg, #f8d7da)'
                                 }}>
                                     <div style={{ fontSize: '0.85rem', color: '#666' }}>
                                         {isRTL
-                                            ? (preview.net_income >= 0 ? t('common.net_profit') : t('common.net_loss'))
-                                            : (preview.net_income >= 0 ? 'Net Profit' : 'Net Loss')}
+                                            ? (preview.result_type === 'profit' ? t('common.net_profit') : t('common.net_loss'))
+                                            : (preview.result_type === 'profit' ? 'Net Profit' : 'Net Loss')}
                                     </div>
                                     <div style={{
                                         fontSize: '1.3rem', fontWeight: 'bold',
-                                        color: preview.net_income >= 0 ? 'var(--success, #28a745)' : 'var(--danger, #dc3545)'
+                                        color: preview.result_type === 'profit' ? 'var(--success, #28a745)' : 'var(--danger, #dc3545)'
                                     }}>
-                                        {formatNumber(Math.abs(preview.net_income))} {currency}
+                                        {formatNumber(preview.net_income_abs || preview.net_income)} {currency}
                                     </div>
                                 </div>
                             </div>

@@ -3,21 +3,14 @@
 Mounted under the parent router via taxes/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
+from decimal import Decimal
 import logging
-from database import get_db_connection
-from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
 
@@ -29,7 +22,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import TaxCalendarCreate, TaxCalendarUpdate, _D2, _D4
+from .core import TaxCalendarCreate, TaxCalendarUpdate  # noqa: E402
 
 @router.get("/calendar", response_model=List[Dict[str, Any]])
 def list_tax_calendar(
@@ -58,7 +51,7 @@ def list_tax_calendar(
                 params["tax_type"] = tax_type
     
             where = " AND ".join(conditions)
-            rows = db.execute(text(  # noqa: sql-lint
+            rows = db.execute(text(  # noqa
                 f"""
     
                 SELECT *, 
@@ -87,7 +80,7 @@ def tax_calendar_summary(
         try:
             params = {}
             branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
-            row = db.execute(text( # noqa: sql-lint
+            row = db.execute(text( # noqa
                         f"""
                 SELECT
                     COUNT(*) as total,
@@ -200,7 +193,7 @@ def update_tax_calendar_item(
             if not updates:
                 raise HTTPException(**http_error(400, "pos_no_fields", request))
     
-            row = db.execute(text(  # noqa: sql-lint
+            row = db.execute(text(  # noqa
                 f"""
     
                 UPDATE tax_calendar SET {', '.join(updates)}, updated_at = CURRENT_TIMESTAMP WHERE id = :id RETURNING *

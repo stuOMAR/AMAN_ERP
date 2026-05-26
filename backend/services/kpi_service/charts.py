@@ -1,16 +1,17 @@
 """kpi_service.charts — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
 from decimal import Decimal
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     build_branch_filter
 )
-from utils.accounting import get_base_currency
-from utils.currency_display import document_amount_base_sql
+from utils.accounting import get_base_currency  # noqa: E402
+from utils.currency_display import document_amount_base_sql  # noqa: E402
+from utils.i18n import i18n_message  # noqa: E402
 
 
 def _build_revenue_expense_chart(db, start_date: date, end_date: date,

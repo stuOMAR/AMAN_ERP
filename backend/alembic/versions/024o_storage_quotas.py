@@ -3,7 +3,6 @@
 Feature 024 — T069.
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "024o_storage_quotas"
 down_revision = "024n_documents_scan_state"
@@ -12,19 +11,22 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "storage_quotas",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("tenant_id", sa.BigInteger(), nullable=False),
-        sa.Column("scope", sa.String(16), nullable=False),  # tenant/user
-        sa.Column("scope_ref_id", sa.BigInteger(), nullable=True),
-        sa.Column("used_bytes", sa.BigInteger(), server_default="0"),
-        sa.Column("quota_bytes", sa.BigInteger(), nullable=False),
-        sa.Column("last_recalculated_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.clock_timestamp()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.clock_timestamp()),
-    )
-    op.create_index("uq_storage_quota_scope", "storage_quotas", ["tenant_id", "scope", "scope_ref_id"], unique=True)
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS storage_quotas (
+            id BIGSERIAL PRIMARY KEY,
+            tenant_id BIGINT NOT NULL,
+            scope VARCHAR(16) NOT NULL,
+            scope_ref_id BIGINT DEFAULT 0,
+            used_bytes BIGINT DEFAULT 0,
+            quota_bytes BIGINT NOT NULL,
+            last_recalculated_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+            updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+        );
+        ALTER TABLE storage_quotas ALTER COLUMN scope_ref_id SET DEFAULT 0;
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_quota_scope
+            ON storage_quotas (tenant_id, scope, scope_ref_id);
+    """)
 
 
 def downgrade() -> None:

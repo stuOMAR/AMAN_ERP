@@ -15,13 +15,13 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
+from datetime import datetime
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import text
 
-from services.audit_sanitizer import sanitize_for_audit, get_sanitizer_metadata
+from services.audit_sanitizer import sanitize_for_audit
 
 logger = logging.getLogger(__name__)
 
@@ -148,7 +148,5 @@ def log_activity(
     except AuditWriteError:
         raise
     except Exception as exc:
-        logger.error(
-            "audit_outbox: failed to enqueue %s — %s", action, exc, exc_info=True
-        )
-        raise AuditWriteError(f"Failed to enqueue audit row for {action}: {exc}") from exc
+        logger.error("audit_outbox: failed to enqueue %s", action)
+        raise AuditWriteError(f"Failed to enqueue audit row for {action}") from exc

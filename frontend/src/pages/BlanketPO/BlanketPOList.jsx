@@ -46,14 +46,14 @@ const BlanketPOList = () => {
         return <span className={`badge ${map[s] || 'bg-gray-100'}`}>{t(`blanket_po.status_${s}`) || s}</span>;
     };
 
-    const progressBar = (released, total) => {
-        const pct = total > 0 ? Math.min((released / total) * 100, 100) : 0;
+    const progressBar = (bpo) => {
+        const pct = bpo.consumption_progress_pct || '0';
         return (
             <div className="d-flex align-items-center gap-2">
                 <div style={{ width: 80, height: 6, background: '#e5e7eb', borderRadius: 3, overflow: 'hidden' }}>
-                    <div style={{ width: `${pct}%`, height: '100%', background: pct >= 100 ? '#3b82f6' : '#22c55e', borderRadius: 3 }} />
+                    <div style={{ width: `${pct}%`, height: '100%', background: bpo.is_fully_released ? '#3b82f6' : '#22c55e', borderRadius: 3 }} />
                 </div>
-                <span className="text-sm text-muted">{pct.toFixed(0)}%</span>
+                <span className="text-sm text-muted">{formatNumber(pct, 0)}%</span>
             </div>
         );
     };
@@ -118,7 +118,7 @@ const BlanketPOList = () => {
                                         <td>
                                             <span className="text-sm">{formatNumber(bpo.remaining_quantity)} / {formatNumber(bpo.remaining_amount)} {currency}</span>
                                         </td>
-                                        <td>{progressBar(bpo.released_quantity, bpo.total_quantity)}</td>
+                                        <td>{progressBar(bpo)}</td>
                                         <td className="text-sm">{formatDate(bpo.valid_from)} → {formatDate(bpo.valid_to)}</td>
                                         <td>{statusBadge(bpo.status)}</td>
                                     </tr>

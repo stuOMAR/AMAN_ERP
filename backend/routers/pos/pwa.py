@@ -2,22 +2,16 @@
 
 Mounted under the parent router via pos/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, Optional
+from decimal import Decimal
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.audit import log_activity
+from utils.permissions import branch_scope_filter_from_scope, resolve_branch_scope
 from schemas import UserResponse
-from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +25,6 @@ def get_db(current_user: UserResponse = Depends(get_current_user)):
 
 router = APIRouter()
 
-from .core import _D2, _D4
 
 @router.get("/pwa/manifest", response_model=Dict[str, Any])
 def get_pwa_manifest(current_user: UserResponse = Depends(get_current_user)):

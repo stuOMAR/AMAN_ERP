@@ -3,6 +3,7 @@ import { useParams } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { dashboardAPI } from '../../services/dashboard'
 import BackButton from '../../components/common/BackButton'
+import { formatNumber } from '../../utils/format'
 import {
     BarChart, Bar, LineChart, Line, PieChart, Pie, Cell,
     XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer
@@ -11,17 +12,21 @@ import DateInput from '../../components/common/DateInput';
 
 const CHART_COLORS = ['#0088FE', '#00C49F', '#FFBB28', '#FF8042', '#8884D8', '#82CA9D', '#FFC658', '#FF6B6B']
 
+const formatCellValue = (value) => {
+    if (value === null || value === undefined || value === '') return ''
+    const raw = String(value)
+    return /^-?\d+(\.\d+)?$/.test(raw) ? formatNumber(raw) : raw
+}
+
 function KPICard({ title, data, dataSource }) {
-    const total = Array.isArray(data)
-        ? data.reduce((sum, d) => sum + Number(d.total_revenue || d.total_expenses || d.balance || d.total_amount || 0), 0)
-        : 0
+    const total = data?.summary?.display_value ?? data?.summary?.value ?? '0'
 
     return (
         <div className="card h-100">
             <div className="card-body text-center">
                 <h6 className="text-muted mb-2">{title}</h6>
                 <h3 className="mb-0" style={{ color: 'var(--primary)' }}>
-                    {total.toLocaleString(undefined, { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                    {formatNumber(total)}
                 </h3>
                 <small className="text-muted">{dataSource}</small>
             </div>
@@ -29,12 +34,9 @@ function KPICard({ title, data, dataSource }) {
     )
 }
 
-function GaugeWidget({ title, data }) {
-    const avg = Array.isArray(data) && data.length > 0
-        ? data.reduce((s, d) => s + Number(d.turnover_ratio || d.avg_probability || 0), 0) / data.length
-        : 0
-
-    const pct = Math.min(avg * 100, 100)
+function GaugeWidget({ title, widget }) {
+    const value = widget.summary?.gauge_value ?? widget.summary?.display_value ?? '0'
+    const dasharray = widget.summary?.gauge_dasharray || '0 157'
     return (
         <div className="card h-100">
             <div className="card-body text-center">
@@ -47,11 +49,11 @@ function GaugeWidget({ title, data }) {
                             fill="none"
                             stroke="#0088FE"
                             strokeWidth="8"
-                            strokeDasharray={`${pct * 1.57} 157`}
+                            strokeDasharray={dasharray}
                         />
                     </svg>
                 </div>
-                <h4 className="mt-2">{avg.toFixed(2)}</h4>
+                <h4 className="mt-2">{formatNumber(value, 4)}</h4>
             </div>
         </div>
     )
@@ -76,7 +78,7 @@ function TableWidget({ title, data }) {
                             {data.slice(0, 20).map((row, i) => (
                                 <tr key={i}>
                                     {keys.map(k => (
-                                        <td key={k}>{typeof row[k] === 'number' ? Number(row[k]).toLocaleString() : String(row[k] ?? '')}</td>
+                                        <td key={k}>{formatCellValue(row[k])}</td>
                                     ))}
                                 </tr>
                             ))}
@@ -95,8 +97,8 @@ function ChartWidget({ widget }) {
         return <div className="card h-100"><div className="card-body"><h6>{title}</h6><p className="text-muted">{t('common.no_data')}</p></div></div>
     }
 
-    const numericKeys = Object.keys(data[0]).filter(k => typeof data[0][k] === 'number' || !isNaN(Number(data[0][k])))
-    const labelKey = Object.keys(data[0]).find(k => typeof data[0][k] === 'string') || numericKeys[0]
+    const numericKeys = widget.value_keys || []
+    const labelKey = widget.label_key || Object.keys(data[0] || {})[0]
 
     if (widget_type === 'bar_chart') {
         return (
@@ -141,9 +143,7 @@ function ChartWidget({ widget }) {
     }
 
     if (widget_type === 'pie_chart') {
-        const pieData = numericKeys.length > 1
-            ? data.map(d => ({ name: String(d[labelKey] ?? ''), value: Number(d[numericKeys.find(k => k !== labelKey)] || 0) }))
-            : data.map((d, i) => ({ name: `Item ${i + 1}`, value: Number(d[numericKeys[0]] || 0) }))
+        const pieData = widget.pie_data || []
 
         return (
             <div className="card h-100">
@@ -169,8 +169,8 @@ function ChartWidget({ widget }) {
 
 function WidgetRenderer({ widget }) {
     const { widget_type } = widget
-    if (widget_type === 'kpi_card') return <KPICard title={widget.title} data={widget.data} dataSource={widget.data_source} />
-    if (widget_type === 'gauge') return <GaugeWidget title={widget.title} data={widget.data} />
+    if (widget_type === 'kpi_card') return <KPICard title={widget.title} data={widget} dataSource={widget.data_source} />
+    if (widget_type === 'gauge') return <GaugeWidget title={widget.title} widget={widget} />
     if (widget_type === 'table') return <TableWidget title={widget.title} data={widget.data} />
     return <ChartWidget widget={widget} />
 }
@@ -190,9 +190,10 @@ function DashboardView() {
         try {
             setLoading(true)
             const params = {}
-            if (dateFrom) params.start_date = dateFrom
-            if (dateTo) params.end_date = dateTo
+            if (dateFrom) params.date_from = dateFrom
+            if (dateTo) params.date_to = dateTo
             if (branchFilter) params.branch_id = branchFilter
+            params.limit = 25
             const response = await dashboardAPI.getAnalyticsDashboard(id, { params })
             setDashboard(response.data)
         } catch (err) {
@@ -209,13 +210,18 @@ function DashboardView() {
 
     const handleRefreshWidget = async (widgetId) => {
         try {
-            const resp = await dashboardAPI.getWidgetData(widgetId)
+            const params = {}
+            if (dateFrom) params.date_from = dateFrom
+            if (dateTo) params.date_to = dateTo
+            if (branchFilter) params.branch_id = branchFilter
+            params.limit = 25
+            const resp = await dashboardAPI.getWidgetData(widgetId, params)
             setDashboard(prev => {
                 if (!prev) return prev
                 return {
                     ...prev,
                     widgets: prev.widgets.map(w =>
-                        w.id === widgetId ? { ...w, data: resp.data?.data || [] } : w
+                        w.id === widgetId ? { ...w, ...resp.data } : w
                     )
                 }
             })

@@ -232,7 +232,7 @@ def get_quote(request: Request,
             WHERE ql.quote_id = :qid
             ORDER BY ql.id
         """), {"qid": quote_id}).fetchall()
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
     finally:
         db.close()

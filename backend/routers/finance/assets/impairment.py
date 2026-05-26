@@ -3,24 +3,19 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from typing import Any, Dict, List
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import get_mapped_account_id
+from utils.permissions import require_permission, validate_branch_access
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    ImpairmentTestInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +28,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/{asset_id}/impairments", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_asset_impairments(asset_id: int, request: Request, current_user: dict = Depends(get_current_user)):
@@ -52,8 +47,28 @@ def list_asset_impairments(asset_id: int, request: Request, current_user: dict =
 @router.post("/{asset_id}/impairment-test", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, request: Request, current_user: dict = Depends(get_current_user)):
     """إجراء اختبار انخفاض القيمة IAS 36 مع قيد محاسبي تلقائي"""
+    idempotency_key = require_idempotency_key(request, operation="asset impairment test")
     with transactional(current_user.company_id) as conn:
         try:
+            existing = conn.execute(text("""
+                SELECT id, impairment_loss
+                FROM asset_impairments
+                WHERE asset_id = :aid
+                  AND test_date = :td
+                  AND recoverable_amount = :ra
+                LIMIT 1
+            """), {
+                "aid": asset_id,
+                "td": (test_data.test_date or date.today()).isoformat(),
+                "ra": _dec(test_data.recoverable_amount).quantize(_D2, ROUND_HALF_UP),
+            }).fetchone()
+            if existing:
+                return {
+                    "id": existing.id,
+                    "impairment_loss": str(_dec(existing.impairment_loss).quantize(_D2, ROUND_HALF_UP)),
+                    "replayed": True,
+                }
+
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
             if not asset:
                 raise HTTPException(**http_error(404, "asset_not_found", request))
@@ -118,7 +133,8 @@ def run_impairment_test(asset_id: int, test_data: ImpairmentTestInput, request: 
                         currency=get_base_currency(conn),
                         exchange_rate=Decimal("1"),
                         source="asset_impairment",
-                        source_id=imp_id
+                        source_id=imp_id,
+                        idempotency_key=f"{idempotency_key}:asset-impairment:{asset_id}",
                     )
                     journal_entry_id = je_id
     

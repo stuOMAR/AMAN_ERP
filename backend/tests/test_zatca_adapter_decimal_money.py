@@ -15,7 +15,6 @@ from datetime import datetime, timezone
 import pytest
 
 from integrations.einvoicing.zatca_adapter import build_qr_payload, build_ubl_xml
-from utils.tax_precision import money_str, qty_str, q_money
 
 
 # ──────────────────────────────────────────────────────────────────────

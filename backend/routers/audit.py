@@ -3,15 +3,16 @@ AMAN ERP - Audit Logs Router
 API endpoints for viewing audit logs.
 """
 
-from fastapi import Request, APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from typing import Optional, List, Any
 from datetime import datetime, date
 from pydantic import BaseModel
 import logging
 
-from database import get_db_connection, engine
+from database import engine
 from routers.auth import get_current_user
+from utils.i18n import http_error
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
 from utils.tenant_isolation import resolve_target_company_id
@@ -34,8 +35,8 @@ class AuditLogResponse(BaseModel):
 
 @router.get("/logs", response_model=List[dict], dependencies=[Depends(require_permission("audit.view"))])
 def list_audit_logs(request: Request, 
-    skip: int = 0,
-    limit: int = 50,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=100),
     action: Optional[str] = None,
     username: Optional[str] = None,
     resource_type: Optional[str] = None,

@@ -6,11 +6,13 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 from utils.audit import log_activity
+from utils.permissions import validate_branch_access
+from utils.tax_precision import qty_str, rate_str, require_idempotency_key
 from sqlalchemy import text
 import logging
 
@@ -21,13 +23,24 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.resource import AllocationCreate, AllocationUpdate
+from schemas.resource import AllocationCreate, AllocationUpdate  # noqa: E402
 
 router = APIRouter()
 
-from .core import _D2, _dec, _fetch_allocation, _compute_total_allocation
+from .core import _dec, _fetch_allocation, _compute_total_allocation  # noqa: E402
 
-@router.get("/resources/allocation", dependencies=[Depends(require_permission("projects.view"))], response_model=Dict[str, Any])
+def _load_status(hours: Decimal) -> str:
+    if hours <= 0:
+        return "none"
+    if hours <= Decimal("6"):
+        return "light"
+    if hours <= Decimal("8"):
+        return "optimal"
+    if hours <= Decimal("10"):
+        return "heavy"
+    return "overload"
+
+@router.get("/resources/allocation", dependencies=[Depends(require_permission("projects.view"))], response_model=List[Dict[str, Any]])
 async def get_resource_allocation(
     start_date: date,
     end_date: date,
@@ -84,7 +97,8 @@ async def get_resource_allocation(
                  continue
 
             days_count = (task.end_date - task.start_date).days + 1
-            if days_count <= 0: days_count = 1
+            if days_count <= 0:
+                days_count = 1
             
             # Simple linear distribution: hours / days
             daily_hours = _dec(task.planned_hours or 0) / _dec(days_count)
@@ -96,11 +110,21 @@ async def get_resource_allocation(
         # Format for frontend
         result = []
         for emp_id, data in allocation.items():
+            weekly_total = sum((_dec(h) for h in data["daily_load"].values()), Decimal("0"))
             result.append({
                 "id": data["id"],
                 "name": data["name"],
                 "projects": list(data["projects"]),
-                "daily_load": [{"date": d, "hours": float(_dec(h).quantize(_D2, ROUND_HALF_UP))} for d, h in data["daily_load"].items()]
+                "weekly_total_load": qty_str(weekly_total),
+                "weekly_load_status": _load_status(weekly_total),
+                "daily_load": [
+                    {
+                        "date": d,
+                        "hours": qty_str(h),
+                        "load_status": _load_status(_dec(h)),
+                    }
+                    for d, h in data["daily_load"].items()
+                ],
             })
 
         return result
@@ -153,12 +177,12 @@ async def get_team_availability(
                 ORDER  BY ra.start_date
             """), {"eid": emp.employee_id, "sd": date_from, "ed": date_to}).fetchall()
 
-            total_alloc = sum(float(a.allocation_percent) for a in allocs)
+            total_alloc = sum((_dec(a.allocation_percent) for a in allocs), Decimal("0"))
             result.append({
                 "employee_id": emp.employee_id,
                 "employee_name": emp.employee_name,
-                "total_allocation": total_alloc,
-                "is_over_allocated": total_alloc > 100,
+                "total_allocation": rate_str(total_alloc),
+                "is_over_allocated": total_alloc > Decimal("100"),
                 "allocations": [dict(a._mapping) for a in allocs],
             })
         return {"employees": result}
@@ -176,45 +200,77 @@ async def allocate_resource(
     """تخصيص مورد لمشروع مع تحذير عند التخصيص الزائد"""
     db = get_db_connection(current_user.company_id)
     try:
+        idempotency_key = require_idempotency_key(request, operation="resource allocation")
+        replay = db.execute(text("""
+            SELECT id FROM resource_allocations WHERE idempotency_key = :key LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if replay:
+            data = _fetch_allocation(db, replay.id)
+            if data and data.get("allocation_percent") is not None:
+                data["allocation_percent"] = rate_str(data["allocation_percent"])
+            data["idempotency_replayed"] = True
+            return data
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": alloc.project_id}).fetchone()
+        if not project:
+            raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
+
         existing_total = _compute_total_allocation(
             db, alloc.employee_id, alloc.start_date, alloc.end_date
         )
-        new_total = existing_total + float(alloc.allocation_percent)
-        over_allocated = new_total > 100
+        new_total = existing_total + _dec(alloc.allocation_percent)
+        over_allocated = new_total > Decimal("100")
+        if over_allocated:
+            raise HTTPException(status_code=400, detail=i18n_message("employee_overallocated_warning", total=rate_str(new_total)))
 
         result = db.execute(text("""
             INSERT INTO resource_allocations
                 (employee_id, project_id, role, allocation_percent,
-                 start_date, end_date, created_by)
+                 start_date, end_date, created_by, idempotency_key)
             VALUES
                 (:employee_id, :project_id, :role, :allocation_percent,
-                 :start_date, :end_date, :created_by)
+                 :start_date, :end_date, :created_by, :idempotency_key)
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
             RETURNING id
         """), {
             "employee_id":      alloc.employee_id,
             "project_id":       alloc.project_id,
             "role":             alloc.role,
-            "allocation_percent": float(alloc.allocation_percent),
+            "allocation_percent": alloc.allocation_percent,
             "start_date":       alloc.start_date,
             "end_date":         alloc.end_date,
             "created_by":       current_user.id,
+            "idempotency_key":   idempotency_key,
         })
-        alloc_id = result.fetchone()[0]
+        inserted = result.fetchone()
+        if not inserted:
+            replay = db.execute(text("""
+                SELECT id FROM resource_allocations WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if replay:
+                data = _fetch_allocation(db, replay.id)
+                data["allocation_percent"] = rate_str(data["allocation_percent"])
+                data["idempotency_replayed"] = True
+                return data
+            raise HTTPException(**http_error(status.HTTP_409_CONFLICT, "duplicate_idempotency_key"))
+        alloc_id = inserted[0]
         db.commit()
 
         log_activity(
             db, user_id=current_user.id, username=current_user.username,
             action="project.resource_allocate", resource_type="resource_allocation",
             resource_id=str(alloc_id),
-            details={"project_id": alloc.project_id, "employee_id": alloc.employee_id, "percent": float(alloc.allocation_percent)},
+            details={"project_id": alloc.project_id, "employee_id": alloc.employee_id, "percent": rate_str(alloc.allocation_percent)},
             request=request
         )
 
         data = _fetch_allocation(db, alloc_id)
-        data["total_allocation"] = new_total
+        data["allocation_percent"] = rate_str(data["allocation_percent"])
+        data["total_allocation"] = rate_str(new_total)
         data["over_allocation_warning"] = over_allocated
-        if over_allocated:
-            data["warning_message"] = i18n_message("employee_overallocated_warning", total=f"{new_total:.0f}")
         return data
     except Exception as e:
         db.rollback()
@@ -233,24 +289,43 @@ async def update_allocation(
     current_user: dict = Depends(get_current_user)
 ):
     """تحديث تخصيص مورد"""
+    require_idempotency_key(request, operation="resource allocation update")
     db = get_db_connection(current_user.company_id)
     try:
         existing = _fetch_allocation(db, alloc_id)
         if not existing:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "allocation_not_found"))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": existing["project_id"]}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
 
         updates, params = [], {"id": alloc_id}
         if alloc.role is not None:
-            updates.append("role = :role"); params["role"] = alloc.role
+            updates.append("role = :role")
+            params["role"] = alloc.role
         if alloc.allocation_percent is not None:
             updates.append("allocation_percent = :pct")
-            params["pct"] = float(alloc.allocation_percent)
+            params["pct"] = alloc.allocation_percent
         if alloc.start_date is not None:
-            updates.append("start_date = :sd"); params["sd"] = alloc.start_date
+            updates.append("start_date = :sd")
+            params["sd"] = alloc.start_date
         if alloc.end_date is not None:
-            updates.append("end_date = :ed"); params["ed"] = alloc.end_date
+            updates.append("end_date = :ed")
+            params["ed"] = alloc.end_date
         if not updates:
             return existing
+
+        new_sd = alloc.start_date or existing["start_date"]
+        new_ed = alloc.end_date or existing["end_date"]
+        new_pct = _dec(alloc.allocation_percent) if alloc.allocation_percent is not None else _dec(existing["allocation_percent"])
+        total_without_existing = _compute_total_allocation(
+            db, existing["employee_id"], new_sd, new_ed, exclude_id=alloc_id
+        )
+        projected_total = total_without_existing + new_pct
+        if projected_total > Decimal("100"):
+            raise HTTPException(status_code=400, detail=i18n_message("employee_overallocated_warning", total=rate_str(projected_total)))
 
         updates.append("updated_at = now()")
         db.execute(text(
@@ -267,14 +342,9 @@ async def update_allocation(
         )
 
         updated = _fetch_allocation(db, alloc_id)
-        # Compute new total for warning
-        new_sd = alloc.start_date or existing["start_date"]
-        new_ed = alloc.end_date or existing["end_date"]
-        total = _compute_total_allocation(
-            db, existing["employee_id"], new_sd, new_ed
-        )
-        updated["total_allocation"] = total
-        updated["over_allocation_warning"] = total > 100
+        updated["allocation_percent"] = rate_str(updated["allocation_percent"])
+        updated["total_allocation"] = rate_str(projected_total)
+        updated["over_allocation_warning"] = False
         return updated
     except HTTPException:
         raise
@@ -299,6 +369,11 @@ async def delete_allocation(
         existing = _fetch_allocation(db, alloc_id)
         if not existing:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "allocation_not_found"))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": existing["project_id"]}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         db.execute(text("DELETE FROM resource_allocations WHERE id = :id"),
                    {"id": alloc_id})
         db.commit()
@@ -329,6 +404,12 @@ async def get_project_resources(
     """عرض تخصيصات الموارد لمشروع معين"""
     db = get_db_connection(current_user.company_id)
     try:
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": project_id}).fetchone()
+        if not project:
+            raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
         rows = db.execute(text("""
             SELECT ra.*,
                    e.full_name  AS employee_name,
@@ -339,6 +420,12 @@ async def get_project_resources(
             WHERE  ra.project_id = :pid
             ORDER  BY ra.start_date, e.full_name
         """), {"pid": project_id}).fetchall()
-        return [dict(r._mapping) for r in rows]
+        result = []
+        for row in rows:
+            data = dict(row._mapping)
+            if data.get("allocation_percent") is not None:
+                data["allocation_percent"] = rate_str(data["allocation_percent"])
+            result.append(data)
+        return result
     finally:
         db.close()

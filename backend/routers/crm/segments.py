@@ -3,28 +3,30 @@
 Mounted under the parent router via crm/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
-from pydantic import BaseModel
 from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
-from utils.accounting import generate_sequential_number
+from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
-from services.notification_service import notification_service
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
+from utils.tax_precision import money_str
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import LeadScoringRuleCreate, LeadScoringRuleUpdate, SegmentCreate, SegmentUpdate
+from .core import LeadScoringRuleCreate, LeadScoringRuleUpdate, SegmentCreate, SegmentUpdate  # noqa: E402
+
+
+def _serialize_lead_score(row) -> Dict[str, Any]:
+    data = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+    if data.get("expected_value") is not None:
+        data["expected_value"] = money_str(data["expected_value"])
+    return data
 
 @router.get("/lead-scoring/rules", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def list_scoring_rules(current_user=Depends(get_current_user)):
@@ -55,9 +57,9 @@ def create_scoring_rule(data: LeadScoringRuleCreate, request: Request, current_u
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_scoring_rule", resource_type="lead_scoring_rule", resource_id=str(rid), details={"rule_name": data.rule_name, "score": data.score}, request=request)
         return {"id": rid, "message": i18n_message("segment_rule_created", request)}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error creating scoring rule: {e}")
+        logger.error("Error creating scoring rule")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -104,7 +106,7 @@ def calculate_lead_scores(request: Request, current_user=Depends(get_current_use
             "SELECT * FROM crm_lead_scoring_rules WHERE is_active = TRUE"
         )).fetchall()
         opps = db.execute(text(
-            "SELECT * FROM sales_opportunities WHERE stage NOT IN ('won','lost')"
+            "SELECT * FROM sales_opportunities WHERE stage NOT IN ('won','lost') AND COALESCE(is_deleted, FALSE) = FALSE"
         )).fetchall()
 
         scored = 0
@@ -157,9 +159,9 @@ def calculate_lead_scores(request: Request, current_user=Depends(get_current_use
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_calculate_lead_scores", resource_type="lead_scoring", details={"scored_count": scored}, request=request)
         return {"scored": scored, "message": i18n_message("leads_scored_count", request)}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error calculating lead scores: {e}")
+        logger.error("Error calculating lead scores")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -185,7 +187,7 @@ def get_lead_scores(grade: Optional[str] = None, current_user=Depends(get_curren
             WHERE {' AND '.join(conditions)}
             ORDER BY ls.total_score DESC
         """), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+        return [_serialize_lead_score(r) for r in rows]
     finally:
         db.close()
 
@@ -226,9 +228,9 @@ def create_segment(data: SegmentCreate, request: Request, current_user=Depends(g
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_segment", resource_type="customer_segment", resource_id=str(sid), details={"name": data.name}, request=request)
         return {"id": sid, "message": i18n_message("segment_created", request)}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error creating segment: {e}")
+        logger.error("Error creating segment")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -283,9 +285,9 @@ def add_customer_to_segment(seg_id: int, customer_id: int, request: Request, cur
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_add_customer_to_segment", resource_type="customer_segment", resource_id=str(seg_id), details={"customer_id": customer_id}, request=request)
         return {"message": i18n_message("segment_member_added", request)}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error adding customer to segment: {e}")
+        logger.error("Error adding customer to segment")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -325,4 +327,3 @@ def get_segment_customers(seg_id: int, current_user=Depends(get_current_user)):
 
 
 # ======================== CRM-008: CRM Contacts ========================
-

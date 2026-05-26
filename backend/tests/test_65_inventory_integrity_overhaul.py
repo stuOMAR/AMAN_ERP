@@ -15,9 +15,7 @@ Covers:
 """
 
 import pytest
-import psycopg2
-from decimal import Decimal, ROUND_HALF_UP
-from psycopg2.extras import RealDictCursor
+from decimal import Decimal
 
 # ── Precision constants ──────────────────────────────────────────
 _D4 = Decimal("0.0001")

@@ -14,6 +14,7 @@ from datetime import date
 
 from sqlalchemy import text
 from fastapi import HTTPException
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 _D4 = Decimal("0.0001")
@@ -62,12 +63,12 @@ def complete_production(
 
     # Yield tolerance check
     planned = Decimal(str(mo.get("original_qty", 0)))
-    tolerance = Decimal("0.05")  # Default 5%
+    Decimal("0.05")  # Default 5%
     try:
         from sqlalchemy import text as t
         row = db.execute(t("SELECT setting_value FROM company_settings WHERE setting_key = 'manufacturing.yield_tolerance'")).fetchone()
         if row:
-            tolerance = Decimal(str(row.setting_value))
+            Decimal(str(row.setting_value))
     except Exception:
         pass
 

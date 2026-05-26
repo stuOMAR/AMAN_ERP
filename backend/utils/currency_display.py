@@ -105,7 +105,7 @@ def resolve_display_currency(db, branch_scope: Any = None) -> dict[str, Any]:
             else:
                 default_filter = "AND 1=0"
         row = db.execute(
-            text( # noqa: sql-lint
+            text( # noqa
                         f"""
                 SELECT COALESCE(default_currency, :base) AS currency
                 FROM branches
@@ -145,8 +145,8 @@ def base_to_display_decimal(value: Any, display_meta: Mapping[str, Any]) -> Deci
     return amount
 
 
-def base_to_display_amount(value: Any, display_meta: Mapping[str, Any]) -> float:
-    return float(base_to_display_decimal(value, display_meta))
+def base_to_display_amount(value: Any, display_meta: Mapping[str, Any]) -> str:
+    return format(base_to_display_decimal(value, display_meta).quantize(Decimal("0.01")), "f")
 
 
 def display_currency_fields(display_meta: Mapping[str, Any]) -> dict[str, Any]:
@@ -245,11 +245,11 @@ def convert_dashboard_payload_to_display(payload: Mapping[str, Any], display_met
     for key in ("kpis", "role_kpis", "industry_kpis"):
         for item in result.get(key, []) or []:
             if _is_currency_unit(item.get("unit")) and _is_number(item.get("value")):
-                item["value"] = round(base_to_display_amount(item.get("value"), display_meta), 2)
+                item["value"] = base_to_display_amount(item.get("value"), display_meta)
                 item["unit"] = "currency"
                 item.pop("formatted", None)
                 if _is_number(item.get("target")):
-                    item["target"] = round(base_to_display_amount(item.get("target"), display_meta), 2)
+                    item["target"] = base_to_display_amount(item.get("target"), display_meta)
 
     for key in ("charts", "role_charts", "industry_charts"):
         for chart in result.get(key, []) or []:

@@ -11,7 +11,20 @@ import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import SimpleModal from '../../components/common/SimpleModal'
 import DataTable from '../../components/common/DataTable'
+import { Decimal } from '../../utils/decimal'
 
+function isNegativeAmount(value) {
+    return String(value || '0').trim().startsWith('-')
+}
+
+function isPositiveAmount(value) {
+    return new Decimal(value || '0.00').bi > 0n
+}
+
+function absoluteAmount(value) {
+    const text = String(value || '0.00').trim()
+    return text.startsWith('-') ? text.slice(1) : text
+}
 
 function TaxHome() {
     const { t } = useTranslation()
@@ -208,7 +221,7 @@ function TaxHome() {
         { key: 'taxable_sales', label: t('taxes.taxable_sales'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
         { key: 'output_vat', label: t('taxes.output_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
         { key: 'input_vat', label: t('taxes.input_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--primary)' }, render: (v, b) => <>{formatNumber(v)} <small>{b.currency || currency}</small></> },
-        { key: 'net_vat', label: t('taxes.net_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }, render: (v, b) => <span style={{ color: Number(v || 0) >= 0 ? 'var(--error)' : 'var(--success)' }}>{formatNumber(Math.abs(Number(v || 0)))} <small>{b.currency || currency}</small></span> },
+        { key: 'net_vat', label: t('taxes.net_vat'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }, render: (v, b) => <span style={{ color: isNegativeAmount(v) ? 'var(--success)' : 'var(--error)' }}>{formatNumber(absoluteAmount(v))} <small>{b.currency || currency}</small></span> },
         { key: 'invoice_count', label: t('taxes.invoices'), style: { textAlign: 'center' } },
         { key: 'returns_count', label: t('taxes.returns_filed'), style: { textAlign: 'center' }, render: (_, b) => b.returns_count || <span className="text-muted">-</span> },
     ]
@@ -221,7 +234,7 @@ function TaxHome() {
         { key: 'total_gross', label: t('taxes.total_gross'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v) => formatNumber(v) },
         { key: 'gosi_employee', label: t('taxes.gosi_employee'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--warning)' }, render: (v) => formatNumber(v) },
         { key: 'gosi_employer', label: t('taxes.gosi_employer'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', color: 'var(--secondary)' }, render: (v) => formatNumber(v) },
-        { key: 'income_tax_due', label: t('taxes.income_tax'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v, emp) => Number(v || 0) > 0 ? <span style={{ color: 'var(--error)', fontWeight: 600 }}>{formatNumber(v)} ({emp.income_tax_rate}%)</span> : <span className="text-muted">-</span> },
+        { key: 'income_tax_due', label: t('taxes.income_tax'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap' }, render: (v, emp) => isPositiveAmount(v) ? <span style={{ color: 'var(--error)', fontWeight: 600 }}>{formatNumber(v)} ({emp.income_tax_rate}%)</span> : <span className="text-muted">-</span> },
         { key: 'total_net', label: t('taxes.total_net'), headerStyle: { textAlign: 'left' }, style: { textAlign: 'left', whiteSpace: 'nowrap', fontWeight: 700 }, render: (v) => formatNumber(v) },
         { key: 'payslip_count', label: t('taxes.payslips'), style: { textAlign: 'center' } },
     ]
@@ -262,10 +275,10 @@ function TaxHome() {
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('taxes.net_vat_current')}</div>
-                        <div className={`metric-value ${summary.current_period.net_vat >= 0 ? 'text-error' : 'text-success'}`}>
-                            {formatNumber(Math.abs(summary.current_period.net_vat))} <small>{currency}</small>
+                        <div className={`metric-value ${isNegativeAmount(summary.current_period.net_vat) ? 'text-success' : 'text-error'}`}>
+                            {formatNumber(absoluteAmount(summary.current_period.net_vat))} <small>{currency}</small>
                         </div>
-                        <div className="metric-change">{summary.current_period.net_vat >= 0 ? (t('taxes.payable')) : (t('taxes.refundable'))}</div>
+                        <div className="metric-change">{isNegativeAmount(summary.current_period.net_vat) ? (t('taxes.refundable')) : (t('taxes.payable'))}</div>
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('taxes.pending_returns')}</div>
@@ -542,8 +555,8 @@ function TaxHome() {
                             </div>
                             <div className="metric-card">
                                 <div className="metric-label">{t('taxes.net_vat')}</div>
-                                <div className={`metric-value ${branchAnalysis.totals.net_vat >= 0 ? 'text-error' : 'text-success'}`}>
-                                    {formatNumber(Math.abs(branchAnalysis.totals.net_vat))} <small>{currency}</small>
+                                <div className={`metric-value ${isNegativeAmount(branchAnalysis.totals.net_vat) ? 'text-success' : 'text-error'}`}>
+                                    {formatNumber(absoluteAmount(branchAnalysis.totals.net_vat))} <small>{currency}</small>
                                 </div>
                             </div>
                             <div className="metric-card">

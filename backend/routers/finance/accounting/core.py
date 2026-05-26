@@ -2,39 +2,32 @@
 
 Mounted under the parent router via accounting/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, Request
 from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 import logging
 from datetime import date
 from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
-from utils.audit import log_activity
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.accounting import get_base_currency
 from utils.currency_display import base_to_display_decimal, resolve_display_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
 
-def _dec(v) -> Decimal:
-    return Decimal(str(v)) if v is not None else Decimal('0')
-
 router = APIRouter()
 
 def _dec(v) -> Decimal:
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return Decimal("0")
     return Decimal(str(v)) if v is not None else Decimal("0")
 
 @router.get("/summary", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
@@ -168,7 +161,7 @@ def _account_code_to_module(code: str) -> str | None:
             if m:
                 return m
     return None
-def _create_entry_from_template(db, tmpl, lines, current_user):
+def _create_entry_from_template(db, tmpl, lines, current_user, idempotency_key=None):
     """Helper: إنشاء قيد يومي من قالب متكرر"""
 
     today = date.today()
@@ -206,6 +199,7 @@ def _create_entry_from_template(db, tmpl, lines, current_user):
         exchange_rate=_dec(tmpl.exchange_rate or 1),
         source="recurring_template",
         source_id=tmpl.id,
+        idempotency_key=idempotency_key,
     )
 
     # Update template tracking

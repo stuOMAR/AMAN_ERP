@@ -1,6 +1,5 @@
 """Centralized VAT aggregation helper for reports and returns."""
-from decimal import Decimal, ROUND_HALF_UP
-from typing import Dict, Any
+from decimal import Decimal
 
 _D2 = Decimal("0.01")
 

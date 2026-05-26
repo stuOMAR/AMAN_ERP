@@ -606,6 +606,34 @@ def get_additional_base_tables_sql() -> str:
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE TABLE IF NOT EXISTS notifications_queue (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id VARCHAR(100) NOT NULL,
+        idempotency_key CHAR(32),
+        event_type VARCHAR(64) NOT NULL,
+        channel VARCHAR(16) NOT NULL,
+        recipient VARCHAR(512) NOT NULL,
+        template_code VARCHAR(64),
+        locale CHAR(5),
+        payload JSONB,
+        state VARCHAR(16) DEFAULT 'pending',
+        attempts SMALLINT DEFAULT 0,
+        next_attempt_at TIMESTAMPTZ,
+        last_error TEXT,
+        claimed_at TIMESTAMPTZ,
+        sent_at TIMESTAMPTZ,
+        dlq_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_notif_inflight
+        ON notifications_queue(tenant_id, idempotency_key)
+        WHERE state IN ('pending', 'sending') AND idempotency_key IS NOT NULL;
+    CREATE INDEX IF NOT EXISTS ix_notif_worker
+        ON notifications_queue(channel, state, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS ix_notif_dlq
+        ON notifications_queue(state, dlq_at);
+
     CREATE TABLE IF NOT EXISTS custom_reports (
         id SERIAL PRIMARY KEY,
         report_name VARCHAR(255) NOT NULL,
@@ -959,6 +987,41 @@ def get_core_dependent_tables_sql() -> str:
         notes TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS party_sites (
+        id SERIAL PRIMARY KEY,
+        party_id INTEGER NOT NULL REFERENCES parties(id) ON DELETE CASCADE,
+        site_name VARCHAR(255) NOT NULL,
+        site_name_en VARCHAR(255),
+        country VARCHAR(100),
+        country_code VARCHAR(5),
+        currency VARCHAR(10) NOT NULL,
+        contact_name VARCHAR(255),
+        phone VARCHAR(50),
+        email VARCHAR(255),
+        address TEXT,
+        city VARCHAR(100),
+        tax_number VARCHAR(50),
+        bank_account VARCHAR(100),
+        payment_terms INTEGER DEFAULT 30,
+        is_default BOOLEAN DEFAULT FALSE,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS party_site_balances (
+        id SERIAL PRIMARY KEY,
+        company_branch_id INTEGER NOT NULL REFERENCES branches(id) ON DELETE CASCADE,
+        party_site_id INTEGER NOT NULL REFERENCES party_sites(id) ON DELETE CASCADE,
+        account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('payable', 'receivable')),
+        currency VARCHAR(10) NOT NULL,
+        balance DECIMAL(18,4) DEFAULT 0,
+        gl_account_id INTEGER REFERENCES accounts(id) ON DELETE SET NULL,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(company_branch_id, party_site_id, account_type, currency)
     );
 
     CREATE TABLE IF NOT EXISTS invoices (
@@ -1374,10 +1437,12 @@ def get_organization_tables_sql() -> str:
     -- MOVED HERE TO FIX CIRCULAR DEPENDENCY
     CREATE TABLE IF NOT EXISTS payroll_periods (
         id SERIAL PRIMARY KEY,
+        tenant_id INTEGER,
         name VARCHAR(100) NOT NULL,
         start_date DATE NOT NULL,
         end_date DATE NOT NULL,
         payment_date DATE,
+        state VARCHAR(20) DEFAULT 'draft',
         status VARCHAR(20) DEFAULT 'draft',
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
@@ -1427,7 +1492,7 @@ def get_organization_tables_sql() -> str:
         resource_id VARCHAR(50),
         details JSONB,
         ip_address VARCHAR(50),
-        branch_id INTEGER REFERENCES branches(id),
+        branch_id INTEGER,
         is_archived BOOLEAN DEFAULT FALSE,
         archived_at TIMESTAMPTZ,
         -- T3.7 (audit #21,#22): tamper-evident chain.
@@ -1436,6 +1501,24 @@ def get_organization_tables_sql() -> str:
         chain_seq BIGINT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS bank_codes (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        code VARCHAR(32) NOT NULL,
+        name_en VARCHAR(255) NOT NULL,
+        name_ar VARCHAR(255),
+        swift_bic VARCHAR(16),
+        wps_routing_code VARCHAR(32),
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_codes_tenant_code
+        ON bank_codes(tenant_id, code);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_codes_tenant_swift
+        ON bank_codes(tenant_id, swift_bic)
+        WHERE swift_bic IS NOT NULL;
         
     CREATE TABLE IF NOT EXISTS employees (
         id SERIAL PRIMARY KEY,
@@ -1463,17 +1546,49 @@ def get_organization_tables_sql() -> str:
         other_allowances DECIMAL(18, 4) DEFAULT 0,
         hourly_cost DECIMAL(18, 4) DEFAULT 0,
         currency VARCHAR(3) DEFAULT NULL,
+        salary_currency CHAR(3),
+        salary_encrypted BYTEA,
         user_id INTEGER REFERENCES company_users(id),
         account_id INTEGER REFERENCES accounts(id),
         bank_account_id INTEGER REFERENCES treasury_accounts(id) ON DELETE SET NULL,
+        bank_code_id BIGINT REFERENCES bank_codes(id) ON DELETE SET NULL,
+        iban_encrypted BYTEA,
+        national_id_encrypted BYTEA,
+        passport_number_encrypted BYTEA,
+        bank_account_number_encrypted BYTEA,
+        gosi_number_encrypted BYTEA,
+        ticket_allowance_amount NUMERIC(18,4),
+        ticket_allowance_currency CHAR(3),
+        ticket_allowance_frequency_months SMALLINT DEFAULT 12,
+        ticket_allowance_last_paid_at DATE,
+        technician_profile_id BIGINT,
         tax_id VARCHAR(50),
         social_security VARCHAR(50),
+        labor_card_number VARCHAR(50),
+        insurance_number VARCHAR(50),
+        visa_status VARCHAR(50),
         address TEXT,
         emergency_contact TEXT,
         notes TEXT,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS employee_salary_history (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        employee_id BIGINT NOT NULL REFERENCES employees(id) ON DELETE CASCADE,
+        salary_encrypted BYTEA,
+        salary_currency CHAR(3),
+        effective_from DATE NOT NULL,
+        effective_to DATE,
+        change_reason VARCHAR(64),
+        created_by_user_id BIGINT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_salary_hist_tenant_emp
+        ON employee_salary_history(tenant_id, employee_id);
     
     CREATE TABLE IF NOT EXISTS cost_centers (
         id SERIAL PRIMARY KEY,
@@ -1546,9 +1661,15 @@ def get_organization_tables_sql() -> str:
         status VARCHAR(20) DEFAULT 'pending',
         approved_by INTEGER REFERENCES company_users(id),
         attachment_url TEXT,
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_leave_requests_idempotency_key
+        ON leave_requests (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
 
     -- ===== ADVANCED HR TABLES (Phase 4) =====
 
@@ -1757,11 +1878,17 @@ def get_organization_tables_sql() -> str:
         exchange_rate DECIMAL(18, 6) DEFAULT 1.0,
         net_salary_base DECIMAL(18, 4) DEFAULT 0,
         status VARCHAR(20) DEFAULT 'draft',
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_entries_idempotency_key
+        ON payroll_entries (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
     CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_entries_period_employee
         ON payroll_entries (period_id, employee_id);
+
 
     -- ===== JOB OPENINGS & APPLICATIONS (HR Recruitment) =====
     CREATE TABLE IF NOT EXISTS job_openings (
@@ -1817,6 +1944,23 @@ def get_organization_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_job_openings_status ON job_openings(status);
     CREATE INDEX IF NOT EXISTS idx_job_applications_opening ON job_applications(opening_id);
     CREATE INDEX IF NOT EXISTS idx_leave_carryover_emp ON leave_carryover(employee_id, year);
+
+    -- ===== 2026-05-26 AUDIT: FIELD PERMISSIONS =====
+    CREATE TABLE IF NOT EXISTS user_field_permissions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER UNIQUE NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+        field_restrictions JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+
+    CREATE TABLE IF NOT EXISTS role_field_permissions (
+        id SERIAL PRIMARY KEY,
+        role_name VARCHAR(50) UNIQUE NOT NULL REFERENCES roles(role_name) ON DELETE CASCADE,
+        field_restrictions JSONB NOT NULL DEFAULT '{}',
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
     """
 
 
@@ -2469,10 +2613,13 @@ def get_financial_tables_sql() -> str:
         approved_by INTEGER REFERENCES company_users(id),
         status VARCHAR(20) DEFAULT 'pending',
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_project_expenses_project ON project_expenses(project_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_project_expenses_idempotency_key
+        ON project_expenses(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS project_revenues (
         id SERIAL PRIMARY KEY,
@@ -2485,10 +2632,13 @@ def get_financial_tables_sql() -> str:
         approved_by INTEGER REFERENCES company_users(id),
         status VARCHAR(20) DEFAULT 'pending',
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
     CREATE INDEX IF NOT EXISTS idx_project_revenues_project ON project_revenues(project_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_project_revenues_idempotency_key
+        ON project_revenues(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS project_documents (
         id SERIAL PRIMARY KEY,
@@ -2515,9 +2665,12 @@ def get_financial_tables_sql() -> str:
         requested_by INTEGER REFERENCES company_users(id),
         approved_by INTEGER REFERENCES company_users(id),
         approved_at TIMESTAMPTZ,
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_project_change_orders_idempotency_key
+        ON project_change_orders(idempotency_key) WHERE idempotency_key IS NOT NULL;
     
     -- ===== ATTACHMENTS (3) =====
     CREATE TABLE IF NOT EXISTS document_types (
@@ -2573,13 +2726,38 @@ def get_financial_tables_sql() -> str:
     
     CREATE TABLE IF NOT EXISTS email_templates (
         id SERIAL PRIMARY KEY,
-        template_name VARCHAR(255) NOT NULL,
+        template_name VARCHAR(255),
         subject VARCHAR(255),
         body TEXT,
         variables JSONB DEFAULT '{}',
         is_active BOOLEAN DEFAULT TRUE,
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        tenant_id VARCHAR(100) NOT NULL,
+        code VARCHAR(64) NOT NULL,
+        locale CHAR(5) NOT NULL DEFAULT 'en',
+        body_html TEXT,
+        body_text TEXT,
+        version INT NOT NULL DEFAULT 1,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
     );
+
+    CREATE INDEX IF NOT EXISTS ix_email_templates_tenant_code_locale
+        ON email_templates (tenant_id, code, locale);
+
+    CREATE TABLE IF NOT EXISTS search_query_logs (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id VARCHAR(100) NOT NULL,
+        actor_id VARCHAR(50),
+        query VARCHAR(256) NOT NULL,
+        result_count INT NOT NULL DEFAULT 0,
+        latency_ms INT NOT NULL DEFAULT 0,
+        entity_hits JSONB NOT NULL DEFAULT '{}'::jsonb,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp()
+    );
+
+    CREATE INDEX IF NOT EXISTS idx_search_query_logs_tenant_query
+        ON search_query_logs (tenant_id, query);
+
 
     -- ===== DASHBOARD LAYOUTS =====
     CREATE TABLE IF NOT EXISTS dashboard_layouts (
@@ -2757,6 +2935,8 @@ def get_treasury_dependent_tables_sql() -> str:
         is_active BOOLEAN DEFAULT TRUE,
         is_deleted BOOLEAN DEFAULT FALSE,
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
+        approval_idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_by INTEGER REFERENCES company_users(id)
@@ -2787,6 +2967,8 @@ def get_treasury_dependent_tables_sql() -> str:
         receipt_number VARCHAR(100),
         vendor_name VARCHAR(255),
         is_deleted BOOLEAN DEFAULT FALSE,
+        idempotency_key VARCHAR(64),
+        approval_idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -2805,6 +2987,10 @@ def get_treasury_dependent_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_expenses_reversal_je
         ON expenses(reversal_journal_entry_id)
         WHERE reversal_journal_entry_id IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_expenses_idempotency_key
+        ON expenses(idempotency_key) WHERE idempotency_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_expenses_approval_idempotency_key
+        ON expenses(approval_idempotency_key) WHERE approval_idempotency_key IS NOT NULL;
     """
 
 
@@ -2870,10 +3056,18 @@ def get_contract_tables_sql() -> str:
         notes TEXT,
         branch_id INTEGER REFERENCES branches(id),
         idempotency_key VARCHAR(64) UNIQUE,
+        renewal_idempotency_key VARCHAR(64),
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_contracts_renewal_idempotency_key
+        ON contracts(renewal_idempotency_key)
+        WHERE renewal_idempotency_key IS NOT NULL;
+
+    ALTER TABLE invoices
+        ADD COLUMN IF NOT EXISTS contract_id INTEGER REFERENCES contracts(id) ON DELETE SET NULL;
+    CREATE INDEX IF NOT EXISTS idx_invoices_contract ON invoices(contract_id);
 
     CREATE TABLE IF NOT EXISTS contract_items (
         id SERIAL PRIMARY KEY,
@@ -2905,6 +3099,7 @@ def get_contract_tables_sql() -> str:
         completed_at TIMESTAMPTZ,
         billed_at TIMESTAMPTZ,
         invoice_id INTEGER REFERENCES invoices(id),
+        idempotency_key VARCHAR(64),
         notes TEXT,
         created_by INTEGER REFERENCES company_users(id),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -2912,6 +3107,9 @@ def get_contract_tables_sql() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_contract_milestones_contract ON contract_milestones(contract_id);
     CREATE INDEX IF NOT EXISTS idx_contract_milestones_status ON contract_milestones(status, due_date);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_contract_milestones_idempotency_key
+        ON contract_milestones(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
     """
 
 
@@ -3279,12 +3477,17 @@ def get_manufacturing_tables_sql() -> str:
         route_id INTEGER REFERENCES manufacturing_routes(id),
         is_active BOOLEAN DEFAULT TRUE,
         notes TEXT,
+        idempotency_key VARCHAR(64),
         is_deleted BOOLEAN DEFAULT FALSE,
         deleted_at TIMESTAMPTZ,
         deleted_by VARCHAR(100),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bill_of_materials_idempotency_key
+        ON bill_of_materials (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS bom_components (
         id SERIAL PRIMARY KEY,
@@ -3563,10 +3766,17 @@ def get_manufacturing_tables_sql() -> str:
         file_size INTEGER,
         mime_type VARCHAR(100),
         tags JSONB DEFAULT '[]',
+        tags_jsonb JSONB DEFAULT '[]',
         access_level VARCHAR(50) DEFAULT 'company',
         related_module VARCHAR(100),
         related_id INTEGER,
         current_version INTEGER DEFAULT 1,
+        state VARCHAR(16) DEFAULT 'clean',
+        quarantine_path VARCHAR(1024),
+        scanned_at TIMESTAMPTZ,
+        scan_engine VARCHAR(64),
+        scan_engine_version VARCHAR(64),
+        checksum_sha256 CHAR(64),
         is_deleted BOOLEAN DEFAULT FALSE,
         created_by INTEGER REFERENCES company_users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
@@ -3576,6 +3786,7 @@ def get_manufacturing_tables_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_documents_related ON documents(related_module, related_id);
     CREATE INDEX IF NOT EXISTS idx_documents_created_by ON documents(created_by);
+    CREATE INDEX IF NOT EXISTS idx_documents_state ON documents(state);
 
     CREATE TABLE IF NOT EXISTS document_versions (
         id SERIAL PRIMARY KEY,
@@ -3588,6 +3799,37 @@ def get_manufacturing_tables_sql() -> str:
         uploaded_by INTEGER REFERENCES company_users(id) ON DELETE SET NULL,
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+
+    CREATE TABLE IF NOT EXISTS dms_attachment_links (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        document_id BIGINT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+        entity_type VARCHAR(64) NOT NULL,
+        entity_id BIGINT NOT NULL,
+        link_role VARCHAR(64),
+        created_by_user_id BIGINT,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_att_link_unique
+        ON dms_attachment_links (tenant_id, document_id, entity_type, entity_id, COALESCE(link_role, ''));
+    CREATE INDEX IF NOT EXISTS ix_att_link_entity
+        ON dms_attachment_links(entity_type, entity_id);
+    CREATE INDEX IF NOT EXISTS ix_att_link_document
+        ON dms_attachment_links(document_id);
+
+    CREATE TABLE IF NOT EXISTS storage_quotas (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        scope VARCHAR(16) NOT NULL,
+        scope_ref_id BIGINT NOT NULL DEFAULT 0,
+        used_bytes BIGINT DEFAULT 0,
+        quota_bytes BIGINT NOT NULL,
+        last_recalculated_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_storage_quota_scope
+        ON storage_quotas(tenant_id, scope, scope_ref_id);
     """
 
 
@@ -3626,9 +3868,11 @@ def get_pos_tables_sql() -> str:
         walk_in_customer_name VARCHAR(255),
         branch_id INTEGER REFERENCES branches(id),
         warehouse_id INTEGER REFERENCES warehouses(id),
+        party_site_id INTEGER REFERENCES party_sites(id),
         order_date TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         status VARCHAR(20) DEFAULT 'draft', 
         client_order_id VARCHAR(100),
+        idempotency_key VARCHAR(64),
         
         -- Money Fields
         subtotal DECIMAL(18, 4) DEFAULT 0,
@@ -3644,6 +3888,10 @@ def get_pos_tables_sql() -> str:
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_by VARCHAR(100)
     );
+
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_pos_orders_idempotency_key
+        ON pos_orders (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS pos_order_lines (
         id SERIAL PRIMARY KEY,
@@ -3905,12 +4153,16 @@ def get_approval_tables_sql() -> str:
         action VARCHAR(20) NOT NULL,
         actioned_by INTEGER REFERENCES company_users(id),
         notes TEXT,
+        idempotency_key VARCHAR(120),
         actioned_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
 
     CREATE INDEX IF NOT EXISTS idx_approval_requests_status ON approval_requests(status);
     CREATE INDEX IF NOT EXISTS idx_approval_requests_doc ON approval_requests(document_type, document_id);
     CREATE INDEX IF NOT EXISTS idx_approval_actions_request ON approval_actions(request_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_approval_actions_idempotency
+        ON approval_actions(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_approval_requests_workflow ON approval_requests(workflow_id);
     CREATE INDEX IF NOT EXISTS idx_approval_requests_requested_by ON approval_requests(requested_by);
     CREATE INDEX IF NOT EXISTS idx_approval_workflows_doc_type ON approval_workflows(document_type);
@@ -3998,10 +4250,29 @@ def get_security_tables_sql() -> str:
         payload JSONB,
         response_status INT,
         response_body TEXT,
+        error_message TEXT,
         success BOOLEAN DEFAULT FALSE,
         attempt INT DEFAULT 1,
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
+
+    CREATE TABLE IF NOT EXISTS webhook_outbox (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL DEFAULT 0,
+        webhook_id INT REFERENCES webhooks(id) ON DELETE CASCADE,
+        event VARCHAR(100) NOT NULL,
+        payload JSONB NOT NULL,
+        state VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempts INT NOT NULL DEFAULT 0,
+        last_error TEXT,
+        next_attempt_at TIMESTAMPTZ DEFAULT NOW(),
+        created_at TIMESTAMPTZ DEFAULT NOW(),
+        updated_at TIMESTAMPTZ DEFAULT NOW()
+    );
+    CREATE INDEX IF NOT EXISTS ix_webhook_outbox_worker
+        ON webhook_outbox(state, next_attempt_at);
+    CREATE INDEX IF NOT EXISTS ix_webhook_outbox_webhook
+        ON webhook_outbox(webhook_id, event);
 
     CREATE TABLE IF NOT EXISTS wht_rates (
         id SERIAL PRIMARY KEY,
@@ -4074,6 +4345,7 @@ def get_security_tables_sql() -> str:
         notes TEXT,
         lost_reason TEXT,
         won_quotation_id INT,
+        idempotency_key VARCHAR(120),
         created_by INT,
         version INTEGER NOT NULL DEFAULT 0,  -- TASK-020: optimistic locking
         created_at TIMESTAMPTZ DEFAULT NOW(),
@@ -4193,6 +4465,8 @@ def get_security_tables_sql() -> str:
         total_responded INTEGER DEFAULT 0,
         estimated_cost DECIMAL(18,4) DEFAULT 0,
         actual_cost DECIMAL(18,4) DEFAULT 0,
+        idempotency_key VARCHAR(120),
+        execution_idempotency_key VARCHAR(120),
         created_by INT,
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
@@ -4215,6 +4489,10 @@ def get_security_tables_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_sales_opp_stage ON sales_opportunities(stage);
     CREATE INDEX IF NOT EXISTS idx_sales_opp_customer ON sales_opportunities(customer_id);
+    ALTER TABLE sales_opportunities ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(120);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_opportunities_idempotency
+        ON sales_opportunities (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
     -- T10.1 P1 #38 — soft-delete column so opportunity history is preserved.
     ALTER TABLE sales_opportunities ADD COLUMN IF NOT EXISTS is_deleted BOOLEAN DEFAULT FALSE;
     ALTER TABLE sales_opportunities ADD COLUMN IF NOT EXISTS deleted_at TIMESTAMPTZ;
@@ -4248,6 +4526,14 @@ def get_security_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS idx_tickets_status ON support_tickets(status, priority);
     CREATE INDEX IF NOT EXISTS idx_tickets_assigned ON support_tickets(assigned_to);
     CREATE INDEX IF NOT EXISTS idx_campaigns_status ON marketing_campaigns(status);
+    ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(120);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_marketing_campaigns_idempotency
+        ON marketing_campaigns (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    ALTER TABLE marketing_campaigns ADD COLUMN IF NOT EXISTS execution_idempotency_key VARCHAR(120);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_marketing_campaigns_execution_idempotency
+        ON marketing_campaigns (execution_idempotency_key)
+        WHERE execution_idempotency_key IS NOT NULL;
     CREATE INDEX IF NOT EXISTS idx_kb_category ON crm_knowledge_base(category);
 
     -- ========== CRM Advanced: Lead Scoring ==========
@@ -4346,6 +4632,23 @@ def get_security_tables_sql() -> str:
         schedule_lines JSONB DEFAULT '[]',
         created_by INT,
         created_at TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    -- ===== 2026-05-26 AUDIT: WAREHOUSE & COST CENTER PERMISSIONS =====
+    CREATE TABLE IF NOT EXISTS user_warehouses (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+        warehouse_id INTEGER NOT NULL REFERENCES warehouses(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, warehouse_id)
+    );
+
+    CREATE TABLE IF NOT EXISTS user_cost_centers (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES company_users(id) ON DELETE CASCADE,
+        cost_center_id INTEGER NOT NULL REFERENCES cost_centers(id) ON DELETE CASCADE,
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(user_id, cost_center_id)
     );
     """
 
@@ -4791,8 +5094,17 @@ def get_system_completion_tables_sql() -> str:
         total_credit NUMERIC(15,4) DEFAULT 0,
         status VARCHAR(20) DEFAULT 'pending',
         uploaded_by INTEGER REFERENCES company_users(id),
-        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
+        idempotency_key VARCHAR(120),
+        source_file_hash VARCHAR(64),
+        created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_import_batches_idempotency_key
+        ON bank_import_batches(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_bank_import_batches_source_file_hash
+        ON bank_import_batches(bank_account_id, source_file_hash)
+        WHERE source_file_hash IS NOT NULL;
 
     CREATE TABLE IF NOT EXISTS bank_import_lines (
         id SERIAL PRIMARY KEY,
@@ -5355,6 +5667,12 @@ def get_extended_features_tables_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS ix_dashboard_widgets_dashboard ON analytics_dashboard_widgets(dashboard_id);
 
+    CREATE TABLE IF NOT EXISTS analytics_mv_freshness (
+        mv_name VARCHAR(128) PRIMARY KEY,
+        last_refreshed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+        refresh_duration_ms INTEGER
+    );
+
     -- Materialized Views for BI Dashboard
     -- AUDIT-FIX-2026-04-22: column/table names aligned with the actual tenant
     -- schema (see backend/database.py block 4-22). Previously these MVs were
@@ -5362,98 +5680,141 @@ def get_extended_features_tables_sql() -> str:
     -- nonexistent columns/tables (issue: "16 MVs disabled" in audit plan).
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_revenue_summary AS
         SELECT date_trunc('month', invoice_date) AS month,
-               SUM(total) AS total_revenue,
+               branch_id,
+               SUM(total * COALESCE(exchange_rate, 1)) AS total_revenue,
                COUNT(*) AS invoice_count
         FROM invoices
-        WHERE invoice_type = 'sale' AND status = 'posted'
-        GROUP BY date_trunc('month', invoice_date);
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_revenue_month ON mv_revenue_summary(month);
+        WHERE invoice_type IN ('sales', 'sale', 'pos_invoice') AND status NOT IN ('draft', 'cancelled')
+        GROUP BY date_trunc('month', invoice_date), branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_revenue_month ON mv_revenue_summary(month, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_expense_summary AS
         SELECT date_trunc('month', invoice_date) AS month,
-               SUM(total) AS total_expenses,
+               branch_id,
+               SUM(total * COALESCE(exchange_rate, 1)) AS total_expenses,
                COUNT(*) AS invoice_count
         FROM invoices
-        WHERE invoice_type = 'purchase' AND status = 'posted'
-        GROUP BY date_trunc('month', invoice_date);
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_expense_month ON mv_expense_summary(month);
+        WHERE invoice_type IN ('purchase', 'purchase_invoice') AND status NOT IN ('draft', 'cancelled')
+        GROUP BY date_trunc('month', invoice_date), branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_expense_month ON mv_expense_summary(month, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_cash_position AS
         SELECT ta.id AS account_id,
                ta.name AS account_name,
+               ta.account_number,
+               ta.branch_id,
                COALESCE(SUM(CASE
-                   WHEN tt.transaction_type IN ('deposit','receipt','transfer_in') THEN tt.amount
-                   WHEN tt.transaction_type IN ('withdraw','payment','transfer_out') THEN -tt.amount
+                   WHEN tt.transaction_type IN ('deposit','receipt','transfer_in','pos_sale','income') THEN tt.amount * COALESCE(tt.exchange_rate, 1)
+                   WHEN tt.transaction_type IN ('withdraw','withdrawal','payment','transfer_out','expense','transfer') THEN -tt.amount * COALESCE(tt.exchange_rate, 1)
                    ELSE 0
                END), 0) AS balance
         FROM treasury_accounts ta
         LEFT JOIN treasury_transactions tt
-               ON tt.treasury_id = ta.id AND tt.status = 'completed'
-        GROUP BY ta.id, ta.name;
+               ON tt.treasury_id = ta.id AND tt.status IN ('posted', 'completed')
+        GROUP BY ta.id, ta.name, ta.account_number, ta.branch_id;
     CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_cash_account ON mv_cash_position(account_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_top_customers AS
         SELECT i.party_id,
                p.name AS customer_name,
-               SUM(i.total) AS total_revenue,
-               COUNT(*) AS order_count
+               i.branch_id,
+               COUNT(*) AS invoice_count,
+               SUM(i.total * COALESCE(i.exchange_rate, 1)) AS total_amount
         FROM invoices i
         JOIN parties p ON p.id = i.party_id
-        WHERE i.invoice_type = 'sale' AND i.status = 'posted'
-        GROUP BY i.party_id, p.name;
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_top_cust_party ON mv_top_customers(party_id);
+        WHERE i.invoice_type IN ('sales', 'sale', 'pos_invoice') AND i.status NOT IN ('draft', 'cancelled')
+        GROUP BY i.party_id, p.name, i.branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_top_cust_party ON mv_top_customers(party_id, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ar_aging AS
-        SELECT party_id,
-               SUM(CASE WHEN NOW() - due_date <= INTERVAL '30 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS current_bucket,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '30 days' AND NOW() - due_date <= INTERVAL '60 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_30,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '60 days' AND NOW() - due_date <= INTERVAL '90 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_60,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '90 days' THEN (total - COALESCE(paid_amount,0)) ELSE 0 END) AS bucket_90_plus
-        FROM invoices
-        WHERE invoice_type = 'sale' AND status IN ('posted', 'partially_paid')
-        GROUP BY party_id;
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_ar_aging_party ON mv_ar_aging(party_id);
+        SELECT i.party_id,
+               p.name AS customer_name,
+               i.branch_id,
+               SUM(CASE WHEN CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) <= 30 THEN (i.total - COALESCE(i.paid_amount,0)) * COALESCE(i.exchange_rate,1) ELSE 0 END) AS current_bucket,
+               SUM(CASE WHEN CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) > 30 AND CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) <= 60 THEN (i.total - COALESCE(i.paid_amount,0)) * COALESCE(i.exchange_rate,1) ELSE 0 END) AS days_31_60,
+               SUM(CASE WHEN CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) > 60 AND CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) <= 90 THEN (i.total - COALESCE(i.paid_amount,0)) * COALESCE(i.exchange_rate,1) ELSE 0 END) AS days_61_90,
+               SUM(CASE WHEN CURRENT_DATE - COALESCE(i.due_date, i.invoice_date) > 90 THEN (i.total - COALESCE(i.paid_amount,0)) * COALESCE(i.exchange_rate,1) ELSE 0 END) AS days_over_90
+        FROM invoices i
+        JOIN parties p ON p.id = i.party_id
+        WHERE i.invoice_type IN ('sales', 'sale', 'pos_invoice')
+          AND i.status NOT IN ('draft', 'cancelled', 'paid')
+          AND (i.total - COALESCE(i.paid_amount,0)) > 0.01
+        GROUP BY i.party_id, p.name, i.branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_ar_aging_party ON mv_ar_aging(party_id, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_ap_aging AS
-        SELECT party_id,
-               SUM(CASE WHEN NOW() - due_date <= INTERVAL '30 days' THEN amount_base ELSE 0 END) AS current_bucket,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '30 days' AND NOW() - due_date <= INTERVAL '60 days' THEN amount_base ELSE 0 END) AS bucket_30,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '60 days' AND NOW() - due_date <= INTERVAL '90 days' THEN amount_base ELSE 0 END) AS bucket_60,
-               SUM(CASE WHEN NOW() - due_date >  INTERVAL '90 days' THEN amount_base ELSE 0 END) AS bucket_90_plus
+        SELECT ap_docs.party_id,
+               p.name AS supplier_name,
+               ap_docs.branch_id,
+               SUM(CASE WHEN CURRENT_DATE - due_date <= 30 THEN amount_base ELSE 0 END) AS current_bucket,
+               SUM(CASE WHEN CURRENT_DATE - due_date > 30 AND CURRENT_DATE - due_date <= 60 THEN amount_base ELSE 0 END) AS days_31_60,
+               SUM(CASE WHEN CURRENT_DATE - due_date > 60 AND CURRENT_DATE - due_date <= 90 THEN amount_base ELSE 0 END) AS days_61_90,
+               SUM(CASE WHEN CURRENT_DATE - due_date > 90 THEN amount_base ELSE 0 END) AS days_over_90
         FROM (
             SELECT party_id,
+                   branch_id,
                    COALESCE(due_date, invoice_date) AS due_date,
                    (total - COALESCE(paid_amount,0)) * COALESCE(exchange_rate,1) AS amount_base
             FROM invoices
-            WHERE invoice_type IN ('purchase', 'purchase_debit_note')
+            WHERE invoice_type IN ('purchase', 'purchase_invoice', 'purchase_debit_note')
               AND status NOT IN ('draft', 'cancelled', 'paid')
               AND (total - COALESCE(paid_amount,0)) > 0.01
             UNION ALL
             SELECT party_id,
+                   branch_id,
                    invoice_date AS due_date,
                    -1 * total * COALESCE(exchange_rate,1) AS amount_base
             FROM invoices
             WHERE invoice_type IN ('purchase_credit_note', 'purchase_return')
               AND status NOT IN ('draft', 'cancelled')
         ) ap_docs
-        GROUP BY party_id;
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_ap_aging_party ON mv_ap_aging(party_id);
+        JOIN parties p ON p.id = ap_docs.party_id
+        GROUP BY ap_docs.party_id, p.name, ap_docs.branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_ap_aging_party ON mv_ap_aging(party_id, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_inventory_turnover AS
-        SELECT product_id,
-               SUM(CASE WHEN transaction_type = 'out' THEN quantity ELSE 0 END) AS total_sold,
-               AVG(quantity) AS avg_stock
-        FROM inventory_transactions
-        GROUP BY product_id;
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_inv_turn_product ON mv_inventory_turnover(product_id);
+        WITH sold AS (
+            SELECT it.product_id,
+                   w.branch_id,
+                   SUM(CASE WHEN it.transaction_type IN ('out', 'sale', 'sales') THEN ABS(it.quantity) ELSE 0 END) AS total_sold
+            FROM inventory_transactions it
+            LEFT JOIN warehouses w ON w.id = it.warehouse_id
+            GROUP BY it.product_id, w.branch_id
+        ),
+        stock AS (
+            SELECT inv.product_id,
+                   w.branch_id,
+                   SUM(inv.quantity) AS current_stock
+            FROM inventory inv
+            LEFT JOIN warehouses w ON w.id = inv.warehouse_id
+            GROUP BY inv.product_id, w.branch_id
+        ),
+        keys AS (
+            SELECT product_id, branch_id FROM sold
+            UNION
+            SELECT product_id, branch_id FROM stock
+        )
+        SELECT k.product_id,
+               p.product_name,
+               k.branch_id,
+               COALESCE(s.total_sold, 0) AS total_sold,
+               COALESCE(st.current_stock, 0) AS current_stock,
+               CASE WHEN COALESCE(st.current_stock, 0) > 0 THEN COALESCE(s.total_sold, 0) / st.current_stock ELSE 0 END AS turnover_ratio
+        FROM keys k
+        JOIN products p ON p.id = k.product_id
+        LEFT JOIN sold s ON s.product_id = k.product_id AND s.branch_id IS NOT DISTINCT FROM k.branch_id
+        LEFT JOIN stock st ON st.product_id = k.product_id AND st.branch_id IS NOT DISTINCT FROM k.branch_id;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_inv_turn_product ON mv_inventory_turnover(product_id, branch_id);
 
     CREATE MATERIALIZED VIEW IF NOT EXISTS mv_sales_pipeline AS
-        SELECT stage,
+        SELECT branch_id,
+               stage,
                COUNT(*) AS deal_count,
-               SUM(expected_value) AS total_value
+               SUM(expected_value) AS total_value,
+               AVG(probability) AS avg_probability
         FROM sales_opportunities
-        GROUP BY stage;
-    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_pipeline_stage ON mv_sales_pipeline(stage);
+        GROUP BY branch_id, stage;
+    CREATE UNIQUE INDEX IF NOT EXISTS ux_mv_pipeline_stage ON mv_sales_pipeline(stage, branch_id);
 
     -- ========== US10: Mobile Push Devices & Sync ==========
     CREATE TABLE IF NOT EXISTS push_devices (
@@ -5571,6 +5932,7 @@ def get_extended_features_tables_sql() -> str:
         approved_by INTEGER REFERENCES employees(id),
         rejection_reason TEXT,
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -5578,6 +5940,8 @@ def get_extended_features_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS ix_timesheet_employee ON timesheet_entries(employee_id);
     CREATE INDEX IF NOT EXISTS ix_timesheet_project ON timesheet_entries(project_id);
     CREATE INDEX IF NOT EXISTS ix_timesheet_date ON timesheet_entries(date);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_timesheet_entries_idempotency_key
+        ON timesheet_entries(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     -- ========== US15: Resource Allocations ==========
     CREATE TABLE IF NOT EXISTS resource_allocations (
@@ -5589,6 +5953,7 @@ def get_extended_features_tables_sql() -> str:
         start_date DATE NOT NULL,
         end_date DATE NOT NULL CHECK (end_date >= start_date),
         created_by INTEGER REFERENCES company_users(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT NOW(),
         updated_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -5596,6 +5961,8 @@ def get_extended_features_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS ix_resource_alloc_employee ON resource_allocations(employee_id);
     CREATE INDEX IF NOT EXISTS ix_resource_alloc_project ON resource_allocations(project_id);
     CREATE INDEX IF NOT EXISTS ix_resource_alloc_dates ON resource_allocations(start_date, end_date);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_resource_allocations_idempotency_key
+        ON resource_allocations(idempotency_key) WHERE idempotency_key IS NOT NULL;
 
     -- review_cycles moved to get_organization_tables_sql()
     -- performance_reviews.cycle_id FK now inline in get_organization_tables_sql()
@@ -5753,6 +6120,7 @@ def get_extended_features_tables_sql() -> str:
         id SERIAL PRIMARY KEY,
         campaign_id INTEGER REFERENCES marketing_campaigns(id) ON DELETE CASCADE,
         lead_id INTEGER REFERENCES sales_opportunities(id) ON DELETE CASCADE,
+        idempotency_key VARCHAR(120),
         attributed_at TIMESTAMPTZ DEFAULT NOW(),
         created_at TIMESTAMPTZ DEFAULT NOW()
     );
@@ -5760,6 +6128,12 @@ def get_extended_features_tables_sql() -> str:
     CREATE INDEX IF NOT EXISTS ix_campaign_recipients_campaign ON campaign_recipients(campaign_id);
     CREATE INDEX IF NOT EXISTS ix_campaign_recipients_contact ON campaign_recipients(contact_id);
     CREATE INDEX IF NOT EXISTS ix_campaign_lead_attr_campaign ON campaign_lead_attributions(campaign_id);
+    ALTER TABLE campaign_lead_attributions ADD COLUMN IF NOT EXISTS idempotency_key VARCHAR(120);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_lead_attr_idempotency
+        ON campaign_lead_attributions(idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_campaign_lead_attr_campaign_lead
+        ON campaign_lead_attributions(campaign_id, lead_id);
     """
 
 
@@ -6061,10 +6435,16 @@ def get_performance_indexes_sql() -> str:
         status VARCHAR(20) DEFAULT 'pending',  -- pending|approved|paid|recovering|recovered|cancelled
         reason TEXT,
         branch_id INTEGER REFERENCES branches(id),
+        idempotency_key VARCHAR(64),
         created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP,
         updated_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP
     );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_salary_advances_idempotency_key
+        ON salary_advances (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
     CREATE INDEX IF NOT EXISTS idx_salary_advances_emp_status ON salary_advances(employee_id, status);
+
 
     -- T15 #104 — surface advance recovery as its own line on the payslip
     -- (parallel to the absence_deduction column added by T13).
@@ -6258,10 +6638,22 @@ def get_performance_indexes_sql() -> str:
 
     CREATE INDEX IF NOT EXISTS idx_sales_orders_party_id ON sales_orders(party_id);
     CREATE INDEX IF NOT EXISTS idx_sales_orders_branch_id ON sales_orders(branch_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_orders_idempotency_key
+        ON sales_orders (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_sales_returns_party_id ON sales_returns(party_id);
     CREATE INDEX IF NOT EXISTS idx_sales_returns_branch_id ON sales_returns(branch_id);
     CREATE INDEX IF NOT EXISTS idx_sales_returns_invoice_id ON sales_returns(invoice_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_returns_idempotency_key
+        ON sales_returns (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
+
+    CREATE INDEX IF NOT EXISTS idx_sales_quotations_party_id ON sales_quotations(party_id);
+    CREATE INDEX IF NOT EXISTS idx_sales_quotations_branch_id ON sales_quotations(branch_id);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_sales_quotations_idempotency_key
+        ON sales_quotations (idempotency_key)
+        WHERE idempotency_key IS NOT NULL;
 
     CREATE INDEX IF NOT EXISTS idx_payment_vouchers_party_id ON payment_vouchers(party_id);
     CREATE INDEX IF NOT EXISTS idx_payment_vouchers_party_type_id ON payment_vouchers(party_type, party_id);
@@ -7082,6 +7474,7 @@ def get_audit_security_finance_tables_sql() -> str:
         expires_at           TIMESTAMPTZ,
         created_by           BIGINT,
         created_at           TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
+        updated_at           TIMESTAMPTZ  NOT NULL DEFAULT clock_timestamp(),
         deleted_at           TIMESTAMPTZ
     );
     CREATE UNIQUE INDEX IF NOT EXISTS ux_integration_credentials_active
@@ -7258,7 +7651,7 @@ def get_feature023_tables_sql() -> str:
         ADD COLUMN IF NOT EXISTS responsible_user_id BIGINT;
 
     CREATE UNIQUE INDEX IF NOT EXISTS uix_so_converted_invoice
-        ON sales_orders (tenant_id, converted_to_invoice_id)
+        ON sales_orders (converted_to_invoice_id)
         WHERE converted_to_invoice_id IS NOT NULL;
 
     -- ═══════════════════════════════════════════════════════════════════
@@ -7561,13 +7954,6 @@ def get_feature023_tables_sql() -> str:
     ALTER TABLE workstations
         ADD COLUMN IF NOT EXISTS effective_to DATE;
 
-    -- ═══════════════════════════════════════════════════════════════════
-    -- Feature 023: Inventory transactions archive
-    -- ═══════════════════════════════════════════════════════════════════
-    CREATE TABLE IF NOT EXISTS inventory_transactions_archive (
-        LIKE inventory_transactions INCLUDING DEFAULTS INCLUDING CONSTRAINTS
-    );
-
     CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_product_wh_created
         ON inventory_transactions_archive (product_id, warehouse_id, created_at);
     CREATE INDEX IF NOT EXISTS ix_inv_txn_archive_created
@@ -7626,6 +8012,249 @@ def get_feature024_tables_sql() -> str:
     );
     CREATE INDEX IF NOT EXISTS idx_scheduled_job_runs_status
         ON scheduled_job_runs (status, scheduled_for);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024: Payroll run tracking and bank movements
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS payroll_runs (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        period_id INTEGER REFERENCES payroll_periods(id) ON DELETE CASCADE,
+        run_number VARCHAR(64),
+        status VARCHAR(32) DEFAULT 'draft',
+        je_id INTEGER REFERENCES journal_entries(id) ON DELETE SET NULL,
+        wps_superseded_by_run_id BIGINT REFERENCES payroll_runs(id),
+        created_by BIGINT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_payroll_runs_period
+        ON payroll_runs(tenant_id, period_id);
+
+    CREATE TABLE IF NOT EXISTS payroll_bank_movements (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        period_id INTEGER REFERENCES payroll_periods(id) ON DELETE CASCADE,
+        run_id BIGINT REFERENCES payroll_runs(id) ON DELETE SET NULL,
+        treasury_account_id INTEGER REFERENCES treasury_accounts(id) ON DELETE SET NULL,
+        total_amount NUMERIC(18,4) NOT NULL,
+        currency VARCHAR(10) NOT NULL DEFAULT 'SAR',
+        description TEXT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_payroll_bank_movements_run
+        ON payroll_bank_movements(tenant_id, period_id, run_id)
+        WHERE run_id IS NOT NULL;
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024: Loans/advances account mapping split
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS acc_map_loans (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        debit_account_id BIGINT NOT NULL,
+        credit_account_id BIGINT NOT NULL,
+        valid_from DATE NOT NULL,
+        valid_to DATE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_acc_map_loans_tenant
+        ON acc_map_loans(tenant_id);
+
+    CREATE TABLE IF NOT EXISTS acc_map_advances (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        debit_account_id BIGINT NOT NULL,
+        credit_account_id BIGINT NOT NULL,
+        valid_from DATE NOT NULL,
+        valid_to DATE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_acc_map_advances_tenant
+        ON acc_map_advances(tenant_id);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024: FSM service contracts, pricing, technicians, work orders
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS service_contracts (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        title VARCHAR(255) NOT NULL,
+        customer_id BIGINT,
+        status VARCHAR(32) DEFAULT 'draft',
+        start_date DATE,
+        end_date DATE,
+        coverage_rules JSONB,
+        pricing_strategy VARCHAR(32),
+        maintenance_schedule JSONB,
+        renew_policy VARCHAR(32),
+        auto_renewed_to_id BIGINT REFERENCES service_contracts(id) ON DELETE SET NULL,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_service_contracts_tenant_customer
+        ON service_contracts(tenant_id, customer_id);
+
+    CREATE TABLE IF NOT EXISTS service_pricelists (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        scope VARCHAR(16) NOT NULL,
+        scope_ref_id BIGINT,
+        item_id BIGINT NOT NULL,
+        currency CHAR(3) NOT NULL,
+        price NUMERIC(18,4) NOT NULL,
+        unit_price NUMERIC(18,4) GENERATED ALWAYS AS (price) STORED,
+        valid_from DATE,
+        valid_to DATE,
+        active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_pricelist_scope_item_from
+        ON service_pricelists(tenant_id, scope, scope_ref_id, item_id, valid_from);
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_pricelist_scope_item_window
+        ON service_pricelists(
+            tenant_id, scope, scope_ref_id, item_id, currency,
+            COALESCE(valid_from, DATE '1900-01-01'),
+            COALESCE(valid_to, DATE '9999-12-31')
+        );
+    CREATE INDEX IF NOT EXISTS ix_pricelist_tenant_item
+        ON service_pricelists(tenant_id, item_id, active);
+
+    CREATE TABLE IF NOT EXISTS technicians (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        employee_id BIGINT REFERENCES employees(id) ON DELETE SET NULL,
+        external_name VARCHAR(255),
+        skills JSONB,
+        zones JSONB,
+        certifications JSONB,
+        availability JSONB,
+        active BOOLEAN DEFAULT TRUE,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        UNIQUE(tenant_id, employee_id)
+    );
+    CREATE INDEX IF NOT EXISTS ix_technicians_tenant
+        ON technicians(tenant_id, active);
+    CREATE INDEX IF NOT EXISTS ix_technicians_tenant_is_active
+        ON technicians(tenant_id, is_active);
+
+    CREATE TABLE IF NOT EXISTS service_orders (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        kind VARCHAR(32),
+        source VARCHAR(64),
+        title VARCHAR(255) NOT NULL,
+        description TEXT,
+        customer_id BIGINT,
+        asset_id BIGINT,
+        contract_id BIGINT REFERENCES service_contracts(id) ON DELETE SET NULL,
+        assigned_technician_id BIGINT REFERENCES technicians(id) ON DELETE SET NULL,
+        priority VARCHAR(32) DEFAULT 'normal',
+        due_date DATE,
+        status VARCHAR(32) DEFAULT 'open',
+        pricelist_source_level VARCHAR(16),
+        revenue_total NUMERIC(18,4),
+        cost_total NUMERIC(18,4),
+        margin_amount NUMERIC(18,4),
+        margin_pct NUMERIC(7,4),
+        revenue_resolved_at TIMESTAMPTZ,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_service_orders_tenant_status
+        ON service_orders(tenant_id, status);
+    CREATE INDEX IF NOT EXISTS ix_service_orders_tenant_source_created
+        ON service_orders(tenant_id, source, created_at);
+
+    CREATE TABLE IF NOT EXISTS maintenance_plans (
+        id BIGSERIAL PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        title VARCHAR(255),
+        asset_id BIGINT,
+        equipment_id BIGINT,
+        contract_id BIGINT REFERENCES service_contracts(id) ON DELETE SET NULL,
+        cadence JSONB NOT NULL DEFAULT '{}',
+        template_service_order_id BIGINT REFERENCES service_orders(id) ON DELETE SET NULL,
+        assigned_technician_id BIGINT REFERENCES technicians(id) ON DELETE SET NULL,
+        next_due_at TIMESTAMPTZ NOT NULL,
+        last_generated_at TIMESTAMPTZ,
+        active BOOLEAN DEFAULT TRUE,
+        is_active BOOLEAN DEFAULT TRUE,
+        created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+    );
+    CREATE INDEX IF NOT EXISTS ix_maint_plans_tenant_due
+        ON maintenance_plans(tenant_id, next_due_at, active);
+    CREATE INDEX IF NOT EXISTS ix_maint_plans_tenant_due_active
+        ON maintenance_plans(tenant_id, next_due_at, is_active);
+
+    -- ═══════════════════════════════════════════════════════════════════
+    -- Feature 024/025: Approval tokens and KPI monitoring
+    -- ═══════════════════════════════════════════════════════════════════
+    CREATE TABLE IF NOT EXISTS approval_tokens (
+        nonce CHAR(32) PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        action VARCHAR(64) NOT NULL,
+        target_id BIGINT NOT NULL,
+        issuer_user_id BIGINT,
+        issued_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+        expires_at TIMESTAMPTZ NOT NULL,
+        consumed_at TIMESTAMPTZ,
+        consumed_by_user_id BIGINT,
+        consumed_via_ip VARCHAR(45)
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS uq_token_nonce_unconsumed
+        ON approval_tokens(nonce)
+        WHERE consumed_at IS NULL;
+    CREATE INDEX IF NOT EXISTS ix_token_tenant_action
+        ON approval_tokens(tenant_id, action);
+
+    CREATE TABLE IF NOT EXISTS kpi_definitions (
+        id UUID PRIMARY KEY,
+        tenant_id BIGINT NOT NULL,
+        kpi_code VARCHAR(128) NOT NULL,
+        metric_source VARCHAR(32) NOT NULL,
+        metric_reference TEXT NOT NULL,
+        threshold_value NUMERIC(18,4) NOT NULL,
+        comparison_op VARCHAR(8) NOT NULL,
+        channels JSONB NOT NULL DEFAULT '[]'::jsonb,
+        evaluation_interval_minutes INT NOT NULL DEFAULT 15,
+        is_active BOOLEAN NOT NULL DEFAULT TRUE,
+        created_by BIGINT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT uq_kpi_definitions_tenant_code UNIQUE (tenant_id, kpi_code),
+        CONSTRAINT ck_kpi_metric_source CHECK (metric_source IN ('report_key', 'classifier_category')),
+        CONSTRAINT ck_kpi_comparison_op CHECK (comparison_op IN ('lt', 'lte', 'gt', 'gte', 'eq')),
+        CONSTRAINT ck_kpi_interval CHECK (evaluation_interval_minutes >= 5)
+    );
+    CREATE INDEX IF NOT EXISTS idx_kpi_definitions_active
+        ON kpi_definitions(tenant_id, is_active, evaluation_interval_minutes);
+
+    CREATE TABLE IF NOT EXISTS kpi_evaluations (
+        id BIGSERIAL PRIMARY KEY,
+        kpi_id UUID NOT NULL REFERENCES kpi_definitions(id) ON DELETE CASCADE,
+        tenant_id BIGINT NOT NULL,
+        evaluation_window_start TIMESTAMPTZ NOT NULL,
+        evaluation_window_end TIMESTAMPTZ NOT NULL,
+        value NUMERIC(18,4) NOT NULL,
+        breached BOOLEAN NOT NULL DEFAULT FALSE,
+        notified_at TIMESTAMPTZ,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT clock_timestamp(),
+        CONSTRAINT uq_kpi_evaluations_window UNIQUE (kpi_id, evaluation_window_start)
+    );
+    CREATE INDEX IF NOT EXISTS idx_kpi_evaluations_tenant_created
+        ON kpi_evaluations(tenant_id, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_kpi_evaluations_pending_notifications
+        ON kpi_evaluations(tenant_id, breached, notified_at)
+        WHERE breached = TRUE AND notified_at IS NULL;
 
     -- ═══════════════════════════════════════════════════════════════════
     -- Feature 024: Settings keys

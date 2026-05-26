@@ -2,29 +2,21 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
-from pydantic import BaseModel
 from decimal import Decimal, ROUND_HALF_UP
-import io
-import csv
 import json
 import logging
-import subprocess
-import os
-from database import get_db_connection, engine as system_engine
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope
 from utils.audit import log_activity
 from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.currency_display import display_currency_fields, resolve_display_currency
 from utils.fiscal_lock import create_fiscal_lock_table, check_fiscal_period_open
-from utils.duplicate_detection import find_duplicate_parties, find_duplicate_products
-from utils.tax_precision import CALCULATION_VERSION, get_idempotency_key, money_str, rate_str
+from utils.tax_precision import CALCULATION_VERSION, get_idempotency_key, money_str, rate_str, require_idempotency_key
 from services.gl_service import create_journal_entry
 
 logger = logging.getLogger(__name__)
@@ -36,7 +28,7 @@ def _u(current_user, key, default=None):
 
 router = APIRouter()
 
-from .core import FiscalPeriodLockRequest, ZakatCalculateRequest, _zakat_balance_query, _zakat_account_breakdown
+from .core import FiscalPeriodLockRequest, ZakatCalculateRequest, _zakat_balance_query, _zakat_account_breakdown  # noqa: E402
 
 
 def zakat_branch_scope_key(branch_scope: dict) -> tuple[str, list[int] | None]:
@@ -629,9 +621,9 @@ def post_zakat_entry(
         scope_key = f"branch:{selected_branch_id}"
     with transactional(company_id) as db:
         try:
-            idempotency_key = get_idempotency_key(
+            idempotency_key = require_idempotency_key(
                 request,
-                fallback=f"zakat-post:{fiscal_year}:branch:{selected_branch_id or 'all'}",
+                operation="zakat posting",
             )
             zakat = db.execute(text(
                 """
@@ -736,7 +728,7 @@ def list_fiscal_periods(current_user: dict = Depends(get_current_user)):
 def create_fiscal_period(request: Request, body: FiscalPeriodLockRequest, current_user: dict = Depends(get_current_user)):
     """Create Fiscal Period."""
     company_id = _u(current_user, "company_id")
-    user_id = _u(current_user, "user_id")
+    _u(current_user, "user_id")
     with transactional(company_id) as db:
         create_fiscal_lock_table(db)
 

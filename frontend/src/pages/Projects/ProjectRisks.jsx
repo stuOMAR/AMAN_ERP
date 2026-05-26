@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
-import Decimal from 'decimal.js';
 import { projectsAPI } from '../../utils/api';
 import { useToast } from '../../context/ToastContext';
 import { formatNumber } from '../../utils/format';
@@ -23,7 +22,7 @@ const ProjectRisks = () => {
     const [showForm, setShowForm] = useState(false);
     const [editingId, setEditingId] = useState(null);
     const [form, setForm] = useState({
-        title: '', description: '', probability: '0.5', impact: '0.5',
+        title: '', description: '', probability: 'medium', impact: 'medium',
         status: 'identified', mitigation_plan: '', owner_id: '', due_date: ''
     });
     const [depForm, setDepForm] = useState({ task_id: '', depends_on_task_id: '', dependency_type: 'FS', lag_days: '0' });
@@ -100,17 +99,20 @@ const ProjectRisks = () => {
 
     const resetRiskForm = () => {
         setShowForm(false); setEditingId(null);
-        setForm({ title: '', description: '', probability: '0.5', impact: '0.5', status: 'identified', mitigation_plan: '', owner_id: '', due_date: '' });
+        setForm({ title: '', description: '', probability: 'medium', impact: 'medium', status: 'identified', mitigation_plan: '', owner_id: '', due_date: '' });
     };
 
     const riskColor = (score) => {
-        if (score >= 0.6) return '#dc3545';
-        if (score >= 0.3) return '#ffc107';
+        const normalized = String(score || '0');
+        if (['9', '12', '16'].includes(normalized)) return '#dc3545';
+        if (['4', '6', '8'].includes(normalized)) return '#ffc107';
         return '#28a745';
     };
 
     const riskStatuses = { identified: t('project_risks.identified', 'مُحدد'), mitigating: t('project_risks.mitigating', 'قيد المعالجة'), resolved: t('project_risks.resolved', 'تم الحل'), accepted: t('project_risks.accepted', 'مقبول') };
+    const riskLevels = { low: t('project_risks.low', 'منخفض'), medium: t('project_risks.medium', 'متوسط'), high: t('project_risks.high', 'عالٍ'), critical: t('project_risks.critical', 'حرج') };
     const depTypes = { FS: t('project_risks.fs', 'نهاية–بداية'), SS: t('project_risks.ss', 'بداية–بداية'), FF: t('project_risks.ff', 'نهاية–نهاية'), SF: t('project_risks.sf', 'بداية–نهاية') };
+    const isHighRisk = (risk) => ['9', '12', '16'].includes(String(risk.risk_score || '0'));
 
     return (
         <div className="workspace fade-in">
@@ -143,7 +145,7 @@ const ProjectRisks = () => {
                 <div className="metric-card">
                     <div className="metric-icon" style={{ background: '#fce4ec' }}><AlertTriangle size={22} color="#c62828" /></div>
                     <div className="metric-info">
-                        <span className="metric-value">{risks.filter(r => new Decimal(r.risk_score || '0').gte('0.6')).length}</span>
+                        <span className="metric-value">{risks.filter(isHighRisk).length}</span>
                         <span className="metric-label">{t('project_risks.high_risks', 'مخاطر عالية')}</span>
                     </div>
                 </div>
@@ -206,24 +208,20 @@ const ProjectRisks = () => {
                                     </div>
                                     <div className="col-md-3">
                                         <div className="form-group">
-                                            <label className="form-label">{t('project_risks.probability', 'الاحتمالية')} (0-1)</label>
-                                            <input className="form-input" type="number" step="0.1" min="0" max="1" value={form.probability}
-                                                onChange={e => setForm(p => ({ ...p, probability: e.target.value }))} />
+                                            <label className="form-label">{t('project_risks.probability', 'الاحتمالية')}</label>
+                                            <select className="form-select" value={form.probability}
+                                                onChange={e => setForm(p => ({ ...p, probability: e.target.value }))}>
+                                                {Object.entries(riskLevels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                            </select>
                                         </div>
                                     </div>
                                     <div className="col-md-3">
                                         <div className="form-group">
-                                            <label className="form-label">{t('project_risks.impact', 'التأثير')} (0-1)</label>
-                                            <input className="form-input" type="number" step="0.1" min="0" max="1" value={form.impact}
-                                                onChange={e => setForm(p => ({ ...p, impact: e.target.value }))} />
-                                        </div>
-                                    </div>
-                                    <div className="col-md-3">
-                                        <div className="form-group">
-                                            <label className="form-label">{t('project_risks.risk_score', 'درجة الخطر')}</label>
-                                            <div className="form-input" style={{ background: riskColor(new Decimal(form.probability || '0').times(new Decimal(form.impact || '0')).toNumber()), color: '#fff', textAlign: 'center', fontWeight: 700 }}>
-                                                {formatNumber(new Decimal(form.probability || '0').times(new Decimal(form.impact || '0')).toString())}
-                                            </div>
+                                            <label className="form-label">{t('project_risks.impact', 'التأثير')}</label>
+                                            <select className="form-select" value={form.impact}
+                                                onChange={e => setForm(p => ({ ...p, impact: e.target.value }))}>
+                                                {Object.entries(riskLevels).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+                                            </select>
                                         </div>
                                     </div>
                                     <div className="col-md-3">
@@ -336,10 +334,10 @@ const ProjectRisks = () => {
                                 ) : risks.map(r => (
                                     <tr key={r.id}>
                                         <td><strong>{r.title}</strong><br /><small className="text-muted">{r.description}</small></td>
-                                        <td>{formatNumber(r.probability || '0')}</td>
-                                        <td>{formatNumber(r.impact || '0')}</td>
+                                        <td>{riskLevels[r.probability] || r.probability}</td>
+                                        <td>{riskLevels[r.impact] || r.impact}</td>
                                         <td>
-                                            <span className="badge" style={{ background: riskColor(new Decimal(r.risk_score || '0').toNumber()), color: '#fff', fontSize: '0.85rem' }}>
+                                            <span className="badge" style={{ background: riskColor(r.risk_score), color: '#fff', fontSize: '0.85rem' }}>
                                                 {formatNumber(r.risk_score || '0')}
                                             </span>
                                         </td>

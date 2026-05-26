@@ -283,7 +283,7 @@ const Budgets = () => {
                                                 <div style={{ width: '50px', height: '4px', background: '#f3f4f6', borderRadius: '2px', overflow: 'hidden' }}>
                                                     <div style={{
                                                         height: '100%',
-                                                        width: `${Math.min(alert.usage_percentage, 100)}%`,
+                                                        width: `${alert.usage_percentage_capped || alert.usage_percentage}%`,
                                                         background: alert.severity === 'critical' ? '#dc2626' : alert.severity === 'danger' ? '#f97316' : '#f59e0b',
                                                         borderRadius: '2px',
                                                     }} />

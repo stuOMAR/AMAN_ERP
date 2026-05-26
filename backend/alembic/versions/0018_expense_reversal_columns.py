@@ -16,7 +16,6 @@ Revises: 0017_audit_logs_hash_chain_immutability
 Create Date: 2026-05-01
 """
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "0018_expense_reversal_columns"

@@ -3,27 +3,24 @@
 Mounted under the parent router via crm/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timezone
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission
 from utils.accounting import generate_sequential_number
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
 from services.notification_service import notification_service
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import CommentCreate, TicketCreate, TicketUpdate
+from .core import CommentCreate, TicketCreate, TicketUpdate  # noqa: E402
 
 @router.get("/tickets", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=List[Dict[str, Any]])
 def list_tickets(

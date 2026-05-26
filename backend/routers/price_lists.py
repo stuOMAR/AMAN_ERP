@@ -6,12 +6,15 @@ Allows branch managers to import prices from Excel files.
 from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File
 from sqlalchemy import text
 from typing import Optional
+from decimal import Decimal, InvalidOperation
 import pandas as pd
 import io
 
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
+from utils.i18n import http_error, i18n_message
+from utils.tax_precision import require_idempotency_key
 
 router = APIRouter(prefix="/price-lists", tags=["Price Lists"])
 
@@ -126,11 +129,13 @@ def update_price_list_item(request: Request,
 
 @router.post("/{list_id}/import", dependencies=[Depends(require_permission(["products.edit", "sales.edit"]))])
 async def import_prices_from_excel(
+    request: Request,
     list_id: int,
     file: UploadFile = File(...),
     current_user: dict = Depends(get_current_user)
 ):
     """استيراد الأسعار من ملف Excel"""
+    require_idempotency_key(request, operation="price list import")
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     db = get_db_connection(company_id)
     try:
@@ -139,8 +144,20 @@ async def import_prices_from_excel(
         if not pl:
             raise HTTPException(**http_error(404, "price_list_not_found", request))
         
-        # Read Excel file
         content = await file.read()
+        from utils.sql_safety import (
+            ALLOWED_IMPORT_EXTENSIONS,
+            MAX_IMPORT_FILE_SIZE,
+            validate_file_extension,
+            validate_file_mime_and_signature,
+            validate_file_size,
+        )
+
+        validate_file_size(content, MAX_IMPORT_FILE_SIZE, "ملف الأسعار", request)
+        validate_file_extension(file.filename, ALLOWED_IMPORT_EXTENSIONS, "ملف الأسعار", request)
+        validate_file_mime_and_signature(file.filename, file.content_type or "", content, "ملف الأسعار", request)
+
+        # Read Excel file
         df = pd.read_excel(io.BytesIO(content))
         
         # Expected columns: product_code, price
@@ -153,7 +170,11 @@ async def import_prices_from_excel(
         
         for _, row in df.iterrows():
             product_code = str(row['product_code']).strip()
-            price = Decimal(str(row['price']))
+            try:
+                price = Decimal(str(row['price']))
+            except (InvalidOperation, TypeError, ValueError):
+                errors.append(f"المنتج {product_code}: سعر غير صالح")
+                continue
             
             # Get product ID
             product = db.execute(text("SELECT id FROM products WHERE product_code = :code"), {"code": product_code}).fetchone()
@@ -166,7 +187,7 @@ async def import_prices_from_excel(
                 INSERT INTO customer_price_list_items (price_list_id, product_id, price)
                 VALUES (:lid, :pid, :price)
                 ON CONFLICT (price_list_id, product_id) DO UPDATE SET price = :price
-            """), {"lid": list_id, "pid": product.id, "price": price})
+            """), {"lid": list_id, "pid": product.id, "price": str(price)})
             updated += 1
         
         db.commit()

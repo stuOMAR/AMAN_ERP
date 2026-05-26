@@ -3,38 +3,21 @@
 Mounted under the parent router via core/__init__.py.
 """
 import logging
-from decimal import Decimal
-from datetime import datetime, date
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from typing import Any, Dict, List
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
-from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import require_permission
 from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
-from services.gl_service import create_journal_entry
 from schemas import UserResponse
-from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
-)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import QCResultRecord
+from .core import QCResultRecord  # noqa: E402
 
 @router.post("/qc-checks/{qc_id}/record-result", dependencies=[Depends(require_permission("manufacturing.manage"))], response_model=Dict[str, Any])
 def record_qc_result(

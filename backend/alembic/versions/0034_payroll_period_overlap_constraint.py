@@ -5,7 +5,6 @@ Revises: 0033_accounts_currency_backfill
 Create Date: 2026-05-20
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0034_payroll_period_overlap_constraint"
 down_revision = "0033_accounts_currency_backfill"

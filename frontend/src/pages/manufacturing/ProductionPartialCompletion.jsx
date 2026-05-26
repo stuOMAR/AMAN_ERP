@@ -30,8 +30,7 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
 
     const handleSubmit = async (e) => {
         e.preventDefault();
-        const qtyNum = qty;
-        if (!qtyNum || Number(qtyNum) <= 0 || Number(qtyNum) > remainingQty) return;
+        if (!qty) return;
 
         setLoading(true);
         setError(null);
@@ -39,7 +38,7 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
 
         try {
             const payload = {
-                qty: qtyNum,
+                qty,
                 warehouse_id: warehouseId,
                 scrap_lines: scrapLines.filter(s => s.item_id && s.qty).map(s => ({
                     item_id: parseInt(s.item_id),
@@ -85,7 +84,8 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
                     {t('Quantity')} (max: {remainingQty})
                 </label>
                 <input
-                    type="number"
+                    type="text"
+                    inputMode="decimal"
                     value={qty}
                     onChange={e => setQty(e.target.value)}
                     min="0.0001"
@@ -114,7 +114,8 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
                         />
                         <input
                             placeholder="Qty"
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             value={line.qty}
                             onChange={e => updateScrapLine(i, 'qty', e.target.value)}
                             className="w-24 border rounded px-2 py-1 text-sm"
@@ -150,14 +151,16 @@ const ProductionPartialCompletion = ({ moId, remainingQty, warehouseId }) => {
                         />
                         <input
                             placeholder="Qty"
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             value={line.qty}
                             onChange={e => updateByproductLine(i, 'qty', e.target.value)}
                             className="w-24 border rounded px-2 py-1 text-sm"
                         />
                         <input
                             placeholder="Sales Value"
-                            type="number"
+                            type="text"
+                            inputMode="decimal"
                             value={line.sales_value}
                             onChange={e => updateByproductLine(i, 'sales_value', e.target.value)}
                             className="w-32 border rounded px-2 py-1 text-sm"

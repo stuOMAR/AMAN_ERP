@@ -239,6 +239,11 @@ def create_quotation(
 
         grand_total = (subtotal - total_discount + total_tax).quantize(_D2, ROUND_HALF_UP)
 
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        if quotation.submitted_grand_total is not None:
+            if abs(grand_total - quotation.submitted_grand_total) > _D2:
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
+
         # Save Header
         cols = [
             "sq_number", "party_id", "quotation_date", "expiry_date",

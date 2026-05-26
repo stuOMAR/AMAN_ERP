@@ -178,6 +178,7 @@ function SalesOrderForm() {
                 expected_delivery_date: formData.expected_delivery_date || null,
                 notes: formData.notes,
                 currency,
+                submitted_grand_total: String(backendTotals?.grandTotal || '0'),
                 items: items.map(item => ({
                     product_id: parseInt(item.product_id),
                     description: item.description || '',

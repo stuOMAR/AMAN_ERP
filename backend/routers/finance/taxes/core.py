@@ -3,23 +3,21 @@
 Mounted under the parent router via taxes/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
-from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.currency_display import display_currency_fields, resolve_display_currency
-from utils.tax_precision import get_idempotency_key, money_str
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from utils.tax_precision import money_str, require_idempotency_key
 
 logger = logging.getLogger(__name__)
 
@@ -48,9 +46,9 @@ def create_tax_settlement(
             end = body.get("period_end")
             branch_scope = resolve_branch_scope(current_user, body.get("branch_id"))
             branch_id = branch_scope["branch_id"]
-            idempotency_key = get_idempotency_key(
+            idempotency_key = require_idempotency_key(
                 request,
-                fallback=f"tax-settlement:{start}:{end}:branch:{branch_id or 'all'}",
+                operation="tax settlement",
             )
     
             if not start or not end:
@@ -62,7 +60,7 @@ def create_tax_settlement(
 
             def lock_invoice_vat_rows(invoice_type: str) -> None:
                 row_params = {**params, "invoice_type": invoice_type}
-                db.execute(text(  # noqa: sql-lint
+                db.execute(text(  # noqa
                     f"""
                     SELECT i.id
                     FROM invoices i
@@ -75,7 +73,7 @@ def create_tax_settlement(
 
             def invoice_vat(invoice_type: str) -> Decimal:
                 row_params = {**params, "invoice_type": invoice_type}
-                return _dec(db.execute(text(  # noqa: sql-lint
+                return _dec(db.execute(text(  # noqa
                     f"""
                     SELECT COALESCE(SUM(COALESCE(i.tax_amount, 0) * COALESCE(i.exchange_rate, 1)), 0) as vat
                     FROM invoices i

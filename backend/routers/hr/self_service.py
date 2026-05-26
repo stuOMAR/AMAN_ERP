@@ -9,10 +9,11 @@ Endpoints under /hr/self-service:
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import date
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
@@ -419,7 +420,7 @@ def submit_leave_request(
             pass
 
         # Notify managers
-        emp_name = f"{emp['first_name']} {emp['last_name']}"
+        f"{emp['first_name']} {emp['last_name']}"
         _notify_leave(
             conn,
             """SELECT DISTINCT u.id, 'leave_request', :title, :message, :link, FALSE, NOW()

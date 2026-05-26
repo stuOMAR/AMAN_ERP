@@ -21,13 +21,13 @@ const WorkOrderStatusReport = () => {
         status: '',
     });
 
-    const fetchData = async () => {
+    const fetchData = async (activeFilters = filters) => {
         setLoading(true);
         try {
-            const params = { start_date: filters.start_date, end_date: filters.end_date };
+            const params = { start_date: activeFilters.start_date, end_date: activeFilters.end_date };
             const [sumRes, ordersRes] = await Promise.allSettled([
                 manufacturingAPI.getProductionSummary(params),
-                manufacturingAPI.listOrders({ ...params, status: filters.status || undefined, page_size: 200 }),
+                manufacturingAPI.listOrders({ ...params, status: activeFilters.status || undefined, limit: 100 }),
             ]);
             if (sumRes.status === 'fulfilled') setSummary(sumRes.value.data);
             if (ordersRes.status === 'fulfilled') {
@@ -59,15 +59,6 @@ const WorkOrderStatusReport = () => {
         if (!d) return '-';
         try { return new Date(d).toLocaleDateString('ar-EG') } catch { return d }
     };
-
-    const getProgress = (o) => {
-        if (!o.quantity) return 0;
-        return Math.min(100, Math.round((o.produced_quantity || 0) / o.quantity * 100));
-    };
-
-    const filteredOrders = filters.status
-        ? orders.filter(o => o.status === filters.status)
-        : orders;
 
     return (
         <div className="workspace fade-in">
@@ -102,7 +93,7 @@ const WorkOrderStatusReport = () => {
                             ))}
                         </select>
                     </div>
-                    <button className="btn btn-primary" onClick={fetchData} disabled={loading}>
+                    <button className="btn btn-primary" onClick={() => fetchData()} disabled={loading}>
                         {loading ? '...' : t('common.search', 'بحث')}
                     </button>
                 </div>
@@ -114,12 +105,13 @@ const WorkOrderStatusReport = () => {
                 <>
                     {/* Status Summary Cards */}
                     <div className="metrics-grid" style={{ marginBottom: 16 }}>
-                        {Object.entries(statusConfig).map(([status, cfg]) => {
-                            const count = byStatus[status]?.count || 0;
-                            const qty = byStatus[status]?.total_qty || 0;
-                            return (
-                                <div key={status} className="metric-card" style={{ cursor: 'pointer', border: filters.status === status ? `2px solid ${cfg.color}` : undefined }}
-                                    onClick={() => setFilters(p => ({ ...p, status: p.status === status ? '' : status }))}>
+                            {Object.entries(statusConfig).map(([status, cfg]) => {
+                                const count = byStatus[status]?.count || 0;
+                                const qty = byStatus[status]?.total_qty || 0;
+                                const nextFilters = { ...filters, status: filters.status === status ? '' : status };
+                                return (
+                                    <div key={status} className="metric-card" style={{ cursor: 'pointer', border: filters.status === status ? `2px solid ${cfg.color}` : undefined }}
+                                    onClick={() => { setFilters(nextFilters); fetchData(nextFilters); }}>
                                     <div className="metric-label">{cfg.label}</div>
                                     <div className="metric-value" style={{ color: cfg.color }}>{count}</div>
                                     <div style={{ fontSize: 12, color: '#6b7280', marginTop: 2 }}>{t('common.quantity', 'كمية')}: {formatNumber(qty)}</div>
@@ -136,14 +128,14 @@ const WorkOrderStatusReport = () => {
                                 <div style={{ flex: 1 }}>
                                     <div style={{ background: '#e5e7eb', borderRadius: 999, height: 16, overflow: 'hidden' }}>
                                         <div style={{
-                                            width: `${((byStatus.completed?.count || 0) / totalOrders * 100)}%`,
+                                            width: `${summary?.completion_rate_pct || 0}%`,
                                             background: 'linear-gradient(90deg, #22c55e, #16a34a)',
                                             height: '100%', borderRadius: 999, transition: 'width 0.5s'
                                         }} />
                                     </div>
                                 </div>
                                 <span style={{ fontWeight: 700, fontSize: 18, color: '#22c55e', minWidth: 60, textAlign: 'center' }}>
-                                    {formatNumber(((byStatus.completed?.count || 0) / totalOrders * 100), 1)}%
+                                    {formatNumber(summary?.completion_rate_pct || 0, 1)}%
                                 </span>
                             </div>
                         </div>
@@ -151,8 +143,8 @@ const WorkOrderStatusReport = () => {
 
                     {/* Orders Table */}
                     <div className="card">
-                        <h3 className="section-title">{t('manufacturing.work_orders_report.orders_list', 'قائمة الأوامر')} ({filteredOrders.length})</h3>
-                        {filteredOrders.length === 0 ? (
+                        <h3 className="section-title">{t('manufacturing.work_orders_report.orders_list', 'قائمة الأوامر')} ({orders.length})</h3>
+                        {orders.length === 0 ? (
                             <div className="empty-state"><p>{t('common.no_data', 'لا توجد بيانات')}</p></div>
                         ) : (
                             <div className="table-responsive" style={{ marginTop: 8 }}>
@@ -170,10 +162,10 @@ const WorkOrderStatusReport = () => {
                                         </tr>
                                     </thead>
                                     <tbody>
-                                        {filteredOrders.map(o => {
-                                            const pct = getProgress(o);
+                                        {orders.map(o => {
+                                            const pct = o.completion_percent || 0;
                                             const cfg = statusConfig[o.status] || { label: o.status, color: '#6b7280', bg: '#f3f4f6' };
-                                            const isOverdue = o.due_date && new Date(o.due_date) < new Date() && o.status !== 'completed' && o.status !== 'cancelled';
+                                            const isOverdue = Boolean(o.is_overdue);
                                             return (
                                                 <tr key={o.id} style={{ cursor: 'pointer' }} onClick={() => navigate(`/manufacturing/orders/${o.id}`)}>
                                                     <td><strong style={{ color: isOverdue ? '#ef4444' : undefined }}>{o.order_number}</strong></td>
@@ -186,7 +178,7 @@ const WorkOrderStatusReport = () => {
                                                     <td style={{ minWidth: 120 }}>
                                                         <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                                             <div style={{ flex: 1, background: '#e5e7eb', borderRadius: 999, height: 6, overflow: 'hidden' }}>
-                                                                <div style={{ width: `${pct}%`, background: pct >= 100 ? '#22c55e' : '#3b82f6', height: '100%', borderRadius: 999 }} />
+                                                                <div style={{ width: `${pct}%`, background: o.completion_status === 'complete' ? '#22c55e' : '#3b82f6', height: '100%', borderRadius: 999 }} />
                                                             </div>
                                                             <span style={{ fontSize: 12, fontWeight: 600, minWidth: 35 }}>{pct}%</span>
                                                         </div>

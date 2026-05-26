@@ -45,7 +45,7 @@ def _load_cfg(db, carrier: str, request: Request = None) -> Dict[str, Any]:
         raise HTTPException(**http_error(412, "shipping_carrier_not_configured", request, carrier=carrier))
     try:
         return row[0] if isinstance(row[0], dict) else json.loads(row[0])
-    except Exception as e:
+    except Exception:
         raise HTTPException(**http_error(500, "shipping_config_invalid_json", request))
 
 
@@ -136,7 +136,7 @@ def create_shipment(body: CreateShipmentRequest, request: Request, current_user=
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("shipment create failed")
         raise HTTPException(**http_error(500, "shipping_create_failed", request))

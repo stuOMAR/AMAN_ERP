@@ -24,6 +24,7 @@ export default function ClosingEntries() {
     const [preview, setPreview] = useState(null)
     const [useIncomeSummary, setUseIncomeSummary] = useState(false)
     const [result, setResult] = useState(null)
+    const [closingIdempotencyKey, setClosingIdempotencyKey] = useState(() => crypto.randomUUID())
 
     const fetchPreview = async () => {
         setLoading(true)
@@ -54,10 +55,11 @@ export default function ClosingEntries() {
                 retained_earnings_account_id: preview?.retained_earnings_account?.id,
             }
             if (currentBranch?.id) payload.branch_id = currentBranch.id;
-            const res = await accountingAPI.generateClosingEntries(payload)
+            const res = await accountingAPI.generateClosingEntries(payload, closingIdempotencyKey)
             setResult(res.data)
             showToast(res.data.message || (t('closing.generated')), 'success')
             setPreview(null)
+            setClosingIdempotencyKey(crypto.randomUUID())
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
         } finally {
@@ -69,6 +71,8 @@ export default function ClosingEntries() {
         if (!n && n !== 0) return '-'
         return formatNumber(n)
     }
+    const isProfit = (data) => data?.result_type !== 'loss'
+    const resultTone = (data, profitTone = 'success', lossTone = 'danger') => isProfit(data) ? profitTone : lossTone
 
     return (
         <div className="workspace fade-in" dir={i18n.dir()}>
@@ -136,7 +140,7 @@ export default function ClosingEntries() {
                             </div>
                             <div className="p-3 bg-light rounded text-center">
                                 <div className="small text-muted">{t('closing.net_income')}</div>
-                                <div className={`fw-bold fs-5 ${result.net_income >= 0 ? 'text-success' : 'text-danger'}`}>
+                                <div className={`fw-bold fs-5 text-${resultTone(result)}`}>
                                     {formatNum(result.net_income)} <small>{currency}</small>
                                 </div>
                             </div>
@@ -166,14 +170,14 @@ export default function ClosingEntries() {
                             <div className="fw-bold fs-4 text-danger">{formatNum(preview.total_expense)} <small>{currency}</small></div>
                             <div className="small text-muted">{preview.expenses.length} {t('closing.accounts_count')}</div>
                         </div>
-                        <div className={`card p-3 text-center border-${preview.net_income >= 0 ? 'success' : 'warning'}`}>
-                            {preview.net_income >= 0 ? <DollarSign size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-warning mb-2" />}
+                        <div className={`card p-3 text-center border-${resultTone(preview, 'success', 'warning')}`}>
+                            {isProfit(preview) ? <DollarSign size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-warning mb-2" />}
                             <div className="small text-muted">{t('closing.net_income')}</div>
-                            <div className={`fw-bold fs-4 ${preview.net_income >= 0 ? 'text-success' : 'text-warning'}`}>
+                            <div className={`fw-bold fs-4 text-${resultTone(preview, 'success', 'warning')}`}>
                                 {formatNum(preview.net_income)} <small>{currency}</small>
                             </div>
                             <div className="small text-muted">
-                                {preview.net_income >= 0 ? (t('closing.profit')) : (t('closing.loss'))}
+                                {isProfit(preview) ? (t('closing.profit')) : (t('closing.loss'))}
                             </div>
                         </div>
                     </div>

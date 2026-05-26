@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Save, Search, AlertTriangle, Lock } from 'lucide-react';
-import Decimal from 'decimal.js';
 import { useParams } from 'react-router-dom';
 import { useToast } from '../../context/ToastContext';
 import { useBranch } from '../../context/BranchContext';
@@ -19,7 +18,6 @@ const BudgetItems = () => {
     const [initialLoad, setInitialLoad] = useState(true);
     const [accounts, setAccounts] = useState([]);
     const [budgetItems, setBudgetItems] = useState({});
-    const [budgetMonths, setBudgetMonths] = useState(12);
     const [searchTerm, setSearchTerm] = useState('');
     const [saving, setSaving] = useState(false);
     const [budgetBranchId, setBudgetBranchId] = useState(null);
@@ -51,10 +49,9 @@ const BudgetItems = () => {
         return () => clearTimeout(timer)
     }, [id, currentBranch]);
 
-    const countMonths = (start, end) => {
-        const s = new Date(start);
-        const e = new Date(end);
-        return (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth()) + 1;
+    const hasRawAmount = (value) => {
+        const raw = String(value || '').trim();
+        return raw !== '' && !/^[-+]?0+(\.0+)?$/.test(raw);
     };
 
     const fetchData = async () => {
@@ -63,9 +60,6 @@ const BudgetItems = () => {
             // Fetch budget details to get duration and branch
             const budgetRes = await budgetsAPI.get(id);
             const budget = budgetRes.data;
-            if (budget?.start_date && budget?.end_date) {
-                setBudgetMonths(countMonths(budget.start_date, budget.end_date));
-            }
             if (budget?.branch_id) {
                 setBudgetBranchId(budget.branch_id);
                 // Find branch name from branches list
@@ -87,7 +81,8 @@ const BudgetItems = () => {
             const itemsMap = {};
             (itemsRes.data || []).forEach(item => {
                 itemsMap[item.account_id] = {
-                    planned: item.planned_amount,
+                    planned_amount: item.planned_amount || '',
+                    monthly_amount: item.monthly_amount || '',
                     notes: item.notes || ''
                 };
             });
@@ -104,16 +99,15 @@ const BudgetItems = () => {
 
     const handleAmountChange = (accountId, field, value) => {
         if (!canManageBudgets) return;
-        const decValue = new Decimal(value || '0');
         setBudgetItems(prev => {
-            const currentItem = prev[accountId] || { planned: 0, notes: '' };
+            const currentItem = prev[accountId] || { planned_amount: '', monthly_amount: '', notes: '' };
             if (field === 'monthly') {
                 return {
                     ...prev,
                     [accountId]: {
                         ...currentItem,
-                        planned: decValue.times(budgetMonths).toNumber(),
-                        monthly: decValue.toNumber()
+                        monthly_amount: value,
+                        planned_amount: ''
                     }
                 };
             } else {
@@ -121,8 +115,8 @@ const BudgetItems = () => {
                     ...prev,
                     [accountId]: {
                         ...currentItem,
-                        planned: decValue.toNumber(),
-                        monthly: decValue.div(budgetMonths).toNumber()
+                        planned_amount: value,
+                        monthly_amount: ''
                     }
                 };
             }
@@ -142,10 +136,11 @@ const BudgetItems = () => {
         setSaving(true);
         try {
             const items = Object.entries(budgetItems)
-                .filter(([_, val]) => val.planned > 0)
+                .filter(([_, val]) => hasRawAmount(val.planned_amount) || hasRawAmount(val.monthly_amount))
                 .map(([accountId, val]) => ({
                     account_id: parseInt(accountId),
-                    planned_amount: val.planned,
+                    planned_amount: hasRawAmount(val.planned_amount) ? val.planned_amount : null,
+                    monthly_amount: hasRawAmount(val.monthly_amount) ? val.monthly_amount : null,
                     notes: val.notes || ''
                 }));
 
@@ -265,7 +260,7 @@ const BudgetItems = () => {
                                                     <input
                                                         type="number"
                                                         className="form-input text-center"
-                                                        value={budgetItems[acc.id]?.monthly || (budgetItems[acc.id]?.planned / budgetMonths) || ''}
+                                                        value={budgetItems[acc.id]?.monthly_amount || ''}
                                                         onChange={(e) => handleAmountChange(acc.id, 'monthly', e.target.value)}
                                                         placeholder="0.00"
                                                         autoComplete="off"
@@ -278,7 +273,7 @@ const BudgetItems = () => {
                                                     <input
                                                         type="number"
                                                         className="form-input text-center fw-bold text-primary"
-                                                        value={budgetItems[acc.id]?.planned || ''}
+                                                        value={budgetItems[acc.id]?.planned_amount || ''}
                                                         onChange={(e) => handleAmountChange(acc.id, 'annual', e.target.value)}
                                                         placeholder="0.00"
                                                         autoComplete="off"

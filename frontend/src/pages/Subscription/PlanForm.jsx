@@ -147,8 +147,8 @@ function PlanForm() {
                             </FormField>
                             <FormField label={t('subscription.form.base_amount')} required style={{ marginBottom: 0 }}>
                                 <input
-                                    type="number" name="base_amount" className="form-input"
-                                    step="0.01" min="0" required
+                                    type="text" inputMode="decimal" name="base_amount" className="form-input"
+                                    required
                                     value={formData.base_amount} onChange={handleChange}
                                 />
                             </FormField>

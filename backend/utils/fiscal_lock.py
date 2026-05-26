@@ -43,7 +43,7 @@ def check_fiscal_period_open(db, entry_date, raise_error=True, request=None):
 
         if locked:
             if raise_error:
-                locked_date = locked.locked_at.strftime("%Y-%m-%d") if locked.locked_at else "—"
+                locked.locked_at.strftime("%Y-%m-%d") if locked.locked_at else "—"
                 raise HTTPException(**http_error(400, "fiscal_period_locked", request, name=locked.period_name))
             return False
 

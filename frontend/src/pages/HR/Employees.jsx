@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Decimal from 'decimal.js';
 import { useTranslation } from 'react-i18next';
 import {
     Mail, Phone,
@@ -17,15 +18,19 @@ import { useLocation } from 'react-router-dom';
 import BackButton from '../../components/common/BackButton';
 
 const toAmount = (value) => {
-    const n = Number(value);
-    return Number.isFinite(n) ? n : 0;
+    try {
+        return new Decimal(value || '0');
+    } catch {
+        return new Decimal('0');
+    }
 };
 
 const employeeTotalSalary = (emp) => (
     toAmount(emp.salary)
-    + toAmount(emp.housing_allowance)
-    + toAmount(emp.transport_allowance)
-    + toAmount(emp.other_allowances)
+        .plus(toAmount(emp.housing_allowance))
+        .plus(toAmount(emp.transport_allowance))
+        .plus(toAmount(emp.other_allowances))
+        .toDecimalPlaces(2).toString()
 );
 
 const Employees = () => {
@@ -362,7 +367,7 @@ const Employees = () => {
                                         employees.forEach(emp => {
                                             const c = emp.currency || companyCurrency;
                                             const total = employeeTotalSalary(emp);
-                                            byCurrency[c] = (byCurrency[c] || 0) + total;
+                                            byCurrency[c] = new Decimal(byCurrency[c] || '0').plus(total).toDecimalPlaces(2).toString();
                                         });
                                         // Sort: base currency first, then alphabetically
                                         const sorted = Object.entries(byCurrency).sort(([a], [b]) => {

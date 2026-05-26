@@ -14,21 +14,49 @@ depends_on = None
 def upgrade() -> None:
     op.execute("CREATE EXTENSION IF NOT EXISTS btree_gist")
 
-    op.add_column("payroll_periods", sa.Column(
-        "state", sa.String(16), nullable=False, server_default="draft",
-    ))
-
-    # Exclusion constraint: no overlapping periods unless reversed
+    # Perform column addition and exclusion constraint conditionally
     op.execute("""
-        ALTER TABLE payroll_periods
-        ADD CONSTRAINT excl_payroll_period_overlap
-        EXCLUDE USING gist (
-            tenant_id WITH =,
-            tstzrange(start_date, end_date, '[]') WITH &&
-        ) WHERE (state <> 'reversed')
+        DO $$
+        DECLARE
+            has_tenant_id boolean;
+        BEGIN
+            -- 1. Add state column if not exists
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.columns 
+                WHERE table_name = 'payroll_periods' AND column_name = 'state'
+            ) THEN
+                ALTER TABLE payroll_periods ADD COLUMN state VARCHAR(16) NOT NULL DEFAULT 'draft';
+            END IF;
+
+            -- 2. Add exclusion constraint if not exists
+            IF NOT EXISTS (
+                SELECT 1 FROM information_schema.table_constraints 
+                WHERE constraint_name = 'excl_payroll_period_overlap'
+            ) THEN
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'payroll_periods' AND column_name = 'tenant_id'
+                ) INTO has_tenant_id;
+
+                IF has_tenant_id THEN
+                    ALTER TABLE payroll_periods
+                    ADD CONSTRAINT excl_payroll_period_overlap
+                    EXCLUDE USING gist (
+                        tenant_id WITH =,
+                        daterange(start_date, end_date, '[]') WITH &&
+                    ) WHERE (state <> 'reversed');
+                ELSE
+                    ALTER TABLE payroll_periods
+                    ADD CONSTRAINT excl_payroll_period_overlap
+                    EXCLUDE USING gist (
+                        daterange(start_date, end_date, '[]') WITH &&
+                    ) WHERE (state <> 'reversed');
+                END IF;
+            END IF;
+        END $$;
     """)
 
 
 def downgrade() -> None:
-    op.drop_constraint("excl_payroll_period_overlap", "payroll_periods", type_="exclusion")
-    op.drop_column("payroll_periods", "state")
+    op.execute("ALTER TABLE payroll_periods DROP CONSTRAINT IF EXISTS excl_payroll_period_overlap")
+    op.execute("ALTER TABLE payroll_periods DROP COLUMN IF EXISTS state")

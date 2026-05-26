@@ -3,27 +3,21 @@
 Mounted under the parent router via crm/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
-from utils.accounting import generate_sequential_number
+from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
-from services.notification_service import notification_service
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import ArticleCreate, ArticleUpdate
+from .core import ArticleCreate, ArticleUpdate  # noqa: E402
 
 @router.get("/knowledge-base", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
 def list_articles(

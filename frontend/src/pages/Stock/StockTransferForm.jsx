@@ -188,7 +188,7 @@ const StockTransferForm = () => {
                                     >
                                         <option value="">{t('stock.transfer.select_product')}</option>
                                         {sourceStock.map(p => (
-                                            <option key={p.id} value={p.id}>{p.product_name} ({t('stock.transfer.table.available')}: {p.quantity} {p.unit_name})</option>
+                                            <option key={p.id} value={p.id}>{p.product_name} ({t('stock.transfer.table.available')}: {p.available_quantity ?? p.quantity} {p.unit_name})</option>
                                         ))}
                                     </select>
                                 </div>

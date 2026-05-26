@@ -2,7 +2,6 @@ import { useState, useEffect, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { accountingAPI } from '../../utils/api'
-import Decimal from 'decimal.js'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
@@ -38,6 +37,10 @@ function JournalEntryList() {
     const [reverseReason, setReverseReason] = useState('')
     const [reverseLoading, setReverseLoading] = useState(false)
     const limit = 25
+    const hasAmount = (value) => {
+        const raw = String(value || '0').trim()
+        return raw !== '' && !/^[-+]?0+(\.0+)?$/.test(raw)
+    }
 
     const fetchEntries = useCallback(async () => {
         try {
@@ -281,14 +284,14 @@ function JournalEntryList() {
                                         <tr key={i}>
                                             <td>{l.account_number} - {isRTL ? l.account_name : (l.account_name_en || l.account_name)}</td>
                                             <td>{l.description || '\u2014'}</td>
-                                            <td>{l.debit > 0 ? formatNumber(l.debit) : ''}</td>
-                                            <td>{l.credit > 0 ? formatNumber(l.credit) : ''}</td>
+                                            <td>{hasAmount(l.debit) ? formatNumber(l.debit) : ''}</td>
+                                            <td>{hasAmount(l.credit) ? formatNumber(l.credit) : ''}</td>
                                         </tr>
                                     ))}
                                     <tr style={{ fontWeight: 'bold', borderTop: '2px solid var(--border)' }}>
                                         <td colSpan="2">{t('common.total')}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0')).toString())}</td>
-                                        <td>{formatNumber(selectedEntry.lines?.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0')).toString())}</td>
+                                        <td>{formatNumber(selectedEntry.total_debit || '0')}</td>
+                                        <td>{formatNumber(selectedEntry.total_credit || '0')}</td>
                                     </tr>
                                 </tbody>
                             </table>

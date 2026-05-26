@@ -72,7 +72,7 @@ def get_sales_summary(branch_id: Optional[int] = None, current_user: dict = Depe
 @customers_router.get("/customers", response_model=List[dict], dependencies=[Depends(require_permission("sales.view"))])
 def list_customers(branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
     """عرض قائمة العملاء مع أرصدة من party_site_balances"""
-    branch_scope = resolve_branch_scope(current_user, branch_id)
+    resolve_branch_scope(current_user, branch_id)
     db = get_db_connection(_company_id(current_user))
     try:
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"

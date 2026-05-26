@@ -244,7 +244,8 @@ const SalesReturnForm = () => {
                 check_number: formData.check_number || null,
                 check_date: formData.check_date || null,
                 refund_amount: formData.refund_method !== 'credit' ? String(formData.refund_amount || 0) : '0',
-                branch_id: currentBranch?.id
+                branch_id: currentBranch?.id,
+                submitted_grand_total: String(backendTotals?.grandTotal || '0')
             };
 
             const res = await salesAPI.createReturn(payload);

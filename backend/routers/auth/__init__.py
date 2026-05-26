@@ -6,7 +6,7 @@ from .session import router as _session_router
 from .password import router as _password_router
 from .twofa import router as _twofa_router
 from .admin import router as _admin_router
-from .core import *  # re-export module-level names
+from .core import *  # noqa: F403  # re-export module-level names
 
 router = APIRouter(prefix="/auth", tags=['Authentication'])
 router.include_router(_core_router)

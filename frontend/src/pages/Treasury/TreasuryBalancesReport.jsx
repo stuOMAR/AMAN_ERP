@@ -45,6 +45,7 @@ function TreasuryBalancesReport() {
 
     const cashAccounts = data?.accounts?.filter(a => a.account_type === 'cash') || [];
     const bankAccounts = data?.accounts?.filter(a => a.account_type === 'bank') || [];
+    const balanceClass = (direction) => direction === 'negative' ? 'text-danger' : 'text-success';
 
     return (
         <div className="workspace fade-in">
@@ -113,7 +114,7 @@ function TreasuryBalancesReport() {
                                                 <td style={{ fontWeight: 600 }}>{i18n.language === 'ar' ? acc.name : (acc.name_en || acc.name)}</td>
                                                 <td>{acc.branch_name || '—'}</td>
                                                 <td className="text-end">
-                                                    <span className={acc.current_balance >= 0 ? 'text-success' : 'text-danger'} style={{ fontWeight: 600 }}>
+                                                    <span className={balanceClass(acc.current_balance_direction)} style={{ fontWeight: 600 }}>
                                                         {formatNumber(acc.current_balance)} {currency}
                                                     </span>
                                                 </td>
@@ -162,7 +163,7 @@ function TreasuryBalancesReport() {
                                                 <td style={{ fontWeight: 600 }}>{i18n.language === 'ar' ? acc.name : (acc.name_en || acc.name)}</td>
                                                 <td>{acc.branch_name || '—'}</td>
                                                 <td className="text-end">
-                                                    <span className={acc.current_balance >= 0 ? 'text-success' : 'text-danger'} style={{ fontWeight: 600 }}>
+                                                    <span className={balanceClass(acc.current_balance_direction)} style={{ fontWeight: 600 }}>
                                                         {formatNumber(acc.current_balance)} {currency}
                                                     </span>
                                                     {acc.currency && acc.currency !== currency && (

@@ -9,7 +9,6 @@ import hmac
 import logging
 import os
 import secrets
-import time
 from datetime import datetime, timezone
 from typing import Any, Optional
 
@@ -35,7 +34,7 @@ def issue(
 
     # Get signing key from vault (or env for dev)
     signing_key = _get_signing_key(tenant_id)
-    signature = _sign(nonce, signing_key)
+    _sign(nonce, signing_key)
 
     expires_at = datetime.now(timezone.utc).replace(
         minute=datetime.now(timezone.utc).minute + ttl_minutes

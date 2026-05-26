@@ -94,7 +94,7 @@ def _compute_metric(db: Any, tenant_id: str, metric_source: str, metric_ref: str
         # Aggregate from mv_period_stats
         try:
             result = db.execute(
-                text(f"""
+                text("""
                     SELECT COALESCE(SUM(CASE WHEN :cat = 'revenue' THEN revenue ELSE expense END), 0)
                     FROM mv_period_stats
                     WHERE tenant_id = :tid

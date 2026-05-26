@@ -3,29 +3,16 @@
 Mounted under the parent router via core/__init__.py.
 """
 import logging
-from decimal import Decimal
-from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error
-from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
+from utils.permissions import require_permission
 from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
-from services.gl_service import create_journal_entry
 from schemas import UserResponse
 from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
     EquipmentCreate, EquipmentResponse,
     MaintenanceLogCreate, MaintenanceLogResponse
 )
@@ -176,7 +163,7 @@ def list_maintenance_logs(
         params["offset"] = offset
         
         logs = conn.execute(text(query), params).fetchall()
-        return [dict(l._mapping) for l in logs]
+        return [dict(line._mapping) for line in logs]
     finally:
         conn.close()
 

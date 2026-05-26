@@ -7,21 +7,20 @@
 • تقارير ضريبية رسمية: إقرار VAT سعودي، ضريبة دخل سورية، إلخ
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime, timezone
 from decimal import Decimal
 from pydantic import BaseModel, Field
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter, branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
 from utils.audit import log_activity
 from utils.currency_display import display_currency_fields, resolve_display_currency
 from utils.tax_reporting import adjusted_line_taxable_cte
-from utils.tax_precision import CALCULATION_VERSION, display_money_str, money_str, rate_str
-from decimal import Decimal, ROUND_HALF_UP
+from utils.tax_precision import display_money_str, rate_str
+from decimal import ROUND_HALF_UP
 import logging
 import re
 
@@ -50,7 +49,7 @@ def _adjusted_tax_totals(
     join_products: bool = False,
 ):
     joins = "LEFT JOIN products p ON p.id = al.product_id" if join_products else ""
-    return db.execute(text( # noqa: sql-lint
+    return db.execute(text( # noqa
                 f"""
         {adjusted_line_taxable_cte(extra_where)}
         SELECT COALESCE(SUM(al.adjusted_taxable_base), 0) as amount,
@@ -132,7 +131,7 @@ def list_tax_regimes(
             where += " AND is_active = :active"
             params["active"] = is_active
 
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT id, country_code, tax_type, name_ar, name_en, default_rate,
                    is_required, applies_to, filing_frequency, is_active
@@ -374,7 +373,7 @@ def update_tax_classification(
         if not updates:
             raise HTTPException(**http_error(400, "pos_no_fields", request))
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             UPDATE tax_classifications SET {', '.join(updates)}
             WHERE id = :id
@@ -826,7 +825,7 @@ def saudi_vat_return_report(
         box1_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box1 = db.execute(text( # noqa: sql-lint
+        box1 = db.execute(text( # noqa
                     f"""
             {box1_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
@@ -839,7 +838,7 @@ def saudi_vat_return_report(
         box2_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box2 = db.execute(text( # noqa: sql-lint
+        box2 = db.execute(text( # noqa
                     f"""
             {box2_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount
@@ -851,7 +850,7 @@ def saudi_vat_return_report(
         box3_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type = 'sales' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box3 = db.execute(text( # noqa: sql-lint
+        box3 = db.execute(text( # noqa
                     f"""
             {box3_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount
@@ -863,7 +862,7 @@ def saudi_vat_return_report(
         box4_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type IN ('purchase', 'purchase_debit_note') AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box4 = db.execute(text( # noqa: sql-lint
+        box4 = db.execute(text( # noqa
                     f"""
             {box4_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
@@ -876,7 +875,7 @@ def saudi_vat_return_report(
         box6_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type = 'sales_return' AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box6 = db.execute(text( # noqa: sql-lint
+        box6 = db.execute(text( # noqa
                     f"""
             {box6_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
@@ -888,7 +887,7 @@ def saudi_vat_return_report(
         box7_cte = adjusted_line_taxable_cte(
             f"AND i.invoice_type IN ('purchase_return', 'purchase_credit_note') AND i.invoice_date BETWEEN :start AND :end {branch_filter}"
         )
-        box7 = db.execute(text( # noqa: sql-lint
+        box7 = db.execute(text( # noqa
                     f"""
             {box7_cte}
             SELECT COALESCE(SUM(adjusted_taxable_base), 0) as amount,
@@ -1002,7 +1001,7 @@ def syrian_income_tax_report(request: Request,
         branch_filter = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
 
         # Revenue (account_type = 'revenue')
-        revenue = db.execute(text( # noqa: sql-lint
+        revenue = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.credit - jl.debit), 0) as total
             FROM journal_lines jl 
@@ -1013,7 +1012,7 @@ def syrian_income_tax_report(request: Request,
         """), params).scalar() or 0
 
         # COGS (account number starts with '51')
-        cogs = db.execute(text( # noqa: sql-lint
+        cogs = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0) as total
             FROM journal_lines jl
@@ -1024,7 +1023,7 @@ def syrian_income_tax_report(request: Request,
         """), params).scalar() or 0
 
         # Operating Expenses (account number starts with '52', '53', '54', '55')
-        op_expenses = db.execute(text( # noqa: sql-lint
+        op_expenses = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0) as total
             FROM journal_lines jl
@@ -1053,7 +1052,7 @@ def syrian_income_tax_report(request: Request,
         income_tax = max(Decimal("0"), (net_profit * (tax_rate_dec / Decimal("100"))).quantize(_D2, ROUND_HALF_UP))
 
         # Salary tax summary for the year
-        salary_expenses = db.execute(text( # noqa: sql-lint
+        salary_expenses = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl
@@ -1110,7 +1109,8 @@ def uae_vat_return_report(
         y = year or date_cls.today().year
         if period and period.startswith("Q"):
             q = int(period[1])
-            ms = (q - 1) * 3 + 1; me = q * 3
+            ms = (q - 1) * 3 + 1
+            me = q * 3
             period_start = date_cls(y, ms, 1)
             period_end = date_cls(y, me, 28 if me == 2 else 30 if me in (4,6,9,11) else 31)
         else:
@@ -1182,7 +1182,8 @@ def turkey_kdv_return_report(
         y = year or date_cls.today().year
         if period and period.startswith("Q"):
             q = int(period[1])
-            ms = (q - 1) * 3 + 1; me = q * 3
+            ms = (q - 1) * 3 + 1
+            me = q * 3
             period_start = date_cls(y, ms, 1)
             period_end = date_cls(y, me, 28 if me == 2 else 30 if me in (4,6,9,11) else 31)
         else:
@@ -1266,7 +1267,8 @@ def egypt_vat_return_report(request: Request,
         y = year or date_cls.today().year
         if period and period.startswith("Q"):
             q = int(period[1])
-            ms = (q - 1) * 3 + 1; me = q * 3
+            ms = (q - 1) * 3 + 1
+            me = q * 3
             period_start = date_cls(y, ms, 1)
             period_end = date_cls(y, me, 28 if me == 2 else 30 if me in (4,6,9,11) else 31)
         elif period and period.isdigit():
@@ -1366,7 +1368,7 @@ def generic_income_tax_report(request: Request,
         params = {"start": start_date, "end": end_date}
         bf = branch_scope_filter(current_user, branch_id, "je.branch_id", params)
 
-        revenue = db.execute(text( # noqa: sql-lint
+        revenue = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
             FROM journal_lines jl 
@@ -1376,7 +1378,7 @@ def generic_income_tax_report(request: Request,
             AND je.entry_date BETWEEN :start AND :end {bf}
         """), params).scalar() or 0
 
-        expenses = db.execute(text( # noqa: sql-lint
+        expenses = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl
@@ -1450,7 +1452,7 @@ def compliance_overview(
         company_tax = db.execute(text("SELECT * FROM company_tax_settings")).fetchall()
 
         # Branches with their jurisdictions
-        branches = db.execute(text( # noqa: sql-lint
+        branches = db.execute(text( # noqa
                     f"""
             SELECT b.id, b.branch_name, b.branch_name_en, b.country_code,
                    COUNT(bts.id) as configured_taxes,
@@ -1464,7 +1466,7 @@ def compliance_overview(
         """), branch_params).fetchall()
 
         # Pending tax returns
-        pending = db.execute(text( # noqa: sql-lint
+        pending = db.execute(text( # noqa
                     f"""
             SELECT COUNT(*) FILTER (WHERE status = 'draft') as draft,
                    COUNT(*) FILTER (WHERE status = 'filed') as filed,

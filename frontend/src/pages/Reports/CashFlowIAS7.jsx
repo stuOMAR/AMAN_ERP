@@ -8,6 +8,9 @@ import BackButton from '../../components/common/BackButton';
 import DateInput from '../../components/common/DateInput';
 import { PageLoading } from '../../components/common/LoadingStates'
 
+const isNegativeAmount = (value) => String(value ?? '').trim().startsWith('-');
+const isPositiveAmount = (value) => !isNegativeAmount(value) && !/^0+(?:\.0+)?$/.test(String(value ?? '0').trim());
+
 function CashFlowIAS7() {
     const { t } = useTranslation();
     const { currentBranch } = useBranch();
@@ -52,11 +55,11 @@ function CashFlowIAS7() {
         { key: 'financing', label: t('cashflow_ias7.financing'), icon: '🏦', color: 'var(--info)' },
     ];
 
-    const operating = data?.operating || { items: [], total: 0 };
-    const investing = data?.investing || { items: [], total: 0 };
-    const financing = data?.financing || { items: [], total: 0 };
+    const operating = data?.operating || { items: [], total: '0' };
+    const investing = data?.investing || { items: [], total: '0' };
+    const financing = data?.financing || { items: [], total: '0' };
     const sectionData = { operating, investing, financing };
-    const netChange = operating.total + investing.total + financing.total;
+    const netChange = data?.net_change ?? '0';
 
     return (
         <div className="workspace fade-in">
@@ -101,7 +104,7 @@ function CashFlowIAS7() {
                         {sections.map(sec => (
                             <div key={sec.key} className="metric-card">
                                 <div className="metric-label">{sec.icon} {sec.label}</div>
-                                <div className={`metric-value ${sectionData[sec.key].total >= 0 ? 'text-success' : 'text-danger'}`}>
+                                <div className={`metric-value ${isNegativeAmount(sectionData[sec.key].total) ? 'text-danger' : 'text-success'}`}>
                                     {formatNumber(sectionData[sec.key].total)}
                                 </div>
                                 <div className="metric-change">{currency}</div>
@@ -109,7 +112,7 @@ function CashFlowIAS7() {
                         ))}
                         <div className="metric-card">
                             <div className="metric-label">{t('cashflow_ias7.net_change')}</div>
-                            <div className={`metric-value ${netChange >= 0 ? 'text-success' : 'text-danger'}`}>
+                            <div className={`metric-value ${isNegativeAmount(netChange) ? 'text-danger' : 'text-success'}`}>
                                 {formatNumber(netChange)}
                             </div>
                             <div className="metric-change">{currency}</div>
@@ -125,8 +128,8 @@ function CashFlowIAS7() {
                             </div>
                             <div style={{ fontSize: '2rem', color: 'var(--text-muted)' }}>→</div>
                             <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
-                                <span className={`badge ${netChange >= 0 ? 'badge-success' : 'badge-danger'}`} style={{ fontSize: '0.9rem', padding: '4px 12px' }}>
-                                    {netChange >= 0 ? '+' : ''}{formatNumber(netChange)}
+                                <span className={`badge ${isNegativeAmount(netChange) ? 'badge-danger' : 'badge-success'}`} style={{ fontSize: '0.9rem', padding: '4px 12px' }}>
+                                    {isNegativeAmount(netChange) ? '' : '+'}{formatNumber(netChange)}
                                 </span>
                             </div>
                             <div style={{ fontSize: '2rem', color: 'var(--text-muted)' }}>→</div>
@@ -142,7 +145,7 @@ function CashFlowIAS7() {
                         <div key={sec.key} className="card" style={{ marginBottom: '16px' }}>
                             <div className="card-header" style={{ borderLeft: `4px solid ${sec.color}` }}>
                                 <h3 className="card-title">{sec.icon} {sec.label}</h3>
-                                <span className={`font-medium ${sectionData[sec.key].total >= 0 ? 'text-success' : 'text-danger'}`}>
+                                <span className={`font-medium ${isNegativeAmount(sectionData[sec.key].total) ? 'text-danger' : 'text-success'}`}>
                                     {formatNumber(sectionData[sec.key].total)} {currency}
                                 </span>
                             </div>
@@ -164,16 +167,16 @@ function CashFlowIAS7() {
                                             <tr key={i}>
                                                 <td className="font-medium">{item.description || item.account_name}</td>
                                                 <td>{item.account_code || '-'}</td>
-                                                <td className="text-end text-success">{item.inflow > 0 ? formatNumber(item.inflow) : '-'}</td>
-                                                <td className="text-end text-danger">{item.outflow > 0 ? formatNumber(item.outflow) : '-'}</td>
-                                                <td className={`text-end font-medium ${item.net >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                <td className="text-end text-success">{isPositiveAmount(item.inflow) ? formatNumber(item.inflow) : '-'}</td>
+                                                <td className="text-end text-danger">{isPositiveAmount(item.outflow) ? formatNumber(item.outflow) : '-'}</td>
+                                                <td className={`text-end font-medium ${isNegativeAmount(item.net) ? 'text-danger' : 'text-success'}`}>
                                                     {formatNumber(item.net)}
                                                 </td>
                                             </tr>
                                         ))}
                                         <tr style={{ borderTop: '2px solid var(--border-color)' }}>
                                             <td colSpan={4} className="text-end font-bold">{t('cashflow_ias7.section_total')}</td>
-                                            <td className={`text-end font-bold ${sectionData[sec.key].total >= 0 ? 'text-success' : 'text-danger'}`}>
+                                            <td className={`text-end font-bold ${isNegativeAmount(sectionData[sec.key].total) ? 'text-danger' : 'text-success'}`}>
                                                 {formatNumber(sectionData[sec.key].total)} {currency}
                                             </td>
                                         </tr>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import Decimal from 'decimal.js';
 import { useTranslation } from 'react-i18next';
 import DOMPurify from 'dompurify';
 import { hrImprovementsAPI, hrAPI } from '../../utils/api';
@@ -10,6 +11,13 @@ import { FileText, Calculator, Eye, Printer, X } from 'lucide-react';
 import '../../components/ModuleStyles.css';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+
+const moneySum = (rows, selector) => rows.reduce(
+    (sum, row) => sum.plus(new Decimal(selector(row) || '0')),
+    new Decimal('0')
+).toDecimalPlaces(2).toString();
+
+const isPositiveMoney = (value) => new Decimal(value || '0').gt(0);
 
 const Payslips = () => {
     const { t, i18n } = useTranslation();
@@ -60,7 +68,16 @@ const Payslips = () => {
     const handleGenerate = async (e) => {
         e.preventDefault();
         try {
-            await hrImprovementsAPI.generatePayslip({ employee_id: parseInt(genForm.employee_id), month: parseInt(genForm.month), year: parseInt(genForm.year) });
+            const payload = {
+                employee_id: parseInt(genForm.employee_id),
+                month: parseInt(genForm.month),
+                year: parseInt(genForm.year),
+            };
+            const preview = await hrImprovementsAPI.previewPayslip(payload);
+            await hrImprovementsAPI.generatePayslip({
+                ...payload,
+                submitted_grand_total: String(preview.data?.net_salary || '0'),
+            });
             toastEmitter.emit(t('hr.payslip_generated'), 'success');
             setShowGenerate(false); fetchPayslips();
         } catch (err) { toastEmitter.emit(err.response?.data?.detail || t('common.error'), 'error'); }
@@ -138,8 +155,8 @@ const Payslips = () => {
         return true;
     });
 
-    const totalNet = filteredPayslips.reduce((s, p) => s + (p.net_pay || p.net_salary || 0), 0);
-    const totalBasic = filteredPayslips.reduce((s, p) => s + (p.basic_salary || 0), 0);
+    const totalNet = moneySum(filteredPayslips, p => p.net_pay || p.net_salary);
+    const totalBasic = moneySum(filteredPayslips, p => p.basic_salary);
 
     const monthNames = [
         t('months.jan'), t('months.feb'), t('months.mar'), t('months.apr'),
@@ -347,11 +364,11 @@ const Payslips = () => {
                                         </thead>
                                         <tbody>
                                             <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.col_basic_salary')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.basic_salary || 0)} {currency}</td></tr>
-                                            {(selectedPayslip.housing_allowance > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_housing')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.housing_allowance)} {currency}</td></tr>}
-                                            {(selectedPayslip.transport_allowance > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_transport')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.transport_allowance)} {currency}</td></tr>}
-                                            {(selectedPayslip.other_allowances > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_other_allowances')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.other_allowances)} {currency}</td></tr>}
-                                            {(selectedPayslip.salary_components_earning > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_comp_earning')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.salary_components_earning)} {currency}</td></tr>}
-                                            {(selectedPayslip.overtime_amount > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_overtime')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.overtime_amount)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.housing_allowance) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_housing')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.housing_allowance)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.transport_allowance) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_transport')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.transport_allowance)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.other_allowances) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_other_allowances')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.other_allowances)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.salary_components_earning) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_comp_earning')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.salary_components_earning)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.overtime_amount) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_overtime')}</td><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>{formatNumber(selectedPayslip.overtime_amount)} {currency}</td></tr>}
                                         </tbody>
                                     </table>
 
@@ -367,15 +384,15 @@ const Payslips = () => {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {(selectedPayslip.gosi_employee_share > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_gosi_employee')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.gosi_employee_share)} {currency}</td></tr>}
-                                            {(selectedPayslip.violation_deduction > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_violations')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.violation_deduction)} {currency}</td></tr>}
-                                            {(selectedPayslip.loan_deduction > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_loan')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.loan_deduction)} {currency}</td></tr>}
-                                            {(selectedPayslip.salary_components_deduction > 0) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_comp_deduction')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.salary_components_deduction)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.gosi_employee_share) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_gosi_employee')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.gosi_employee_share)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.violation_deduction) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_violations')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.violation_deduction)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.loan_deduction) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_loan')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.loan_deduction)} {currency}</td></tr>}
+                                            {isPositiveMoney(selectedPayslip.salary_components_deduction) && <tr><td style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)' }}>{t('hr.payslip_comp_deduction')}</td><td className="text-danger" style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-color)', textAlign: isRTL ? 'left' : 'right' }}>-{formatNumber(selectedPayslip.salary_components_deduction)} {currency}</td></tr>}
                                         </tbody>
                                     </table>
 
                                     {/* GOSI Employer (Info) */}
-                                    {(selectedPayslip.gosi_employer_share > 0) && (
+                                    {isPositiveMoney(selectedPayslip.gosi_employer_share) && (
                                         <div style={{ background: '#fefce8', padding: '8px 12px', borderRadius: 6, fontSize: 13, marginBottom: 16, border: '1px solid #fef08a' }}>
                                             ℹ️ {t('hr.payslip_gosi_employer')}: <strong>{formatNumber(selectedPayslip.gosi_employer_share)} {currency}</strong> <span style={{ color: '#6b7280' }}>({t('hr.payslip_gosi_employer_note')})</span>
                                         </div>

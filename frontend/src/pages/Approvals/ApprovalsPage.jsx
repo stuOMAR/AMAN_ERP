@@ -11,6 +11,8 @@ import SimpleModal from '../../components/common/SimpleModal';
 import { formatDate } from '../../utils/dateUtils';
 import { PageLoading, Spinner } from '../../components/common/LoadingStates'
 
+const makeIdempotencyKey = (prefix) => `${prefix}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`}`;
+
 const ApprovalsPage = () => {
     const { t } = useTranslation();
     const navigate = useNavigate();
@@ -97,6 +99,8 @@ const ApprovalsPage = () => {
             await api.post(`/approvals/requests/${selectedRequest.id}/action`, {
                 action: actionType,
                 notes: actionNotes
+            }, {
+                headers: { 'Idempotency-Key': makeIdempotencyKey('approval-action') }
             });
 
             showToast(t('common.success_update'), 'success');
@@ -114,6 +118,12 @@ const ApprovalsPage = () => {
     const openActionModal = (request, type) => {
         setSelectedRequest(request);
         setActionType(type);
+        setActionNotes('');
+    };
+
+    const openDetailsModal = (request) => {
+        setSelectedRequest(request);
+        setActionType(null);
         setActionNotes('');
     };
 
@@ -325,7 +335,7 @@ const ApprovalsPage = () => {
                                                 <td>{getStatusBadge(item.status)}</td>
                                                 <td>
                                                     <button className="btn btn-ghost btn-xs text-primary" title={t('common.view_details')}
-                                                        onClick={() => navigate(`/approvals/requests/${item.id}`)}>
+                                                        onClick={() => openDetailsModal(item)}>
                                                         <Eye size={16} />
                                                     </button>
                                                 </td>
@@ -412,7 +422,9 @@ const ApprovalsPage = () => {
                                         onClick={async () => {
                                             setRunningAction('auto-approve');
                                             try {
-                                                const res = await api.post('/workflow/auto-approve');
+                                                const res = await api.post('/workflow/auto-approve', null, {
+                                                    headers: { 'Idempotency-Key': makeIdempotencyKey('workflow-auto-approve') }
+                                                });
                                                 showToast(`${res.data.message || t('common.success')}`, 'success');
                                                 fetchData();
                                             } catch (e) { showToast(t('common.error'), 'error'); }
@@ -584,12 +596,14 @@ const ApprovalsPage = () => {
                 }
             >
                 <div className="p-4 space-y-4">
-                    <div className="alert alert-info bg-primary/5 border-primary/20 text-sm">
-                        <AlertCircle size={18} className="text-primary" />
-                        <div>
-                            {t('approvals.approvals.confirm_action_on_this_request')}
+                    {actionType && (
+                        <div className="alert alert-info bg-primary/5 border-primary/20 text-sm">
+                            <AlertCircle size={18} className="text-primary" />
+                            <div>
+                                {t('approvals.approvals.confirm_action_on_this_request')}
+                            </div>
                         </div>
-                    </div>
+                    )}
 
                     {selectedRequest && (
                         <div className="bg-base-200/50 p-4 rounded-xl border border-base-200">
@@ -616,17 +630,19 @@ const ApprovalsPage = () => {
                         </div>
                     )}
 
-                    <div className="form-input">
-                        <label className="label">
-                            <span className="label-text font-medium">{t('common.notes')}</span>
-                        </label>
-                        <textarea
-                            className="textarea textarea-bordered h-24 focus:border-primary"
-                            placeholder={t('approvals.add_notes_placeholder')}
-                            value={actionNotes}
-                            onChange={(e) => setActionNotes(e.target.value)}
-                        />
-                    </div>
+                    {actionType && (
+                        <div className="form-input">
+                            <label className="label">
+                                <span className="label-text font-medium">{t('common.notes')}</span>
+                            </label>
+                            <textarea
+                                className="textarea textarea-bordered h-24 focus:border-primary"
+                                placeholder={t('approvals.add_notes_placeholder')}
+                                value={actionNotes}
+                                onChange={(e) => setActionNotes(e.target.value)}
+                            />
+                        </div>
+                    )}
 
                     <div className="flex justify-end gap-3 pt-4 border-t border-base-200">
                         <button
@@ -636,20 +652,22 @@ const ApprovalsPage = () => {
                         >
                             {t('common.cancel')}
                         </button>
-                        <button
-                            className={`btn ${actionType === 'approve' ? 'btn-success' :
-                                actionType === 'reject' ? 'btn-error' : 'btn-warning'
-                                } text-white min-w-[120px]`}
-                            onClick={handleAction}
-                            disabled={submittingAction}
-                        >
-                            {submittingAction ?
-                                <Spinner size="sm"/> :
-                                (actionType === 'approve' ? t('common.approve') :
-                                    actionType === 'reject' ? t('common.reject') :
-                                        t('approvals.actions.return'))
-                            }
-                        </button>
+                        {actionType && (
+                            <button
+                                className={`btn ${actionType === 'approve' ? 'btn-success' :
+                                    actionType === 'reject' ? 'btn-error' : 'btn-warning'
+                                    } text-white min-w-[120px]`}
+                                onClick={handleAction}
+                                disabled={submittingAction}
+                            >
+                                {submittingAction ?
+                                    <Spinner size="sm"/> :
+                                    (actionType === 'approve' ? t('common.approve') :
+                                        actionType === 'reject' ? t('common.reject') :
+                                            t('approvals.actions.return'))
+                                }
+                            </button>
+                        )}
                     </div>
                 </div>
             </SimpleModal>

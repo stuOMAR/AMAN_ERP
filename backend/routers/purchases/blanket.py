@@ -6,31 +6,22 @@ are mounted under the parent /buying prefix via purchases/__init__.py.
 from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import (
     branch_scope_filter_from_scope,
     require_permission,
-    require_module,
     resolve_branch_scope,
     validate_branch_access,
 )
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.accounting import generate_sequential_number
 from utils.tax_precision import require_idempotency_key
-from services.gl_service import create_journal_entry as gl_create_journal_entry
-from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
-    SupplierPaymentCreate,
-)
 from schemas.blanket_po import BlanketPOCreate, ReleaseOrderCreate, PriceAmendRequest
 
 _D2 = Decimal("0.01")
@@ -41,6 +32,27 @@ BLANKET_PO_STATUSES = {"draft", "active", "expired", "completed", "cancelled"}
 def _dec(v) -> Decimal:
     """Convert any numeric value to Decimal safely."""
     return Decimal(str(v)) if v is not None else Decimal("0")
+
+
+def _blanket_po_calculated_fields(row: Dict[str, Any]) -> Dict[str, Any]:
+    total_qty = _dec(row.get("total_quantity"))
+    released_qty = _dec(row.get("released_quantity"))
+    total_amount = _dec(row.get("total_amount"))
+    released_amount = _dec(row.get("released_amount"))
+    remaining_quantity = total_qty - released_qty
+    remaining_amount = total_amount - released_amount
+    progress_pct = Decimal("0")
+    if total_qty > 0:
+        progress_pct = min(
+            (released_qty / total_qty * Decimal("100")).quantize(_D4, ROUND_HALF_UP),
+            Decimal("100"),
+        )
+
+    row["remaining_quantity"] = str(remaining_quantity)
+    row["remaining_amount"] = str(remaining_amount)
+    row["consumption_progress_pct"] = str(progress_pct)
+    row["is_fully_released"] = released_qty >= total_qty if total_qty > 0 else False
+    return row
 
 
 router = APIRouter()
@@ -128,7 +140,7 @@ def list_blanket_pos(
         where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
         try:
-            rows = db.execute(text(  # noqa: sql-lint
+            rows = db.execute(text(  # noqa
                 f"""
                 SELECT b.*, p.name AS supplier_name
                 FROM blanket_purchase_orders b
@@ -146,9 +158,7 @@ def list_blanket_pos(
         result = []
         for row in rows:
             d = dict(row._mapping)
-            d["remaining_quantity"] = str(_dec(d["total_quantity"]) - _dec(d["released_quantity"]))
-            d["remaining_amount"] = str(_dec(d["total_amount"]) - _dec(d["released_amount"]))
-            result.append(d)
+            result.append(_blanket_po_calculated_fields(d))
 
         return {"blanket_pos": result}
 @router.get("/blanket/{bpo_id}", dependencies=[Depends(require_permission("buying.blanket_view"))], response_model=Dict[str, Any])
@@ -168,8 +178,7 @@ def get_blanket_po(request: Request, bpo_id: int, current_user: dict = Depends(g
         validate_branch_access(current_user, bpo._mapping.get("branch_id"), request)
 
         d = dict(bpo._mapping)
-        d["remaining_quantity"] = str(_dec(d["total_quantity"]) - _dec(d["released_quantity"]))
-        d["remaining_amount"] = str(_dec(d["total_amount"]) - _dec(d["released_amount"]))
+        d = _blanket_po_calculated_fields(d)
 
         releases = db.execute(text("""
             SELECT r.*, po.po_number

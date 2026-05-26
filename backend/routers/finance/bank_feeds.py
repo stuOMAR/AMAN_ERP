@@ -24,6 +24,7 @@ from routers.auth import get_current_user
 from utils.idempotency import find_bank_statement_by_source_hash
 from utils.permissions import require_permission, validate_treasury_account_access, _is_branch_privileged
 from utils.i18n import http_error
+from utils.tax_precision import require_idempotency_key
 from utils.tx import transactional
 
 logger = logging.getLogger(__name__)
@@ -58,8 +59,10 @@ async def import_statement(
     """
     from utils.sql_safety import (
         validate_file_size, validate_file_extension,
+        validate_file_mime_and_signature,
         MAX_IMPORT_FILE_SIZE,
     )
+    require_idempotency_key(request, operation="bank feed import")
     fmt = (source_format or "").lower().strip()
     raw = await file.read()
     # P1 #60 — size + extension guard. MT940 ships as .sta/.txt; CAMT.053
@@ -68,6 +71,7 @@ async def import_statement(
     _BANKFEED_EXTS = {".csv", ".txt", ".sta", ".mt940", ".xml", ".camt", ".camt053"}
     if file.filename:
         validate_file_extension(file.filename.lower(), _BANKFEED_EXTS, "كشف البنك")
+        validate_file_mime_and_signature(file.filename.lower(), file.content_type or "", raw, "كشف البنك", request)
     # F-NEW-068 (R-MISSING-IDEMPOTENCY) — PR16-fix:
     #
     # The original implementation hashed the raw payload once and reused
@@ -150,7 +154,7 @@ async def import_statement(
                     try:
                         override = json.loads(csv_config)
                         cfg = CSVStatementConfig(**{**cfg.__dict__, **override})
-                    except Exception as e:
+                    except Exception:
                         raise HTTPException(**http_error(400, "bank_feed_invalid_csv_config", request))
                 rows = parse_csv_statement(raw, cfg)
                 if not rows:
@@ -184,7 +188,7 @@ async def import_statement(
             elif fmt in ("camt053", "camt.053", "camt", "iso20022"):
                 try:
                     statements = parse_camt053(raw)
-                except ValueError as e:
+                except ValueError:
                     raise HTTPException(**http_error(400, "bank_feed_camt_parse_failed", request))
                 for idx, st in enumerate(statements, start=1):
                     stmt_id = _insert_statement(
@@ -218,8 +222,8 @@ async def import_statement(
             return {"imported_statement_ids": created, "count": len(created)}
         except HTTPException:
             raise
-        except Exception as e:
-            logger.exception("bank-feed import failed")
+        except Exception:
+            logger.warning("bank-feed import failed")
             raise HTTPException(**http_error(500, "bank_feed_import_failed", request))
 
 

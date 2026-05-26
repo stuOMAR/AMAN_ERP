@@ -3,8 +3,8 @@ AMAN ERP - Roles Management Router
 API endpoints for managing roles and permissions.
 """
 
-from fastapi import Request, APIRouter, Depends, HTTPException, status
-from utils.i18n import http_error
+from fastapi import Request, APIRouter, Depends, HTTPException, status, Query
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 import logging
@@ -12,13 +12,36 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
 from utils.tx import transactional
-from utils.permissions import require_permission
+from utils.permissions import PERMISSION_ALIASES, require_permission
 from utils.tenant_isolation import resolve_target_company_id
 from schemas.roles import RoleCreate, RoleUpdate
 from utils.audit import log_activity
 
 router = APIRouter(prefix="/roles", tags=["Roles Management"])
 logger = logging.getLogger(__name__)
+
+
+def _allowed_permission_keys() -> set[str]:
+    keys = {str(item["key"]) for item in AVAILABLE_PERMISSIONS}
+    keys.update(PERMISSION_ALIASES.keys())
+    keys.add("*")
+    return keys
+
+
+def _is_allowed_permission_key(permission: str) -> bool:
+    if permission in _allowed_permission_keys():
+        return True
+    if permission.endswith(".*"):
+        prefix = permission[:-2]
+        return any(key == prefix or key.startswith(f"{prefix}.") for key in _allowed_permission_keys())
+    return False
+
+
+def _validate_role_permissions(permissions: Optional[List[str]], request: Request) -> None:
+    invalid = sorted({p for p in (permissions or []) if not _is_allowed_permission_key(p)})
+    if invalid:
+        logger.warning("Rejected role permission keys outside registry: %s", invalid)
+        raise HTTPException(**http_error(400, "invalid_data", request))
 
 
 # --- Available Permissions ---
@@ -50,6 +73,7 @@ AVAILABLE_PERMISSIONS = [
     {"key": "sales.approve_return", "section": "sales", "label_ar": "اعتماد مرتجع المبيعات", "label_en": "Approve Sales Return"},
     {"key": "sales.return_outside_window", "section": "sales", "label_ar": "السماح بمرتجع خارج نافذة الإرجاع", "label_en": "Allow Returns Outside Window"},
     {"key": "sales.manage_credit_notes", "section": "sales", "label_ar": "إصدار وإدارة الإشعارات الدائنة/المدينة", "label_en": "Issue & Manage Credit / Debit Notes"},
+    {"key": "sales.cancel_quotation", "section": "sales", "label_ar": "إلغاء عرض سعر", "label_en": "Cancel Sales Quotation"},
     {"key": "sales.reports", "section": "sales", "label_ar": "تقارير المبيعات", "label_en": "Sales Reports"},
 
     # ═══════════════════════ Purchases ═══════════════════════
@@ -93,6 +117,7 @@ AVAILABLE_PERMISSIONS = [
     {"key": "treasury.edit", "section": "treasury", "label_ar": "تعديل عمليات الخزينة", "label_en": "Edit Treasury Transactions"},
     {"key": "treasury.delete", "section": "treasury", "label_ar": "حذف عمليات الخزينة", "label_en": "Delete Treasury Transactions"},
     {"key": "treasury.manage", "section": "treasury", "label_ar": "إدارة الحسابات البنكية والخزائن", "label_en": "Manage Bank Accounts & Safes"},
+    {"key": "treasury.bank_details.view", "section": "treasury", "label_ar": "عرض تفاصيل الحسابات البنكية", "label_en": "View Bank Account Details"},
 
     {"key": "reconciliation.view", "section": "treasury", "label_ar": "عرض تسوية البنك", "label_en": "View Bank Reconciliation"},
     {"key": "reconciliation.create", "section": "treasury", "label_ar": "إنشاء تسوية بنكية", "label_en": "Create Bank Reconciliation"},
@@ -112,6 +137,7 @@ AVAILABLE_PERMISSIONS = [
     {"key": "reports.create", "section": "reports", "label_ar": "إنشاء تقارير مجدولة", "label_en": "Create Scheduled Reports"},
     {"key": "reports.edit", "section": "reports", "label_ar": "تعديل التقارير المجدولة", "label_en": "Edit Scheduled Reports"},
     {"key": "reports.delete", "section": "reports", "label_ar": "حذف التقارير", "label_en": "Delete Reports"},
+    {"key": "reports.refresh", "section": "reports", "label_ar": "تحديث كاش ومواد التقارير", "label_en": "Refresh Report Cache and Materialized Views"},
 
     # ═══════════════════════ HR & Payroll ═══════════════════════
     {"key": "hr.view", "section": "hr", "label_ar": "عرض بيانات الموظفين", "label_en": "View Employee Data"},
@@ -123,14 +149,18 @@ AVAILABLE_PERMISSIONS = [
     {"key": "hr.leaves.manage", "section": "hr", "label_ar": "إدارة الإجازات والأرصدة", "label_en": "Manage Leaves & Balances"},
     {"key": "hr.loans.view", "section": "hr", "label_ar": "عرض القروض والسلف", "label_en": "View Loans & Advances"},
     {"key": "hr.loans.manage", "section": "hr", "label_ar": "إدارة القروض والسلف", "label_en": "Manage Loans & Advances"},
+    {"key": "hr.payroll", "section": "hr", "label_ar": "إدارة الرواتب (اسم قديم)", "label_en": "Manage Payroll (Legacy Key)"},
     {"key": "hr.payroll.view", "section": "hr", "label_ar": "عرض كشوف الرواتب", "label_en": "View Payroll"},
     {"key": "hr.payroll.manage", "section": "hr", "label_ar": "إدارة الرواتب ومعالجتها", "label_en": "Manage & Process Payroll"},
+    {"key": "hr.salary.write", "section": "hr", "label_ar": "تعديل الرواتب والزيادات", "label_en": "Write Salaries and Increments"},
+    {"key": "payroll.reverse", "section": "hr", "label_ar": "عكس قيد / فترة رواتب", "label_en": "Reverse Payroll Posting or Period"},
     {"key": "hr.self_service", "section": "hr", "label_ar": "الخدمة الذاتية للموظف", "label_en": "Employee Self-Service"},
     {"key": "hr.self_service_approve", "section": "hr", "label_ar": "اعتماد طلبات الخدمة الذاتية", "label_en": "Approve Self-Service Requests"},
 
     # ═══════════════════════ SSO ═══════════════════════
     {"key": "sso.view", "section": "sso", "label_ar": "عرض إعدادات الدخول الموحد", "label_en": "View SSO Configuration"},
     {"key": "sso.manage", "section": "sso", "label_ar": "إدارة إعدادات الدخول الموحد", "label_en": "Manage SSO Configuration"},
+    {"key": "auth.sso_manage", "section": "sso", "label_ar": "إدارة الدخول الموحد (اسم قديم)", "label_en": "Manage SSO (Legacy Key)"},
 
     # ═══════════════════════ 3-Way Matching ═══════════════════════
     {"key": "matching.view", "section": "matching", "label_ar": "عرض المطابقة الثلاثية", "label_en": "View 3-Way Matching"},
@@ -166,6 +196,7 @@ AVAILABLE_PERMISSIONS = [
     {"key": "contracts.create", "section": "contracts", "label_ar": "إنشاء عقد", "label_en": "Create Contract"},
     {"key": "contracts.edit", "section": "contracts", "label_ar": "تعديل العقود", "label_en": "Edit Contracts"},
     {"key": "contracts.manage", "section": "contracts", "label_ar": "إدارة وتجديد العقود", "label_en": "Manage & Renew Contracts"},
+    {"key": "contract.renew", "section": "contracts", "label_ar": "تجديد عقد خدمة", "label_en": "Renew Service Contract"},
 
     # ═══════════════════════ Projects ═══════════════════════
     {"key": "projects.view", "section": "projects", "label_ar": "عرض المشاريع", "label_en": "View Projects"},
@@ -177,10 +208,12 @@ AVAILABLE_PERMISSIONS = [
     # ═══════════════════════ POS ═══════════════════════
     {"key": "pos.view", "section": "pos", "label_ar": "عرض نقطة البيع", "label_en": "View POS"},
     {"key": "pos.create", "section": "pos", "label_ar": "إنشاء طلبات نقطة البيع", "label_en": "Create POS Orders"},
+    {"key": "pos.use", "section": "pos", "label_ar": "استخدام واجهة نقطة البيع", "label_en": "Use POS Register"},
     {"key": "pos.price_override", "section": "pos", "label_ar": "تجاوز سعر نقطة البيع", "label_en": "Override POS Prices"},
     {"key": "pos.manage", "section": "pos", "label_ar": "إدارة نقطة البيع", "label_en": "Manage POS Settings"},
     {"key": "pos.sessions", "section": "pos", "label_ar": "إدارة جلسات نقطة البيع", "label_en": "Manage POS Sessions"},
     {"key": "pos.returns", "section": "pos", "label_ar": "مرتجعات نقطة البيع", "label_en": "POS Returns"},
+    {"key": "pos.cancel", "section": "pos", "label_ar": "إلغاء عمليات نقطة البيع", "label_en": "Cancel POS Transactions"},
 
     # ═══════════════════════ Manufacturing ═══════════════════════
     {"key": "manufacturing.view", "section": "manufacturing", "label_ar": "عرض التصنيع وأوامر الإنتاج", "label_en": "View Manufacturing & Production Orders"},
@@ -199,6 +232,8 @@ AVAILABLE_PERMISSIONS = [
     # ═══════════════════════ Notifications ═══════════════════════
     {"key": "notifications.view", "section": "notifications", "label_ar": "عرض التنبيهات", "label_en": "View Notifications"},
     {"key": "notifications.send", "section": "notifications", "label_ar": "إرسال تنبيهات للمستخدمين", "label_en": "Send Notifications to Users"},
+    {"key": "notifications.admin", "section": "notifications", "label_ar": "إدارة طابور التنبيهات", "label_en": "Administer Notification Queue"},
+    {"key": "email_templates.admin", "section": "notifications", "label_ar": "إدارة قوالب البريد الإلكتروني", "label_en": "Administer Email Templates"},
 
     # ═══════════════════════ Audit ═══════════════════════
     {"key": "audit.view", "section": "audit", "label_ar": "عرض سجلات المراقبة", "label_en": "View Audit Logs"},
@@ -219,6 +254,11 @@ AVAILABLE_PERMISSIONS = [
     {"key": "admin.roles", "section": "admin", "label_ar": "إدارة الأدوار والصلاحيات", "label_en": "Manage Roles & Permissions"},
     {"key": "admin.companies", "section": "admin", "label_ar": "إدارة الشركات (SaaS)", "label_en": "Manage Companies (SaaS)"},
     {"key": "admin.branches", "section": "admin", "label_ar": "إدارة الفروع", "label_en": "Manage Branches"},
+    {"key": "admin.account_classifications", "section": "admin", "label_ar": "إدارة تصنيفات الحسابات", "label_en": "Manage Account Classifications"},
+    {"key": "admin.cache", "section": "admin", "label_ar": "إدارة كاش النظام", "label_en": "Manage System Cache"},
+    {"key": "admin.credentials", "section": "admin", "label_ar": "إدارة بيانات الاعتماد والتكامل", "label_en": "Manage Credentials and Integration Secrets"},
+    {"key": "admin.recurring", "section": "admin", "label_ar": "إدارة العمليات المتكررة", "label_en": "Manage Recurring Operations"},
+    {"key": "system.admin", "section": "admin", "label_ar": "إدارة النظام العامة", "label_en": "System Administration"},
 
     {"key": "branches.view", "section": "branches", "label_ar": "عرض الفروع", "label_en": "View Branches"},
     {"key": "branches.manage", "section": "branches", "label_ar": "تعديل وحذف الفروع", "label_en": "Edit & Delete Branches"},
@@ -234,6 +274,12 @@ AVAILABLE_PERMISSIONS = [
     {"key": "services.create", "section": "services", "label_ar": "إنشاء طلبات خدمة ومستندات", "label_en": "Create Service Requests & Documents"},
     {"key": "services.edit", "section": "services", "label_ar": "تعديل طلبات الخدمة", "label_en": "Edit Service Requests"},
     {"key": "services.delete", "section": "services", "label_ar": "حذف طلبات الخدمة", "label_en": "Delete Service Requests"},
+    {"key": "services.admin", "section": "services", "label_ar": "إدارة مستندات الخدمة الحساسة", "label_en": "Administer Sensitive Service Documents"},
+
+    # ═══════════════════════ DMS ═══════════════════════
+    {"key": "dms.view", "section": "dms", "label_ar": "عرض مستندات DMS", "label_en": "View DMS Documents"},
+    {"key": "dms.manage", "section": "dms", "label_ar": "إدارة مستندات DMS", "label_en": "Manage DMS Documents"},
+    {"key": "dms.audit_admin", "section": "dms", "label_ar": "إدارة تدقيق وحجر DMS", "label_en": "Administer DMS Audit and Quarantine"},
 
     # ═══════════════════════ Parties ═══════════════════════
     {"key": "parties.view", "section": "parties", "label_ar": "عرض الأطراف (عملاء/موردين)", "label_en": "View Parties (Customers/Suppliers)"},
@@ -286,12 +332,12 @@ AVAILABLE_PERMISSIONS = [
 
     # ═══════════════════════ HR – Leaves & PII ═══════════════════════
     {"key": "hr.leaves.view", "section": "hr", "label_ar": "عرض الإجازات والأرصدة", "label_en": "View Leaves & Balances"},
-    {"key": "hr.pii", "section": "hr", "label_ar": "الوصول لبيانات الموظف الحساسة (رقم هوية، إيبان)", "label_en": "Access Employee PII (Nat. ID, IBAN)"},
 
     # ═══════════════════════ Finance – Cash Flow & Subscriptions ═══════════════════════
     {"key": "finance.cashflow_manage", "section": "finance", "label_ar": "إدارة توقعات التدفق النقدي", "label_en": "Manage Cash Flow Forecasts"},
     {"key": "finance.subscription_view", "section": "finance", "label_ar": "عرض الاشتراكات والفوترة المتكررة", "label_en": "View Subscriptions & Recurring Billing"},
     {"key": "finance.subscription_manage", "section": "finance", "label_ar": "إدارة الاشتراكات والفوترة المتكررة", "label_en": "Manage Subscriptions & Recurring Billing"},
+    {"key": "finance.expenses", "section": "finance", "label_ar": "ترحيل وربط مصاريف الموظفين مالياً", "label_en": "Post and Link Employee Expenses"},
 
     # ═══════════════════════ Dashboard – BI & Analytics ═══════════════════════
     {"key": "dashboard.analytics_view", "section": "dashboard", "label_ar": "عرض لوحات التحليلات (BI)", "label_en": "View BI Dashboards"},
@@ -321,6 +367,10 @@ AVAILABLE_PERMISSIONS = [
     # ═══════════════════════ Finance – Bank Feeds & Auto-Reconciliation ═══════════════════════
     {"key": "finance.reconciliation_view", "section": "finance", "label_ar": "عرض التسوية البنكية الآلية", "label_en": "View Bank Feed Reconciliation"},
     {"key": "finance.reconciliation_manage", "section": "finance", "label_ar": "إدارة التسوية البنكية الآلية", "label_en": "Manage Bank Feed Reconciliation"},
+    {"key": "finance.reconciliation.finalize", "section": "finance", "label_ar": "اعتماد التسوية البنكية نهائياً", "label_en": "Finalize Bank Reconciliation"},
+
+    # ═══════════════════════ E-Invoicing ═══════════════════════
+    {"key": "einvoicing.manage", "section": "einvoicing", "label_ar": "إدارة الإرسال والفوترة الإلكترونية", "label_en": "Manage E-Invoicing Outbox"},
 
     # ═══════════════════════ Admin – Security Events ═══════════════════════
     {"key": "admin.security", "section": "admin", "label_ar": "إدارة أحداث الأمان والمراقبة", "label_en": "Manage Security Events & Monitoring"},
@@ -328,6 +378,10 @@ AVAILABLE_PERMISSIONS = [
     # ═══════════════════════ Mobile App Access ═══════════════════════
     {"key": "mobile.sync", "section": "mobile", "label_ar": "مزامنة بيانات تطبيق الموبايل", "label_en": "Mobile App Data Sync"},
     {"key": "mobile.dashboard", "section": "mobile", "label_ar": "عرض لوحة الموبايل", "label_en": "View Mobile Dashboard"},
+
+    # ═══════════════════════ Operations ═══════════════════════
+    {"key": "ops.scheduler.admin", "section": "ops", "label_ar": "إدارة جدولة المهام", "label_en": "Administer Job Scheduler"},
+    {"key": "ops.restore", "section": "ops", "label_ar": "استعادة النسخ الاحتياطية", "label_en": "Restore Backups"},
 
     # ═══════════════════════ Umbrella / legacy-alias perms (registered so UI & frontend can reference them) ═══════════════════════
     # These are expanded through PERMISSION_ALIASES in utils/permissions.py:
@@ -366,6 +420,7 @@ PERMISSION_SECTIONS = {
     "manufacturing": {"label_ar": "التصنيع", "label_en": "Manufacturing", "icon": "Factory"},
     "approvals": {"label_ar": "الاعتمادات", "label_en": "Approvals", "icon": "CheckSquare"},
     "notifications": {"label_ar": "التنبيهات", "label_en": "Notifications", "icon": "Bell"},
+    "dms": {"label_ar": "إدارة المستندات", "label_en": "Document Management", "icon": "FileText"},
     "audit": {"label_ar": "المراقبة", "label_en": "Audit", "icon": "Eye"},
     "security": {"label_ar": "الأمان", "label_en": "Security", "icon": "Shield"},
     "data_import": {"label_ar": "استيراد البيانات", "label_en": "Data Import", "icon": "Upload"},
@@ -379,10 +434,12 @@ PERMISSION_SECTIONS = {
     "intercompany": {"label_ar": "بين الشركات", "label_en": "Intercompany", "icon": "Building2"},
     "costing": {"label_ar": "تكاليف المخزون", "label_en": "Inventory Costing", "icon": "Layers"},
     "finance": {"label_ar": "التمويل", "label_en": "Finance", "icon": "TrendingUp"},
+    "einvoicing": {"label_ar": "الفوترة الإلكترونية", "label_en": "E-Invoicing", "icon": "ReceiptText"},
     "crm": {"label_ar": "إدارة العلاقات والتسويق", "label_en": "CRM & Marketing", "icon": "Megaphone"},
     "logistics": {"label_ar": "الشحن واللوجستيات", "label_en": "Logistics & Shipments", "icon": "Truck"},
     "forecast": {"label_ar": "توقعات الطلب", "label_en": "Demand Forecasting", "icon": "LineChart"},
     "mobile": {"label_ar": "تطبيق الموبايل", "label_en": "Mobile App", "icon": "Smartphone"},
+    "ops": {"label_ar": "العمليات التقنية", "label_en": "Operations", "icon": "ServerCog"},
 }
 
 
@@ -647,8 +704,8 @@ DEFAULT_ROLES = {
         ]
     },
     "user": {
-        "name_ar": "مستخدم",
-        "description": "صلاحيات الخدمة الذاتية الأساسية للموظفين",
+        "name_ar": "مستخدم عام",
+        "description": "مستخدم عام للنظام بالحد الأدنى من الصلاحيات",
         "permissions": [
             "dashboard.view",
             "hr.self_service",
@@ -762,6 +819,7 @@ def init_default_roles(request: Request,
         updated = 0
         for role_name, role_data in DEFAULT_ROLES.items():
             perms = role_data["permissions"]
+            _validate_role_permissions(perms, request)
             name_ar = role_data.get("name_ar", role_name)
             description = role_data.get("description", "")
 
@@ -818,7 +876,9 @@ def init_default_roles(request: Request,
 @router.get("/", response_model=List[dict], dependencies=[Depends(require_permission("admin.roles"))])
 def list_roles(
     company_id: Optional[str] = None,
-    current_user: Any = Depends(get_current_user)
+    current_user: Any = Depends(get_current_user),
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0)
 ):
     """عرض قائمة الأدوار"""
     target_company_id = resolve_target_company_id(company_id, current_user)
@@ -831,7 +891,8 @@ def list_roles(
                    is_system_role, created_at
             FROM roles
             ORDER BY is_system_role DESC, role_name
-        """)).fetchall()
+            LIMIT :limit OFFSET :offset
+        """), {"limit": limit, "offset": offset}).fetchall()
         
         roles = []
         for row in result:
@@ -890,6 +951,17 @@ def create_role(request: Request,
     target_company_id = resolve_target_company_id(company_id, current_user)
     if not target_company_id:
         raise HTTPException(**http_error(400, "company_id_missing", request))
+    if role.permissions is not None:
+        _validate_role_permissions(role.permissions, request)
+        # Check privilege escalation
+        from utils.permissions import check_permission
+        user_perms = getattr(current_user, 'permissions', []) or []
+        if isinstance(current_user, dict):
+            user_perms = current_user.get("permissions", [])
+        if "*" not in user_perms:
+            for perm in role.permissions:
+                if not check_permission(user_perms, perm):
+                    raise HTTPException(**http_error(403, "cannot_grant_unpossessed_permission", request))
 
     db = get_db_connection(target_company_id)
     try:
@@ -949,6 +1021,24 @@ def update_role(request: Request,
         
         if not existing:
             raise HTTPException(**http_error(404, "role_not_found"))
+
+        if role.permissions is not None:
+            # Block system role permissions modification
+            if existing.is_system_role:
+                raise HTTPException(**http_error(400, "system_role_permissions_immutable", request))
+
+            # Validate role permissions
+            _validate_role_permissions(role.permissions, request)
+            
+            # Check privilege escalation
+            from utils.permissions import check_permission
+            user_perms = getattr(current_user, 'permissions', []) or []
+            if isinstance(current_user, dict):
+                user_perms = current_user.get("permissions", [])
+            if "*" not in user_perms:
+                for perm in role.permissions:
+                    if not check_permission(user_perms, perm):
+                        raise HTTPException(**http_error(403, "cannot_grant_unpossessed_permission", request))
         
         # Build update query dynamically
         updates = []

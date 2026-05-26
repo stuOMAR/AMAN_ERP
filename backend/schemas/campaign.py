@@ -2,13 +2,16 @@
 
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Optional
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 
 
 class CampaignCreate(BaseModel):
     name: str = Field(min_length=1, max_length=200)
-    campaign_type: str = Field(default="email", pattern=r"^(email|sms|both)$")
+    campaign_type: str = Field(default="email", pattern=r"^(email|sms|both|social|event)$")
+    status: str = Field(default="draft", pattern=r"^(draft|scheduled|active|paused|completed|executing)$")
+    start_date: Optional[date] = None
+    end_date: Optional[date] = None
     segment_id: Optional[int] = None
     subject: Optional[str] = Field(None, max_length=500)
     content: Optional[str] = None

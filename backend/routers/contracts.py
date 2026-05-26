@@ -3,27 +3,182 @@ from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import List, Optional
 from datetime import date, timedelta
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
 from utils.tx import transactional
-from schemas.contracts import ContractCreate, ContractUpdate, ContractAmendmentCreate, ContractResponse
+from schemas.contracts import (
+    ContractBillingCyclePreviewRequest,
+    ContractCreate,
+    ContractInvoiceGenerateRequest,
+    ContractUpdate,
+    ContractAmendmentCreate,
+    ContractResponse,
+)
 from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 from utils.accounting import get_base_currency, compute_line_amounts, compute_invoice_totals
 from utils.audit import log_activity
-from utils.tax_precision import money_str
-from services.tax_engine import resolve_line_tax
+from utils.tax_precision import money_str, rate_str, require_idempotency_key
+from services.tax_engine import resolve_line_tax_group
 
 logger = logging.getLogger(__name__)
 
 
-def _float(v) -> float:
-    """Convert any numeric to float safely for legacy DB inserts."""
-    return float(Decimal(str(v if v is not None else 0)))
+_D2 = Decimal("0.01")
+_D4 = Decimal("0.0001")
+
+
+def _dec(v) -> Decimal:
+    return Decimal(str(v if v is not None else 0))
 
 router = APIRouter(prefix="/contracts", tags=["Contracts"])
+
+
+def _default_branch_id(db) -> Optional[int]:
+    return db.execute(text("""
+        SELECT id
+        FROM branches
+        WHERE is_default = TRUE
+          AND is_active = TRUE
+        LIMIT 1
+    """)).scalar()
+
+
+def _contract_line_amount(db, *, branch_id: int, party_id: int, item, as_of_date) -> dict:
+    taxes = resolve_line_tax_group(branch_id, item.product_id, db, as_of_date, customer_id=party_id)
+    tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+    return {
+        "tax_rate": tax_rate,
+        "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+        "amounts": compute_line_amounts(item.quantity, item.unit_price, tax_rate),
+    }
+
+
+def _line_preview_payload(index: int, item, tax_rate: Decimal, amounts: dict) -> dict:
+    return {
+        "index": index,
+        "product_id": item.product_id,
+        "description": item.description,
+        "quantity": str(_dec(item.quantity).quantize(_D4, ROUND_HALF_UP)),
+        "unit_price": money_str(item.unit_price),
+        "tax_rate": rate_str(tax_rate),
+        "subtotal": money_str(amounts["subtotal"]),
+        "tax_amount": money_str(amounts["tax_amount"]),
+        "line_total": money_str(amounts["line_total"]),
+    }
+
+
+def _calculate_contract_preview(db, *, branch_id: int, party_id: int, items, as_of_date) -> dict:
+    saved_items = []
+    preview_lines = []
+    total_lines = []
+
+    for index, item in enumerate(items):
+        line = _contract_line_amount(
+            db,
+            branch_id=branch_id,
+            party_id=party_id,
+            item=item,
+            as_of_date=as_of_date,
+        )
+        amounts = line["amounts"]
+        tax_rate = line["tax_rate"]
+        saved_items.append({
+            "item": item,
+            "tax_rate": tax_rate,
+            "tax_rate_id": line["tax_rate_id"],
+            "total": amounts["line_total"],
+        })
+        total_lines.append({
+            "quantity": item.quantity,
+            "unit_price": item.unit_price,
+            "tax_rate": tax_rate,
+        })
+        preview_lines.append(_line_preview_payload(index, item, tax_rate, amounts))
+
+    totals = compute_invoice_totals(total_lines)
+    return {
+        "saved_items": saved_items,
+        "lines": preview_lines,
+        "subtotal": totals["subtotal"],
+        "tax_amount": totals["total_tax"],
+        "grand_total": totals["grand_total"],
+    }
+
+
+def _interval_months(interval: str | None) -> int:
+    return {
+        "monthly": 1,
+        "quarterly": 3,
+        "semi_annual": 6,
+        "semiannual": 6,
+        "annual": 12,
+        "yearly": 12,
+    }.get((interval or "monthly").lower(), 1)
+
+
+def _add_months(d: date, months: int) -> date:
+    year = d.year + ((d.month - 1 + months) // 12)
+    month = ((d.month - 1 + months) % 12) + 1
+    if month == 12:
+        next_month = date(year + 1, 1, 1)
+    else:
+        next_month = date(year, month + 1, 1)
+    last_day = (next_month - timedelta(days=1)).day
+    return date(year, month, min(d.day, last_day))
+
+
+def _billing_period_end(start: date, interval: str | None) -> date:
+    return _add_months(start, _interval_months(interval)) - timedelta(days=1)
+
+
+def _recognition_schedule(amount: Decimal, billing_start: date, interval: str | None) -> list[dict]:
+    months = _interval_months(interval)
+    if months <= 0:
+        months = 1
+
+    monthly_amount = (amount / Decimal(str(months))).quantize(_D2, ROUND_HALF_UP)
+    last_amount = (amount - (monthly_amount * Decimal(str(months - 1)))).quantize(_D2, ROUND_HALF_UP)
+    rows = []
+    recognition_date = date(billing_start.year, billing_start.month, 1)
+
+    for index in range(months):
+        rows.append({
+            "recognition_date": str(recognition_date),
+            "amount": money_str(last_amount if index == months - 1 else monthly_amount),
+        })
+        recognition_date = _add_months(recognition_date, 1)
+    return rows
+
+
+def _serialize_contract_billing_preview(contract, preview: dict, billing_start: date) -> dict:
+    billing_end = _billing_period_end(billing_start, contract.billing_interval)
+    return {
+        "contract_id": contract.id,
+        "billing_period_start": str(billing_start),
+        "billing_period_end": str(billing_end),
+        "currency": contract.currency or "SAR",
+        "invoice": {
+            "subtotal": money_str(preview["subtotal"]),
+            "tax_amount": money_str(preview["tax_amount"]),
+            "grand_total": money_str(preview["grand_total"]),
+        },
+        "lines": preview["lines"],
+        "revenue_recognition_schedule": _recognition_schedule(
+            preview["subtotal"],
+            billing_start,
+            contract.billing_interval,
+        ),
+    }
+
+
+def _assert_submitted_total_matches(submitted, calculated: Decimal, request: Request) -> None:
+    if submitted is None:
+        raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
+    if abs(_dec(submitted) - calculated) > _D2:
+        raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
 @router.post("", response_model=ContractResponse, dependencies=[Depends(require_permission("contracts.create"))])
 def create_contract(
@@ -58,15 +213,19 @@ def create_contract(
             
             # Validate branch access
             branch_id = validate_branch_access(current_user, getattr(contract, 'branch_id', None))
+            if branch_id is None:
+                branch_id = validate_branch_access(current_user, _default_branch_id(db), request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
     
-            # Recalculate total_amount from items to prevent client manipulation
-            calculated_total = Decimal('0')
-            for item in contract.items:
-                la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate)
-                calculated_total += la['line_total']
-            
-            # Use calculated total (override client-provided total)
-            final_total = calculated_total
+            preview = _calculate_contract_preview(
+                db,
+                branch_id=branch_id,
+                party_id=contract.party_id,
+                items=contract.items,
+                as_of_date=contract.start_date,
+            )
+            final_total = preview["grand_total"]
     
             # Create Contract Header
             contract_id = db.execute(
@@ -99,15 +258,15 @@ def create_contract(
             ).scalar()
     
             # Create Contract Items
-            for item in contract.items:
-                la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate)
+            for saved in preview["saved_items"]:
+                item = saved["item"]
                 db.execute(
                     text("""
                         INSERT INTO contract_items (
                             contract_id, product_id, description, quantity, 
-                            unit_price, tax_rate, total
+                            unit_price, tax_rate, tax_rate_id, total
                         ) VALUES (
-                            :cid, :pid, :desc, :qty, :price, :tax, :total
+                            :cid, :pid, :desc, :qty, :price, :tax, :tax_id, :total
                         )
                     """),
                     {
@@ -116,8 +275,9 @@ def create_contract(
                         "desc": item.description,
                         "qty": item.quantity,
                         "price": item.unit_price,
-                        "tax": item.tax_rate,
-                        "total": la["line_total"]
+                        "tax": saved["tax_rate"],
+                        "tax_id": saved["tax_rate_id"],
+                        "total": saved["total"]
                     }
                 )
             
@@ -133,7 +293,7 @@ def create_contract(
     
             # Notify about new contract
             try:
-                party_name = db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": contract.party_id}).scalar()
+                db.execute(text("SELECT name FROM parties WHERE id = :id"), {"id": contract.party_id}).scalar()
                 db.execute(text("""
                     INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
                     SELECT DISTINCT u.id, 'contract', :title, :message, :link, FALSE, NOW()
@@ -159,9 +319,96 @@ def create_contract(
             logger.error(f"Error creating contract: {e}")
             raise HTTPException(**http_error(500, "internal_error"))
 
+
+@router.post("/preview", dependencies=[Depends(require_permission("contracts.view"))])
+def preview_contract(
+    contract: ContractCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Preview contract totals without saving the contract."""
+    with transactional(current_user.company_id) as db:
+        try:
+            branch_id = validate_branch_access(current_user, getattr(contract, "branch_id", None))
+            if branch_id is None:
+                branch_id = validate_branch_access(current_user, _default_branch_id(db), request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
+
+            preview = _calculate_contract_preview(
+                db,
+                branch_id=branch_id,
+                party_id=contract.party_id,
+                items=contract.items,
+                as_of_date=contract.start_date,
+            )
+            return {
+                "subtotal": money_str(preview["subtotal"]),
+                "tax_amount": money_str(preview["tax_amount"]),
+                "grand_total": money_str(preview["grand_total"]),
+                "lines": preview["lines"],
+                "currency": contract.currency or get_base_currency(db),
+            }
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Error previewing contract")
+            raise HTTPException(**http_error(500, "internal_error"))
+
+
+@router.post("/billing-cycle/preview", dependencies=[Depends(require_permission("contracts.view"))])
+def preview_contract_billing_cycle(
+    preview_request: ContractBillingCyclePreviewRequest,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+):
+    """Preview the next contract billing cycle and revenue recognition schedule."""
+    with transactional(current_user.company_id) as db:
+        try:
+            contract = db.execute(
+                text("SELECT * FROM contracts WHERE id = :id AND status = 'active'"),
+                {"id": preview_request.contract_id},
+            ).fetchone()
+            if not contract:
+                raise HTTPException(**http_error(404, "contract_inactive_or_not_found"))
+            if contract.branch_id is not None:
+                validate_branch_access(current_user, contract.branch_id, request)
+
+            items = db.execute(
+                text("SELECT * FROM contract_items WHERE contract_id = :id"),
+                {"id": preview_request.contract_id},
+            ).fetchall()
+            if not items:
+                raise HTTPException(**http_error(400, "contract_items_empty"))
+
+            branch_id = contract.branch_id or _default_branch_id(db)
+            branch_id = validate_branch_access(current_user, branch_id, request)
+            if branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
+
+            billing_start = preview_request.billing_start or contract.next_billing_date or date.today()
+            cycles = []
+            for _ in range(preview_request.cycles):
+                preview = _calculate_contract_preview(
+                    db,
+                    branch_id=branch_id,
+                    party_id=contract.party_id,
+                    items=items,
+                    as_of_date=billing_start,
+                )
+                cycles.append(_serialize_contract_billing_preview(contract, preview, billing_start))
+                billing_start = _billing_period_end(billing_start, contract.billing_interval) + timedelta(days=1)
+            return cycles[0] if preview_request.cycles == 1 else {"contract_id": contract.id, "cycles": cycles}
+        except HTTPException:
+            raise
+        except Exception:
+            logger.exception("Error previewing contract billing cycle")
+            raise HTTPException(**http_error(500, "internal_error"))
+
 @router.get("", response_model=List[ContractResponse], dependencies=[Depends(require_permission("contracts.view"))])
 def list_contracts(
     branch_id: Optional[int] = None,
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """List Contracts."""
@@ -176,6 +423,15 @@ def list_contracts(
         branch_clause = branch_scope_filter(current_user, branch_id, "c.branch_id", params)
         if branch_clause:
             conditions.append(branch_clause[4:].strip() if branch_clause.startswith("AND ") else branch_clause.strip())
+        if search:
+            conditions.append("""(
+                c.contract_number ILIKE :search
+                OR c.contract_type ILIKE :search
+                OR c.status ILIKE :search
+                OR c.notes ILIKE :search
+                OR p.name ILIKE :search
+            )""")
+            params["search"] = f"%{search}%"
         if conditions:
             query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY c.created_at DESC"
@@ -213,6 +469,7 @@ def list_contracts(
 @router.get("/alerts/expiring", dependencies=[Depends(require_permission("contracts.view"))])
 def get_expiring_contracts(
     days: int = 30,
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """جلب العقود التي ستنتهي خلال فترة محددة (افتراضي 30 يوم)"""
@@ -221,7 +478,9 @@ def get_expiring_contracts(
             today = date.today()
             future_date = today + timedelta(days=days)
             
-            contracts = db.execute(text("""
+            params = {"today": today, "future": future_date}
+            branch_clause = branch_scope_filter(current_user, branch_id, "c.branch_id", params)
+            contracts = db.execute(text(f"""
                 SELECT c.*, p.name as party_name,
                        (c.end_date - CURRENT_DATE) as days_remaining
                 FROM contracts c
@@ -229,8 +488,9 @@ def get_expiring_contracts(
                 WHERE c.status = 'active' 
                   AND c.end_date IS NOT NULL
                   AND c.end_date BETWEEN :today AND :future
+                  {branch_clause}
                 ORDER BY c.end_date ASC
-            """), {"today": today, "future": future_date}).fetchall()
+            """), params).fetchall()
             
             result = []
             for c in contracts:
@@ -241,7 +501,7 @@ def get_expiring_contracts(
                     "contract_type": c.contract_type,
                     "end_date": str(c.end_date),
                     "days_remaining": c.days_remaining,
-                    "total_amount": float(c.total_amount or 0),
+                    "total_amount": money_str(c.total_amount or 0),
                     "billing_interval": c.billing_interval,
                     "currency": c.currency
                 })
@@ -258,12 +518,16 @@ def get_expiring_contracts(
 
 @router.get("/stats/summary", dependencies=[Depends(require_permission("contracts.view"))])
 def get_contracts_summary(
+    branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """ملخص إحصائيات العقود"""
     with transactional(current_user.company_id) as db:
         try:
-            stats = db.execute(text("""
+            params = {}
+            branch_clause = branch_scope_filter(current_user, branch_id, "branch_id", params)
+            where_clause = f"WHERE {branch_clause[4:].strip()}" if branch_clause else ""
+            stats = db.execute(text(f"""
                 SELECT 
                     COUNT(*) as total_contracts,
                     COUNT(*) FILTER (WHERE status = 'active') as active_count,
@@ -273,15 +537,16 @@ def get_contracts_summary(
                     COALESCE(SUM(total_amount), 0) as total_value,
                     COUNT(*) FILTER (WHERE status = 'active' AND end_date IS NOT NULL AND end_date <= CURRENT_DATE + INTERVAL '30 days') as expiring_soon
                 FROM contracts
-            """)).fetchone()
+                {where_clause}
+            """), params).fetchone()
             
             return {
                 "total_contracts": stats.total_contracts,
                 "active_count": stats.active_count,
                 "expired_count": stats.expired_count,
                 "cancelled_count": stats.cancelled_count,
-                "active_value": float(stats.active_value),
-                "total_value": float(stats.total_value),
+                "active_value": money_str(stats.active_value),
+                "total_value": money_str(stats.total_value),
                 "expiring_soon": stats.expiring_soon
             }
         except Exception as e:
@@ -308,6 +573,8 @@ def get_contract(
         
         if not contract:
             raise HTTPException(**http_error(404, "contract_not_found"))
+        if contract.branch_id is not None:
+            validate_branch_access(current_user, contract.branch_id)
             
         items = db.execute(
             text("SELECT * FROM contract_items WHERE contract_id = :id"),
@@ -365,16 +632,32 @@ def update_contract(
         # If items provided, replace them and recalculate total (T026 + T028)
         if data.items is not None:
             db.execute(text("DELETE FROM contract_items WHERE contract_id = :id"), {"id": contract_id})
+            effective_branch_id = data.branch_id if data.branch_id is not None else existing.branch_id
+            effective_branch_id = validate_branch_access(current_user, effective_branch_id)
+            if effective_branch_id is None:
+                effective_branch_id = validate_branch_access(current_user, _default_branch_id(db), request)
+            if effective_branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
+
             calculated_total = Decimal('0')
             for item in data.items:
-                la = compute_line_amounts(item.quantity, item.unit_price, item.tax_rate)
+                line = _contract_line_amount(
+                    db,
+                    branch_id=effective_branch_id,
+                    party_id=data.party_id if data.party_id is not None else existing.party_id,
+                    item=item,
+                    as_of_date=data.start_date if data.start_date is not None else existing.start_date,
+                )
+                la = line["amounts"]
                 calculated_total += la['line_total']
                 db.execute(text("""
-                    INSERT INTO contract_items (contract_id, product_id, description, quantity, unit_price, tax_rate, total)
-                    VALUES (:cid, :pid, :desc, :qty, :price, :tax, :total)
+                    INSERT INTO contract_items (contract_id, product_id, description, quantity, unit_price, tax_rate, tax_rate_id, total)
+                    VALUES (:cid, :pid, :desc, :qty, :price, :tax, :tax_id, :total)
                 """), {
                     "cid": contract_id, "pid": item.product_id, "desc": item.description,
-                    "qty": item.quantity, "price": item.unit_price, "tax": item.tax_rate, "total": la["line_total"]
+                    "qty": item.quantity, "price": item.unit_price,
+                    "tax": line["tax_rate"], "tax_id": line["tax_rate_id"],
+                    "total": la["line_total"]
                 })
             set_parts.append("total_amount = :total_amount")
             params["total_amount"] = calculated_total
@@ -413,8 +696,35 @@ def renew_contract(
     current_user: UserResponse = Depends(get_current_user)
 ):
     """تجديد العقد - ينشئ فترة جديدة بناءً على فترة الفوترة"""
+    idempotency_key = require_idempotency_key(request, operation="contract renewal")
     with transactional(current_user.company_id) as db:
         try:
+            replay = db.execute(
+                text("""
+                    SELECT id
+                    FROM contracts
+                    WHERE id = :id
+                      AND renewal_idempotency_key = :key
+                    LIMIT 1
+                """),
+                {"id": contract_id, "key": idempotency_key},
+            ).fetchone()
+            if replay:
+                return get_contract(contract_id, current_user)
+
+            duplicate_key = db.execute(
+                text("""
+                    SELECT id
+                    FROM contracts
+                    WHERE renewal_idempotency_key = :key
+                      AND id <> :id
+                    LIMIT 1
+                """),
+                {"id": contract_id, "key": idempotency_key},
+            ).fetchone()
+            if duplicate_key:
+                raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
+
             contract = db.execute(
                 text("SELECT * FROM contracts WHERE id = :id"),
                 {"id": contract_id}
@@ -425,6 +735,10 @@ def renew_contract(
             
             if contract.status != 'active':
                 raise HTTPException(**http_error(400, "only_active_contracts_renew"))
+            if contract.branch_id is not None:
+                validate_branch_access(current_user, contract.branch_id, request)
+            if contract.end_date is None:
+                raise HTTPException(**http_error(400, "contract_end_date_required", request))
             
             from datetime import timedelta
             from dateutil.relativedelta import relativedelta
@@ -439,7 +753,7 @@ def renew_contract(
                 delta = relativedelta(months=3)
             elif interval == 'semi_annual':
                 delta = relativedelta(months=6)
-            elif interval == 'annual':
+            elif interval in ('annual', 'yearly'):
                 delta = relativedelta(years=1)
             else:
                 delta = relativedelta(months=1)
@@ -452,10 +766,16 @@ def renew_contract(
                 text("""
                     UPDATE contracts 
                     SET start_date = :start, end_date = :end, 
+                        renewal_idempotency_key = :idem_key,
                         updated_at = CURRENT_TIMESTAMP
                     WHERE id = :id
                 """),
-                {"start": new_start, "end": new_end, "id": contract_id}
+                {
+                    "start": new_start,
+                    "end": new_end,
+                    "id": contract_id,
+                    "idem_key": idempotency_key,
+                }
             )
             
     
@@ -481,11 +801,31 @@ def renew_contract(
 def generate_contract_invoice(
     contract_id: int,
     request: Request,
+    body: Optional[ContractInvoiceGenerateRequest] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
     """إنشاء فاتورة من العقد"""
+    idempotency_key = require_idempotency_key(request, operation="contract invoice generation")
     with transactional(current_user.company_id) as db:
         try:
+            replay = db.execute(
+                text("""
+                    SELECT id, invoice_number, total
+                    FROM invoices
+                    WHERE idempotency_key = :key
+                    LIMIT 1
+                """),
+                {"key": idempotency_key},
+            ).fetchone()
+            if replay:
+                return {
+                    "success": True,
+                    "invoice_id": replay.id,
+                    "invoice_number": replay.invoice_number,
+                    "total": money_str(replay.total),
+                    "duplicate": True,
+                }
+
             contract = db.execute(
                 text("SELECT * FROM contracts WHERE id = :id AND status = 'active'"),
                 {"id": contract_id}
@@ -493,6 +833,8 @@ def generate_contract_invoice(
             
             if not contract:
                 raise HTTPException(**http_error(404, "contract_inactive_or_not_found"))
+            if contract.branch_id is not None:
+                validate_branch_access(current_user, contract.branch_id, request)
             
             items = db.execute(
                 text("SELECT * FROM contract_items WHERE contract_id = :id"),
@@ -505,60 +847,86 @@ def generate_contract_invoice(
             from datetime import date as dt_date
             from utils.accounting import generate_sequential_number
     
-            # Get user's default branch for tax resolution
+            # Get an authorized branch for tax resolution
             user_branch = db.execute(text(
                 "SELECT branch_id FROM user_branches WHERE user_id = :uid ORDER BY branch_id LIMIT 1"
             ), {"uid": current_user.id}).fetchone()
-            _branch_id = user_branch.branch_id if user_branch else None
+            _branch_id = contract.branch_id or (user_branch.branch_id if user_branch else None) or _default_branch_id(db)
+            _branch_id = validate_branch_access(current_user, _branch_id, request)
+            if _branch_id is None:
+                raise HTTPException(**http_error(400, "branch_required", request))
+            billing_start = body.billing_start if body and body.billing_start else contract.next_billing_date or dt_date.today()
+            billing_end = _billing_period_end(billing_start, contract.billing_interval)
             inv_num = generate_sequential_number(
-                db, f"INV-CTR-{dt_date.today().year}", "invoices", "invoice_number", branch_id=_branch_id
+                db, f"INV-CTR-{billing_start.year}", "invoices", "invoice_number", branch_id=_branch_id
             )
 
-            # Centralized Decimal calculation (Constitution: no inline float math)
-            line_dicts = []
-            resolved_items = []
-            for i in items:
-                tax_info = resolve_line_tax(_branch_id, i.product_id, db, dt_date.today(), customer_id=contract.party_id) if _branch_id else {"tax_rate": Decimal(str(i.tax_rate or 0)), "tax_rate_id": None}
-                line_dicts.append({"quantity": i.quantity, "unit_price": i.unit_price, "tax_rate": tax_info["tax_rate"]})
-                resolved_items.append({"item": i, "tax_info": tax_info})
-            totals = compute_invoice_totals(line_dicts)
-            subtotal = totals["subtotal"]
-            tax_total = totals["total_tax"]
-            total = totals["grand_total"]
+            preview = _calculate_contract_preview(
+                db,
+                branch_id=_branch_id,
+                party_id=contract.party_id,
+                items=items,
+                as_of_date=billing_start,
+            )
+            subtotal = preview["subtotal"]
+            tax_total = preview["tax_amount"]
+            total = preview["grand_total"]
+            _assert_submitted_total_matches(
+                body.submitted_grand_total if body else None,
+                total,
+                request,
+            )
             
             inv_id = db.execute(text("""
                 INSERT INTO invoices (
-                    invoice_number, invoice_type, party_id, invoice_date, due_date,
+                    invoice_number, invoice_type, party_id, contract_id, invoice_date, due_date,
                     subtotal, tax_amount, total, paid_amount, status, notes,
-                    created_by, currency, exchange_rate
+                    branch_id, created_by, currency, exchange_rate, idempotency_key
                 ) VALUES (
-                    :num, :type, :pid, CURRENT_DATE, CURRENT_DATE + 30,
+                    :num, :type, :pid, :contract_id, :invoice_date, :due_date,
                     :sub, :tax, :total, 0, 'unpaid', :notes,
-                    :uid, :curr, 1.0
+                    :branch_id, :uid, :curr, :exchange_rate, :idem_key
                 ) RETURNING id
             """), {
                 "num": inv_num,
-                "type": 'sales' if contract.contract_type == 'sales' else 'purchase',
+                "type": "purchase" if contract.contract_type == "purchase" else "sales",
                 "pid": contract.party_id,
+                "contract_id": contract_id,
+                "invoice_date": billing_start,
+                "due_date": billing_end,
                 "sub": subtotal, "tax": tax_total, "total": total,
                 "notes": f"فاتورة عقد #{contract.contract_number}",
+                "branch_id": _branch_id,
                 "uid": current_user.id,
-                "curr": contract.currency or get_base_currency(db)
+                "curr": contract.currency or get_base_currency(db),
+                "exchange_rate": Decimal("1"),
+                "idem_key": idempotency_key,
             }).scalar()
             
-            for ri in resolved_items:
-                item = ri["item"]
-                tax_info = ri["tax_info"]
-                la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"])
+            for saved in preview["saved_items"]:
+                item = saved["item"]
                 db.execute(text("""
                     INSERT INTO invoice_lines (invoice_id, product_id, description, quantity, unit_price, tax_rate, tax_rate_id, total)
                     VALUES (:iid, :pid, :desc, :qty, :price, :tax, :tax_id, :total)
                 """), {
                     "iid": inv_id, "pid": item.product_id, "desc": item.description,
                     "qty": item.quantity, "price": item.unit_price,
-                    "tax": tax_info["tax_rate"], "tax_id": tax_info.get("tax_rate_id"),
-                    "total": la["line_total"]
+                    "tax": saved["tax_rate"], "tax_id": saved["tax_rate_id"],
+                    "total": saved["total"]
                 })
+
+            db.execute(
+                text("""
+                    UPDATE contracts
+                    SET next_billing_date = :next_billing_date,
+                        updated_at = CURRENT_TIMESTAMP
+                    WHERE id = :id
+                """),
+                {
+                    "next_billing_date": billing_end + timedelta(days=1),
+                    "id": contract_id,
+                },
+            )
             
     
             # Audit log
@@ -573,9 +941,8 @@ def generate_contract_invoice(
             return {"success": True, "invoice_id": inv_id, "invoice_number": inv_num, "total": money_str(total)}
         except HTTPException:
             raise
-        except Exception as e:
-            pass
-            logger.error(f"Error generating contract invoice: {e}")
+        except Exception:
+            logger.exception("Error generating contract invoice")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -598,6 +965,8 @@ def cancel_contract(
             
             if contract.status == 'cancelled':
                 raise HTTPException(**http_error(400, "contract_already_cancelled"))
+            if contract.branch_id is not None:
+                validate_branch_access(current_user, contract.branch_id, request)
             
             db.execute(
                 text("UPDATE contracts SET status = 'cancelled', updated_at = CURRENT_TIMESTAMP WHERE id = :id"),
@@ -698,16 +1067,20 @@ def get_contract_kpis(contract_id: int, current_user=Depends(get_current_user)):
             end_date = c.get("end_date")
             days_remaining = (end_date - date.today()).days if end_date else None
     
-            total_value = float(c.get("total_amount") or c.get("value") or 0)
-            invoiced = float(inv.get("total", 0))
-            utilization = round(invoiced / total_value * 100, 2) if total_value > 0 else 0
+            total_value = _dec(c.get("total_amount") or c.get("value") or 0)
+            invoiced = _dec(inv.get("total", 0))
+            utilization = (
+                (invoiced / total_value * Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+                if total_value > 0
+                else Decimal("0")
+            )
     
             return {
                 "contract_id": contract_id,
-                "total_value": total_value,
-                "invoiced_amount": invoiced,
-                "outstanding_amount": float(inv.get("outstanding", 0)),
-                "utilization_pct": utilization,
+                "total_value": money_str(total_value),
+                "invoiced_amount": money_str(invoiced),
+                "outstanding_amount": money_str(inv.get("outstanding", 0)),
+                "utilization_pct": rate_str(utilization),
                 "days_remaining": days_remaining,
                 "invoice_count": int(inv.get("count", 0)),
                 "amendment_count": amendments,
@@ -782,7 +1155,7 @@ def create_contract_milestone(
             name = (payload.get("name") or "").strip()
             if not name:
                 raise HTTPException(**http_error(400, "milestone_name_required"))
-            amount = _float(payload.get("amount") or 0)
+            amount = _dec(payload.get("amount") or 0)
             if amount < 0:
                 raise HTTPException(**http_error(400, "milestone_amount_invalid"))
     
@@ -868,6 +1241,7 @@ def complete_contract_milestone(
 def bill_contract_milestone(
     contract_id: int,
     milestone_id: int,
+    request: Request,
     current_user=Depends(get_current_user),
 ):
     """Generate an invoice for a completed milestone.
@@ -878,17 +1252,38 @@ def bill_contract_milestone(
     flow (invoice remains ``draft`` until posted through the regular
     approval path).
     """
+    idempotency_key = require_idempotency_key(request, operation="contract milestone billing")
     with transactional(current_user.company_id) as db:
         try:
+            replay = db.execute(
+                text("""
+                    SELECT id, invoice_number
+                    FROM invoices
+                    WHERE idempotency_key = :key
+                    LIMIT 1
+                """),
+                {"key": idempotency_key},
+            ).fetchone()
+            if replay:
+                return {
+                    "id": milestone_id,
+                    "status": "billed",
+                    "invoice_id": replay.id,
+                    "invoice_number": replay.invoice_number,
+                    "duplicate": True,
+                }
+
             contract = db.execute(
                 text(
-                    "SELECT id, party_id, currency FROM contracts "
+                    "SELECT id, party_id, currency, branch_id FROM contracts "
                     "WHERE id = :id"
                 ),
                 {"id": contract_id},
             ).fetchone()
             if not contract:
                 raise HTTPException(**http_error(404, "contract_not_found"))
+            if contract.branch_id is not None:
+                validate_branch_access(current_user, contract.branch_id, request)
     
             ms = db.execute(
                 text(
@@ -903,25 +1298,42 @@ def bill_contract_milestone(
                 raise HTTPException(**http_error(400, "milestone_not_completed"))
     
             # Create minimal draft invoice
+            from utils.accounting import generate_sequential_number
+            invoice_date = date.today()
+            inv_num = generate_sequential_number(
+                db,
+                f"INV-CTR-MS-{invoice_date.year}",
+                "invoices",
+                "invoice_number",
+                branch_id=contract.branch_id,
+            )
+            amount = _dec(ms.amount or 0).quantize(_D2, ROUND_HALF_UP)
             inv = db.execute(
                 text(
                     """
                     INSERT INTO invoices
-                        (invoice_type, party_id, contract_id, invoice_date,
-                         currency, subtotal, total, status, notes, created_by)
+                        (invoice_number, invoice_type, party_id, contract_id, invoice_date,
+                         due_date, currency, subtotal, tax_amount, total, paid_amount,
+                         status, notes, branch_id, created_by, idempotency_key)
                     VALUES
-                        ('sale', :pid, :cid, CURRENT_DATE, :cur,
-                         :amt, :amt, 'draft', :notes, :uid)
+                        (:num, 'sales', :pid, :cid, :invoice_date,
+                         :due_date, :cur, :amt, 0, :amt, 0,
+                         'draft', :notes, :branch_id, :uid, :idem_key)
                     RETURNING id
                     """
                 ),
                 {
+                    "num": inv_num,
                     "pid": contract.party_id,
                     "cid": contract_id,
+                    "invoice_date": invoice_date,
+                    "due_date": invoice_date + timedelta(days=30),
                     "cur": contract.currency or "SAR",
-                    "amt": _float(ms.amount or 0),
+                    "amt": amount,
                     "notes": f"Milestone: {ms.name}",
+                    "branch_id": contract.branch_id,
                     "uid": current_user.id,
+                    "idem_key": idempotency_key,
                 },
             ).fetchone()
     
@@ -938,6 +1350,7 @@ def bill_contract_milestone(
                 "id": milestone_id,
                 "status": "billed",
                 "invoice_id": inv.id,
+                "invoice_number": inv_num,
             }
         except HTTPException:
             pass

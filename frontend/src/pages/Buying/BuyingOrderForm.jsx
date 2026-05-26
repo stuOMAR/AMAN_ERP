@@ -32,7 +32,7 @@ function BuyingOrderForm() {
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
+        { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
     ])
 
     useEffect(() => {
@@ -59,7 +59,7 @@ function BuyingOrderForm() {
     const handleAddItem = () => {
         setItems([
             ...items,
-            { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
+            { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
         ])
     }
 
@@ -73,7 +73,6 @@ function BuyingOrderForm() {
                     if (product) {
                         updatedItem.description = product.item_name || ''
                         updatedItem.unit_price = String(product.last_buying_price || product.buying_price || '')
-                        updatedItem.tax_rate = null
                     }
                 }
 
@@ -165,9 +164,9 @@ function BuyingOrderForm() {
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
                     discount: String(item.discount || 0),
-                    tax_rate: null,
                     markup: '0'
-                }))
+                })),
+                submitted_grand_total: backendTotals?.grandTotal ? String(backendTotals.grandTotal) : null,
             }
             await purchasesAPI.createOrder(payload)
             navigate('/buying/orders')
@@ -302,10 +301,12 @@ function BuyingOrderForm() {
                                         />
                                     </td>
                                     <td>
-                                        <span>—</span>
+                                        <span>{backendLines?.[index]?.tax_rate ?? '—'}</span>
                                     </td>
                                     <td className="font-bold">
-                                        {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+                                        {backendLines?.[index]?.line_total != null || backendLines?.[index]?.total != null
+                                            ? formatNumber(backendLines[index].line_total ?? backendLines[index].total)
+                                            : '—'}
                                     </td>
                                     <td>
                                         <button

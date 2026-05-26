@@ -3,7 +3,7 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import Request, APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date, datetime
@@ -13,14 +13,12 @@ import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    AssetCreate, AssetUpdate, AssetDisposal,
 )
 
 logger = logging.getLogger(__name__)
@@ -57,7 +55,7 @@ def list_assets(
 ):
     """List Assets."""
     branch_scope = resolve_branch_scope(current_user, branch_id)
-    
+
     with transactional(current_user.company_id) as conn:
         params = {}
         query = "SELECT * FROM assets WHERE 1=1"
@@ -65,9 +63,9 @@ def list_assets(
         if status:
             query += " AND status = :status"
             params["status"] = status
-            
+
         query += " ORDER BY created_at DESC"
-        
+
         assets = conn.execute(text(query), params).fetchall()
         return [dict(row._mapping) for row in assets]
 
@@ -80,10 +78,10 @@ def create_asset(request: Request, asset: AssetCreate, current_user: dict = Depe
         # Insert Asset
         result = conn.execute(text("""
             INSERT INTO assets (
-                company_id, branch_id, name, code, type, purchase_date, 
+                company_id, branch_id, name, code, type, purchase_date,
                 cost, residual_value, life_years, depreciation_method, currency
             ) VALUES (
-                :cid, :bid, :name, :code, :type, :pdate, 
+                :cid, :bid, :name, :code, :type, :pdate,
                 :cost, :res_val, :life, :method, :currency
             ) RETURNING id
         """), {
@@ -99,29 +97,29 @@ def create_asset(request: Request, asset: AssetCreate, current_user: dict = Depe
             "method": asset.depreciation_method,
             "currency": asset.currency
         }).fetchone()
-        
+
         asset_id = result.id
-        
+
         # Calculate Depreciation Schedule (Straight Line)
         if asset.life_years > 0 and asset.depreciation_method == 'straight_line':
             depreciable_amount = (_dec(asset.cost) - _dec(asset.residual_value)).quantize(_D2, ROUND_HALF_UP)
             annual_depreciation = (depreciable_amount / _dec(asset.life_years)).quantize(_D4, ROUND_HALF_UP)
-            
+
             # Partial first year based on purchase month
             current_accumulated = Decimal('0')
             purchase_year = asset.purchase_date.year
             purchase_month = asset.purchase_date.month
-            
+
             # Calculate first year fraction (remaining months / 12)
             remaining_months_first_year = 12 - purchase_month + 1  # Include purchase month
             first_year_fraction = _dec(remaining_months_first_year) / Decimal('12')
             first_year_amount = (annual_depreciation * first_year_fraction).quantize(_D2, ROUND_HALF_UP)
-            
+
             total_years = asset.life_years
             # If partial first year, we need an extra year at the end for the remainder
             has_partial_first_year = purchase_month > 1
             schedule_years = total_years + (1 if has_partial_first_year else 0)
-            
+
             for i in range(1, schedule_years + 1):
                 if i == 1:
                     # First year — partial (or full if purchased in January)
@@ -135,16 +133,16 @@ def create_asset(request: Request, asset: AssetCreate, current_user: dict = Depe
                     # Full intermediate years
                     year = purchase_year + i - 1
                     amount = annual_depreciation.quantize(_D2, ROUND_HALF_UP)
-                
+
                 # Safety: ensure we don't exceed depreciable amount
                 if current_accumulated + amount > depreciable_amount:
                     amount = (depreciable_amount - current_accumulated).quantize(_D2, ROUND_HALF_UP)
                 if amount <= 0:
                     break
-                
+
                 current_accumulated = (current_accumulated + amount).quantize(_D2, ROUND_HALF_UP)
                 book_val = (_dec(asset.cost) - current_accumulated).quantize(_D2, ROUND_HALF_UP)
-                
+
                 conn.execute(text("""
                     INSERT INTO asset_depreciation_schedule (
                         asset_id, fiscal_year, amount, accumulated_amount, book_value, date
@@ -223,7 +221,7 @@ def create_asset(request: Request, asset: AssetCreate, current_user: dict = Depe
                     "acc": current_accumulated, "bv": book_value,
                     "date": date(year, 12, 31)
                 })
-        
+
         trans.commit()
         return {"id": asset_id, "message": i18n_message("asset_created_success", request)}
     except HTTPException:
@@ -247,13 +245,13 @@ def get_asset(request: Request, asset_id: int, current_user: dict = Depends(get_
         if not asset:
             raise HTTPException(**http_error(404, "asset_not_found", request))
         validate_branch_access(current_user, asset.branch_id, request)
-            
+
         schedule = conn.execute(text("""
-            SELECT * FROM asset_depreciation_schedule 
-            WHERE asset_id = :id 
+            SELECT * FROM asset_depreciation_schedule
+            WHERE asset_id = :id
             ORDER BY fiscal_year ASC
         """), {"id": asset_id}).fetchall()
-        
+
         return {
             "asset": dict(asset._mapping),
             "schedule": [dict(row._mapping) for row in schedule]
@@ -270,8 +268,8 @@ def update_asset(request: Request, asset_id: int, data: AssetUpdate, current_use
             raise HTTPException(**http_error(404, "asset_not_found"))
         if existing.status == 'disposed':
             raise HTTPException(**http_error(400, "asset_already_disposed", request))
-        
-        allowed_fields = ['name', 'code', 'type', 'status', 'cost', 'residual_value', 'life_years', 
+
+        allowed_fields = ['name', 'code', 'type', 'status', 'cost', 'residual_value', 'life_years',
                          'location', 'branch_id', 'notes', 'purchase_date']
         updates = []
         params = {"id": asset_id}
@@ -280,11 +278,11 @@ def update_asset(request: Request, asset_id: int, data: AssetUpdate, current_use
             if field in data_dict:
                 updates.append(f"{field} = :{field}")
                 params[field] = data_dict[field]
-        
+
         if updates:
             conn.execute(text(f"UPDATE assets SET {', '.join(updates)} WHERE id = :id"), params)
             trans.commit()
-        
+
         return {"message": i18n_message("asset_updated_success_msg", request)}
     except HTTPException:
         trans.rollback()
@@ -299,6 +297,7 @@ def update_asset(request: Request, asset_id: int, data: AssetUpdate, current_use
 @router.post("/{asset_id}/dispose", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, current_user: dict = Depends(get_current_user)):
     """استبعاد أصل ثابت مع معثرات محاسبية (إهلاك متراكم، ربح/خسارة)"""
+    idempotency_key = require_idempotency_key(request, operation="asset disposal")
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -308,12 +307,21 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
         asset = conn.execute(text("SELECT * FROM assets WHERE id = :id FOR UPDATE"), {"id": asset_id}).fetchone()
         if not asset or asset.status == 'disposed':
             raise HTTPException(**http_error(400, "asset_not_found_or_already_disposed", request))
-            
+
+        # Authority Check: submitted_grand_total / submitted_disposal_proceeds
+        calculated_proceeds = _dec(disposal.disposal_price)
+        if disposal.submitted_grand_total is not None:
+            if abs(_dec(disposal.submitted_grand_total) - calculated_proceeds) > Decimal("0.02"):
+                raise HTTPException(**http_error(400, "submitted_grand_total_mismatch", request))
+        if disposal.submitted_disposal_proceeds is not None:
+            if abs(_dec(disposal.submitted_disposal_proceeds) - calculated_proceeds) > Decimal("0.02"):
+                raise HTTPException(**http_error(400, "submitted_grand_total_mismatch", request))
+
         acc_depr_recorded = conn.execute(text("""
-            SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule 
+            SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule
             WHERE asset_id = :id AND posted = TRUE
         """), {"id": asset_id}).scalar()
-        
+
         # 2. Update Asset Status
         conn.execute(text("UPDATE assets SET status = 'disposed', updated_at = NOW() WHERE id = :id"), {"id": asset_id})
 
@@ -351,7 +359,7 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
                     })
                     # Recalculate accumulated depreciation including pro-rata
                     acc_depr_recorded = _dec(acc_depr_recorded) + pro_rata
-        
+
         # 3. GL Entry (Automated)
         acc_fixed_assets = get_mapped_account_id(conn, "acc_map_fixed_assets")
         acc_acc_depr = get_mapped_account_id(conn, "acc_map_acc_depr")
@@ -360,39 +368,39 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
         acc_cash = get_mapped_account_id(conn, "acc_map_cash_main")
         if disposal.payment_method == 'bank':
             acc_cash = get_mapped_account_id(conn, "acc_map_bank")
-            
+
         book_value = (_dec(asset.cost) - _dec(acc_depr_recorded)).quantize(_D2, ROUND_HALF_UP)
         gain_loss = (_dec(disposal.disposal_price) - book_value).quantize(_D2, ROUND_HALF_UP)
-        
+
         # Use UUID OR simple generation
         ts = datetime.now().strftime('%Y%m%d%H%M%S')
         je_num = f"JE-ASSET-DISP-{asset_id}-{ts}"
-        
+
         # Check if JE exists for this asset disposal (to avoid double posting)
         exists = conn.execute(text("SELECT 1 FROM journal_entries WHERE reference = :ref"), {"ref": f"ASSET-DISP-{asset_id}"}).fetchone()
         if exists:
              raise HTTPException(**http_error(400, "asset_disposal_entry_already_posted", request))
 
         check_fiscal_period_open(conn, disposal.disposal_date)
-        
+
         je_lines = []
         if disposal.disposal_price > 0:
             je_lines.append({
                 "account_id": acc_cash, "debit": _dec(disposal.disposal_price), "credit": 0,
                 "description": 'ثمن بيع أصل'
             })
-            
+
         if acc_depr_recorded > 0:
             je_lines.append({
                 "account_id": acc_acc_depr, "debit": _dec(acc_depr_recorded), "credit": 0,
                 "description": 'استبعاد إهلاك متراكم'
             })
-            
+
         je_lines.append({
             "account_id": acc_fixed_assets, "debit": 0, "credit": _dec(asset.cost),
             "description": 'استبعاد تكلفة أصل تاريخية'
         })
-        
+
         if gain_loss > 0:
             je_lines.append({
                 "account_id": acc_gain, "debit": 0, "credit": _dec(gain_loss),
@@ -403,7 +411,7 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
                 "account_id": acc_loss, "debit": abs(_dec(gain_loss)), "credit": 0,
                 "description": 'خسائر بيع أصول'
             })
-            
+
         from services.gl_service import create_journal_entry as gl_create_journal_entry
         je_id, je_num = gl_create_journal_entry(
             db=conn,
@@ -417,9 +425,10 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
             currency=asset.currency or base_currency,
             exchange_rate=Decimal("1"),
             source="asset_disposal",
-            source_id=asset_id
+            source_id=asset_id,
+            idempotency_key=f"{idempotency_key}:asset-disposal:{asset_id}",
         )
-                         
+
         trans.commit()
         return {"id": asset_id, "status": "disposed", "journal_entry": je_num}
     except HTTPException:
@@ -432,6 +441,50 @@ def dispose_asset(request: Request, asset_id: int, disposal: AssetDisposal, curr
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         conn.close()
+
+
+@router.post("/{asset_id}/disposal/preview", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
+def preview_asset_disposal(request: Request, asset_id: int, disposal: AssetDisposal, current_user: dict = Depends(get_current_user)):
+    """Preview disposal proceeds, NBV, gain/loss, and draft GL lines without committing."""
+    with transactional(current_user.company_id) as conn:
+        asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": asset_id}).fetchone()
+        if not asset or asset.status == 'disposed':
+            raise HTTPException(**http_error(400, "asset_not_found_or_already_disposed", request))
+        validate_branch_access(current_user, asset.branch_id, request)
+
+        acc_depr_recorded = conn.execute(text("""
+            SELECT COALESCE(SUM(amount), 0) FROM asset_depreciation_schedule
+            WHERE asset_id = :id AND posted = TRUE
+        """), {"id": asset_id}).scalar() or 0
+        accumulated = _dec(acc_depr_recorded).quantize(_D2, ROUND_HALF_UP)
+        cost = _dec(asset.cost).quantize(_D2, ROUND_HALF_UP)
+        book_value = (cost - accumulated).quantize(_D2, ROUND_HALF_UP)
+        proceeds = _dec(disposal.disposal_price).quantize(_D2, ROUND_HALF_UP)
+        gain_loss = (proceeds - book_value).quantize(_D2, ROUND_HALF_UP)
+
+        draft_lines = []
+        if proceeds > 0:
+            draft_lines.append({
+                "side": "debit",
+                "account_key": "acc_map_bank" if disposal.payment_method == "bank" else "acc_map_cash_main",
+                "amount": str(proceeds),
+            })
+        if accumulated > 0:
+            draft_lines.append({"side": "debit", "account_key": "acc_map_acc_depr", "amount": str(accumulated)})
+        draft_lines.append({"side": "credit", "account_key": "acc_map_fixed_assets", "amount": str(cost)})
+        if gain_loss > 0:
+            draft_lines.append({"side": "credit", "account_key": "acc_map_asset_gain", "amount": str(gain_loss)})
+        elif gain_loss < 0:
+            draft_lines.append({"side": "debit", "account_key": "acc_map_asset_loss", "amount": str(abs(gain_loss))})
+
+        return {
+            "asset_id": asset_id,
+            "disposal_proceeds": str(proceeds),
+            "accumulated_depreciation": str(accumulated),
+            "book_value": str(book_value),
+            "gain_loss": str(gain_loss),
+            "draft_journal_lines": draft_lines,
+        }
 
 
 # ═══════════════════════════════════════════════════════════
@@ -489,8 +542,8 @@ def create_asset_return_write_down(
         lines=[
             # F-NEW-054 (R-FLOAT-MONEY, Req 8.5): pass Decimal straight
             # through; gl_service.create_journal_entry quantizes via
-            # _dec(...) on entry, so a float() cast here is a precision
-            # leak with no benefit.
+            # _dec(...) on entry, so demoting here is a precision leak
+            # with no benefit.
             {"account_id": acc_loss, "debit": _dec(nbv), "credit": 0,
              "description": "Loss on asset return"},
             {"account_id": acc_fixed, "debit": 0, "credit": _dec(nbv),

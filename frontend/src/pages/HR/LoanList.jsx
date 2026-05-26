@@ -1,5 +1,6 @@
 
 import { useState, useEffect, useMemo } from 'react';
+import Decimal from 'decimal.js';
 import { hrAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
 import { useTranslation } from 'react-i18next';
@@ -12,6 +13,8 @@ import { formatNumber } from '../../utils/format';
 import DataTable from '../../components/common/DataTable';
 import SearchFilter from '../../components/common/SearchFilter';
 import BackButton from '../../components/common/BackButton';
+
+const remainingAmount = (row) => new Decimal(row.amount || '0').minus(row.paid_amount || '0').toDecimalPlaces(2).toString();
 
 const LoanList = () => {
     const { t } = useTranslation();
@@ -150,7 +153,7 @@ const LoanList = () => {
         {
             key: '_remaining',
             label: t('hr.loans.remaining'),
-            render: (_val, row) => <span className="text-danger">{formatNumber(row.amount - row.paid_amount)}</span>,
+            render: (_val, row) => <span className="text-danger">{formatNumber(remainingAmount(row))}</span>,
         },
         {
             key: 'monthly_installment',

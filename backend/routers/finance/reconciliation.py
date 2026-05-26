@@ -11,13 +11,12 @@ from decimal import Decimal, ROUND_HALF_UP
 
 logger = logging.getLogger(__name__)
 
-from database import get_db_connection
-from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
-from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
-from schemas.reconciliation import ReconciliationCreate, StatementLineCreate, MatchRequest, UnmatchRequest
+from routers.auth import get_current_user  # noqa: E402
+from utils.tx import transactional  # noqa: E402
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access  # noqa: E402
+from utils.audit import log_activity  # noqa: E402
+from utils.fiscal_lock import check_fiscal_period_open  # noqa: E402
+from schemas.reconciliation import ReconciliationCreate, StatementLineCreate, MatchRequest, UnmatchRequest  # noqa: E402
 
 router = APIRouter(prefix="/reconciliation", tags=["Bank Reconciliation"], dependencies=[Depends(require_module("accounting"))])
 
@@ -130,7 +129,21 @@ def list_reconciliations(
         query += " ORDER BY r.statement_date DESC"
         
         result = db.execute(text(query), params).fetchall()
-        return [dict(row._mapping) for row in result]
+        reconciliations = []
+        for row in result:
+            item = dict(row._mapping)
+            matched_count = int(item.get("matched_count") or 0)
+            total_lines = int(item.get("total_lines") or 0)
+            progress_pct = Decimal("0")
+            if total_lines > 0:
+                progress_pct = (Decimal(matched_count * 100) / Decimal(total_lines)).quantize(
+                    Decimal("1"), ROUND_HALF_UP
+                )
+            item["progress_pct"] = int(progress_pct)
+            item["is_fully_matched"] = total_lines > 0 and matched_count == total_lines
+            item["progress_status"] = "complete" if item["is_fully_matched"] else "incomplete"
+            reconciliations.append(item)
+        return reconciliations
 
 @router.post("", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("reconciliation.create"))], response_model=Dict[str, Any])
 def create_reconciliation(request: Request, data: ReconciliationCreate, current_user: dict = Depends(get_current_user)):
@@ -218,15 +231,18 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
         """), {"id": id}).fetchall()
 
         all_lines = [dict(r._mapping) for r in statement_lines]
-        matched_lines = [l for l in all_lines if l.get('is_reconciled')]
-        unmatched_lines = [l for l in all_lines if not l.get('is_reconciled')]
+        matched_lines = [line for line in all_lines if line.get('is_reconciled')]
+        unmatched_lines = [line for line in all_lines if not line.get('is_reconciled')]
 
-        matched_net = sum((_dec(l.get('credit', 0)) - _dec(l.get('debit', 0)) for l in matched_lines), Decimal("0"))
-        unmatched_net = sum((_dec(l.get('credit', 0)) - _dec(l.get('debit', 0)) for l in unmatched_lines), Decimal("0"))
-        total_net = sum((_dec(l.get('credit', 0)) - _dec(l.get('debit', 0)) for l in all_lines), Decimal("0"))
+        matched_net = sum((_dec(line.get('credit', 0)) - _dec(line.get('debit', 0)) for line in matched_lines), Decimal("0"))
+        unmatched_net = sum((_dec(line.get('credit', 0)) - _dec(line.get('debit', 0)) for line in unmatched_lines), Decimal("0"))
+        total_net = sum((_dec(line.get('credit', 0)) - _dec(line.get('debit', 0)) for line in all_lines), Decimal("0"))
 
         calculated_end = _dec(rec.start_balance) + total_net
         difference = calculated_end - _dec(rec.end_balance)
+        difference_abs = abs(difference)
+        tolerance_amount = _auto_match_tolerance_for_currency(db, rec.currency)
+        is_balanced = difference_abs <= tolerance_amount
 
         return {
             "header": dict(rec._mapping),
@@ -241,6 +257,10 @@ def get_reconciliation(id: int, current_user: dict = Depends(get_current_user)):
                 "calculated_end_balance": str(calculated_end.quantize(_D2, ROUND_HALF_UP)),
                 "target_end_balance": str(_dec(rec.end_balance).quantize(_D2, ROUND_HALF_UP)),
                 "difference": str(difference.quantize(_D2, ROUND_HALF_UP)),
+                "difference_abs": str(difference_abs.quantize(_D2, ROUND_HALF_UP)),
+                "tolerance_amount": str(tolerance_amount),
+                "is_balanced": is_balanced,
+                "difference_status": "balanced" if is_balanced else "out_of_balance",
             }
         }
 

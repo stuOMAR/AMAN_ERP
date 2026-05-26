@@ -3,7 +3,6 @@
 Feature 024 — T081. Adds unique (tenant_id, code, locale).
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "024q_email_templates_finalize"
 down_revision = "024p_notifications_queue"

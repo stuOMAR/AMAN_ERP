@@ -1,5 +1,9 @@
 import api from './apiClient'
 
+const idempotencyHeaders = () => ({
+    headers: { 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` }
+})
+
 export const hrAPI = {
     listEmployees: (params) => api.get('/hr/employees', { params }),
     createEmployee: (data) => api.post('/hr/employees', data),
@@ -30,7 +34,7 @@ export const hrAPI = {
 
     // Leave Requests
     listLeaveRequests: (params) => api.get('/hr/leaves', { params }),
-    createLeaveRequest: (data) => api.post('/hr/leaves', data),
+    createLeaveRequest: (data) => api.post('/hr/leaves', data, idempotencyHeaders()),
     updateLeaveStatus: (id, status) => api.put(`/hr/leaves/${id}/status`, null, { params: { status_in: status } }),
 
     // End of Service
@@ -116,7 +120,8 @@ export const hrAdvancedAPI = {
 export const hrImprovementsAPI = {
     // Payslips
     listPayslips: (params) => api.get('/hr/payslips', { params }),
-    generatePayslip: (data) => api.post('/hr/payslips/generate', data),
+    previewPayslip: (data) => api.post('/hr/payslips/preview', data),
+    generatePayslip: (data) => api.post('/hr/payslips/generate', data, idempotencyHeaders()),
     getPayslip: (entryId) => api.get(`/hr/payslips/${entryId}`),
     getEmployeePayslips: (empId, params) => api.get(`/hr/employees/${empId}/payslips`, { params }),
     // Leave Balance & Carryover
@@ -155,7 +160,7 @@ export const selfServiceAPI = {
     listPayslips: () => api.get('/hr/self-service/payslips'),
     getPayslip: (id) => api.get(`/hr/self-service/payslips/${id}`),
     getLeaveBalance: () => api.get('/hr/self-service/leave-balance'),
-    submitLeaveRequest: (data) => api.post('/hr/self-service/leave-request', data),
+    submitLeaveRequest: (data) => api.post('/hr/self-service/leave-request', data, idempotencyHeaders()),
     listLeaveRequests: (params) => api.get('/hr/self-service/leave-requests', { params }),
     listTeamRequests: (params) => api.get('/hr/self-service/team-requests', { params }),
     approveLeave: (id) => api.post(`/hr/self-service/leave-request/${id}/approve`),

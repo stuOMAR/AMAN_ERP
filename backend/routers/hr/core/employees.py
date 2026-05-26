@@ -3,25 +3,21 @@
 Mounted under the parent router via core/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from routers.roles import DEFAULT_ROLES
-from pydantic import BaseModel
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from repositories import EmployeeRepository
-from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access, check_permission, require_module
-from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.permissions import require_permission, require_sensitive_permission, check_permission
+from utils.permissions import has_pii_access, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
+from utils.accounting import get_base_currency
 from utils.audit import log_activity
-from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from schemas.hr import EmployeeCreate, EmployeeUpdate, EndOfServiceRequest
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
@@ -31,11 +27,12 @@ def _dec(v: Any) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/employees", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def get_employees(request: Request, 
     branch_id: Optional[int] = None, 
+    search: Optional[str] = None,
     current_user: UserResponse = Depends(get_current_user),
     company_id: str = Depends(get_current_user_company)
 ):
@@ -111,6 +108,21 @@ def get_employees(request: Request,
             if branch_id is not None:
                 query += " AND (e.branch_id = :bid OR ub.branch_id = :bid)"
                 params["bid"] = branch_id
+
+        if search:
+            query += """
+                AND (
+                    e.employee_code ILIKE :search
+                    OR e.first_name ILIKE :search
+                    OR e.last_name ILIKE :search
+                    OR (e.first_name || ' ' || e.last_name) ILIKE :search
+                    OR e.email ILIKE :search
+                    OR e.phone ILIKE :search
+                    OR p.position_name ILIKE :search
+                    OR d.department_name ILIKE :search
+                )
+            """
+            params["search"] = f"%{search}%"
 
         query += """
             GROUP BY e.id, e.employee_code, e.first_name, e.last_name, e.email, e.phone, e.status, e.user_id, e.account_id, e.created_at, p.position_name, d.department_name, e.branch_id, e.salary, e.housing_allowance, e.transport_allowance, e.other_allowances, e.hourly_cost, e.currency, e.nationality, u.role
@@ -366,7 +378,7 @@ def create_employee(request: Request, employee: EmployeeCreate, current_user: Us
 
         return {"message": i18n_message("record_created_success", request)}
         
-    except Exception as e:
+    except Exception:
         trans.rollback()
         logger.exception("Internal error")
         raise HTTPException(status_code=400, detail=i18n_message("invalid_data_detail", request))
@@ -614,7 +626,6 @@ def calculate_end_of_service(request: Request,
 # ============================================================
 # Phase 8.15 - Payslips, Recruitment, Leave Balance
 # ============================================================
-import calendar as cal_module
 
 # --- Payslips ---
 
@@ -654,5 +665,4 @@ def get_employee_payslips_route(
             if owner != uid:
                 rows = mask_pii_list(rows, PAYROLL_PII_FIELDS)
         return rows
-
 

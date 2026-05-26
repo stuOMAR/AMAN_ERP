@@ -2,27 +2,22 @@
 
 Mounted under the parent router via auth/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Body
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy import text, create_engine
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from pydantic import BaseModel, EmailStr
 import logging
-import os
-import secrets
 import hashlib
 import ipaddress
-from database import get_system_db, verify_password, get_db_connection, hash_password, engine as system_engine
-from utils.tx import transactional
+from database import get_system_db, get_db_connection, engine as system_engine
 from config import settings
-from schemas import Token, UserResponse
-from utils.audit import log_activity, log_system_activity
-from utils.limiter import limiter
-from utils.auth_cookies import set_auth_cookies, clear_auth_cookies
+from schemas import UserResponse
+from utils.audit import log_activity
 
 logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='api/auth/login')
@@ -477,7 +472,7 @@ async def get_current_user(request: Request, token: str = Depends(oauth2_scheme)
             raise credentials_exception
         username: str = payload.get("sub")
         company_id: str = payload.get("company_id")
-        permissions: list = payload.get("permissions")
+        payload.get("permissions")
         
         if username is None:
             raise credentials_exception
@@ -660,6 +655,7 @@ class RefreshTokenRequest(BaseModel):
 
 @router.put("/me", response_model=UserResponse)
 async def update_current_user_profile(
+    request: Request,
     data: SelfProfileUpdateRequest,
     token: str = Depends(oauth2_scheme)
 ):
@@ -711,7 +707,7 @@ async def update_current_user_profile(
         set_parts.append("updated_at = CURRENT_TIMESTAMP")
 
         db.execute(
-            text(f"UPDATE company_users SET {', '.join(set_parts)} WHERE id = :uid"), # noqa: sql-lint
+            text(f"UPDATE company_users SET {', '.join(set_parts)} WHERE id = :uid"), # noqa
             params
         )
         db.commit()
@@ -810,5 +806,4 @@ def _require_system_admin(current_user, request: Request = None):
     role = getattr(current_user, "role", None) or getattr(current_user, "type", None)
     if role != "system_admin":
         raise HTTPException(**http_error(403, "system_admin_required", request))
-
 

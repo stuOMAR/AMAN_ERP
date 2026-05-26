@@ -22,22 +22,53 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
 _D2 = Decimal("0.01")
+_PCT1 = Decimal("0.1")
 
 
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal("0")
 
 
+def _plain_decimal(value: Decimal) -> str:
+    return format(value, "f")
+
+
+def _schedule_progress(total_amount, recognized_amount) -> Dict[str, str]:
+    total = _dec(total_amount)
+    recognized = _dec(recognized_amount)
+    pct = Decimal("0.0")
+    if total > 0:
+        pct = (recognized * Decimal("100") / total).quantize(_PCT1, ROUND_HALF_UP)
+    capped = min(max(pct, Decimal("0.0")), Decimal("100.0"))
+    return {
+        "pct_recognized": _plain_decimal(pct),
+        "pct_recognized_capped": _plain_decimal(capped),
+    }
+
+
+def _serialize_schedule(row) -> Dict[str, Any]:
+    result = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+    for key, value in list(result.items()):
+        if isinstance(value, Decimal):
+            result[key] = _plain_decimal(value)
+        elif hasattr(value, "isoformat"):
+            result[key] = value.isoformat()
+    if isinstance(result.get("schedule_lines"), str):
+        result["schedule_lines"] = json.loads(result["schedule_lines"])
+    result.update(_schedule_progress(result.get("total_amount"), result.get("recognized_amount")))
+    return result
+
+
 class RevenueScheduleCreate(BaseModel):
     invoice_id: Optional[int] = None
     contract_id: Optional[int] = None
-    total_amount: float
+    total_amount: Decimal
     start_date: str  # YYYY-MM-DD
     end_date: str    # YYYY-MM-DD
     method: str      # straight_line | percentage_completion | milestone
@@ -60,7 +91,7 @@ def list_revenue_schedules(status_filter: Optional[str] = None, current_user=Dep
             conditions.append("status = :status")
             params["status"] = status_filter
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT rs.*,
                    ROUND(100.0 * recognized_amount / NULLIF(total_amount, 0), 1) as pct_recognized
@@ -68,7 +99,7 @@ def list_revenue_schedules(status_filter: Optional[str] = None, current_user=Dep
             WHERE {' AND '.join(conditions)}
             ORDER BY rs.start_date DESC
         """), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+        return [_serialize_schedule(r) for r in rows]
     finally:
         db.close()
 
@@ -162,10 +193,7 @@ def get_revenue_schedule(schedule_id: int, request: Request, current_user=Depend
         ).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "revenue_schedule_not_found", request))
-        result = dict(row._mapping)
-        if isinstance(result.get("schedule_lines"), str):
-            result["schedule_lines"] = json.loads(result["schedule_lines"])
-        return result
+        return _serialize_schedule(row)
     finally:
         db.close()
 
@@ -176,8 +204,10 @@ def recognize_revenue_period(schedule_id: int, request: Request, period_index: i
     """الاعتراف بإيرادات فترة محددة وإنشاء قيد محاسبي"""
     db = get_db_connection(current_user.company_id)
     try:
+        idempotency_key = request.headers.get("Idempotency-Key")
+        recognition_source_id = (int(schedule_id) * 10000) + int(period_index)
         row = db.execute(text(
-            "SELECT * FROM revenue_recognition_schedules WHERE id = :id AND status = 'active'"
+            "SELECT * FROM revenue_recognition_schedules WHERE id = :id AND status = 'active' FOR UPDATE"
         ), {"id": schedule_id}).fetchone()
         if not row:
             raise HTTPException(**http_error(404, "revenue_schedule_not_active", request))
@@ -187,10 +217,29 @@ def recognize_revenue_period(schedule_id: int, request: Request, period_index: i
         if isinstance(lines, str):
             lines = json.loads(lines)
 
-        if period_index >= len(lines):
+        if period_index < 0 or period_index >= len(lines):
             raise HTTPException(**http_error(400, "invalid_period_index", request))
         period = lines[period_index]
         if period.get("recognized"):
+            if idempotency_key:
+                existing = db.execute(text("""
+                    SELECT id, entry_number
+                    FROM journal_entries
+                    WHERE idempotency_key = :key
+                    LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if existing:
+                    recognized = _dec(schedule.get("recognized_amount") or 0).quantize(_D2, ROUND_HALF_UP)
+                    remaining = _dec(schedule.get("deferred_amount") or 0).quantize(_D2, ROUND_HALF_UP)
+                    return {
+                        "message": i18n_message("revenue_recognized_amount", request),
+                        "recognized_total": str(recognized),
+                        "remaining": str(remaining),
+                        "status": schedule.get("status"),
+                        "journal_entry_id": existing.id,
+                        "entry_number": existing.entry_number,
+                        "idempotent": True,
+                    }
             raise HTTPException(**http_error(400, "period_already_recognized", request))
 
         amount = _dec(period["amount"]).quantize(_D2, ROUND_HALF_UP)
@@ -206,31 +255,36 @@ def recognize_revenue_period(schedule_id: int, request: Request, period_index: i
             text("SELECT id FROM accounts WHERE account_type = 'revenue' LIMIT 1")
         ).scalar()
 
-        if deferred_acc and revenue_acc:
-            gl_create_journal_entry(
-                db=db,
-                company_id=current_user.company_id,
-                date=datetime.now().date().isoformat(),
-                description=f"اعتراف بإيرادات - جدول #{schedule_id}",
-                lines=[
-                    {
-                        "account_id": deferred_acc,
-                        "debit": amount,
-                        "credit": 0,
-                        "description": "اعتراف بإيرادات مؤجلة",
-                    },
-                    {
-                        "account_id": revenue_acc,
-                        "debit": 0,
-                        "credit": amount,
-                        "description": "إيرادات معترف بها",
-                    },
-                ],
-                user_id=current_user.id,
-                reference=f"RR-{schedule_id}-{period_index}",
-                source="revenue_recognition",
-                source_id=schedule_id,
-            )
+        if not deferred_acc:
+            raise HTTPException(**http_error(400, "deferred_revenue_account_not_found", request))
+        if not revenue_acc:
+            raise HTTPException(**http_error(400, "revenue_account_not_found", request))
+
+        journal_entry_id, entry_number = gl_create_journal_entry(
+            db=db,
+            company_id=current_user.company_id,
+            date=datetime.now().date().isoformat(),
+            description=f"اعتراف بإيرادات - جدول #{schedule_id}",
+            lines=[
+                {
+                    "account_id": deferred_acc,
+                    "debit": amount,
+                    "credit": 0,
+                    "description": "اعتراف بإيرادات مؤجلة",
+                },
+                {
+                    "account_id": revenue_acc,
+                    "debit": 0,
+                    "credit": amount,
+                    "description": "إيرادات معترف بها",
+                },
+            ],
+            user_id=current_user.id,
+            reference=f"RR-{schedule_id}-{period_index}",
+            source="revenue_recognition",
+            source_id=recognition_source_id,
+            idempotency_key=idempotency_key,
+        )
 
         lines[period_index]["recognized"] = True
         lines[period_index]["recognized_at"] = datetime.now().isoformat()
@@ -256,6 +310,8 @@ def recognize_revenue_period(schedule_id: int, request: Request, period_index: i
             "recognized_total": str(new_recognized.quantize(_D2, ROUND_HALF_UP)),
             "remaining": str(max(new_deferred, Decimal("0")).quantize(_D2, ROUND_HALF_UP)),
             "status": new_status,
+            "journal_entry_id": journal_entry_id,
+            "entry_number": entry_number,
         }
     except HTTPException:
         raise

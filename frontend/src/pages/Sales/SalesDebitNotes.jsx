@@ -35,7 +35,7 @@ function SalesDebitNotes() {
     const [form, setForm] = useState({
         party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
         notes: '', branch_id: currentBranch?.id, party_site_id: '',
-        lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
+        lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }]
     })
     const [saving, setSaving] = useState(false)
 
@@ -82,13 +82,13 @@ function SalesDebitNotes() {
     const openCreate = () => {
         setForm({
             party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
-            notes: '', lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
+            notes: '', lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }]
         })
         loadCreateData()
         setShowCreate(true)
     }
 
-    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }] }))
+    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }] }))
     const removeLine = (i) => setForm(f => {
         if (f.lines.length <= 1) return f;
         return { ...f, lines: f.lines.filter((_, idx) => idx !== i) };
@@ -102,7 +102,6 @@ function SalesDebitNotes() {
                 if (prod) {
                     lines[i].description = prod.item_name || prod.name || ''
                     lines[i].unit_price = String(prod.selling_price || prod.last_selling_price || prod.last_buying_price || prod.buying_price || '0')
-                    lines[i].tax_rate = null // Resolved by backend engine
                 }
             }
             return { ...f, lines }
@@ -118,7 +117,6 @@ function SalesDebitNotes() {
                     product_id: l.product_id ? parseInt(l.product_id, 10) : null,
                     quantity: String(l.quantity || '0'),
                     unit_price: String(l.unit_price || '0'),
-                    tax_rate: l.tax_rate != null ? String(l.tax_rate) : null,
                     discount: String(l.discount || '0'),
                 })),
                 branch_id: currentBranch?.id || null,
@@ -154,9 +152,9 @@ function SalesDebitNotes() {
                     description: line.description || '',
                     quantity: String(line.quantity || '0'),
                     unit_price: String(line.unit_price || '0'),
-                    tax_rate: line.tax_rate !== null && line.tax_rate !== '' ? String(line.tax_rate) : null,
                     discount: String(line.discount || '0'),
                 })),
+                submitted_grand_total: backendTotals?.grandTotal ? String(backendTotals.grandTotal) : null,
             })
             setShowCreate(false)
             fetchList()
@@ -300,7 +298,7 @@ function SalesDebitNotes() {
                                                 <td><input className="form-input" value={line.description} onChange={e => updateLine(i, 'description', e.target.value)} /></td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} /></td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} /></td>
-                                                <td><input className="form-input" type="text" inputMode="decimal" value={line.tax_rate ?? ''} onChange={e => updateLine(i, 'tax_rate', e.target.value)} /></td>
+                                                <td>{(backendLines?.find(l => l.index === i) || backendLines?.[i])?.tax_rate ?? '—'}</td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.discount} onChange={e => updateLine(i, 'discount', e.target.value)} /></td>
                                                 <td style={{ fontWeight: 'bold', textAlign: 'center' }}>
                                                     {(() => {

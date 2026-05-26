@@ -5,9 +5,9 @@ Feature 023 — T062.  Contract: contracts/ubl-signing.md
 from __future__ import annotations
 
 import logging
-from decimal import Decimal
-from typing import Any
 from xml.etree.ElementTree import Element, SubElement, tostring
+
+from utils.tax_precision import money_str, qty_str
 
 logger = logging.getLogger(__name__)
 
@@ -69,18 +69,18 @@ def build_ubl(invoice: dict, profile: str = "standard") -> str:
 
     # Tax total
     tax_total = SubElement(root, f"{{{CAC_NS}}}TaxTotal")
-    _sub(tax_total, CBC_NS, "TaxAmount", str(invoice.get("tax_amount", 0)),
+    _sub(tax_total, CBC_NS, "TaxAmount", money_str(invoice.get("tax_amount", 0)),
          currencyID=invoice.get("currency", "SAR"))
 
     # Legal monetary total
     legal_total = SubElement(root, f"{{{CAC_NS}}}LegalMonetaryTotal")
-    _sub(legal_total, CBC_NS, "LineExtensionAmount", str(invoice.get("subtotal", 0)),
+    _sub(legal_total, CBC_NS, "LineExtensionAmount", money_str(invoice.get("subtotal", 0)),
          currencyID=invoice.get("currency", "SAR"))
-    _sub(legal_total, CBC_NS, "TaxExclusiveAmount", str(invoice.get("subtotal", 0)),
+    _sub(legal_total, CBC_NS, "TaxExclusiveAmount", money_str(invoice.get("subtotal", 0)),
          currencyID=invoice.get("currency", "SAR"))
-    _sub(legal_total, CBC_NS, "TaxInclusiveAmount", str(invoice.get("total", 0)),
+    _sub(legal_total, CBC_NS, "TaxInclusiveAmount", money_str(invoice.get("total", 0)),
          currencyID=invoice.get("currency", "SAR"))
-    _sub(legal_total, CBC_NS, "PayableAmount", str(invoice.get("total", 0)),
+    _sub(legal_total, CBC_NS, "PayableAmount", money_str(invoice.get("total", 0)),
          currencyID=invoice.get("currency", "SAR"))
 
     return tostring(root, encoding="unicode", xml_declaration=True)
@@ -107,9 +107,9 @@ def _add_party(root: Element, cac_ns: str, cbc_ns: str, tag: str, party: dict) -
 def _add_invoice_line(root: Element, cac_ns: str, cbc_ns: str, line: dict, line_no: int) -> None:
     inv_line = SubElement(root, f"{{{cac_ns}}}InvoiceLine")
     _sub(inv_line, cbc_ns, "ID", str(line_no))
-    _sub(inv_line, cbc_ns, "InvoicedQuantity", str(line.get("qty", 0)))
-    _sub(inv_line, cbc_ns, "LineExtensionAmount", str(line.get("subtotal", 0)))
+    _sub(inv_line, cbc_ns, "InvoicedQuantity", qty_str(line.get("qty", 0)))
+    _sub(inv_line, cbc_ns, "LineExtensionAmount", money_str(line.get("subtotal", 0)))
     item = SubElement(inv_line, f"{{{cac_ns}}}Item")
     _sub(item, cbc_ns, "Name", line.get("description", ""))
     price = SubElement(inv_line, f"{{{cac_ns}}}Price")
-    _sub(price, cbc_ns, "PriceAmount", str(line.get("unit_price", 0)))
+    _sub(price, cbc_ns, "PriceAmount", money_str(line.get("unit_price", 0)))

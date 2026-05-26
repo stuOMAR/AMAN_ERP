@@ -165,11 +165,14 @@ def find_duplicate_products(db, product_name: str = None, sku: str = None,
             reasons = []
             score = 0
             if sku and r.get('sku') == sku.strip():
-                reasons.append("sku_match"); score += 100
+                reasons.append("sku_match")
+                score += 100
             if barcode and r.get('barcode') == barcode.strip():
-                reasons.append("barcode_match"); score += 100
+                reasons.append("barcode_match")
+                score += 100
             if product_name and r.get('product_name', '').lower() == product_name.strip().lower():
-                reasons.append("exact_name"); score += 70
+                reasons.append("exact_name")
+                score += 70
 
             results.append({**r, "match_reasons": reasons, "similarity_score": min(score, 100)})
 

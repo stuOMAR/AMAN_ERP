@@ -15,7 +15,6 @@ AMAN ERP - Master Data Seed Script
 import argparse
 import json
 import sys
-import time
 from typing import Optional
 
 import requests
@@ -376,7 +375,7 @@ def seed_company_settings(client: AmanClient):
         for s in COMPANY_SETTINGS:
             print(f"  ✓ {s['setting_key']} = {s['setting_value']}")
     except Exception:
-        print(f"  ⚠ فشل تحديث الإعدادات (غير حرج)")
+        print("  ⚠ فشل تحديث الإعدادات (غير حرج)")
 
 
 def seed_accounts(client: AmanClient):
@@ -684,7 +683,7 @@ def main():
     print(f"\n═══ تسجيل الدخول (company_code={company_code}) ═══")
     try:
         client.login(COMPANY_USER, COMPANY_PASS, company_code)
-        print(f"  ✓ تم تسجيل الدخول بنجاح")
+        print("  ✓ تم تسجيل الدخول بنجاح")
     except Exception as e:
         print(f"  ✗ فشل تسجيل الدخول: {e}")
         sys.exit(1)

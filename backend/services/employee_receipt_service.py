@@ -10,9 +10,8 @@ Posting routes through gl_service. All actions are audited.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
 
 from sqlalchemy import text
@@ -165,7 +164,7 @@ def post_settlement(
     _transition(rec["status"], "posted")
 
     amount = Decimal(str(rec.get("amount") or 0))
-    employee_id = rec.get("employee_id")
+    rec.get("employee_id")
 
     from services.gl_service import create_journal_entry
 
@@ -173,14 +172,14 @@ def post_settlement(
     lines = [
         {
             "account_id": rec.get("expense_account_id") or 1,
-            "debit": float(amount),
+            "debit": amount,
             "credit": 0,
             "description": f"Employee receipt settlement #{settlement_id}",
         },
         {
             "account_id": rec.get("advance_account_id") or 1,
             "debit": 0,
-            "credit": float(amount),
+            "credit": amount,
             "description": f"Employee receipt settlement #{settlement_id}",
         },
     ]

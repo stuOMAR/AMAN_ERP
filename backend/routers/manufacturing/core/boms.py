@@ -4,30 +4,17 @@ Mounted under the parent router via core/__init__.py.
 """
 import logging
 from decimal import Decimal
-from datetime import datetime, date
 from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Header
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
-from services.gl_service import create_journal_entry
 from schemas import UserResponse
 from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
+    BOMCreate, BOMResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -98,19 +85,34 @@ def list_boms(
         conn.close()
 
 @router.post("/boms", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
-def create_bom(bom: BOMCreate, request: Request, current_user: UserResponse = Depends(get_current_user)):
+def create_bom(
+    bom: BOMCreate,
+    request: Request,
+    current_user: UserResponse = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+):
     """Create BOM."""
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
+        # Idempotency pre-check
+        if idempotency_key:
+            existing = conn.execute(text("""
+                SELECT id FROM bill_of_materials WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                trans.rollback()
+                return {"id": existing.id, "idempotent_replay": True}
+
         new_bom = conn.execute(text("""
-            INSERT INTO bill_of_materials (product_id, code, name, yield_quantity, route_id, is_active, notes)
-            VALUES (:pid, :code, :name, :yield_q, :rid, :active, :notes)
+            INSERT INTO bill_of_materials (product_id, code, name, yield_quantity, route_id, is_active, notes, idempotency_key)
+            VALUES (:pid, :code, :name, :yield_q, :rid, :active, :notes, :idempotency_key)
             RETURNING *
         """), {
             "pid": bom.product_id, "code": bom.code, "name": bom.name,
             "yield_q": bom.yield_quantity, "rid": bom.route_id, 
-            "active": bom.is_active, "notes": bom.notes
+            "active": bom.is_active, "notes": bom.notes,
+            "idempotency_key": idempotency_key,
         }).fetchone()
         
         for comp in bom.components:
@@ -336,7 +338,7 @@ def delete_bom(bom_id: int, request: Request, current_user: UserResponse = Depen
 @router.get("/boms/{bom_id}/compute-materials", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def compute_bom_materials(request: Request, 
     bom_id: int,
-    quantity: float = Query(..., description="Production order quantity"),
+    quantity: Decimal = Query(..., description="Production order quantity"),
     current_user: UserResponse = Depends(get_current_user)
 ):
     """
@@ -361,13 +363,15 @@ def compute_bom_materials(request: Request,
         total_material_cost = Decimal("0")
 
         for c in components:
-            waste_factor = 1 + (c.waste_percentage or 0) / 100.0
+            waste_factor = Decimal("1") + (Decimal(str(c.waste_percentage or 0)) / Decimal("100"))
+            component_qty = Decimal(str(c.quantity or 0))
+            order_qty = Decimal(str(quantity or 0))
             if c.is_percentage:
                 # Variable BOM: base qty = quantity% of order
-                computed_qty = round((c.quantity / 100.0 * quantity) * waste_factor, 4)
+                computed_qty = ((component_qty / Decimal("100")) * order_qty * waste_factor).quantize(Decimal("0.0001"))
             else:
                 # Fixed BOM: qty per unit × order qty
-                computed_qty = round(c.quantity * quantity * waste_factor, 4)
+                computed_qty = (component_qty * order_qty * waste_factor).quantize(Decimal("0.0001"))
 
             unit_cost = Decimal(str(c.cost_price or 0))
             line_cost = computed_qty * unit_cost
@@ -391,7 +395,7 @@ def compute_bom_materials(request: Request,
                 "line_cost": round(line_cost, 2),
                 "available_inventory": round(available, 4),
                 "sufficient": available >= computed_qty,
-                "shortage": round(max(0.0, computed_qty - available), 4),
+                "shortage": round(max(Decimal("0"), computed_qty - available), 4),
             })
 
         return {
@@ -414,4 +418,3 @@ def compute_bom_materials(request: Request,
 # ═══════════════════════════════════════════════════════════
 # MFG-108: In-Process QC Checks (فحص الجودة أثناء الإنتاج)
 # ═══════════════════════════════════════════════════════════
-

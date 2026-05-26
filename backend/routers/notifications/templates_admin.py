@@ -7,7 +7,7 @@ DELETE /notifications/templates/{id}  — delete template
 """
 from __future__ import annotations
 
-from fastapi import Request, APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from typing import Optional
 
@@ -36,6 +36,7 @@ def _get_tenant_id(current_user) -> str:
 
 @router.get("")
 def list_templates(
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(require_sensitive_permission("email_templates.admin")),
 ):
     """List all email templates."""
@@ -54,8 +55,9 @@ def list_templates(
                 FROM email_templates
                 WHERE tenant_id = :tnt
                 ORDER BY COALESCE(code, template_name), COALESCE(locale, 'en')
+                LIMIT :limit
             """),
-            {"tnt": int(tenant_id)},
+            {"tnt": str(tenant_id), "limit": limit},
         ).fetchall()
 
         return [
@@ -89,13 +91,13 @@ def create_template(
                 RETURNING id
             """),
             {
-                "tnt": int(tenant_id), "code": body.code, "locale": body.locale,
+                "tnt": str(tenant_id), "code": body.code, "locale": body.locale,
                 "subject": body.subject, "html": body.body_html, "text": body.body_text,
             },
         ).fetchone()
         conn.commit()
         return {"id": row[0], "code": body.code, "locale": body.locale}
-    except Exception as e:
+    except Exception:
         raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
         conn.close()
@@ -126,7 +128,7 @@ def update_template(request: Request,
                 WHERE id = :tid AND tenant_id = :tnt
             """),
             {
-                "tid": template_id, "tnt": int(tenant_id),
+                "tid": template_id, "tnt": str(tenant_id),
                 "code": body.code, "locale": body.locale,
                 "subject": body.subject, "html": body.body_html, "text": body.body_text,
             },
@@ -154,7 +156,7 @@ def delete_template(request: Request,
                 DELETE FROM email_templates
                 WHERE id = :tid AND tenant_id = :tnt
             """),
-            {"tid": template_id, "tnt": int(tenant_id)},
+            {"tid": template_id, "tnt": str(tenant_id)},
         )
         if result.rowcount == 0:
             raise HTTPException(**http_error(404, "template_not_found", request))

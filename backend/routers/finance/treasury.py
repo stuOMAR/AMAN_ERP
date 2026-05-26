@@ -30,6 +30,52 @@ def _dec(v) -> Decimal:
     """Convert any numeric value to Decimal safely."""
     return Decimal(str(v)) if v is not None else Decimal('0')
 
+
+def _money(value) -> str:
+    return str(_dec(value).quantize(_D2, ROUND_HALF_UP))
+
+
+def _amount_direction(value) -> str:
+    return "negative" if _dec(value) < 0 else "non_negative"
+
+
+def _resolve_exchange_rate(
+    db,
+    *,
+    currency: Optional[str],
+    base_currency: str,
+    rate_date: Optional[date],
+    request: Request,
+) -> Decimal:
+    """Resolve FX from backend tables; client-supplied rates are ignored."""
+    source_currency = (currency or base_currency or "SAR").upper()
+    company_base = (base_currency or "SAR").upper()
+    if source_currency == company_base:
+        return Decimal("1").quantize(Decimal("0.000001"), ROUND_HALF_UP)
+
+    rate_row = db.execute(text("""
+        SELECT rate
+        FROM exchange_rates
+        WHERE currency_id = (SELECT id FROM currencies WHERE UPPER(code) = UPPER(:code))
+          AND rate_date <= COALESCE(:rate_date, CURRENT_DATE)
+        ORDER BY rate_date DESC
+        LIMIT 1
+    """), {"code": source_currency, "rate_date": rate_date}).fetchone()
+
+    rate = _dec(rate_row.rate) if rate_row else Decimal("0")
+    if rate <= 0:
+        current_row = db.execute(text("""
+            SELECT current_rate
+            FROM currencies
+            WHERE UPPER(code) = UPPER(:code)
+            LIMIT 1
+        """), {"code": source_currency}).fetchone()
+        rate = _dec(current_row.current_rate) if current_row else Decimal("0")
+
+    if rate <= 0:
+        raise HTTPException(**http_error(400, "no_exchange_rate_for_currency", request))
+    return rate.quantize(Decimal("0.000001"), ROUND_HALF_UP)
+
 router = APIRouter(prefix="/treasury", tags=["Treasury & Expenses"], dependencies=[Depends(require_module("treasury"))])
 logger = logging.getLogger(__name__)
 
@@ -127,6 +173,27 @@ def _mask_bank_details(record: Dict[str, Any], current_user) -> Dict[str, Any]:
     return record
 
 
+def _treasury_account_response(db, account_id: int, current_user) -> Optional[Dict[str, Any]]:
+    row = db.execute(text("""
+        SELECT ta.*, COALESCE(a.balance, 0) as current_balance,
+               COALESCE(ta.current_balance, 0) as balance_in_currency,
+               b.branch_name as branch_name
+        FROM treasury_accounts ta
+        LEFT JOIN accounts a ON ta.gl_account_id = a.id
+        LEFT JOIN branches b ON ta.branch_id = b.id
+        WHERE ta.id = :id
+    """), {"id": account_id}).fetchone()
+    if not row:
+        return None
+
+    out = dict(row._mapping)
+    out["iban"] = decrypt_pii(out.get("iban"), tenant_id=current_user.company_id)
+    out["account_number"] = decrypt_pii(out.get("account_number"), tenant_id=current_user.company_id)
+    out["current_balance_direction"] = _amount_direction(out.get("current_balance"))
+    out["balance_in_currency_direction"] = _amount_direction(out.get("balance_in_currency"))
+    return _mask_bank_details(out, current_user)
+
+
 def _treasury_account_scope(current_user, requested_branch_id: Optional[int] = None):
     if requested_branch_id not in (None, ''):
         return validate_branch_access(current_user, requested_branch_id), None
@@ -202,11 +269,55 @@ def list_treasury_accounts(request: Request, branch_id: Optional[int] = None, cu
 
             d["current_balance"] = str(raw_balance)  # Already in base currency
             d["balance_in_currency"] = str(balance_in_cur)  # Original currency
+            d["current_balance_direction"] = _amount_direction(raw_balance)
+            d["balance_in_currency_direction"] = _amount_direction(balance_in_cur)
             d["exchange_rate"] = str(rate)
             d["base_currency"] = base_currency
 
             rows.append(d)
         return rows
+    finally:
+        db.close()
+
+
+@router.get("/accounts/opening-balance-preview", dependencies=[Depends(require_permission("treasury.view"))], response_model=Dict[str, Any])
+def preview_opening_balance(
+    request: Request,
+    opening_balance: Decimal = Decimal("0"),
+    currency: Optional[str] = None,
+    current_user=Depends(get_current_user),
+):
+    """Authoritative base-currency preview for a treasury opening balance."""
+    if not current_user.company_id:
+        raise HTTPException(**http_error(400, "company_required", request))
+    db = get_db_connection(current_user.company_id)
+    try:
+        base_currency = db.execute(text(
+            "SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1"
+        )).scalar() or "SAR"
+        source_currency = (currency or base_currency).upper()
+        rate = _resolve_exchange_rate(
+            db,
+            currency=source_currency,
+            base_currency=base_currency,
+            rate_date=date.today(),
+            request=request,
+        )
+        amount = _dec(opening_balance)
+        amount_base = (amount * rate).quantize(_D2, ROUND_HALF_UP)
+        return {
+            "currency": source_currency,
+            "base_currency": base_currency,
+            "opening_balance": _money(amount),
+            "exchange_rate": str(rate.quantize(Decimal("0.000001"), ROUND_HALF_UP)),
+            "opening_balance_base": str(amount_base),
+            "opening_balance_base_direction": _amount_direction(amount_base),
+        }
+    except HTTPException:
+        raise
+    except Exception:
+        logger.error("Treasury opening balance preview failed")
+        raise HTTPException(**http_error(500, "internal_error", request))
     finally:
         db.close()
 
@@ -270,11 +381,27 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
     إنشاء حساب خزينة جديد
     يقوم تلقائياً بإنشاء حساب في دليل الحسابات (GL Account) تحت الأصول المتداولة
     """
+    idempotency_key = request.headers.get("Idempotency-Key")
     with transactional(current_user.company_id) as db:
         if hasattr(account, 'branch_id') and account.branch_id:
             validate_branch_access(current_user, account.branch_id)
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
+
+        if idempotency_key:
+            existing_key = db.execute(text("""
+                SELECT source, source_id
+                FROM journal_entries
+                WHERE idempotency_key = :key
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing_key and existing_key.source == "treasury_account_opening" and existing_key.source_id:
+                existing_response = _treasury_account_response(db, int(existing_key.source_id), current_user)
+                if existing_response:
+                    return existing_response
+            if existing_key:
+                raise HTTPException(**http_error(409, "je_creation_conflict", request))
+
         # Check for duplicate treasury account name
         existing = db.execute(
             text("SELECT id FROM treasury_accounts WHERE name = :name AND is_active = TRUE"),
@@ -408,9 +535,15 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             
             if capital_gl_id:
                 # opening_balance is in the account's original currency
-                # gl_service will convert to base currency using exchange_rate
+                # gl_service will convert to base currency using the backend-resolved rate
                 opening_balance = _dec(account.opening_balance).quantize(_D2, ROUND_HALF_UP)
-                exchange_rate = _dec(account.exchange_rate or 1)
+                opening_exchange_rate = _resolve_exchange_rate(
+                    db,
+                    currency=account.currency,
+                    base_currency=base_currency,
+                    rate_date=date.today(),
+                    request=request,
+                )
 
                 # Build journal lines — debit/credit in ORIGINAL currency
                 # gl_service converts to base: debit_base = debit * exchange_rate
@@ -420,7 +553,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
                         "debit": opening_balance,  # Original currency
                         "credit": 0,
                         "currency": account.currency,
-                        "exchange_rate": exchange_rate,
+                        "exchange_rate": opening_exchange_rate,
                         "amount_currency": opening_balance,  # Original currency
                     },
                     {
@@ -428,7 +561,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
                         "debit": 0,
                         "credit": opening_balance,  # Original currency
                         "currency": account.currency,
-                        "exchange_rate": exchange_rate,
+                        "exchange_rate": opening_exchange_rate,
                         "amount_currency": opening_balance,  # Original currency
                     },
                 ]
@@ -443,9 +576,10 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
                     user_id=current_user.id,
                     branch_id=account.branch_id,
                     currency=base_currency,
-                    exchange_rate=1.0,
+                    exchange_rate=Decimal("1"),
                     source="treasury_account_opening",
-                    source_id=new_treasury[0]
+                    source_id=new_treasury[0],
+                    idempotency_key=idempotency_key,
                 )
 
                 # T1.3a: recompute current_balance now that the opening JE is posted
@@ -465,21 +599,7 @@ def create_treasury_account(request: Request, account: TreasuryAccountCreate, cu
             branch_id=account.branch_id
         )
 
-        # Refresh from DB to get updated balance from GL
-        final_query = """
-            SELECT ta.*, COALESCE(a.balance, 0) as current_balance, b.branch_name as branch_name
-            FROM treasury_accounts ta
-            LEFT JOIN accounts a ON ta.gl_account_id = a.id
-            LEFT JOIN branches b ON ta.branch_id = b.id
-            WHERE ta.id = :id
-        """
-        final_treasury = db.execute(text(final_query), {"id": new_treasury[0]}).fetchone()
-        # T11 — return decrypted IBAN/account_number to caller (UI layer expects plaintext)
-        out = dict(final_treasury._mapping)
-        out["iban"]           = decrypt_pii(out.get("iban"),           tenant_id=current_user.company_id)
-        out["account_number"] = decrypt_pii(out.get("account_number"), tenant_id=current_user.company_id)
-        out = _mask_bank_details(out, current_user)
-        return out
+        return _treasury_account_response(db, new_treasury[0], current_user)
 
 @router.put("/accounts/{id}", dependencies=[Depends(require_sensitive_permission("treasury.edit"))], response_model=Dict[str, Any])
 def update_treasury_account(
@@ -776,9 +896,24 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
         target_gl = target.gl_account_id
         target_name = target.name
         target_currency = target.currency
-        
-        exchange_rate = _dec(data.exchange_rate or 1)
-        amount_base = (_dec(data.amount) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+
+        from utils.accounting import get_base_currency
+        base_currency = get_base_currency(db)
+        source_rate = _resolve_exchange_rate(
+            db,
+            currency=source_currency,
+            base_currency=base_currency,
+            rate_date=data.transaction_date,
+            request=request,
+        )
+        target_rate = _resolve_exchange_rate(
+            db,
+            currency=target_currency,
+            base_currency=base_currency,
+            rate_date=data.transaction_date,
+            request=request,
+        )
+        amount_base = (_dec(data.amount) * source_rate).quantize(_D2, ROUND_HALF_UP)
 
         # Overdraft validation on source account
         new_balance = _dec(source.current_balance) - _dec(data.amount)
@@ -786,41 +921,32 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             is_bank = source.account_type == 'bank'
             allow_od = source.allow_overdraft
             if not is_bank and not allow_od:
-                raise HTTPException(
-                    status_code=400,
-                    detail=f"رصيد حساب المصدر غير كافٍ. الرصيد الحالي: {_dec(source.current_balance):,.2f}"
-                )
+                raise HTTPException(**http_error(
+                    400,
+                    "insufficient_treasury_balance",
+                    request,
+                    available=_money(source.current_balance),
+                    required=_money(data.amount),
+                ))
 
         # 1. Create Journal Entry — GL-first
         check_fiscal_period_open(db, data.transaction_date)
 
-        # Cross-currency: convert amount to target currency before adding to target treasury
-        if source_currency != target_currency and exchange_rate != Decimal('1'):
-            target_rate_row = db.execute(text("""
-                SELECT er.rate
-                FROM exchange_rates er
-                JOIN currencies c ON c.id = er.currency_id
-                WHERE c.code = :code
-                  AND er.rate_date <= :transaction_date
-                ORDER BY er.rate_date DESC
-                LIMIT 1
-            """), {"code": target_currency, "transaction_date": data.transaction_date}).fetchone()
-            target_rate = _dec(target_rate_row.rate) if target_rate_row else Decimal('1')
-            target_amount = ((_dec(data.amount) * exchange_rate) / target_rate).quantize(_D2, ROUND_HALF_UP) if target_rate else _dec(data.amount)
+        # Cross-currency: convert amount to target currency using backend rates.
+        if source_currency != target_currency:
+            target_amount = (amount_base / target_rate).quantize(_D2, ROUND_HALF_UP)
         else:
             target_amount = data.amount
 
-        target_rate = (_dec(amount_base) / _dec(target_amount)) if _dec(target_amount) else Decimal('1')
-        
         je_lines = [
             {
                 "account_id": target_gl, "debit": _dec(target_amount), "credit": Decimal("0"),
-                "currency": target_currency, "exchange_rate": _dec(target_rate), "description": "Transfer In",
+                "currency": target_currency, "exchange_rate": target_rate, "description": "Transfer In",
                 "cost_center_id": data.cost_center_id,
             },
             {
                 "account_id": source_gl, "debit": Decimal("0"), "credit": _dec(data.amount),
-                "currency": source_currency, "exchange_rate": exchange_rate, "description": "Transfer Out",
+                "currency": source_currency, "exchange_rate": source_rate, "description": "Transfer Out",
                 "cost_center_id": data.cost_center_id,
             },
         ]
@@ -836,7 +962,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             branch_id=branch_id,
             reference=trans_num,
             currency=source_currency,
-            exchange_rate=exchange_rate,
+            exchange_rate=source_rate,
             source="treasury_transfer",
             idempotency_key=idempotency_key,
         )
@@ -862,7 +988,7 @@ def create_transfer(request: Request, data: TransactionCreate, current_user: dic
             "ref": data.reference_number,
             "branch_id": branch_id,
             "uid": current_user.id,
-            "exr": exchange_rate,
+            "exr": source_rate,
             "cur": source_currency,
             "idem": idempotency_key,
         }).scalar()
@@ -985,7 +1111,11 @@ def get_treasury_balances_report(
                 "current_balance": str(bal.quantize(_D2, ROUND_HALF_UP)),
                 "balance_in_currency": str(bal.quantize(_D2, ROUND_HALF_UP)),
                 "balance_in_base": str(bal_base.quantize(_D2, ROUND_HALF_UP)),
-	                "gl_balance": str(gl_balances.get(r.gl_account_id, Decimal('0')).quantize(_D2, ROUND_HALF_UP)) if r.gl_account_id else None,
+                "gl_balance": str(gl_balances.get(r.gl_account_id, Decimal('0')).quantize(_D2, ROUND_HALF_UP)) if r.gl_account_id else None,
+                "current_balance_direction": _amount_direction(bal),
+                "balance_in_currency_direction": _amount_direction(bal),
+                "balance_in_base_direction": _amount_direction(bal_base),
+                "gl_balance_direction": _amount_direction(gl_balances.get(r.gl_account_id, Decimal('0'))) if r.gl_account_id else None,
                 "exchange_rate": str(rate.quantize(Decimal("0.000001"), ROUND_HALF_UP)),
                 "base_currency": base_currency,
                 "branch_name": r.branch_name
@@ -1139,11 +1269,9 @@ def get_treasury_cashflow_report(
         """)
         by_account = db.execute(by_account_q, params).fetchall()
 
-        def _money(value) -> str:
-            return str(_dec(value).quantize(_D2, ROUND_HALF_UP))
-
         total_in = sum((_dec(r.total) for r in inflows), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
         total_out = sum((_dec(r.total) for r in outflows), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
+        net_flow = (total_in - total_out).quantize(_D2, ROUND_HALF_UP)
 
         return {
             "inflows": [{"type": r.transaction_type, "total": _money(r.total), "count": r.count} for r in inflows],
@@ -1151,7 +1279,17 @@ def get_treasury_cashflow_report(
             "total_inflow": str(total_in),
             "total_outflow": str(total_out),
             "net_flow": str((total_in - total_out).quantize(_D2, ROUND_HALF_UP)),
-            "daily_trend": [{"date": str(d.day), "inflow": _money(d.inflow), "outflow": _money(d.outflow)} for d in daily],
+            "net_flow_direction": _amount_direction(net_flow),
+            "daily_trend": [
+                {
+                    "date": str(d.day),
+                    "inflow": _money(d.inflow),
+                    "outflow": _money(d.outflow),
+                    "net": _money(_dec(d.inflow) - _dec(d.outflow)),
+                    "net_direction": _amount_direction(_dec(d.inflow) - _dec(d.outflow)),
+                }
+                for d in daily
+            ],
             "by_account": [
                 {
                     "id": a.id,
@@ -1160,6 +1298,7 @@ def get_treasury_cashflow_report(
                     "inflow": _money(a.inflow),
                     "outflow": _money(a.outflow),
                     "net": _money(_dec(a.inflow) - _dec(a.outflow)),
+                    "net_direction": _amount_direction(_dec(a.inflow) - _dec(a.outflow)),
                 }
                 for a in by_account
             ],

@@ -3,24 +3,21 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import Request, APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    DecliningBalanceInput, UnitsOfProductionInput,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,8 +30,63 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import DepreciationRunInput, _D2, _D4, _dec
+from .core import DepreciationRunInput, _D2, _D4, _dec  # noqa: E402
 
+
+def _depreciation_rows(conn, body: DepreciationRunInput, cutoff: date):
+    params: Dict[str, Any] = {"cutoff": cutoff.isoformat()}
+    asset_filter = ""
+    if body.asset_id:
+        asset_filter = " AND s.asset_id = :aid"
+        params["aid"] = body.asset_id
+
+    return conn.execute(text(f"""
+        SELECT s.id, s.asset_id, s.fiscal_year, s.date, s.amount, a.code, a.name, a.currency, a.branch_id
+        FROM asset_depreciation_schedule s
+        JOIN assets a ON a.id = s.asset_id
+        WHERE s.posted = FALSE
+          AND s.date <= :cutoff
+          AND a.status != 'disposed'
+          AND COALESCE(s.amount, 0) > 0
+          {asset_filter}
+        ORDER BY s.date ASC, s.asset_id ASC
+    """), params).fetchall()
+
+
+@router.post("/depreciate/preview", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
+def preview_depreciation(request: Request,
+    body: Optional[DepreciationRunInput] = None,
+    current_user: dict = Depends(get_current_user),
+):
+    """Preview the backend-calculated depreciation posting without committing GL rows."""
+    body = body or DepreciationRunInput()
+    cutoff = body.through_date or date.today()
+    with transactional(current_user.company_id) as conn:
+        rows = _depreciation_rows(conn, body, cutoff)
+        total_amount = Decimal("0")
+        draft_lines = []
+        for r in rows:
+            amount = _dec(r.amount).quantize(_D2, ROUND_HALF_UP)
+            total_amount += amount
+            draft_lines.append({
+                "schedule_id": r.id,
+                "asset_id": r.asset_id,
+                "asset_code": r.code,
+                "fiscal_year": r.fiscal_year,
+                "date": str(r.date),
+                "debit_account_key": "acc_map_depr_exp",
+                "credit_account_key": "acc_map_acc_depr",
+                "amount": str(amount),
+            })
+        return {
+            "posted_count": len(draft_lines),
+            "total_amount": str(total_amount.quantize(_D2, ROUND_HALF_UP)),
+            "through_date": cutoff.isoformat(),
+            "draft_journal_lines": draft_lines,
+        }
+
+
+@router.post("/depreciate", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 @router.post("/run-depreciation", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def run_depreciation(request: Request, 
     body: Optional[DepreciationRunInput] = None,
@@ -48,6 +100,7 @@ def run_depreciation(request: Request,
         دائن : مجمع الإهلاك
     - مُحصَّن من التكرار عبر idempotency_key = dep-sched-{id}.
     """
+    idempotency_key = require_idempotency_key(request, operation="asset depreciation run")
     body = body or DepreciationRunInput()
     cutoff = body.through_date or date.today()
     conn = get_db_connection(current_user.company_id)
@@ -65,26 +118,10 @@ def run_depreciation(request: Request,
         if not dep_exp_acc or not acc_dep_acc:
             raise HTTPException(**http_error(400, "depreciation_accounts_mapped_roles_acc_map_depr_ex", request))
 
-        params: Dict[str, Any] = {"cutoff": cutoff.isoformat()}
-        asset_filter = ""
-        if body.asset_id:
-            asset_filter = " AND s.asset_id = :aid"
-            params["aid"] = body.asset_id
-
-        rows = conn.execute(text(f"""
-            SELECT s.id, s.asset_id, s.fiscal_year, s.date, s.amount, a.code, a.name, a.currency, a.branch_id
-            FROM asset_depreciation_schedule s
-            JOIN assets a ON a.id = s.asset_id
-            WHERE s.posted = FALSE
-              AND s.date <= :cutoff
-              AND a.status != 'disposed'
-              AND COALESCE(s.amount, 0) > 0
-              {asset_filter}
-            ORDER BY s.date ASC, s.asset_id ASC
-        """), params).fetchall()
+        rows = _depreciation_rows(conn, body, cutoff)
 
         if not rows:
-            return {"posted_count": 0, "total_amount": 0.0, "message": i18n_message("no_depreciation_to_post", request)}
+            return {"posted_count": 0, "total_amount": "0.00", "message": i18n_message("no_depreciation_to_post", request)}
 
         base_currency = get_base_currency(conn)
         posted_count = 0
@@ -115,7 +152,7 @@ def run_depreciation(request: Request,
                 source="AssetDepreciation",
                 source_id=r.id,
                 username=getattr(current_user, "username", None),
-                idempotency_key=f"dep-sched-{r.id}",
+                idempotency_key=f"{idempotency_key}:dep-sched-{r.id}",
             )
             conn.execute(text(
                 "UPDATE asset_depreciation_schedule "
@@ -151,6 +188,7 @@ def run_depreciation(request: Request,
 @router.post("/{asset_id}/depreciate/{schedule_id}", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def post_depreciation(request: Request, asset_id: int, schedule_id: int, current_user: dict = Depends(get_current_user)):
     """Post Depreciation."""
+    idempotency_key = require_idempotency_key(request, operation="asset depreciation item")
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -208,7 +246,8 @@ def post_depreciation(request: Request, asset_id: int, schedule_id: int, current
             currency=asset.currency or base_currency,
             exchange_rate=Decimal("1"),
             source="asset_depreciation",
-            source_id=schedule_id
+            source_id=schedule_id,
+            idempotency_key=f"{idempotency_key}:asset-depr:{schedule_id}",
         )
 
         # Update Account Balances handled by gl_service

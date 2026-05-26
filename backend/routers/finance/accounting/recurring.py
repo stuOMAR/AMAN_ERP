@@ -3,25 +3,17 @@
 Mounted under the parent router via accounting/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
+from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
-from services.gl_service import create_journal_entry as gl_create_journal_entry
-from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -29,11 +21,17 @@ _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
 
 def _dec(v) -> Decimal:
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return Decimal("0")
     return Decimal(str(v)) if v is not None else Decimal('0')
+
+
+def _money_str(v) -> str:
+    return str(_dec(v).quantize(_D2, ROUND_HALF_UP))
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, _create_entry_from_template
+from .core import _D2, _D4, _dec, _create_entry_from_template  # noqa: E402
 
 @router.get("/recurring-templates", dependencies=[Depends(require_permission("accounting.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
@@ -89,8 +87,12 @@ def get_recurring_template(request: Request, template_id: int, current_user: dic
         """), {"tid": template_id}).fetchall()
 
         result = dict(tmpl._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
+        result["total_debit"] = _money_str(sum((_dec(line.debit) for line in lines), Decimal("0")))
+        result["total_credit"] = _money_str(sum((_dec(line.credit) for line in lines), Decimal("0")))
         return result
+
+
 @router.post("/recurring-templates", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("accounting.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def create_recurring_template(request: Request, data: dict = Body(...), current_user: dict = Depends(get_current_user)):
@@ -101,8 +103,8 @@ def create_recurring_template(request: Request, data: dict = Body(...), current_
             if not lines or len(lines) < 2:
                 raise HTTPException(**http_error(400, "at_least_two_lines_required", request))
     
-            total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
-            total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
+            total_debit = sum(_dec(line.get("debit", 0)) for line in lines)
+            total_credit = sum(_dec(line.get("credit", 0)) for line in lines)
             if (total_debit - total_credit).copy_abs() > _D4:
                 raise HTTPException(status_code=400, detail=i18n_message("journal_entry_unbalanced", request))
     
@@ -208,8 +210,8 @@ def update_recurring_template(request: Request, template_id: int, data: dict = B
             if lines is not None:
                 if len(lines) < 2:
                     raise HTTPException(**http_error(400, "at_least_two_lines_required", request))
-                total_debit = sum(_dec(l.get("debit", 0)) for l in lines)
-                total_credit = sum(_dec(l.get("credit", 0)) for l in lines)
+                total_debit = sum(_dec(line.get("debit", 0)) for line in lines)
+                total_credit = sum(_dec(line.get("credit", 0)) for line in lines)
                 if (total_debit - total_credit).copy_abs() > _D4:
                     raise HTTPException(status_code=400, detail=i18n_message("journal_entry_unbalanced", request))
     
@@ -268,6 +270,14 @@ def generate_from_template(request: Request, template_id: int, current_user: dic
     """توليد قيد يومي من قالب متكرر يدوياً"""
     with transactional(current_user.company_id) as db:
         try:
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                from utils.idempotency import find_je_by_idempotency_key
+                existing = find_je_by_idempotency_key(db, idempotency_key)
+                if existing:
+                    je_id, _ = existing
+                    return {"success": True, "message": i18n_message("recurring_entry_generated", request), "entry_id": je_id}
+
             tmpl = db.execute(text(
                 "SELECT * FROM recurring_journal_templates WHERE id = :id"
             ), {"id": template_id}).fetchone()
@@ -281,7 +291,7 @@ def generate_from_template(request: Request, template_id: int, current_user: dic
             if not lines:
                 raise HTTPException(**http_error(400, "template_has_no_lines", request))
     
-            entry_id = _create_entry_from_template(db, tmpl, lines, current_user)
+            entry_id = _create_entry_from_template(db, tmpl, lines, current_user, idempotency_key=idempotency_key)
     
             return {"success": True, "message": i18n_message("recurring_entry_generated", request), "entry_id": entry_id}
         except HTTPException:
@@ -295,6 +305,30 @@ def generate_all_due_templates(request: Request, current_user: dict = Depends(ge
     """توليد القيود المستحقة لجميع القوالب النشطة (يُستخدم بالجدولة)"""
     with transactional(current_user.company_id) as db:
         try:
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                prefix = f"due-{idempotency_key}-%"
+                rows = db.execute(text("""
+                    SELECT id, source_id FROM journal_entries
+                    WHERE idempotency_key LIKE :k
+                """), {"k": prefix}).fetchall()
+                if rows:
+                    generated = []
+                    for r in rows:
+                        name_row = db.execute(text("SELECT name FROM recurring_journal_templates WHERE id = :id"), {"id": r.source_id}).fetchone()
+                        generated.append({
+                            "template_id": r.source_id,
+                            "template_name": name_row.name if name_row else f"Template #{r.source_id}",
+                            "entry_id": r.id
+                        })
+                    return {
+                        "success": True,
+                        "generated_count": len(generated),
+                        "error_count": 0,
+                        "generated": generated,
+                        "errors": [],
+                    }
+
             today = date.today()
             params: Dict[str, Any] = {"today": today}
             branch_filter = branch_scope_filter(current_user, None, "branch_id", params)
@@ -318,7 +352,8 @@ def generate_all_due_templates(request: Request, current_user: dict = Depends(ge
                     if not lines:
                         continue
     
-                    entry_id = _create_entry_from_template(db, tmpl, lines, current_user)
+                    tmpl_idem_key = f"due-{idempotency_key}-{tmpl.id}" if idempotency_key else None
+                    entry_id = _create_entry_from_template(db, tmpl, lines, current_user, idempotency_key=tmpl_idem_key)
                     generated.append({"template_id": tmpl.id, "template_name": tmpl.name, "entry_id": entry_id})
                 except Exception as ex:
                     errors.append({"template_id": tmpl.id, "template_name": tmpl.name, "error": str(ex)})

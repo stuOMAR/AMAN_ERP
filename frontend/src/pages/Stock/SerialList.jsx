@@ -21,6 +21,7 @@ function SerialList() {
     const [showCreateModal, setShowCreateModal] = useState(false)
     const [showBulkModal, setShowBulkModal] = useState(false)
     const [total, setTotal] = useState(0)
+    const [summary, setSummary] = useState({})
 
     const [form, setForm] = useState({
         product_id: '',
@@ -64,6 +65,7 @@ function SerialList() {
             const res = await inventoryAPI.listSerials(params)
             setSerials(res.data.items || [])
             setTotal(res.data.total || 0)
+            setSummary(res.data.summary || {})
         } catch (err) {
             console.error(err)
         } finally {
@@ -116,8 +118,8 @@ function SerialList() {
                 product_id: parseInt(bulkForm.product_id),
                 warehouse_id: parseInt(bulkForm.warehouse_id),
                 prefix: bulkForm.prefix,
-                start_number: parseInt(bulkForm.start_number),
-                count: parseInt(bulkForm.count),
+                start_number: bulkForm.start_number,
+                count: bulkForm.count,
                 batch_id: bulkForm.batch_id ? parseInt(bulkForm.batch_id) : null
             })
             setShowBulkModal(false)
@@ -273,7 +275,7 @@ function SerialList() {
                     </svg>
                     <div className="small text-muted">{t('stock.serial.available')}</div>
                     <div className="fw-bold fs-4 text-success">
-                        {serials.filter(s => s.status === 'available').length}
+                        {summary.available_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -284,7 +286,7 @@ function SerialList() {
                     </svg>
                     <div className="small text-muted">{t('stock.serial.sold')}</div>
                     <div className="fw-bold fs-4 text-primary">
-                        {serials.filter(s => s.status === 'sold').length}
+                        {summary.sold_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -295,7 +297,7 @@ function SerialList() {
                     </svg>
                     <div className="small text-muted">{t('stock.serial.defective')}</div>
                     <div className="fw-bold fs-4 text-danger">
-                        {serials.filter(s => s.status === 'defective').length}
+                        {summary.defective_count || 0}
                     </div>
                 </div>
             </div>
@@ -448,7 +450,7 @@ function SerialList() {
                                 </div>
                             </div>
                             <div style={{ padding: '12px', background: 'var(--bg-secondary)', borderRadius: '8px', marginTop: '8px' }}>
-                                <strong>{t('stock.serial.preview')}</strong> {bulkForm.prefix}{String(bulkForm.start_number).padStart(6, '0')} → {bulkForm.prefix}{String(parseInt(bulkForm.start_number) + parseInt(bulkForm.count) - 1).padStart(6, '0')}
+                                <strong>{t('stock.serial.preview')}</strong> {bulkForm.prefix}{String(bulkForm.start_number).padStart(6, '0')}
                                 <br /><small>{t('stock.serial.will_create', { count: bulkForm.count })}</small>
                             </div>
                             <div style={{ display: 'flex', gap: '12px', marginTop: '20px' }}>

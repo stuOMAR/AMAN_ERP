@@ -83,7 +83,7 @@ const ProjectFinancialsReport = () => {
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('projects.reports.total_profit', 'صافي الربح')}</div>
-                            <div className="metric-value" style={{ color: (totals.total_profit || 0) >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                            <div className="metric-value" style={{ color: totals.profit_status === 'profitable' ? 'var(--success)' : 'var(--danger)' }}>
                                 {formatNumber(totals.total_profit || 0)}
                             </div>
                         </div>
@@ -128,21 +128,21 @@ const ProjectFinancialsReport = () => {
                                                 <td>{formatNumber(p.planned_budget)}</td>
                                                 <td style={{ color: 'var(--success)' }}>{formatNumber(p.total_revenues)}</td>
                                                 <td style={{ color: 'var(--danger)' }}>{formatNumber(p.total_expenses)}</td>
-                                                <td style={{ fontWeight: 700, color: p.net_profit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                                <td style={{ fontWeight: 700, color: p.profit_status === 'profitable' ? 'var(--success)' : 'var(--danger)' }}>
                                                     {formatNumber(p.net_profit)}
                                                 </td>
                                                 <td>
-                                                    <span className={`status-badge ${p.margin_pct >= 20 ? 'status-active' : p.margin_pct >= 0 ? 'status-pending' : 'status-rejected'}`}>
+                                                    <span className={`status-badge ${p.profit_status === 'profitable' ? 'status-active' : 'status-rejected'}`}>
                                                         {formatNumber(p.margin_pct, 1)}%
                                                     </span>
                                                 </td>
-                                                <td style={{ color: p.budget_variance >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                                <td style={{ color: p.budget_status === 'within_budget' ? 'var(--success)' : 'var(--danger)' }}>
                                                     {formatNumber(p.budget_variance)}
                                                 </td>
                                                 <td>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                                                         <div style={{ flex: 1, background: '#e5e7eb', borderRadius: 999, height: 6, overflow: 'hidden', minWidth: 50 }}>
-                                                            <div style={{ width: `${p.progress}%`, background: p.progress >= 100 ? '#22c55e' : '#3b82f6', height: '100%', borderRadius: 999 }} />
+                                                            <div style={{ width: `${p.progress}%`, background: '#3b82f6', height: '100%', borderRadius: 999 }} />
                                                         </div>
                                                         <span style={{ fontSize: 11, fontWeight: 600 }}>{formatNumber(p.progress, 0)}%</span>
                                                     </div>

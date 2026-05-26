@@ -188,13 +188,13 @@ def test_wht_augment_payment_lines_inserts_wht_credit():
     ]
     new = augment_payment_lines(lines, br, bank_account_id=2001, expense_account_id=1001)
     # Bank credit reduced to net; a WHT credit line added.
-    bank_line = next(l for l in new if l["account_id"] == 2001)
+    bank_line = next(line for line in new if line["account_id"] == 2001)
     assert Decimal(str(bank_line["credit"])) == Decimal("9500.00")
-    wht_line = next(l for l in new if l["account_id"] == 99)
+    wht_line = next(line for line in new if line["account_id"] == 99)
     assert Decimal(str(wht_line["credit"])) == Decimal("500.00")
     # Debit total still equals credit total.
-    total_debit = sum(Decimal(str(l.get("debit", 0))) for l in new)
-    total_credit = sum(Decimal(str(l.get("credit", 0))) for l in new)
+    total_debit = sum(Decimal(str(line.get("debit", 0))) for line in new)
+    total_credit = sum(Decimal(str(line.get("credit", 0))) for line in new)
     assert total_debit == total_credit == Decimal("10000.00")
 
 

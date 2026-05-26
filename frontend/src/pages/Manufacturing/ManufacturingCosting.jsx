@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { manufacturingCostingAPI, manufacturingAPI } from '../../utils/api'
-import Decimal from 'decimal.js'
 import { toastEmitter } from '../../utils/toastEmitter'
 import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
@@ -91,22 +90,19 @@ function ManufacturingCosting() {
                             </tr>
                         </thead>
                         <tbody>
-                            {(report.orders || report).map((o, i) => {
-                                const estimated = new Decimal(o.estimated_cost || '0')
-                                const actual = new Decimal(o.actual_cost || '0')
-                                const variance = actual.minus(estimated)
-                                const pct = !estimated.isZero() ? variance.div(estimated).times(100).toFixed(1) : '-'
+                            {(Array.isArray(report) ? report : report.orders || []).map((o, i) => {
+                                const isOverEstimate = o.variance_direction === 'unfavorable'
                                 return (
                                     <tr key={i}>
                                         <td className="font-medium">{o.order_number || `#${o.id}`}</td>
                                         <td>{o.product_name}</td>
                                         <td>{formatNumber(o.estimated_cost)} {currency}</td>
                                         <td>{formatNumber(o.actual_cost)} {currency}</td>
-                                        <td className={variance > 0 ? 'text-danger' : 'text-success'}>
-                                            {variance > 0 ? '+' : ''}{formatNumber(variance)} {currency}
+                                        <td className={isOverEstimate ? 'text-danger' : 'text-success'}>
+                                            {o.variance_prefix || ''}{formatNumber(o.variance)} {currency}
                                         </td>
-                                        <td className={variance > 0 ? 'text-danger' : 'text-success'}>
-                                            {pct}%
+                                        <td className={isOverEstimate ? 'text-danger' : 'text-success'}>
+                                            {o.variance_pct !== null && o.variance_pct !== undefined ? formatNumber(o.variance_pct, 1) : '-'}%
                                         </td>
                                     </tr>
                                 )

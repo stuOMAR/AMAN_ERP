@@ -2,27 +2,65 @@
 
 Mounted under the parent router via crm/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
-from pydantic import BaseModel
+from typing import Any, Dict, List
 from decimal import Decimal
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_module, validate_branch_access
-from utils.accounting import generate_sequential_number
-from utils.audit import log_activity
-from utils.sql_builder import validate_update_keys
-from services.notification_service import notification_service
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
+from utils.permissions import require_permission
+from utils.tax_precision import money_str, rate_str
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
+
+CRM_MONEY_FIELDS = {
+    "total_value",
+    "avg_deal_size",
+    "avg_deal_value",
+    "won_value",
+    "weighted_value",
+    "total_pipeline",
+    "actual_value",
+    "commit_value",
+    "best_case",
+    "most_likely",
+    "total_won_value",
+    "pipeline_value",
+    "total_budget",
+    "value",
+    "budget",
+    "cost_per_conversion",
+    "total_investment",
+    "avg_cpc",
+}
+
+CRM_RATE_FIELDS = {
+    "win_rate_pct",
+    "win_rate",
+    "loss_rate",
+    "conversion_rate",
+    "open_rate",
+    "click_rate",
+    "overall_conversion_rate",
+}
+
+
+def _serialize_crm_row(row, *, money_fields=CRM_MONEY_FIELDS, rate_fields=CRM_RATE_FIELDS) -> Dict[str, Any]:
+    data = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+    for field in money_fields:
+        if field in data and data[field] is not None:
+            data[field] = money_str(data[field])
+    for field in rate_fields:
+        if field in data and data[field] is not None:
+            data[field] = rate_str(data[field])
+    return data
+
+
+def _serialize_crm_rows(rows, **kwargs) -> List[Dict[str, Any]]:
+    return [_serialize_crm_row(row, **kwargs) for row in rows]
 
 @router.get("/analytics/pipeline", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
 def pipeline_analytics(current_user=Depends(get_current_user)):
@@ -51,7 +89,7 @@ def pipeline_analytics(current_user=Depends(get_current_user)):
                 COUNT(*) FILTER (WHERE stage = 'lost') as lost,
                 COUNT(*) FILTER (WHERE stage IN ('won','lost')) as closed,
                 CASE WHEN COUNT(*) FILTER (WHERE stage IN ('won','lost')) > 0
-                     THEN ROUND(100.0 * COUNT(*) FILTER (WHERE stage = 'won') /
+                     THEN ROUND(100 * COUNT(*) FILTER (WHERE stage = 'won') /
                           COUNT(*) FILTER (WHERE stage IN ('won','lost')), 1)
                      ELSE 0 END as win_rate_pct
             FROM sales_opportunities
@@ -104,12 +142,12 @@ def pipeline_analytics(current_user=Depends(get_current_user)):
         """)).fetchall()
 
         return {
-            "funnel": [dict(r._mapping) for r in funnel],
-            "win_rate": dict(win_rate._mapping) if win_rate else {},
-            "velocity": dict(velocity._mapping) if velocity else {},
-            "monthly_trend": [dict(r._mapping) for r in monthly],
-            "top_performers": [dict(r._mapping) for r in top_reps],
-            "source_analysis": [dict(r._mapping) for r in sources]
+            "funnel": _serialize_crm_rows(funnel),
+            "win_rate": _serialize_crm_row(win_rate) if win_rate else {},
+            "velocity": _serialize_crm_row(velocity) if velocity else {},
+            "monthly_trend": _serialize_crm_rows(monthly),
+            "top_performers": _serialize_crm_rows(top_reps),
+            "source_analysis": _serialize_crm_rows(sources)
         }
     finally:
         db.close()
@@ -123,7 +161,7 @@ def sales_forecast(current_user=Depends(get_current_user)):
         # Weighted pipeline value
         weighted = db.execute(text("""
             SELECT
-                COALESCE(SUM(expected_value * probability / 100.0), 0) as weighted_value,
+                COALESCE(SUM(expected_value * probability / 100), 0) as weighted_value,
                 COALESCE(SUM(expected_value), 0) as total_pipeline,
                 COUNT(*) as active_deals
             FROM sales_opportunities
@@ -135,7 +173,7 @@ def sales_forecast(current_user=Depends(get_current_user)):
             SELECT TO_CHAR(expected_close_date, 'YYYY-MM') as month,
                    COUNT(*) as deals,
                    COALESCE(SUM(expected_value), 0) as total_value,
-                   COALESCE(SUM(expected_value * probability / 100.0), 0) as weighted_value
+                   COALESCE(SUM(expected_value * probability / 100), 0) as weighted_value
             FROM sales_opportunities
             WHERE stage NOT IN ('won', 'lost') AND expected_close_date IS NOT NULL
             GROUP BY TO_CHAR(expected_close_date, 'YYYY-MM')
@@ -158,16 +196,16 @@ def sales_forecast(current_user=Depends(get_current_user)):
             SELECT
                 COALESCE(SUM(expected_value) FILTER (WHERE probability >= 75), 0) as commit_value,
                 COALESCE(SUM(expected_value) FILTER (WHERE probability >= 50), 0) as best_case,
-                COALESCE(SUM(expected_value * probability / 100.0), 0) as most_likely
+                COALESCE(SUM(expected_value * probability / 100), 0) as most_likely
             FROM sales_opportunities
             WHERE stage NOT IN ('won', 'lost')
         """)).fetchone()
 
         return {
-            "weighted_pipeline": dict(weighted._mapping) if weighted else {},
-            "by_month": [dict(r._mapping) for r in by_month],
-            "historical_actuals": [dict(r._mapping) for r in actuals],
-            "scenarios": dict(scenarios._mapping) if scenarios else {}
+            "weighted_pipeline": _serialize_crm_row(weighted) if weighted else {},
+            "by_month": _serialize_crm_rows(by_month),
+            "historical_actuals": _serialize_crm_rows(actuals),
+            "scenarios": _serialize_crm_row(scenarios) if scenarios else {}
         }
     finally:
         db.close()
@@ -229,7 +267,7 @@ def crm_dashboard(current_user=Depends(get_current_user)):
         # Win rate
         win_rate_row = db.execute(text("""
             SELECT CASE WHEN COUNT(*) FILTER (WHERE stage IN ('won','lost')) > 0
-                        THEN ROUND(100.0 * COUNT(*) FILTER (WHERE stage = 'won') /
+                        THEN ROUND(100 * COUNT(*) FILTER (WHERE stage = 'won') /
                              COUNT(*) FILTER (WHERE stage IN ('won','lost')), 1)
                         ELSE 0 END as win_rate
             FROM sales_opportunities
@@ -251,14 +289,14 @@ def crm_dashboard(current_user=Depends(get_current_user)):
             ORDER BY grade
         """)).fetchall()
 
-        kpis_dict = dict(kpis._mapping) if kpis else {}
-        kpis_dict['win_rate'] = Decimal(str(win_rate_row.win_rate)) if win_rate_row else Decimal('0')
+        kpis_dict = _serialize_crm_row(kpis) if kpis else {}
+        kpis_dict['win_rate'] = rate_str(win_rate_row.win_rate) if win_rate_row else rate_str(0)
 
         return {
             "kpis": kpis_dict,
             "tickets": dict(tickets._mapping) if tickets else {},
-            "campaigns": dict(campaigns._mapping) if campaigns else {},
-            "pipeline_by_stage": [dict(r._mapping) for r in pipeline_by_stage],
+            "campaigns": _serialize_crm_row(campaigns) if campaigns else {},
+            "pipeline_by_stage": _serialize_crm_rows(pipeline_by_stage),
             "recent_activities": [dict(r._mapping) for r in recent],
             "lead_score_distribution": [dict(r._mapping) for r in scores_dist]
         }
@@ -278,10 +316,10 @@ def conversion_analytics(current_user=Depends(get_current_user)):
                 COUNT(*) FILTER (WHERE stage = 'won') as won,
                 COUNT(*) FILTER (WHERE stage = 'lost') as lost,
                 CASE WHEN COUNT(*) FILTER (WHERE stage IN ('won','lost')) > 0
-                     THEN ROUND(100.0 * COUNT(*) FILTER (WHERE stage = 'won') /
+                     THEN ROUND(100 * COUNT(*) FILTER (WHERE stage = 'won') /
                           COUNT(*) FILTER (WHERE stage IN ('won','lost')), 1) ELSE 0 END as win_rate,
                 CASE WHEN COUNT(*) FILTER (WHERE stage IN ('won','lost')) > 0
-                     THEN ROUND(100.0 * COUNT(*) FILTER (WHERE stage = 'lost') /
+                     THEN ROUND(100 * COUNT(*) FILTER (WHERE stage = 'lost') /
                           COUNT(*) FILTER (WHERE stage IN ('won','lost')), 1) ELSE 0 END as loss_rate,
                 COALESCE(AVG(EXTRACT(DAY FROM (updated_at - created_at)))
                     FILTER (WHERE stage = 'won'), 0) as avg_days_to_close
@@ -294,7 +332,7 @@ def conversion_analytics(current_user=Depends(get_current_user)):
                    COUNT(*) as total,
                    COUNT(*) FILTER (WHERE stage = 'won') as won,
                    CASE WHEN COUNT(*) > 0
-                        THEN ROUND(100.0 * COUNT(*) FILTER (WHERE stage = 'won') / COUNT(*), 1)
+                        THEN ROUND(100 * COUNT(*) FILTER (WHERE stage = 'won') / COUNT(*), 1)
                         ELSE 0 END as conversion_rate
             FROM sales_opportunities
             WHERE stage IN ('won', 'lost')
@@ -316,14 +354,14 @@ def conversion_analytics(current_user=Depends(get_current_user)):
         """)).fetchall()
 
         return {
-            "win_rate": Decimal(str(rates.win_rate)) if rates else Decimal('0'),
-            "loss_rate": Decimal(str(rates.loss_rate)) if rates else Decimal('0'),
-            "avg_days_to_close": Decimal(str(rates.avg_days_to_close)) if rates else Decimal('0'),
+            "win_rate": rate_str(rates.win_rate) if rates else rate_str(0),
+            "loss_rate": rate_str(rates.loss_rate) if rates else rate_str(0),
+            "avg_days_to_close": str(Decimal(str(rates.avg_days_to_close))) if rates else "0",
             "total_closed": rates.total_closed if rates else 0,
             "won": rates.won if rates else 0,
             "lost": rates.lost if rates else 0,
-            "by_source": [dict(r._mapping) for r in by_source],
-            "stage_distribution": [dict(r._mapping) for r in stage_conv]
+            "by_source": _serialize_crm_rows(by_source),
+            "stage_distribution": _serialize_crm_rows(stage_conv)
         }
     finally:
         db.close()
@@ -341,11 +379,11 @@ def campaign_roi_analytics(current_user=Depends(get_current_user)):
                    COALESCE(total_clicked, 0) as clicks,
                    COALESCE(total_responded, 0) as conversions,
                    CASE WHEN COALESCE(total_sent, 0) > 0
-                        THEN ROUND(100.0 * COALESCE(total_opened, 0) / total_sent, 1) ELSE 0 END as open_rate,
+                        THEN ROUND(100 * COALESCE(total_opened, 0) / total_sent, 1) ELSE 0 END as open_rate,
                    CASE WHEN COALESCE(total_opened, 0) > 0
-                        THEN ROUND(100.0 * COALESCE(total_clicked, 0) / total_opened, 1) ELSE 0 END as click_rate,
+                        THEN ROUND(100 * COALESCE(total_clicked, 0) / total_opened, 1) ELSE 0 END as click_rate,
                    CASE WHEN COALESCE(total_sent, 0) > 0
-                        THEN ROUND(100.0 * COALESCE(total_responded, 0) / total_sent, 1) ELSE 0 END as conversion_rate,
+                        THEN ROUND(100 * COALESCE(total_responded, 0) / total_sent, 1) ELSE 0 END as conversion_rate,
                    CASE WHEN budget > 0 AND COALESCE(total_responded, 0) > 0
                         THEN ROUND(budget / total_responded, 2) ELSE 0 END as cost_per_conversion,
                    start_date, end_date
@@ -361,14 +399,14 @@ def campaign_roi_analytics(current_user=Depends(get_current_user)):
                 CASE WHEN SUM(COALESCE(total_responded, 0)) > 0
                      THEN ROUND(SUM(budget) / SUM(total_responded), 2) ELSE 0 END as avg_cpc,
                 CASE WHEN SUM(COALESCE(total_sent, 0)) > 0
-                     THEN ROUND(100.0 * SUM(COALESCE(total_responded, 0)) / SUM(total_sent), 2)
+                     THEN ROUND(100 * SUM(COALESCE(total_responded, 0)) / SUM(total_sent), 2)
                      ELSE 0 END as overall_conversion_rate
             FROM marketing_campaigns
         """)).fetchone()
 
         return {
-            "campaigns": [dict(r._mapping) for r in rows],
-            "summary": dict(summary._mapping) if summary else {}
+            "campaigns": _serialize_crm_rows(rows),
+            "summary": _serialize_crm_row(summary) if summary else {}
         }
     finally:
         db.close()

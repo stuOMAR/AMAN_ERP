@@ -61,6 +61,7 @@ function TreasuryCashflowReport() {
         };
         return map[type] || type;
     };
+    const directionClass = (direction) => direction === 'negative' ? 'text-danger' : 'text-primary';
 
     return (
         <div className="workspace fade-in">
@@ -113,7 +114,7 @@ function TreasuryCashflowReport() {
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('treasury_reports.cashflow.net_flow')}</div>
-                            <div className={`metric-value ${data.net_flow >= 0 ? 'text-primary' : 'text-danger'}`}>
+                            <div className={`metric-value ${directionClass(data.net_flow_direction)}`}>
                                 {formatNumber(data.net_flow)}
                             </div>
                             <div className="metric-change">{currency}</div>
@@ -222,7 +223,7 @@ function TreasuryCashflowReport() {
                                             <td className="text-end text-success">{formatNumber(acc.inflow)}</td>
                                             <td className="text-end text-danger">{formatNumber(acc.outflow)}</td>
                                             <td className="text-end" style={{ fontWeight: 700 }}>
-                                                <span className={acc.net >= 0 ? 'text-primary' : 'text-danger'}>{formatNumber(acc.net)}</span>
+                                                <span className={directionClass(acc.net_direction)}>{formatNumber(acc.net)}</span>
                                             </td>
                                         </tr>
                                     ))}
@@ -257,7 +258,7 @@ function TreasuryCashflowReport() {
                                                 <td className="text-end text-success">{formatNumber(d.inflow)}</td>
                                                 <td className="text-end text-danger">{formatNumber(d.outflow)}</td>
                                                 <td className="text-end" style={{ fontWeight: 600 }}>
-                                                    <span className={d.inflow - d.outflow >= 0 ? 'text-primary' : 'text-danger'}>
+                                                    <span className={directionClass(d.net_direction)}>
                                                         {formatNumber(d.net ?? '0')}
                                                     </span>
                                                 </td>

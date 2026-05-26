@@ -31,23 +31,25 @@ const ResourceUtilizationReport = () => {
     useEffect(() => { fetchReport(); }, []);
 
     const resources = report?.resources || [];
-    const totalHours = resources.reduce((s, r) => s + (r.total_hours || 0), 0);
-    const avgUtilization = resources.length > 0
-        ? resources.reduce((s, r) => s + (r.utilization_pct || 0), 0) / resources.length
-        : 0;
+    const summary = report?.summary || {};
 
-    const getUtilizationColor = (pct) => {
-        if (pct >= 100) return '#ef4444';
-        if (pct >= 80) return '#22c55e';
-        if (pct >= 50) return '#f59e0b';
-        return '#94a3b8';
+    const statusColors = {
+        overload: '#ef4444',
+        optimal: '#22c55e',
+        moderate: '#f59e0b',
+        light: '#94a3b8',
     };
 
-    const getUtilizationLabel = (pct) => {
-        if (pct >= 100) return t('projects.load_overload', 'حمل زائد');
-        if (pct >= 80) return t('projects.load_optimal', 'حمل مثالي');
-        if (pct >= 50) return t('projects.load_moderate', 'حمل متوسط');
-        return t('projects.load_light', 'حمل خفيف');
+    const getUtilizationColor = (status) => statusColors[status] || statusColors.light;
+
+    const getUtilizationLabel = (status) => {
+        const labels = {
+            overload: t('projects.load_overload', 'حمل زائد'),
+            optimal: t('projects.load_optimal', 'حمل مثالي'),
+            moderate: t('projects.load_moderate', 'حمل متوسط'),
+            light: t('projects.load_light', 'حمل خفيف'),
+        };
+        return labels[status] || labels.light;
     };
 
     return (
@@ -87,22 +89,22 @@ const ResourceUtilizationReport = () => {
                     <div className="metrics-grid" style={{ marginBottom: 16 }}>
                         <div className="metric-card">
                             <div className="metric-label">{t('projects.reports.total_employees', 'عدد الموظفين')}</div>
-                            <div className="metric-value text-primary">{resources.length}</div>
+                            <div className="metric-value text-primary">{summary.employee_count || 0}</div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('projects.reports.total_hours', 'إجمالي الساعات')}</div>
-                            <div className="metric-value text-success">{formatNumber(totalHours, 1)}</div>
+                            <div className="metric-value text-success">{formatNumber(summary.total_hours || 0, 1)}</div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('projects.reports.avg_utilization', 'متوسط الاستغلال')}</div>
-                            <div className="metric-value" style={{ color: getUtilizationColor(avgUtilization) }}>
-                                {formatNumber(avgUtilization, 1)}%
+                            <div className="metric-value">
+                                {formatNumber(summary.avg_utilization || 0, 1)}%
                             </div>
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('projects.reports.overloaded', 'حمل زائد')}</div>
                             <div className="metric-value text-danger">
-                                {resources.filter(r => r.utilization_pct >= 100).length}
+                                {summary.overloaded_count || 0}
                             </div>
                         </div>
                     </div>
@@ -126,15 +128,15 @@ const ResourceUtilizationReport = () => {
                                                 <span style={{ fontWeight: 600 }}>{r.name}</span>
                                                 <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
                                                     <span style={{ fontSize: 12, color: '#6b7280' }}>{r.projects_count} {t('projects.title', 'مشاريع')}</span>
-                                                    <span style={{ fontWeight: 700, color: getUtilizationColor(r.utilization_pct), minWidth: 45, textAlign: 'left' }}>
+                                                    <span style={{ fontWeight: 700, color: getUtilizationColor(r.load_status), minWidth: 45, textAlign: 'left' }}>
                                                         {formatNumber(r.utilization_pct, 1)}%
                                                     </span>
                                                 </div>
                                             </div>
                                             <div style={{ background: '#e5e7eb', borderRadius: 999, height: 10, overflow: 'hidden' }}>
                                                 <div style={{
-                                                    width: `${Math.min(r.utilization_pct, 100)}%`,
-                                                    background: getUtilizationColor(r.utilization_pct),
+                                                    width: `${r.utilization_bar_pct || '0'}%`,
+                                                    background: getUtilizationColor(r.load_status),
                                                     height: '100%', borderRadius: 999, transition: 'width 0.5s'
                                                 }} />
                                             </div>
@@ -168,13 +170,13 @@ const ResourceUtilizationReport = () => {
                                                     <td>{formatNumber(r.avg_daily_hours, 1)}</td>
                                                     <td>{r.working_days}</td>
                                                     <td>
-                                                        <span className={`status-badge ${r.utilization_pct >= 80 ? (r.utilization_pct >= 100 ? 'status-rejected' : 'status-active') : 'status-pending'}`}>
+                                                        <span className={`status-badge status-${r.load_status === 'overload' ? 'rejected' : r.load_status === 'optimal' ? 'active' : 'pending'}`}>
                                                             {formatNumber(r.utilization_pct, 1)}%
                                                         </span>
                                                     </td>
                                                     <td>
-                                                        <span style={{ fontSize: 12, fontWeight: 600, color: getUtilizationColor(r.utilization_pct) }}>
-                                                            {getUtilizationLabel(r.utilization_pct)}
+                                                        <span style={{ fontSize: 12, fontWeight: 600, color: getUtilizationColor(r.load_status) }}>
+                                                            {getUtilizationLabel(r.load_status)}
                                                         </span>
                                                     </td>
                                                 </tr>

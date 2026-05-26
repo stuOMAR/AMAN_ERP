@@ -3,21 +3,16 @@
 Mounted under the parent router via pos/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from schemas import UserResponse
-from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 
 logger = logging.getLogger(__name__)
 
@@ -26,12 +21,9 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-def get_db(current_user: UserResponse = Depends(get_current_user)):
-    yield from get_company_db(current_user.company_id)
-
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, get_db
+from .core import _D2, _dec, get_db  # noqa: E402
 
 @router.get("/loyalty/programs", dependencies=[Depends(require_permission("pos.view"))], response_model=List[Dict[str, Any]])
 def list_loyalty_programs(

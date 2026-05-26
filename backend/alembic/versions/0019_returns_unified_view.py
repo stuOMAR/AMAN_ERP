@@ -42,44 +42,51 @@ DO $$
 BEGIN
     IF to_regclass('public.sales_returns') IS NOT NULL
        AND to_regclass('public.pos_returns') IS NOT NULL THEN
-        EXECUTE $VIEW$
-        CREATE OR REPLACE VIEW returns_unified AS
-        SELECT
-            'sales'::text                                AS source,
-            sr.id                                        AS return_id,
-            sr.return_number                             AS return_number,
-            sr.return_date::timestamp                    AS return_date,
-            sr.party_id                                  AS party_id,
-            sr.branch_id                                 AS branch_id,
-            sr.warehouse_id                              AS warehouse_id,
-            sr.invoice_id                                AS original_doc_id,
-            COALESCE(sr.refund_amount, sr.total, 0)::numeric(18,4) AS refund_amount,
-            sr.refund_method                             AS refund_method,
-            sr.status                                    AS status,
-            sr.notes                                     AS notes,
-            sr.created_at                                AS created_at,
-            sr.created_by                                AS created_by
-        FROM sales_returns sr
+        -- Only create the view if returns_unified does not exist as a real table
+        IF NOT EXISTS (
+            SELECT 1 FROM pg_class c
+            JOIN pg_namespace n ON n.oid = c.relnamespace
+            WHERE n.nspname = 'public' AND c.relname = 'returns_unified' AND c.relkind = 'r'
+        ) THEN
+            EXECUTE $VIEW$
+            CREATE OR REPLACE VIEW returns_unified AS
+            SELECT
+                'sales'::text                                AS source,
+                sr.id                                        AS return_id,
+                sr.return_number                             AS return_number,
+                sr.return_date::timestamp                    AS return_date,
+                sr.party_id                                  AS party_id,
+                sr.branch_id                                 AS branch_id,
+                sr.warehouse_id                              AS warehouse_id,
+                sr.invoice_id                                AS original_doc_id,
+                COALESCE(sr.refund_amount, sr.total, 0)::numeric(18,4) AS refund_amount,
+                sr.refund_method                             AS refund_method,
+                sr.status                                    AS status,
+                sr.notes                                     AS notes,
+                sr.created_at                                AS created_at,
+                sr.created_by::text                          AS created_by
+            FROM sales_returns sr
 
-        UNION ALL
+            UNION ALL
 
-        SELECT
-            'pos'::text                                  AS source,
-            pr.id                                        AS return_id,
-            ('POS-RET-' || pr.id::text)                  AS return_number,
-            pr.created_at                                AS return_date,
-            NULL::integer                                AS party_id,
-            NULL::integer                                AS branch_id,
-            NULL::integer                                AS warehouse_id,
-            pr.original_order_id                         AS original_doc_id,
-            COALESCE(pr.refund_amount, 0)::numeric(18,4) AS refund_amount,
-            pr.refund_method                             AS refund_method,
-            'completed'::text                            AS status,
-            pr.notes                                     AS notes,
-            pr.created_at                                AS created_at,
-            pr.created_by                                AS created_by
-        FROM pos_returns pr;
-        $VIEW$;
+            SELECT
+                'pos'::text                                  AS source,
+                pr.id                                        AS return_id,
+                ('POS-RET-' || pr.id::text)                  AS return_number,
+                pr.created_at                                AS return_date,
+                NULL::integer                                AS party_id,
+                NULL::integer                                AS branch_id,
+                NULL::integer                                AS warehouse_id,
+                pr.original_order_id                         AS original_doc_id,
+                COALESCE(pr.refund_amount, 0)::numeric(18,4) AS refund_amount,
+                pr.refund_method                             AS refund_method,
+                'completed'::text                            AS status,
+                pr.notes                                     AS notes,
+                pr.created_at                                AS created_at,
+                pr.created_by::text                          AS created_by
+            FROM pos_returns pr;
+            $VIEW$;
+        END IF;
     END IF;
 END $$;
 """

@@ -26,6 +26,7 @@ vi.mock('../services/apiClient', () => {
 vi.mock('../services/accounting', () => ({
     currenciesAPI: {
         getCurrentRate: vi.fn(),
+        previewFx: vi.fn(),
     },
 }))
 
@@ -127,9 +128,9 @@ describe('hooks/useExchangeRate — fetchCurrentRate', () => {
         currenciesAPI.getCurrentRate.mockReset()
     })
 
-    it('returns 1.0 immediately for empty/falsy code (no network)', async () => {
+    it('returns null immediately for empty/falsy code (no network)', async () => {
         const r = await fetchCurrentRate('')
-        expect(r).toBe(1.0)
+        expect(r).toBeNull()
         expect(currenciesAPI.getCurrentRate).not.toHaveBeenCalled()
     })
 
@@ -138,35 +139,33 @@ describe('hooks/useExchangeRate — fetchCurrentRate', () => {
 
         const a = await fetchCurrentRate('USD')
         const b = await fetchCurrentRate('usd') // case-insensitive
-        expect(a).toBe(3.75)
-        expect(b).toBe(3.75)
+        expect(a).toBe('3.75')
+        expect(b).toBe('3.75')
         expect(currenciesAPI.getCurrentRate).toHaveBeenCalledTimes(1)
     })
 
-    it('falls back to 1.0 when the API rejects (graceful degrade)', async () => {
+    it('returns null when the API rejects', async () => {
         currenciesAPI.getCurrentRate.mockRejectedValueOnce(new Error('boom'))
         const r = await fetchCurrentRate('EUR')
-        expect(r).toBe(1.0)
+        expect(r).toBeNull()
     })
 
-    it('falls back to 1.0 when API returns a non-positive rate', async () => {
+    it('returns null when API returns a non-positive rate', async () => {
         currenciesAPI.getCurrentRate.mockResolvedValueOnce({ data: { rate: 0 } })
         const r = await fetchCurrentRate('XYZ')
-        expect(r).toBe(1.0)
+        expect(r).toBeNull()
     })
 
     it('calculates source-to-target cross rates from base-currency rates', () => {
-        expect(calculateCrossExchangeRate(1.021, 1)).toBe(1.021)
-        expect(calculateCrossExchangeRate(3.75, 1.021)).toBe(3.67286974)
+        expect(calculateCrossExchangeRate('1.021', '1')).toBe('1.02100000')
+        expect(calculateCrossExchangeRate('3.75', '1.021')).toBe('3.67286974')
     })
 
     it('fetches source and target rates before calculating a cross rate', async () => {
-        currenciesAPI.getCurrentRate
-            .mockResolvedValueOnce({ data: { rate: 1.021 } })
-            .mockResolvedValueOnce({ data: { rate: 1 } })
+        currenciesAPI.previewFx.mockResolvedValueOnce({ data: { cross_rate: 1.021 } })
 
         const r = await fetchCrossExchangeRate('AED', 'SAR')
         expect(r).toBe(1.021)
-        expect(currenciesAPI.getCurrentRate).toHaveBeenCalledTimes(2)
+        expect(currenciesAPI.previewFx).toHaveBeenCalledTimes(1)
     })
 })

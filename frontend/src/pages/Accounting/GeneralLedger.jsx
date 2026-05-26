@@ -2,13 +2,13 @@ import { useState, useEffect } from 'react'
 import { reportsAPI, accountingAPI } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
-import Decimal from 'decimal.js'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates';
+import Pagination from '../../components/common/Pagination';
 
 function GeneralLedger() {
     const { t, i18n } = useTranslation()
@@ -24,8 +24,16 @@ function GeneralLedger() {
     const [error, setError] = useState(null)
     const [isAggregated, setIsAggregated] = useState(false)
     const [childCount, setChildCount] = useState(0)
-    const [openingBalance, setOpeningBalance] = useState(0)
+    const [summary, setSummary] = useState({})
+    const [page, setPage] = useState(1)
+    const [pageSize, setPageSize] = useState(25)
+    const [pagination, setPagination] = useState({ skip: 0, limit: 25, total: 0, returned: 0 })
     const currency = getCurrency()
+
+    const hasAmount = (value) => {
+        const raw = String(value || '0').trim()
+        return raw !== '' && !/^[-+]?0+(\.0+)?$/.test(raw)
+    }
 
     // Load accounts list
     useEffect(() => {
@@ -54,13 +62,21 @@ function GeneralLedger() {
                 account_id: selectedAccount,
                 start_date: startDate.toISOString().split('T')[0],
                 end_date: endDate.toISOString().split('T')[0],
-                branch_id: currentBranch?.id
+                branch_id: currentBranch?.id,
+                skip: (page - 1) * pageSize,
+                limit: pageSize,
             }
             const response = await reportsAPI.getGeneralLedger(params)
             setEntries(response.data.entries || [])
             setIsAggregated(response.data.is_aggregated || false)
             setChildCount(response.data.child_accounts_count || 0)
-            setOpeningBalance(response.data.opening_balance || 0)
+            setSummary(response.data.summary || {})
+            setPagination(response.data.pagination || {
+                skip: (page - 1) * pageSize,
+                limit: pageSize,
+                total: response.data.entries?.length || 0,
+                returned: response.data.entries?.length || 0,
+            })
         } catch (err) {
             console.error("Failed to fetch ledger", err)
             setError(t('accounting.general_ledger.error_loading'))
@@ -70,31 +86,24 @@ function GeneralLedger() {
     }
 
     useEffect(() => {
+        setPage(1)
+    }, [currentBranch])
+
+    useEffect(() => {
         const timer = setTimeout(() => {
             if (selectedAccount) {
                 fetchLedger()
             }
         }, 300)
         return () => clearTimeout(timer)
-    }, [selectedAccount, startDate, endDate, currentBranch])
+    }, [selectedAccount, startDate, endDate, currentBranch, page, pageSize])
 
     const selectedAccountData = accounts.find(a => String(a.id) === String(selectedAccount))
-
-    // Calculate running balance (backend already computes it, but re-compute for display)
-    let runningBalance = new Decimal(openingBalance || '0')
-    const entriesWithBalance = entries.map(entry => {
-        const debit = new Decimal(entry.debit || '0')
-        const credit = new Decimal(entry.credit || '0')
-        if (selectedAccountData && ['asset', 'expense'].includes(selectedAccountData.account_type)) {
-            runningBalance = runningBalance.plus(debit).minus(credit)
-        } else {
-            runningBalance = runningBalance.plus(credit).minus(debit)
-        }
-        return { ...entry, running_balance: runningBalance.toNumber() }
-    })
-
-    const totalDebit = entries.reduce((sum, e) => sum.plus(new Decimal(e.debit || '0')), new Decimal('0'))
-    const totalCredit = entries.reduce((sum, e) => sum.plus(new Decimal(e.credit || '0')), new Decimal('0'))
+    const entriesWithBalance = entries
+    const totalDebit = summary.total_debit || '0'
+    const totalCredit = summary.total_credit || '0'
+    const closingBalanceAbs = summary.closing_balance_abs || '0'
+    const balanceSide = summary.balance_side || 'debit'
 
     return (
         <div className="workspace fade-in">
@@ -125,7 +134,10 @@ function GeneralLedger() {
                             <select
                                 className="form-input"
                                 value={selectedAccount}
-                                onChange={(e) => setSelectedAccount(e.target.value)}
+                                onChange={(e) => {
+                                    setSelectedAccount(e.target.value)
+                                    setPage(1)
+                                }}
                             >
                                 <option value="">{t('accounting.general_ledger.choose_account')}</option>
                                 {accounts.map(acc => (
@@ -140,14 +152,20 @@ function GeneralLedger() {
                         <CustomDatePicker
                             label={t('common.start_date')}
                             selected={startDate}
-                            onChange={(dateStr) => setStartDate(dateStr ? new Date(dateStr) : new Date(new Date().getFullYear(), 0, 1))}
+                            onChange={(dateStr) => {
+                                setStartDate(dateStr ? new Date(dateStr) : new Date(new Date().getFullYear(), 0, 1))
+                                setPage(1)
+                            }}
                         />
                     </div>
                     <div style={{ width: '200px' }}>
                         <CustomDatePicker
                             label={t('common.end_date')}
                             selected={endDate}
-                            onChange={(dateStr) => setEndDate(dateStr ? new Date(dateStr) : new Date())}
+                            onChange={(dateStr) => {
+                                setEndDate(dateStr ? new Date(dateStr) : new Date())
+                                setPage(1)
+                            }}
                         />
                     </div>
                 </div>
@@ -187,10 +205,10 @@ function GeneralLedger() {
                             </div>
                             <div className="metric-card">
                                 <div className="metric-label">{t('accounting.general_ledger.net_balance')}</div>
-                                <div className={`metric-value ${runningBalance >= 0 ? 'text-success' : 'text-error'}`}>
-                                    {formatNumber(Math.abs(runningBalance))} <small>{currency}</small>
+                                <div className={`metric-value ${balanceSide === 'debit' ? 'text-success' : 'text-error'}`}>
+                                    {formatNumber(closingBalanceAbs)} <small>{currency}</small>
                                     <small style={{ fontSize: '0.7em', marginRight: '4px' }}>
-                                        {runningBalance >= 0 ? t('accounting.table.debit') : t('accounting.table.credit')}
+                                        {balanceSide === 'debit' ? t('accounting.table.debit') : t('accounting.table.credit')}
                                     </small>
                                 </div>
                             </div>
@@ -240,16 +258,16 @@ function GeneralLedger() {
                                                 <td style={{ maxWidth: '280px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{entry.description}</td>
                                                 {isAggregated && <td style={{ fontSize: '12px', color: 'var(--text-secondary)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '200px' }}>{entry.account_name || '-'}</td>}
                                                 <td style={{ color: entry.reference ? 'var(--text-primary)' : 'var(--text-light)' }}>{entry.reference || '-'}</td>
-                                                <td style={{ textAlign: 'left', fontWeight: new Decimal(entry.debit || '0').gt(0) ? '600' : '400', color: new Decimal(entry.debit || '0').gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {new Decimal(entry.debit || '0').gt(0) ? formatNumber(entry.debit) : '-'}
+                                                <td style={{ textAlign: 'left', fontWeight: hasAmount(entry.debit) ? '600' : '400', color: hasAmount(entry.debit) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {hasAmount(entry.debit) ? formatNumber(entry.debit) : '-'}
                                                 </td>
-                                                <td style={{ textAlign: 'left', fontWeight: new Decimal(entry.credit || '0').gt(0) ? '600' : '400', color: new Decimal(entry.credit || '0').gt(0) ? 'var(--text-primary)' : 'var(--text-light)' }}>
-                                                    {new Decimal(entry.credit || '0').gt(0) ? formatNumber(entry.credit) : '-'}
+                                                <td style={{ textAlign: 'left', fontWeight: hasAmount(entry.credit) ? '600' : '400', color: hasAmount(entry.credit) ? 'var(--text-primary)' : 'var(--text-light)' }}>
+                                                    {hasAmount(entry.credit) ? formatNumber(entry.credit) : '-'}
                                                 </td>
-                                                <td style={{ textAlign: 'left', fontWeight: 'bold', color: entry.running_balance >= 0 ? 'var(--text-primary)' : '#DC2626' }}>
-                                                    {formatNumber(Math.abs(entry.running_balance))}
+                                                <td style={{ textAlign: 'left', fontWeight: 'bold', color: entry.balance_side === 'debit' ? 'var(--text-primary)' : '#DC2626' }}>
+                                                    {formatNumber(entry.running_balance_abs || entry.running_balance)}
                                                     <small style={{ opacity: 0.6, marginInlineStart: '4px' }}>
-                                                        {entry.running_balance >= 0 ? t('accounting.table.debit') : t('accounting.table.credit')}
+                                                        {entry.balance_side === 'debit' ? t('accounting.table.debit') : t('accounting.table.credit')}
                                                     </small>
                                                 </td>
                                             </tr>
@@ -263,12 +281,22 @@ function GeneralLedger() {
                                             <td style={{ textAlign: 'left' }}>{formatNumber(totalDebit)} <small>{currency}</small></td>
                                             <td style={{ textAlign: 'left' }}>{formatNumber(totalCredit)} <small>{currency}</small></td>
                                             <td style={{ textAlign: 'left' }}>
-                                                {formatNumber(Math.abs(runningBalance))} <small>{currency}</small>
+                                                {formatNumber(closingBalanceAbs)} <small>{currency}</small>
                                             </td>
                                         </tr>
                                     </tfoot>
                                 )}
                             </table>
+                            <Pagination
+                                currentPage={page}
+                                totalItems={pagination.total || 0}
+                                pageSize={pageSize}
+                                onPageChange={setPage}
+                                onPageSizeChange={(size) => {
+                                    setPageSize(size)
+                                    setPage(1)
+                                }}
+                            />
                         </div>
                     </div>
                 </>

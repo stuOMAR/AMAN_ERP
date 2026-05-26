@@ -5,7 +5,6 @@ Checks Management Router - TRS-001 & TRS-002
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity

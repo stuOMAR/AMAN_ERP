@@ -8,7 +8,6 @@ INSERT into journal_lines). These are the same hunk inside
 """
 from __future__ import annotations
 
-import re
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]

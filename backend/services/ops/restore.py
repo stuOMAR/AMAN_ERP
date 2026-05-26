@@ -5,8 +5,6 @@ from __future__ import annotations
 import hashlib
 import hmac
 import logging
-import time
-from datetime import datetime, timezone
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -58,7 +56,6 @@ async def execute_restore(backup_id: str, confirm_token: str) -> dict[str, Any]:
     """
     from database import get_tenant_db
     from services.audit_writer import log_activity
-    from sqlalchemy import text
 
     # Verify token
     if not _verify_confirm_token(confirm_token, backup_id, "", ""):

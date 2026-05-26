@@ -38,6 +38,8 @@ class AssetDisposal(BaseModel):
     disposal_price: Decimal = Decimal(0)
     notes: Optional[str] = None
     payment_method: str = "cash"
+    submitted_disposal_proceeds: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class AssetTransferCreate(BaseModel):

@@ -1,10 +1,9 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from sqlalchemy import text
-from database import get_db_connection
 from schemas import UserResponse
 from routers.auth import get_current_user
 from utils.tx import transactional
@@ -20,8 +19,24 @@ logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
 
 
+def _q_money(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _money_str(value) -> str:
+    return format(_q_money(value), "f")
+
+
 def _q_pct(value) -> Decimal:
     return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _pct_str(value) -> str:
+    return format(_q_pct(value), "f")
+
+
+def _count_budget_months(start: date, end: date) -> int:
+    return (end.year - start.year) * 12 + (end.month - start.month) + 1
 
 
 def _get_budget_for_branch_scope(
@@ -36,7 +51,7 @@ def _get_budget_for_branch_scope(
     branch_filter = branch_scope_filter(current_user, None, "branch_id", params)
     lock_clause = " FOR UPDATE" if for_update else ""
     budget = conn.execute(text(
-        f"SELECT {columns} FROM budgets WHERE id = :id {branch_filter}{lock_clause}"  # noqa: sql-lint
+        f"SELECT {columns} FROM budgets WHERE id = :id {branch_filter}{lock_clause}"  # noqa
     ), params).fetchone()
     if not budget:
         raise HTTPException(**http_error(404, "budget_not_found", request))
@@ -157,11 +172,23 @@ def set_budget_items(
     """Set Budget Items."""
     with transactional(current_user.company_id) as conn:
         try:
-            # Verify budget exists
-            _get_budget_for_branch_scope(conn, current_user, budget_id, request, "id, branch_id")
+            # Verify budget exists and derive any monthly inputs on the backend.
+            budget = _get_budget_for_branch_scope(
+                conn,
+                current_user,
+                budget_id,
+                request,
+                "id, branch_id, start_date, end_date",
+            )
+            budget_months = Decimal(_count_budget_months(budget.start_date, budget.end_date))
                 
             # Insert or Update items
             for item in items:
+                planned_amount = item.planned_amount
+                if planned_amount is None and item.monthly_amount is not None:
+                    planned_amount = _q_money(item.monthly_amount * budget_months)
+                planned_amount = _q_money(planned_amount)
+
                 # Check if exists
                 exists = conn.execute(text("SELECT id FROM budget_items WHERE budget_id=:bid AND account_id=:aid"), 
                                       {"bid": budget_id, "aid": item.account_id}).fetchone()
@@ -170,7 +197,7 @@ def set_budget_items(
                     conn.execute(text("""
                         UPDATE budget_items SET planned_amount = :amount, notes = :notes
                         WHERE id = :id
-                    """), {"amount": item.planned_amount, "notes": item.notes, "id": exists.id})
+                    """), {"amount": planned_amount, "notes": item.notes, "id": exists.id})
                 else:
                     conn.execute(text("""
                         INSERT INTO budget_items (budget_id, account_id, planned_amount, notes)
@@ -178,7 +205,7 @@ def set_budget_items(
                     """), {
                         "bid": budget_id, 
                         "aid": item.account_id, 
-                        "amount": item.planned_amount, 
+                        "amount": planned_amount,
                         "notes": item.notes
                     })
             
@@ -218,13 +245,10 @@ def get_budget_report(
             
             # Calculate scaling factor (Month-based)
             # We count any month touched by the range as 1 month.
-            def count_months(d1, d2):
-                return (d2.year - d1.year) * 12 + (d2.month - d1.month) + 1
-    
-            budget_months = count_months(budget.start_date, budget.end_date)
-            report_months = count_months(report_start, report_end)
+            budget_months = Decimal(_count_budget_months(budget.start_date, budget.end_date))
+            report_months = Decimal(_count_budget_months(report_start, report_end))
             
-            scaling_factor = 1.0
+            scaling_factor = Decimal("0")
             if budget_months > 0:
                 # Factor = (Months in report) / (Total months in budget)
                 scaling_factor = report_months / budget_months
@@ -288,13 +312,13 @@ def get_budget_report(
             
             report = []
             for row in rows:
-                planned = float(row.planned_amount) if row.planned_amount is not None else 0.0
-                actual = float(row.actual_amount) if row.actual_amount is not None else 0.0
+                planned = _q_money(row.planned_amount)
+                actual = _q_money(row.actual_amount)
                 variance = planned - actual # Positive means under budget (good for expense), Negative means over budget
                 is_over_budget = actual > planned
                 
-                usage_pct = (actual / planned * 100) if planned != 0 else 0
-                variance_pct = ((actual - planned) / planned * 100) if planned != 0 else 0
+                usage_pct = _q_pct((actual / planned * Decimal("100")) if planned != 0 else Decimal("0"))
+                variance_pct = _q_pct(((actual - planned) / planned * Decimal("100")) if planned != 0 else Decimal("0"))
                 
                 report.append({
                     "account_id": row.account_id,
@@ -303,8 +327,9 @@ def get_budget_report(
                     "planned": planned,
                     "actual": actual,
                     "variance": variance,
-                    "usage_percentage": round(usage_pct, 2),
-                    "variance_percentage": round(variance_pct, 2),
+                    "usage_percentage": usage_pct,
+                    "usage_percentage_capped": min(usage_pct, Decimal("100")),
+                    "variance_percentage": variance_pct,
                     "is_over_budget": is_over_budget
                 })
                 
@@ -371,6 +396,17 @@ def activate_budget(budget_id: int, request: Request, current_user: UserResponse
     """Activate a draft budget"""
     with transactional(current_user.company_id) as conn:
         try:
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                existing_log = conn.execute(text("""
+                    SELECT id FROM audit_logs
+                    WHERE action = 'budgets.activate'
+                      AND resource_id = :resource_id
+                      AND details ->> 'idempotency_key' = :key
+                """), {"resource_id": str(budget_id), "key": idempotency_key}).fetchone()
+                if existing_log:
+                    return {"message": i18n_message("budget_activated", request)}
+
             budget = _get_budget_for_branch_scope(conn, current_user, budget_id, request)
             if budget.status != 'draft':
                 raise HTTPException(**http_error(400, "only_draft_budgets_can_be_activated", request))
@@ -383,7 +419,7 @@ def activate_budget(budget_id: int, request: Request, current_user: UserResponse
             conn.execute(text("UPDATE budgets SET status = 'active', updated_at = CURRENT_TIMESTAMP WHERE id = :id"), {"id": budget_id})
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.activate", resource_type="budget",
-                         resource_id=str(budget_id), details={},
+                         resource_id=str(budget_id), details={"idempotency_key": idempotency_key},
                          request=request)
             return {"message": i18n_message("budget_activated", request)}
         except HTTPException:
@@ -400,6 +436,17 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
     """Close an active budget"""
     with transactional(current_user.company_id) as conn:
         try:
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                existing_log = conn.execute(text("""
+                    SELECT id FROM audit_logs
+                    WHERE action = 'budgets.close'
+                      AND resource_id = :resource_id
+                      AND details ->> 'idempotency_key' = :key
+                """), {"resource_id": str(budget_id), "key": idempotency_key}).fetchone()
+                if existing_log:
+                    return {"message": i18n_message("budget_closed", request)}
+
             budget = _get_budget_for_branch_scope(conn, current_user, budget_id, request, for_update=True)
 
             # Audit F-NEW-013: closing a budget is a dated mutation that
@@ -412,7 +459,7 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
             conn.execute(text("UPDATE budgets SET status = 'closed', updated_at = CURRENT_TIMESTAMP WHERE id = :id"), {"id": budget_id})
             log_activity(conn, user_id=current_user.id, username=current_user.username,
                          action="budgets.close", resource_type="budget",
-                         resource_id=str(budget_id), details={},
+                         resource_id=str(budget_id), details={"idempotency_key": idempotency_key},
                          request=request)
             return {"message": i18n_message("budget_closed", request)}
         except HTTPException:
@@ -428,7 +475,14 @@ def close_budget(budget_id: int, request: Request, current_user: UserResponse = 
 def get_budget_items(request: Request, budget_id: int, current_user: UserResponse = Depends(get_current_user)):
     """Get all budget items with account details"""
     with transactional(current_user.company_id) as conn:
-        _get_budget_for_branch_scope(conn, current_user, budget_id, request)
+        budget = _get_budget_for_branch_scope(
+            conn,
+            current_user,
+            budget_id,
+            request,
+            "id, status, branch_id, start_date, end_date",
+        )
+        budget_months = Decimal(_count_budget_months(budget.start_date, budget.end_date))
         
         rows = conn.execute(text("""
             SELECT bi.id, bi.account_id, bi.planned_amount, bi.notes,
@@ -443,7 +497,8 @@ def get_budget_items(request: Request, budget_id: int, current_user: UserRespons
             {
                 "id": row.id,
                 "account_id": row.account_id,
-                "planned_amount": float(row.planned_amount),
+                "planned_amount": _money_str(row.planned_amount),
+                "monthly_amount": _money_str(_q_money(row.planned_amount) / budget_months if budget_months else Decimal("0")),
                 "notes": row.notes,
                 "account_number": row.account_number,
                 "account_name": row.account_name,
@@ -457,7 +512,7 @@ def get_budget_items(request: Request, budget_id: int, current_user: UserRespons
 @limiter.limit("200/minute")
 def get_budget_overrun_alerts(
     request: Request,
-    threshold: float = 80.0,
+    threshold: Decimal = Decimal("80.0"),
     branch_id: Optional[int] = None,
     current_user: UserResponse = Depends(get_current_user)
 ):
@@ -514,9 +569,9 @@ def get_budget_overrun_alerts(
             
             alerts = []
             for row in rows:
-                planned = float(row.planned_amount)
-                actual = float(row.actual_amount)
-                pct = float(row.usage_percentage)
+                planned = _q_money(row.planned_amount)
+                actual = _q_money(row.actual_amount)
+                pct = _q_pct(row.usage_percentage)
                 
                 severity = "warning"  # 80-100%
                 if pct >= 100:
@@ -530,10 +585,11 @@ def get_budget_overrun_alerts(
                     "account_id": row.account_id,
                     "account_number": row.account_number,
                     "account_name": row.account_name,
-                    "planned": planned,
-                    "actual": actual,
-                    "variance": planned - actual,
-                    "usage_percentage": pct,
+                    "planned": _money_str(planned),
+                    "actual": _money_str(actual),
+                    "variance": _money_str(planned - actual),
+                    "usage_percentage": _pct_str(pct),
+                    "usage_percentage_capped": _pct_str(min(pct, Decimal("100"))),
                     "severity": severity
                 })
             
@@ -602,7 +658,7 @@ def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_
                              WHERE c.code = br.default_currency 
                              AND er.rate_date = (SELECT MAX(rate_date) FROM exchange_rates)
                              LIMIT 1),
-                            1.0
+                            1::numeric
                         )), 0) as total_planned,
                         COALESCE(SUM(
                             (SELECT COALESCE(SUM(
@@ -615,7 +671,7 @@ def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_
                                      WHERE c2.code = COALESCE(br.default_currency, 'SAR')
                                      AND er2.rate_date = (SELECT MAX(rate_date) FROM exchange_rates)
                                      LIMIT 1),
-                                    1.0
+                                    1::numeric
                                 )
                             ), 0)
                             FROM journal_lines jl
@@ -632,8 +688,8 @@ def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_
                     WHERE b.status IN ('active', 'draft') {branch_filter}
                 """), params).fetchone()
             
-            total_planned = float(totals.total_planned) if totals else 0
-            total_actual = float(totals.total_actual) if totals else 0
+            total_planned = _q_money(totals.total_planned if totals else 0)
+            total_actual = _q_money(totals.total_actual if totals else 0)
             
             # Count overrun items
             overruns = conn.execute(text(f"""
@@ -669,10 +725,10 @@ def get_budget_stats(request: Request, branch_id: Optional[int] = None, current_
                 "draft_count": counts.draft_count,
                 "active_count": counts.active_count,
                 "closed_count": counts.closed_count,
-                "total_planned": total_planned,
-                "total_actual": total_actual,
-                "total_variance": total_planned - total_actual,
-                "overall_usage_pct": _q_pct(Decimal(str(total_actual)) / Decimal(str(total_planned)) * 100) if total_planned > 0 else Decimal("0"),
+                "total_planned": _money_str(total_planned),
+                "total_actual": _money_str(total_actual),
+                "total_variance": _money_str(total_planned - total_actual),
+                "overall_usage_pct": _pct_str((total_actual / total_planned * Decimal("100")) if total_planned > 0 else Decimal("0")),
                 "overrun_items_count": overruns
             }
         except Exception as e:
@@ -854,5 +910,5 @@ def get_budget_detail(request: Request, budget_id: int, current_user: UserRespon
             "status": budget.status,
             "created_at": str(budget.created_at),
             "items_count": summary.items_count,
-            "total_planned": float(summary.total_planned)
+            "total_planned": _money_str(summary.total_planned)
         }

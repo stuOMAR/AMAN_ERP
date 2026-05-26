@@ -58,8 +58,8 @@ const ProductionAnalytics = () => {
 
     const totalOrders = summary?.total_orders || 0;
     const byStatus = summary?.orders_by_status || {};
-    const completedCount = byStatus.completed?.count || 0;
-    const inProgressCount = byStatus.in_progress?.count || 0;
+    const completedCount = summary?.completed_orders || 0;
+    const inProgressCount = summary?.in_progress_orders || 0;
 
     return (
         <div className="workspace fade-in">
@@ -125,7 +125,7 @@ const ProductionAnalytics = () => {
                             ) : (
                                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8, marginTop: 12 }}>
                                     {Object.entries(byStatus).map(([status, data]) => {
-                                        const pct = totalOrders > 0 ? (data.count / totalOrders * 100) : 0;
+                                        const pct = data.share_pct || 0;
                                         return (
                                             <div key={status}>
                                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
@@ -260,7 +260,7 @@ const ProductionAnalytics = () => {
                                                 <td>{formatNumber(wc.total_run_time_hours, 1)}</td>
                                                 <td>{formatNumber(wc.total_output)}</td>
                                                 <td>
-                                                    <span className={`status-badge ${wc.utilization_percent >= 70 ? 'status-active' : wc.utilization_percent >= 40 ? 'status-pending' : 'status-rejected'}`}>
+                                                    <span className={`status-badge ${wc.utilization_direction === 'high' ? 'status-active' : wc.utilization_direction === 'medium' ? 'status-pending' : 'status-rejected'}`}>
                                                         {formatNumber(wc.utilization_percent, 1)}%
                                                     </span>
                                                 </td>

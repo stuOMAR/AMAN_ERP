@@ -207,6 +207,11 @@ class TestPurchasePaymentDetails:
         r2 = client.get(f"/api/buying/payments/{voucher_id}",
                         headers=admin_headers)
         assert r2.status_code in (200, 404)
+        if r2.status_code == 200:
+            data = r2.json()
+            assert "total_allocated" in data
+            assert isinstance(data["total_allocated"], str)
+            assert "E" not in data["total_allocated"].upper()
 
     def test_invoice_payment_history(self, client, admin_headers):
         """اختبار سجل دفعات فاتورة مشتريات"""
@@ -305,3 +310,39 @@ class TestSupplierTransactions:
                         json={"warehouse_id": None},
                         headers=admin_headers)
         assert r.status_code in (200, 201, 400, 404, 422, 501)
+
+
+class TestBlanketPOBackendAuthority:
+    """اختبارات قيم Blanket PO المحسوبة من الخلفية."""
+
+    def test_blanket_po_list_returns_backend_calculated_fields(self, client, admin_headers):
+        r = client.get("/api/buying/blanket", headers=admin_headers)
+        if r.status_code != 200:
+            pytest.skip("لا يمكن جلب اتفاقيات الشراء المفتوحة")
+        items = r.json().get("blanket_pos", [])
+        if not items:
+            pytest.skip("لا توجد اتفاقيات شراء مفتوحة")
+        row = items[0]
+        for key in ("remaining_quantity", "remaining_amount", "consumption_progress_pct"):
+            assert key in row
+            assert isinstance(row[key], str)
+            assert "E" not in row[key].upper()
+        assert "is_fully_released" in row
+
+    def test_blanket_po_detail_returns_backend_calculated_fields(self, client, admin_headers):
+        r = client.get("/api/buying/blanket", headers=admin_headers)
+        if r.status_code != 200:
+            pytest.skip("لا يمكن جلب اتفاقيات الشراء المفتوحة")
+        items = r.json().get("blanket_pos", [])
+        if not items:
+            pytest.skip("لا توجد اتفاقيات شراء مفتوحة")
+        bpo_id = items[0]["id"]
+        detail = client.get(f"/api/buying/blanket/{bpo_id}", headers=admin_headers)
+        assert detail.status_code in (200, 404)
+        if detail.status_code == 200:
+            data = detail.json()
+            for key in ("remaining_quantity", "remaining_amount", "consumption_progress_pct"):
+                assert key in data
+                assert isinstance(data[key], str)
+                assert "E" not in data[key].upper()
+            assert "is_fully_released" in data

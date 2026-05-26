@@ -25,6 +25,7 @@ export const accountingAPI = {
     create: (data) => withPermission('accounting.edit', () => api.post('/accounting/accounts', withoutCurrentRate(data))),
     update: (id, data) => withPermission('accounting.edit', () => api.put(`/accounting/accounts/${id}`, withoutCurrentRate(data))),
     delete: (id) => api.delete(`/accounting/accounts/${id}`),
+    previewJournalEntry: (data) => api.post('/accounting/journal-entries/preview', data, { skipGlobalToast: true }),
     createJournalEntry: (data, config) => api.post('/accounting/journal-entries', data, config),
     voidJournalEntry: (id) => api.post(`/accounting/journal-entries/${id}/void`),
     getSummary: (params) => api.get('/accounting/summary', { params }),
@@ -59,7 +60,9 @@ export const accountingAPI = {
 
     // Closing Entries (ACC-006)
     previewClosingEntries: (params) => api.get('/accounting/closing-entries/preview', { params }),
-    generateClosingEntries: (data) => api.post('/accounting/closing-entries/generate', data),
+    generateClosingEntries: (data, idempotencyKey) => api.post('/accounting/closing-entries/generate', data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
 
     // FX Revaluation (ACC-007)
     fxRevaluation: (data) => api.post('/accounting/fx-revaluation', data),
@@ -90,7 +93,9 @@ export const accountingAPI = {
     listRevenueSchedules: (params) => api.get('/accounting/revenue-recognition/schedules', { params }),
     createRevenueSchedule: (data) => withPermission('accounting.edit', () => api.post('/accounting/revenue-recognition/schedules', data)),
     getRevenueSchedule: (id) => api.get(`/accounting/revenue-recognition/schedules/${id}`),
-    recognizeRevenue: (id, periodIndex) => withPermission('accounting.edit', () => api.post(`/accounting/revenue-recognition/schedules/${id}/recognize?period_index=${periodIndex}`)),
+    recognizeRevenue: (id, periodIndex, idempotencyKey) => withPermission('accounting.edit', () => api.post(`/accounting/revenue-recognition/schedules/${id}/recognize?period_index=${periodIndex}`, {}, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    })),
     getRevenueSummary: () => api.get('/accounting/revenue-recognition/summary'),
 }
 

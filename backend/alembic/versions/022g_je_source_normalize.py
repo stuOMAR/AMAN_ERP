@@ -24,7 +24,7 @@ _VALID_SOURCES = (
     "ifrs15_revenue", "lease", "tax", "provision", "pos",
     "shipment", "delivery", "payment",
 )
-_SOURCE_EXPR = " | ".join(f"'{s}'" for s in _VALID_SOURCES)
+_SOURCE_EXPR = ", ".join(f"'{s}'" for s in _VALID_SOURCES)
 
 
 def upgrade() -> None:

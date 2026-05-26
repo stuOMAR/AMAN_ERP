@@ -12,8 +12,6 @@ from decimal import Decimal, ROUND_HALF_UP
 import hashlib
 import logging
 
-from utils.cache import invalidate_company_cache
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
@@ -21,7 +19,6 @@ from utils.permissions import (
     branch_scope_filter_from_scope,
     require_permission,
     require_sensitive_permission,
-    require_module,
     resolve_branch_scope,
     validate_branch_access,
     validate_treasury_account_access,
@@ -31,7 +28,6 @@ from utils.accounting import (
     compute_invoice_totals,
     compute_line_amounts,
     get_mapped_account_id,
-    generate_sequential_number,
     get_base_currency,
 )
 from utils.fiscal_lock import check_fiscal_period_open
@@ -39,11 +35,9 @@ from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from utils.tax_precision import require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
-from services.tax_engine import resolve_line_tax
-from utils.party_balance import update_party_site_balance
+from services.tax_engine import resolve_line_tax_group
 from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
-    SupplierPaymentCreate,
+    PurchaseCreate,
 )
 
 
@@ -149,6 +143,15 @@ def _original_purchase_line_for_return(original_lines: dict[int, list], product_
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _resolve_purchase_line_tax(db, branch_id: int, product_id: int, document_date, party_id: int) -> dict:
+    taxes = resolve_line_tax_group(branch_id, product_id, db, document_date, customer_id=party_id)
+    tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+    return {
+        "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+        "tax_rate": tax_rate,
+    }
 
 
 def _company_id(user) -> str:
@@ -331,7 +334,9 @@ def create_purchase_return(
                     line_total = (taxable_base + tax_amount).quantize(_D2, ROUND_HALF_UP)
                     already_reversed_qty[reverse_key] = already_qty + _dec(item.quantity)
                 else:
-                    tax_info = resolve_line_tax(branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.supplier_id)
+                    if not item.product_id:
+                        raise HTTPException(**http_error(400, "product_required", request))
+                    tax_info = _resolve_purchase_line_tax(db, branch_id, item.product_id, invoice.invoice_date, invoice.supplier_id)
                     la = compute_line_amounts(item.quantity, item.unit_price, tax_info["tax_rate"], item.discount, discount_is_percent=False)
                     taxable_base = la["taxable"]
                     effective_discount = _dec(item.discount)
@@ -375,6 +380,11 @@ def create_purchase_return(
                 subtotal = totals["subtotal"]
                 tax_total = totals["total_tax"]
                 total = totals["grand_total"]
+
+            # Strict validation: compare client-submitted grand total with authoritative backend grand total
+            if invoice.submitted_grand_total is not None:
+                if abs(total - invoice.submitted_grand_total) > _D2:
+                    raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
     
             # Determine warehouse: Use original invoice's warehouse if possible
             wh_id = invoice.warehouse_id
@@ -440,7 +450,7 @@ def create_purchase_return(
             elif invoice.paid_amount and _dec(invoice.paid_amount) > 0:
                 return_status = 'partial'
     
-            new_invoice_id = db.execute(text("""
+            new_invoice_row = db.execute(text("""
                 INSERT INTO invoices (
                     invoice_number, party_id, invoice_date, due_date,
                     subtotal, tax_amount, total, paid_amount,
@@ -563,7 +573,7 @@ def create_purchase_return(
                                 costing_method=costing_method,
                             )
                             return_unit_cost = (_dec(consumed_value) / return_qty).quantize(_D4, ROUND_HALF_UP) if return_qty else Decimal("0")
-                    except ValueError as exc:
+                    except ValueError:
                         raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
                 else:
                     inv_cost_row = db.execute(text("""
@@ -704,7 +714,7 @@ def create_purchase_return(
                 gl_paid = to_base(invoice.paid_amount)
     
                 # Create Voucher (Type: refund)
-                vid = db.execute(text("""
+                voucher_row = db.execute(text("""
                     INSERT INTO payment_vouchers (
                         voucher_number, voucher_type, voucher_date, party_type, party_id,
                 amount, payment_method, notes, status, created_by,
@@ -803,7 +813,7 @@ def create_purchase_return(
             raise
         except ValueError:
             raise HTTPException(**http_error(400, "insufficient_stock_for_return", request))
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating return")
             raise HTTPException(**http_error(500, "return_creation_error", request))
 

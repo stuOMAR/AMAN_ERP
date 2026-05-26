@@ -16,9 +16,8 @@ Closed-set is derived from two sources, in this priority:
 from __future__ import annotations
 
 import json
-import os
 import re
-from collections import Counter, OrderedDict, defaultdict
+from collections import defaultdict
 from pathlib import Path
 
 ROOT = Path("/home/omar/Desktop/aman")

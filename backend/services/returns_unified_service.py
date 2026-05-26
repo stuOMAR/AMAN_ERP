@@ -37,7 +37,7 @@ def create_return(
         raise HTTPException(**http_error(422, "original_pos_sale_id_required"))
 
     # Calculate total
-    total = sum(Decimal(str(l.get("qty", 0))) * Decimal(str(l.get("unit_price", 0))) for l in lines)
+    total = sum(Decimal(str(line.get("qty", 0))) * Decimal(str(line.get("unit_price", 0))) for line in lines)
 
     # Insert return
     result = db.execute(
@@ -114,11 +114,10 @@ def post_return(db: Any, *, return_id: int, tenant_id: int, actor: dict | None =
         text("SELECT * FROM returns_unified_lines WHERE return_id = :rid AND tenant_id = :tid"),
         {"rid": return_id, "tid": tenant_id},
     ).fetchall()
-    lines = [dict(l._mapping) for l in lines]
+    lines = [dict(line._mapping) for line in lines]
 
     # Inventory pre-flight if restocking
     if ret.get("restock_warehouse_id"):
-        from services.sales.sales_cancellation import inventory_preflight
         # For returns, we're adding stock (inbound), so no pre-flight needed for shortages
         # Just restock
         for line in lines:

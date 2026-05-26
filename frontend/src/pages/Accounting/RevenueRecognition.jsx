@@ -20,6 +20,8 @@ function RevenueRecognition() {
     const [selectedSchedule, setSelectedSchedule] = useState(null)
     const [loading, setLoading] = useState(true)
     const [initialLoad, setInitialLoad] = useState(true)
+    const [recognizing, setRecognizing] = useState(null)
+    const [recognitionKeys, setRecognitionKeys] = useState({})
     const [tab, setTab] = useState('list')
     const [showForm, setShowForm] = useState(false)
     const [form, setForm] = useState({
@@ -93,14 +95,26 @@ function RevenueRecognition() {
             permissionDenied()
             return
         }
+        const actionKey = `${scheduleId}:${periodIndex}`
+        if (recognizing) return
         if (!confirm(t('accounting.confirm_recognize'))) return
+        const idempotencyKey = recognitionKeys[actionKey] || crypto.randomUUID()
+        setRecognitionKeys(prev => ({ ...prev, [actionKey]: prev[actionKey] || idempotencyKey }))
+        setRecognizing(actionKey)
         try {
-            const res = await accountingAPI.recognizeRevenue(scheduleId, periodIndex)
+            const res = await accountingAPI.recognizeRevenue(scheduleId, periodIndex, idempotencyKey)
             showToast(res.data.message, 'success')
+            setRecognitionKeys(prev => {
+                const next = { ...prev }
+                delete next[actionKey]
+                return next
+            })
             handleViewSchedule(scheduleId)
             fetchData()
         } catch (err) {
             showToast(err.response?.data?.detail || 'Error', 'error')
+        } finally {
+            setRecognizing(null)
         }
     }
 
@@ -117,6 +131,9 @@ function RevenueRecognition() {
         }
         return map[method] || method
     }
+
+    const recognitionPct = (schedule) => schedule?.pct_recognized || '0.0'
+    const recognitionPctWidth = (schedule) => schedule?.pct_recognized_capped || schedule?.pct_recognized || '0.0'
 
     if (initialLoad) return <PageLoading />
 
@@ -254,11 +271,11 @@ function RevenueRecognition() {
                     <div style={{ marginBottom: 16 }}>
                         <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.85rem', marginBottom: 4 }}>
                             <span>{t('accounting.progress', 'التقدم')}</span>
-                            <span>{selectedSchedule.total_amount > 0 ? Math.round((selectedSchedule.recognized_amount || 0) / selectedSchedule.total_amount * 100) : 0}%</span>
+                            <span>{recognitionPct(selectedSchedule)}%</span>
                         </div>
                         <div style={{ background: '#f3f4f6', borderRadius: 8, height: 12, overflow: 'hidden' }}>
                             <div style={{
-                                width: `${selectedSchedule.total_amount > 0 ? Math.min(100, (selectedSchedule.recognized_amount || 0) / selectedSchedule.total_amount * 100) : 0}%`,
+                                width: `${recognitionPctWidth(selectedSchedule)}%`,
                                 height: '100%', borderRadius: 8,
                                 background: 'linear-gradient(90deg, #22c55e, #16a34a)',
                                 transition: 'width 0.5s'
@@ -283,35 +300,40 @@ function RevenueRecognition() {
                                     {(Array.isArray(selectedSchedule.schedule_lines)
                                         ? selectedSchedule.schedule_lines
                                         : JSON.parse(selectedSchedule.schedule_lines || '[]')
-                                    ).map((line, i) => (
-                                        <tr key={i}>
-                                            <td>{i + 1}</td>
-                                            <td style={{ fontWeight: 600 }}>
-                                                {line.period || line.milestone || `${t('common.period', 'فترة')} ${i + 1}`}
-                                            </td>
-                                            <td>{formatNumber(line.amount)} {currency}</td>
-                                            <td>
-                                                {line.recognized ? (
-                                                    <span className="badge badge-success">{t('accounting.recognized', 'معترف به')}</span>
-                                                ) : (
-                                                    <span className="badge badge-secondary">{t('accounting.pending', 'معلق')}</span>
-                                                )}
-                                            </td>
-                                            <td>
-                                                {!line.recognized && selectedSchedule.status === 'active' && canEditAccounting && (
-                                                    <button className="btn btn-success btn-sm"
-                                                        onClick={() => handleRecognize(selectedSchedule.id, i)}>
-                                                        {t('accounting.recognize', 'اعتراف')}
-                                                    </button>
-                                                )}
-                                                {line.recognized && line.recognized_at && (
-                                                    <span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>
-                                                        {new Date(line.recognized_at).toLocaleDateString('ar-SA')}
-                                                    </span>
-                                                )}
-                                            </td>
-                                        </tr>
-                                    ))}
+                                    ).map((line, i) => {
+                                        const actionKey = `${selectedSchedule.id}:${i}`
+                                        const isRecognizing = recognizing === actionKey
+                                        return (
+                                            <tr key={i}>
+                                                <td>{i + 1}</td>
+                                                <td style={{ fontWeight: 600 }}>
+                                                    {line.period || line.milestone || `${t('common.period', 'فترة')} ${i + 1}`}
+                                                </td>
+                                                <td>{formatNumber(line.amount)} {currency}</td>
+                                                <td>
+                                                    {line.recognized ? (
+                                                        <span className="badge badge-success">{t('accounting.recognized', 'معترف به')}</span>
+                                                    ) : (
+                                                        <span className="badge badge-secondary">{t('accounting.pending', 'معلق')}</span>
+                                                    )}
+                                                </td>
+                                                <td>
+                                                    {!line.recognized && selectedSchedule.status === 'active' && canEditAccounting && (
+                                                        <button className="btn btn-success btn-sm"
+                                                            disabled={Boolean(recognizing)}
+                                                            onClick={() => handleRecognize(selectedSchedule.id, i)}>
+                                                            {isRecognizing ? t('common.processing', 'جار التنفيذ...') : t('accounting.recognize', 'اعتراف')}
+                                                        </button>
+                                                    )}
+                                                    {line.recognized && line.recognized_at && (
+                                                        <span style={{ color: '#9ca3af', fontSize: '0.8rem' }}>
+                                                            {new Date(line.recognized_at).toLocaleDateString('ar-SA')}
+                                                        </span>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )
+                                    })}
                                 </tbody>
                             </table>
                         </div>
@@ -344,7 +366,8 @@ function RevenueRecognition() {
                                 </thead>
                                 <tbody>
                                     {schedules.map(s => {
-                                        const pct = s.total_amount > 0 ? Math.round((s.recognized_amount || 0) / s.total_amount * 100) : 0
+                                        const pct = recognitionPct(s)
+                                        const pctWidth = recognitionPctWidth(s)
                                         return (
                                             <tr key={s.id}>
                                                 <td>{s.id}</td>
@@ -357,7 +380,7 @@ function RevenueRecognition() {
                                                 <td>
                                                     <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                                         <div style={{ background: '#f3f4f6', borderRadius: 4, height: 8, flex: 1, maxWidth: 100, overflow: 'hidden' }}>
-                                                            <div style={{ width: `${pct}%`, height: '100%', background: '#22c55e', borderRadius: 4 }} />
+                                                            <div style={{ width: `${pctWidth}%`, height: '100%', background: '#22c55e', borderRadius: 4 }} />
                                                         </div>
                                                         <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{pct}%</span>
                                                     </div>

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Decimal from 'decimal.js';
 import { useTranslation } from 'react-i18next';
 import { hrAdvancedAPI, hrAPI } from '../../utils/api';
 import { toastEmitter } from '../../utils/toastEmitter';
@@ -33,7 +34,7 @@ const OvertimeRequests = () => {
             const rates = ratesRes?.data?.items || [];
             setOvertimeRates(rates);
             // Seed the form with the first multiplier (defaults to weekday 1.5).
-            if (rates.length && Number(form.rate_multiplier) === 1.5) {
+            if (rates.length && new Decimal(form.rate_multiplier || '0').equals('1.5')) {
                 setForm(prev => ({ ...prev, rate_multiplier: rates[0].multiplier }));
             }
         } catch (e) { toastEmitter.emit(t('common.error'), 'error'); }

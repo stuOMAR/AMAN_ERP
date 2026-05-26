@@ -20,7 +20,7 @@ from schemas.cashflow import (
     ForecastRead,
 )
 from services.forecast_service import generate_cashflow_forecast
-from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -128,7 +128,7 @@ def get_forecast(request: Request, forecast_id: int, current_user=Depends(get_cu
         ).fetchall()
 
         forecast = ForecastDetailRead.model_validate(row)
-        forecast.lines = [ForecastLineRead.model_validate(l) for l in lines]
+        forecast.lines = [ForecastLineRead.model_validate(line) for line in lines]
         return forecast
     finally:
         db.close()

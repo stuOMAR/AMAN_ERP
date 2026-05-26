@@ -24,7 +24,7 @@ sys.path.insert(0, ".")
 
 from sqlalchemy import text  # noqa: E402
 
-from database import db_connection, get_db_connection  # noqa: E402
+from database import get_db_connection  # noqa: E402
 from utils.secret_settings import encrypt_existing_secrets  # noqa: E402
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(message)s")

@@ -10,12 +10,11 @@ Works as a FastAPI ``Depends``-compatible callable.
 
 from __future__ import annotations
 
-import functools
 import logging
 from datetime import datetime, timezone
-from typing import Any, Callable
+from typing import Any
 
-from fastapi import Depends, Request
+from fastapi import Request
 
 logger = logging.getLogger(__name__)
 

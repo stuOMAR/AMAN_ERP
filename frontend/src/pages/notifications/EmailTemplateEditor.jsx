@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { notificationsAPI } from '../../services/notifications';
 
 /**
  * EmailTemplateEditor — CRUD for email templates with Jinja preview + locale tabs.
@@ -11,45 +11,58 @@ export default function EmailTemplateEditor() {
   const [form, setForm] = useState({
     code: '', locale: 'en', subject: '', body_html: '', body_text: '',
   });
-  const queryClient = useQueryClient();
+  const [templates, setTemplates] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deletingId, setDeletingId] = useState(null);
+  const [error, setError] = useState('');
 
-  const { data: templates, isLoading } = useQuery({
-    queryKey: ['email-templates'],
-    queryFn: async () => {
-      const res = await fetch('/api/notifications/templates');
-      if (!res.ok) throw new Error('Failed to load');
-      return res.json();
-    },
-  });
+  const loadTemplates = useCallback(async () => {
+    setIsLoading(true);
+    setError('');
+    try {
+      const res = await notificationsAPI.getEmailTemplates();
+      const payload = res.data?.items ?? res.data ?? [];
+      setTemplates(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t('common.error'));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [t]);
 
-  const createMutation = useMutation({
-    mutationFn: async (data) => {
-      const res = await fetch('/api/notifications/templates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Failed');
-      }
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries(['email-templates']);
+  useEffect(() => {
+    loadTemplates();
+  }, [loadTemplates]);
+
+  const handleCreate = async (event) => {
+    event.preventDefault();
+    setSaving(true);
+    setError('');
+    try {
+      await notificationsAPI.createEmailTemplate(form);
+      await loadTemplates();
       setShowForm(false);
       setForm({ code: '', locale: 'en', subject: '', body_html: '', body_text: '' });
-    },
-  });
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t('common.error'));
+    } finally {
+      setSaving(false);
+    }
+  };
 
-  const deleteMutation = useMutation({
-    mutationFn: async (id) => {
-      const res = await fetch(`/api/notifications/templates/${id}`, { method: 'DELETE' });
-      if (!res.ok) throw new Error('Delete failed');
-      return res.json();
-    },
-    onSuccess: () => queryClient.invalidateQueries(['email-templates']),
-  });
+  const handleDelete = async (id) => {
+    setDeletingId(id);
+    setError('');
+    try {
+      await notificationsAPI.deleteEmailTemplate(id);
+      await loadTemplates();
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t('common.error'));
+    } finally {
+      setDeletingId(null);
+    }
+  };
 
   return (
     <div className="email-template-editor">
@@ -60,7 +73,7 @@ export default function EmailTemplateEditor() {
       </button>
 
       {showForm && (
-        <form className="card p-3 mb-3" onSubmit={(e) => { e.preventDefault(); createMutation.mutate(form); }}>
+        <form className="card p-3 mb-3" onSubmit={handleCreate}>
           <div className="row">
             <div className="col-md-4">
               <label>{t('notifications.email_template_editor.form.code')}</label>
@@ -91,12 +104,13 @@ export default function EmailTemplateEditor() {
             <textarea className="form-control font-monospace" rows={4} value={form.body_text}
               onChange={(e) => setForm({ ...form, body_text: e.target.value })} />
           </div>
-          {createMutation.isError && <div className="alert alert-danger mt-2">{createMutation.error.message}</div>}
-          <button type="submit" className="btn btn-success mt-2" disabled={createMutation.isLoading}>
-            {createMutation.isLoading ? t('notifications.email_template_editor.buttons.saving') : t('notifications.email_template_editor.buttons.save')}
+          <button type="submit" className="btn btn-success mt-2" disabled={saving}>
+            {saving ? t('notifications.email_template_editor.buttons.saving') : t('notifications.email_template_editor.buttons.save')}
           </button>
         </form>
       )}
+
+      {error && <div className="alert alert-danger">{error}</div>}
 
       {isLoading ? <p>{t('notifications.email_template_editor.loading')}</p> : (
         <table className="table table-sm">
@@ -110,7 +124,8 @@ export default function EmailTemplateEditor() {
                 <td>{tpl.version}</td>
                 <td>
                   <button className="btn btn-sm btn-outline-danger"
-                    onClick={() => deleteMutation.mutate(tpl.id)}>{t('notifications.email_template_editor.buttons.delete')}</button>
+                    disabled={deletingId === tpl.id}
+                    onClick={() => handleDelete(tpl.id)}>{t('notifications.email_template_editor.buttons.delete')}</button>
                 </td>
               </tr>
             ))}

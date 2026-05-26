@@ -1,14 +1,17 @@
 """kpi_service.projects — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
+from decimal import Decimal
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     kpi_item, ratio_status, _count_table
 )
-from utils.accounting import get_base_currency
+from utils.accounting import get_base_currency  # noqa: E402
+from utils.tax_precision import money_str, rate_str  # noqa: E402
+from utils.i18n import i18n_message  # noqa: E402
 
 
 def get_projects_kpis(db, start_date: date, end_date: date,
@@ -18,10 +21,10 @@ def get_projects_kpis(db, start_date: date, end_date: date,
 
     # Active projects
     active_projects = _count_table(db, "projects", extra_where="status = 'active'")
-    completed_projects = _count_table(db, "projects", extra_where="status = 'completed'")
+    _count_table(db, "projects", extra_where="status = 'completed'")
 
     # Budget utilization
-    budget_util = 0
+    budget_util = Decimal("0")
     try:
         bu = db.execute(text("""
             SELECT
@@ -36,8 +39,8 @@ def get_projects_kpis(db, start_date: date, end_date: date,
 
     # EVM: CPI and SPI (projects table has no earned_value/planned_value;
     # approximate CPI from actual_cost vs planned_budget)
-    avg_cpi = 0
-    avg_spi = 0
+    avg_cpi = Decimal("0")
+    avg_spi = Decimal("0")
     try:
         evm = db.execute(text("""
             SELECT
@@ -46,19 +49,19 @@ def get_projects_kpis(db, start_date: date, end_date: date,
             FROM projects WHERE status = 'active' AND planned_budget > 0
         """)).fetchone()
         if evm:
-            avg_cpi = float(evm[0] or 0)
-            avg_spi = float(evm[1] or 0)
+            avg_cpi = Decimal(str(evm[0] or 0))
+            avg_spi = Decimal(str(evm[1] or 0))
     except Exception:
         pass
 
     # Change Orders
-    change_orders_value = 0
+    change_orders_value = Decimal("0")
     try:
         co = db.execute(text("""
             SELECT COALESCE(SUM(cost_impact), 0) FROM project_change_orders
             WHERE created_at BETWEEN :s AND :e
         """), {"s": start_date, "e": end_date}).scalar()
-        change_orders_value = float(co or 0)
+        change_orders_value = Decimal(str(co or 0))
     except Exception:
         pass
 
@@ -78,37 +81,33 @@ def get_projects_kpis(db, start_date: date, end_date: date,
         pass
 
     # Resource utilization (project_timesheets has single 'hours' column, no planned_hours)
-    resource_util = 0
+    resource_hours = Decimal("0")
+    Decimal("0")
     try:
         ru = db.execute(text("""
             SELECT COALESCE(SUM(hours), 0)
             FROM project_timesheets
             WHERE date BETWEEN :s AND :e
         """), {"s": start_date, "e": end_date}).scalar()
-        resource_util = float(ru or 0)
-        # Without planned hours, report total hours logged instead of percentage
-        # Set to 80% default if hours > 0 to avoid misleading zero
-        if resource_util > 0:
-            resource_util = 80  # placeholder until planned hours are available
+        resource_hours = Decimal(str(ru or 0))
     except Exception:
         pass
 
     kpis = [
         kpi_item("active_projects", "Active Projects", "مشاريع نشطة", active_projects, ""),
-        kpi_item("budget_utilization", "Budget Utilization", "استخدام الميزانية", budget_util, "%",
-                 benchmark=100.0, benchmark_source="PMI PMBOK"),
-        kpi_item("cpi", "Cost Performance Index", "مؤشر أداء التكلفة", avg_cpi, "x",
-                 benchmark=1.0, benchmark_source="PMI PMBOK",
-                 status=ratio_status(avg_cpi, 1.0, 0.8)),
-        kpi_item("spi", "Schedule Performance Index", "مؤشر أداء الجدول", avg_spi, "x",
-                 benchmark=1.0, benchmark_source="PMI PMBOK",
-                 status=ratio_status(avg_spi, 1.0, 0.8)),
-        kpi_item("change_orders", "Change Orders Value", "قيمة أوامر التغيير", change_orders_value, base_currency),
+        kpi_item("budget_utilization", "Budget Utilization", "استخدام الميزانية", rate_str(budget_util), "%",
+                 benchmark="100.0000", benchmark_source="PMI PMBOK"),
+        kpi_item("cpi", "Cost Performance Index", "مؤشر أداء التكلفة", rate_str(avg_cpi), "x",
+                 benchmark="1.0000", benchmark_source="PMI PMBOK",
+                 status=ratio_status(avg_cpi, Decimal("1.0"), Decimal("0.8"))),
+        kpi_item("spi", "Schedule Performance Index", "مؤشر أداء الجدول", rate_str(avg_spi), "x",
+                 benchmark="1.0000", benchmark_source="PMI PMBOK",
+                 status=ratio_status(avg_spi, Decimal("1.0"), Decimal("0.8"))),
+        kpi_item("change_orders", "Change Orders Value", "قيمة أوامر التغيير", money_str(change_orders_value), base_currency),
         kpi_item("high_risks", "High Risks", "مخاطر عالية", risks["high"], "",
                  status="danger" if risks["high"] > 0 else "good"),
-        kpi_item("resource_utilization", "Resource Utilization", "استخدام الموارد", resource_util, "%",
-                 benchmark=80.0, benchmark_source="PMI",
-                 status=ratio_status(resource_util, 80, 60)),
+        kpi_item("resource_utilization", "Resource Hours", "ساعات الموارد", rate_str(resource_hours), "h",
+                 benchmark="", benchmark_source="timesheets"),
     ]
 
     charts = [
@@ -129,4 +128,3 @@ def get_projects_kpis(db, start_date: date, end_date: date,
 # ═══════════════════════════════════════════════════════════════════════════════
 # POS Dashboard KPIs
 # ═══════════════════════════════════════════════════════════════════════════════
-

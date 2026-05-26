@@ -12,10 +12,9 @@ from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
 import logging
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import (
     generate_sequential_number, get_mapped_account_id,
@@ -155,7 +154,7 @@ def get_delivery_order(do_id: int, current_user: dict = Depends(get_current_user
         """), {"doid": do_id}).fetchall()
 
         result = dict(order._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
 
 
@@ -176,11 +175,14 @@ def create_delivery_order(body: DeliveryOrderCreate, request: Request, current_u
             so_id = body.sales_order_id
             party_id = body.party_id
             warehouse_id = body.warehouse_id
+            branch_id = body.branch_id
     
             if so_id and not lines:
                 so = db.execute(text("SELECT * FROM sales_orders WHERE id = :id"), {"id": so_id}).fetchone()
                 if not so:
                     raise HTTPException(**http_error(404, "sales_order_not_found"))
+                if so.branch_id:
+                    branch_id = validate_branch_access(current_user, so.branch_id, request)
                 party_id = party_id or so.party_id
                 warehouse_id = warehouse_id or so.warehouse_id
     
@@ -210,9 +212,39 @@ def create_delivery_order(body: DeliveryOrderCreate, request: Request, current_u
                             delivered_qty=remaining,
                             unit=getattr(sl, 'unit', None)
                         ))
+
+            branch_id = validate_branch_access(current_user, branch_id, request)
     
+            validated_lines = []
+            for line in lines:
+                if line.so_line_id:
+                    so_line = db.execute(text("""
+                        SELECT id, so_id, product_id, quantity
+                        FROM sales_order_lines
+                        WHERE id = :id
+                    """), {"id": line.so_line_id}).fetchone()
+                    if not so_line:
+                        raise HTTPException(**http_error(404, "sales_order_line_not_found", request))
+                    if so_id and int(so_line.so_id) != int(so_id):
+                        raise HTTPException(**http_error(400, "sales_order_line_mismatch", request))
+                    if int(so_line.product_id) != int(line.product_id):
+                        raise HTTPException(**http_error(400, "sales_order_line_mismatch", request))
+
+                    already_delivered = db.execute(text("""
+                        SELECT COALESCE(SUM(dol.delivered_qty), 0)
+                        FROM delivery_order_lines dol
+                        JOIN delivery_orders do2 ON do2.id = dol.delivery_order_id
+                        WHERE dol.so_line_id = :slid AND do2.status != 'cancelled'
+                    """), {"slid": line.so_line_id}).scalar() or 0
+                    remaining = (_dec(so_line.quantity) - _dec(already_delivered)).quantize(_D4, ROUND_HALF_UP)
+                    if _dec(line.delivered_qty) <= 0 or _dec(line.delivered_qty) > remaining:
+                        raise HTTPException(**http_error(400, "delivery_quantity_exceeds_remaining", request))
+                    line.ordered_qty = remaining
+                validated_lines.append(line)
+
+            lines = validated_lines
             total_items = len(lines)
-            total_qty = sum(l.delivered_qty for l in lines)
+            total_qty = sum(line.delivered_qty for line in lines)
     
             result = db.execute(text("""
                 INSERT INTO delivery_orders (
@@ -228,7 +260,7 @@ def create_delivery_order(body: DeliveryOrderCreate, request: Request, current_u
                 "dn": delivery_number,
                 "dd": body.delivery_date or date.today().isoformat(),
                 "soid": so_id, "pid": party_id, "wid": warehouse_id,
-                "bid": body.branch_id, "sm": body.shipping_method,
+                "bid": branch_id, "sm": body.shipping_method,
                 "tn": body.tracking_number, "drn": body.driver_name,
                 "drp": body.driver_phone, "vn": body.vehicle_number,
                 "da": body.delivery_address, "notes": body.notes,
@@ -308,8 +340,7 @@ def confirm_delivery_order(do_id: int, request: Request, current_user: dict = De
     
                 available = (_dec(stock.quantity) - _dec(stock.reserved_quantity)) if stock else Decimal('0')
                 if available < delivered_qty:
-                    product = db.execute(text("SELECT product_name FROM products WHERE id = :id"), {"id": line.product_id}).fetchone()
-                    pname = product.product_name if product else f"#{line.product_id}"
+                    db.execute(text("SELECT product_name FROM products WHERE id = :id"), {"id": line.product_id}).fetchone()
                     raise HTTPException(**http_error(400, "delivery_order_insufficient_stock", request))
 
                 costing_method = CostingService._get_product_costing_method(db, line.product_id, warehouse_id)
@@ -324,8 +355,8 @@ def confirm_delivery_order(do_id: int, request: Request, current_user: dict = De
                             sale_document_id=do_id,
                             costing_method=costing_method,
                         )
-                    except ValueError as exc:
-                        raise HTTPException(400, str(exc))
+                    except ValueError:
+                        raise HTTPException(**http_error(400, "invalid_request", request))
                     unit_cost = (_dec(cogs) / delivered_qty).quantize(_D4, ROUND_HALF_UP) if delivered_qty else Decimal("0")
                     total_cost = _dec(cogs).quantize(_D2, ROUND_HALF_UP)
                 else:
@@ -406,7 +437,7 @@ def mark_delivered(do_id: int, request: Request, current_user: dict = Depends(ge
 
 # ─── CREATE INVOICE FROM DO ───────────────────────────────────────────────────
 
-from fastapi import Header
+from fastapi import Header  # noqa: E402
 
 @router.post("/{do_id}/create-invoice", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def create_invoice_from_delivery(
@@ -683,8 +714,8 @@ def cancel_delivery_order(do_id: int, request: Request, current_user: dict = Dep
                                 original_source_document_type="delivery_order",
                                 original_source_document_id=do_id,
                             )
-                        except ValueError as exc:
-                            raise HTTPException(400, str(exc))
+                        except ValueError:
+                            raise HTTPException(**http_error(400, "invalid_request", request))
                         unit_cost = _dec(return_result.get("restored_unit_cost", unit_cost))
                         total_cost = _dec(return_result.get("restored_total_cost", unit_cost * delivered_qty)).quantize(_D2, ROUND_HALF_UP)
                     else:
@@ -758,6 +789,6 @@ def update_delivery_order(do_id: int, body: DeliveryOrderUpdate, request: Reques
             updates[key] = val
         updates["id"] = do_id
 
-        db.execute(text(f"UPDATE delivery_orders SET {', '.join(set_parts)} WHERE id = :id"), updates) # noqa: sql-lint
+        db.execute(text(f"UPDATE delivery_orders SET {', '.join(set_parts)} WHERE id = :id"), updates) # noqa
 
         return {"message": i18n_message("delivery_order_updated", request)}

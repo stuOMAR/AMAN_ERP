@@ -2,7 +2,6 @@ import React, { useState, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { detailedReportsAPI } from '../../services/reports';
 import { api } from '../../utils/api';
-import Decimal from 'decimal.js';
 import { formatNumber } from '../../utils/format';
 import { useBranch } from '../../context/BranchContext';
 import { useToast } from '../../context/ToastContext';
@@ -29,6 +28,12 @@ const DetailedProfitLoss = () => {
     const [endDate, setEndDate] = useState(todayStr);
     const [groupBy, setGroupBy] = useState('customer');
     const [data, setData] = useState([]);
+    const [totals, setTotals] = useState({
+        total_revenue: '0.00',
+        total_cogs: '0.00',
+        total_gross_profit: '0.00',
+        overall_gross_margin_pct: '0.0',
+    });
     const [loading, setLoading] = useState(false);
     const [initialLoad, setInitialLoad] = useState(true);
 
@@ -42,7 +47,15 @@ const DetailedProfitLoss = () => {
                 branch_id: currentBranch?.id || undefined,
             };
             const res = await detailedReportsAPI.getDetailedPL(params);
-            setData(res.data?.data || res.data || []);
+            const payload = res.data || {};
+            const rows = payload.details || payload.data || (Array.isArray(payload) ? payload : []);
+            setData(Array.isArray(rows) ? rows : []);
+            setTotals(payload.totals || {
+                total_revenue: '0.00',
+                total_cogs: '0.00',
+                total_gross_profit: '0.00',
+                overall_gross_margin_pct: '0.0',
+            });
         } catch (err) {
             console.error(err);
             showToast(t('common.error_loading'), 'error');
@@ -52,18 +65,13 @@ const DetailedProfitLoss = () => {
         }
     }, [startDate, endDate, groupBy, currentBranch?.id]);
 
-    const totals = data.reduce(
-        (acc, row) => ({
-            revenue: acc.revenue.plus(new Decimal(row.revenue || '0')),
-            cogs: acc.cogs.plus(new Decimal(row.cogs || '0')),
-            gross_profit: acc.gross_profit.plus(new Decimal(row.gross_profit || '0')),
-        }),
-        { revenue: new Decimal('0'), cogs: new Decimal('0'), gross_profit: new Decimal('0') }
-    );
-    const overallMargin = !totals.revenue.isZero() ? totals.gross_profit.div(totals.revenue).times(100).toFixed(1) : '0.0';
+    const totalRevenue = totals.total_revenue || '0.00';
+    const totalCogs = totals.total_cogs || '0.00';
+    const totalGrossProfit = totals.total_gross_profit || '0.00';
+    const overallMargin = totals.overall_gross_margin_pct || '0.0';
 
     const chartData = data.slice(0, 10).map(row => ({
-        name: row.name || row.customer || row.product || row.category || '-',
+        name: row.name || row.customer_name || row.customer || row.product_name || row.product || row.category || '-',
         [t('reports.detailed_pl.revenue')]: row.revenue || 0,
         [t('reports.detailed_pl.cogs')]: row.cogs || 0,
         [t('reports.detailed_pl.gross_profit')]: row.gross_profit || 0,
@@ -148,15 +156,15 @@ const DetailedProfitLoss = () => {
                 <div className="metrics-grid" style={{ marginBottom: 24 }}>
                     <div className="metric-card">
                         <div className="metric-label">{t('reports.detailed_pl.revenue')}</div>
-                        <div className="metric-value text-success">{fmt(totals.revenue)}</div>
+                        <div className="metric-value text-success">{fmt(totalRevenue)}</div>
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('reports.detailed_pl.cogs')}</div>
-                        <div className="metric-value text-danger">{fmt(totals.cogs)}</div>
+                        <div className="metric-value text-danger">{fmt(totalCogs)}</div>
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('reports.detailed_pl.gross_profit')}</div>
-                        <div className="metric-value text-primary">{fmt(totals.gross_profit)}</div>
+                        <div className="metric-value text-primary">{fmt(totalGrossProfit)}</div>
                     </div>
                     <div className="metric-card">
                         <div className="metric-label">{t('reports.detailed_pl.gross_margin')}</div>
@@ -209,18 +217,19 @@ const DetailedProfitLoss = () => {
                             <tr><td colSpan="6" className="text-center">{t('common.no_data')}</td></tr>
                         ) : (
                             data.map((row, idx) => {
-                                const margin = row.revenue ? new Decimal(row.gross_profit || '0').div(new Decimal(row.revenue)).times(100).toFixed(1) : '0.0';
+                                const margin = row.gross_margin_pct ?? '0.0';
+                                const isNegativeMargin = String(margin).trim().startsWith('-');
                                 return (
                                     <tr key={idx}>
                                         <td>{idx + 1}</td>
                                         <td style={{ fontWeight: 600 }}>
-                                            {row.name || row.customer || row.product || row.category || '-'}
+                                            {row.name || row.customer_name || row.customer || row.product_name || row.product || row.category || '-'}
                                         </td>
                                         <td className="text-success">{fmt(row.revenue)}</td>
                                         <td className="text-danger">{fmt(row.cogs)}</td>
                                         <td className="text-primary" style={{ fontWeight: 600 }}>{fmt(row.gross_profit)}</td>
                                         <td>
-                                            <span className={`badge ${Number(margin) >= 0 ? 'badge-success' : 'badge-danger'}`}>
+                                            <span className={`badge ${isNegativeMargin ? 'badge-danger' : 'badge-success'}`}>
                                                 {margin}%
                                             </span>
                                         </td>
@@ -232,9 +241,9 @@ const DetailedProfitLoss = () => {
                             <tr style={{ fontWeight: 700, borderTop: '2px solid var(--border-color)' }}>
                                 <td></td>
                                 <td>{t('common.total', 'Total')}</td>
-                                <td className="text-success">{fmt(totals.revenue)}</td>
-                                <td className="text-danger">{fmt(totals.cogs)}</td>
-                                <td className="text-primary">{fmt(totals.gross_profit)}</td>
+                                <td className="text-success">{fmt(totalRevenue)}</td>
+                                <td className="text-danger">{fmt(totalCogs)}</td>
+                                <td className="text-primary">{fmt(totalGrossProfit)}</td>
                                 <td><span className="badge badge-primary">{overallMargin}%</span></td>
                             </tr>
                         )}

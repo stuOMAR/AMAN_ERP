@@ -59,7 +59,7 @@ def reverse_period(
             actor_id=_get_user_id(current_user),
         )
         return result
-    except LookupError as e:
+    except LookupError:
         logger.exception("Payroll period not found for reversal")
         raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
     except ValueError as e:

@@ -221,7 +221,7 @@ def validate_checkin_location(body: CheckInValidate, current_user=Depends(get_cu
 # ==========================================================================
 
 @router.post("/approvals/sla/escalate", dependencies=[Depends(require_permission("approvals.manage"))], response_model=Dict[str, Any])
-def scan_and_escalate_sla(current_user=Depends(get_current_user)):
+def scan_and_escalate_sla(request: Request, current_user=Depends(get_current_user)):
     """Scan ``approval_requests`` in ``pending`` status past their workflow SLA and escalate.
 
     Idempotent: rows already stamped ``sla_escalated_at`` are skipped.
@@ -255,6 +255,16 @@ def scan_and_escalate_sla(current_user=Depends(get_current_user)):
                 {"to": r.escalation_to, "id": r.id},
             )
             escalated += 1
+        log_activity(
+            db,
+            user_id=current_user.id,
+            username=current_user.username,
+            action="approvals.sla_escalate",
+            resource_type="approval_requests",
+            details={"scanned": len(rows), "escalated": escalated},
+            request=request,
+            critical=True,
+        )
         return {"scanned": len(rows), "escalated": escalated}
 
 
@@ -437,11 +447,11 @@ def discount_note_receivable(
             raise HTTPException(**http_error(400, "receipt_voucher_accounts_not_configured", request))
 
         lines = [
-            {"account_id": body.bank_account_id, "debit": float(proceeds), "credit": 0,
+            {"account_id": body.bank_account_id, "debit": proceeds, "credit": Decimal("0"),
              "description": f"Discount NR #{note_id} proceeds"},
-            {"account_id": interest_acc, "debit": float(interest), "credit": 0,
+            {"account_id": interest_acc, "debit": interest, "credit": Decimal("0"),
              "description": f"Discount NR #{note_id} interest"},
-            {"account_id": notes_acc, "debit": 0, "credit": float(face),
+            {"account_id": notes_acc, "debit": Decimal("0"), "credit": face,
              "description": f"Discount NR #{note_id} face"},
         ]
         je_id, je_num = gl_service.create_journal_entry(
@@ -470,9 +480,9 @@ def discount_note_receivable(
         db.commit()
         return {
             "note_id": note_id,
-            "face_value": float(face),
-            "interest": float(interest),
-            "proceeds": float(proceeds),
+            "face_value": face,
+            "interest": interest,
+            "proceeds": proceeds,
             "journal_entry_id": je_id,
             "entry_number": je_num,
         }
@@ -532,11 +542,11 @@ def bounce_check_receivable(request: Request,
         if not bank_acc or not ar_acc:
             raise HTTPException(**http_error(400, "bank_ar_accounts_not_configured", request))
 
-        amt = float(_dec(row.amount))
+        amt = _dec(row.amount)
         lines = [
-            {"account_id": ar_acc, "debit": amt, "credit": 0,
+            {"account_id": ar_acc, "debit": amt, "credit": Decimal("0"),
              "description": f"Check #{check_id} bounce — reinstate AR"},
-            {"account_id": bank_acc, "debit": 0, "credit": amt,
+            {"account_id": bank_acc, "debit": Decimal("0"), "credit": amt,
              "description": f"Check #{check_id} bounce — reverse deposit"},
         ]
         je_id, je_num = gl_service.create_journal_entry(
@@ -621,14 +631,14 @@ def revalue_asset(request: Request,
 
         if delta > 0:
             lines = [
-                {"account_id": asset_acc, "debit": float(delta), "credit": 0, "description": f"Revaluation up asset #{asset_id}"},
-                {"account_id": reserve_acc, "debit": 0, "credit": float(delta), "description": f"Revaluation reserve asset #{asset_id}"},
+                {"account_id": asset_acc, "debit": delta, "credit": Decimal("0"), "description": f"Revaluation up asset #{asset_id}"},
+                {"account_id": reserve_acc, "debit": Decimal("0"), "credit": delta, "description": f"Revaluation reserve asset #{asset_id}"},
             ]
         else:
-            abs_d = float(-delta)
+            abs_d = -delta
             lines = [
-                {"account_id": reserve_acc, "debit": abs_d, "credit": 0, "description": f"Revaluation down asset #{asset_id}"},
-                {"account_id": asset_acc, "debit": 0, "credit": abs_d, "description": f"Asset write-down #{asset_id}"},
+                {"account_id": reserve_acc, "debit": abs_d, "credit": Decimal("0"), "description": f"Revaluation down asset #{asset_id}"},
+                {"account_id": asset_acc, "debit": Decimal("0"), "credit": abs_d, "description": f"Asset write-down #{asset_id}"},
             ]
 
         je_id, je_num = gl_service.create_journal_entry(
@@ -654,10 +664,10 @@ def revalue_asset(request: Request,
                 WHERE id = :id
                 """
             ),
-            {"new": float(new), "delta": float(delta), "id": asset_id},
+            {"new": new, "delta": delta, "id": asset_id},
         )
         db.commit()
-        return {"asset_id": asset_id, "delta": float(delta), "journal_entry_id": je_id, "entry_number": je_num}
+        return {"asset_id": asset_id, "delta": delta, "journal_entry_id": je_id, "entry_number": je_num}
     except HTTPException:
         db.rollback()
         raise
@@ -726,9 +736,9 @@ def depreciate_asset_uop(request: Request,
             raise HTTPException(**http_error(400, "depreciation_accounts_not_configured_on_asset", request))
 
         lines = [
-            {"account_id": row.depreciation_expense_account_id, "debit": float(period_dep), "credit": 0,
+            {"account_id": row.depreciation_expense_account_id, "debit": period_dep, "credit": Decimal("0"),
              "description": f"UoP depreciation asset #{asset_id}"},
-            {"account_id": row.accumulated_depreciation_account_id, "debit": 0, "credit": float(period_dep),
+            {"account_id": row.accumulated_depreciation_account_id, "debit": Decimal("0"), "credit": period_dep,
              "description": f"Accumulated depreciation asset #{asset_id}"},
         ]
         je_id, je_num = gl_service.create_journal_entry(
@@ -754,10 +764,10 @@ def depreciate_asset_uop(request: Request,
                 WHERE id = :id
                 """
             ),
-            {"dep": float(period_dep), "units": float(units), "id": asset_id},
+            {"dep": period_dep, "units": units, "id": asset_id},
         )
         db.commit()
-        return {"asset_id": asset_id, "depreciation": float(period_dep), "units": float(units),
+        return {"asset_id": asset_id, "depreciation": period_dep, "units": units,
                 "journal_entry_id": je_id, "entry_number": je_num}
     except HTTPException:
         db.rollback()
@@ -828,25 +838,25 @@ def modify_lease(request: Request,
 
         lines: List[dict] = []
         if drou > 0:
-            lines.append({"account_id": row.rou_asset_account_id, "debit": float(drou), "credit": 0, "description": f"Lease #{lease_id} ROU up"})
+            lines.append({"account_id": row.rou_asset_account_id, "debit": drou, "credit": Decimal("0"), "description": f"Lease #{lease_id} ROU up"})
         elif drou < 0:
-            lines.append({"account_id": row.rou_asset_account_id, "debit": 0, "credit": float(-drou), "description": f"Lease #{lease_id} ROU down"})
+            lines.append({"account_id": row.rou_asset_account_id, "debit": Decimal("0"), "credit": -drou, "description": f"Lease #{lease_id} ROU down"})
         if dliab > 0:
-            lines.append({"account_id": row.liability_account_id, "debit": 0, "credit": float(dliab), "description": f"Lease #{lease_id} liability up"})
+            lines.append({"account_id": row.liability_account_id, "debit": Decimal("0"), "credit": dliab, "description": f"Lease #{lease_id} liability up"})
         elif dliab < 0:
-            lines.append({"account_id": row.liability_account_id, "debit": float(-dliab), "credit": 0, "description": f"Lease #{lease_id} liability down"})
+            lines.append({"account_id": row.liability_account_id, "debit": -dliab, "credit": Decimal("0"), "description": f"Lease #{lease_id} liability down"})
 
-        total_debit = sum(Decimal(str(l["debit"])) for l in lines)
-        total_credit = sum(Decimal(str(l["credit"])) for l in lines)
+        total_debit = sum(Decimal(str(line["debit"])) for line in lines)
+        total_credit = sum(Decimal(str(line["credit"])) for line in lines)
         balance = (total_debit - total_credit).quantize(_D2)
         if balance != 0:
             plug_acc = get_mapped_account_id(db, "acc_map_lease_modification") or get_mapped_account_id(db, "acc_map_other_expense")
             if not plug_acc:
                 raise HTTPException(**http_error(400, "lease_adjustment_account_not_configured", request))
             if balance > 0:
-                lines.append({"account_id": plug_acc, "debit": 0, "credit": float(balance), "description": "Lease modification P&L"})
+                lines.append({"account_id": plug_acc, "debit": Decimal("0"), "credit": balance, "description": "Lease modification P&L"})
             else:
-                lines.append({"account_id": plug_acc, "debit": float(-balance), "credit": 0, "description": "Lease modification P&L"})
+                lines.append({"account_id": plug_acc, "debit": -balance, "credit": Decimal("0"), "description": "Lease modification P&L"})
 
         je_id, je_num = gl_service.create_journal_entry(
             db,
@@ -874,7 +884,7 @@ def modify_lease(request: Request,
             {"liab": body.new_liability, "rou": body.new_rou_asset, "id": lease_id},
         )
         db.commit()
-        return {"lease_id": lease_id, "delta_liability": float(dliab), "delta_rou": float(drou),
+        return {"lease_id": lease_id, "delta_liability": dliab, "delta_rou": drou,
                 "journal_entry_id": je_id, "entry_number": je_num}
     except HTTPException:
         db.rollback()
@@ -988,24 +998,24 @@ def post_service_request_gl(
 
         lines: List[dict] = []
         if revenue > 0:
-            lines.append({"account_id": cash_acc, "debit": float(revenue), "credit": 0,
+            lines.append({"account_id": cash_acc, "debit": revenue, "credit": Decimal("0"),
                           "description": f"Service revenue SR#{request_id}"})
-            lines.append({"account_id": revenue_acc, "debit": 0, "credit": float(revenue),
+            lines.append({"account_id": revenue_acc, "debit": Decimal("0"), "credit": revenue,
                           "description": f"Service revenue SR#{request_id}"})
         if cost > 0:
-            lines.append({"account_id": cost_acc, "debit": float(cost), "credit": 0,
+            lines.append({"account_id": cost_acc, "debit": cost, "credit": Decimal("0"),
                           "description": f"Cost of services SR#{request_id}"})
             # P1 #110j — split the credit side: inventory for parts
             # actually drawn (already decremented physically), clearing
             # for labor/travel/other.
             non_parts = (cost - parts_cost) if cost > parts_cost else _dec(0)
             if parts_cost > 0 and inventory_acc:
-                lines.append({"account_id": inventory_acc, "debit": 0, "credit": float(parts_cost),
+                lines.append({"account_id": inventory_acc, "debit": Decimal("0"), "credit": parts_cost,
                               "description": f"Service parts consumption SR#{request_id}"})
             else:
                 non_parts = cost  # fallback when inventory mapping missing
             if non_parts > 0:
-                lines.append({"account_id": clearing_acc, "debit": 0, "credit": float(non_parts),
+                lines.append({"account_id": clearing_acc, "debit": Decimal("0"), "credit": non_parts,
                               "description": f"Service cost clearing SR#{request_id}"})
 
         je_id, je_num = gl_service.create_journal_entry(
@@ -1038,13 +1048,13 @@ def post_service_request_gl(
             db, user_id=current_user.id, username=current_user.username,
             action="service_request.post_gl", resource_type="service_request",
             resource_id=request_id,
-            details={"revenue": float(revenue), "cost": float(cost), "je": je_num},
+            details={"revenue": revenue, "cost": cost, "je": je_num},
             request=request,
         )
         return {
             "request_id": request_id,
-            "revenue": float(revenue),
-            "cost": float(cost),
+            "revenue": revenue,
+            "cost": cost,
             "journal_entry_id": je_id,
             "entry_number": je_num,
         }
@@ -1127,7 +1137,7 @@ def run_bulk_cgu_impairment(request: Request,
                 results.append(res)
             except ValueError as e:
                 results.append({"cgu_id": item.cgu_id, "error": str(e)})
-        return {"as_of_date": as_of, "count": len(results), "total_impairment_loss": float(total_loss), "tests": results}
+        return {"as_of_date": as_of, "count": len(results), "total_impairment_loss": total_loss, "tests": results}
 
 
 # ==========================================================================

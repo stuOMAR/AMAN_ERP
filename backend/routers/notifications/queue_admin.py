@@ -7,11 +7,14 @@ POST /notifications/dlq/{id}/requeue — requeue from DLQ
 """
 from __future__ import annotations
 
-from fastapi import Request, APIRouter, Depends, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 
 from database import get_db_connection
+from services.audit_sanitizer import sanitize_for_audit
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import http_error
+from utils.tax_precision import require_idempotency_key
 
 router = APIRouter(tags=["Notifications Admin"])
 
@@ -28,7 +31,7 @@ def _get_tenant_id(current_user) -> str:
 def list_queue(
     state: str = None,
     channel: str = None,
-    limit: int = 50,
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):
     """List notification queue entries."""
@@ -36,7 +39,7 @@ def list_queue(
     conn = get_db_connection(tenant_id)
     try:
         conditions = ["tenant_id = :tnt"]
-        params = {"tnt": int(tenant_id), "limit": limit}
+        params = {"tnt": str(tenant_id), "limit": limit}
 
         if state:
             conditions.append("state = :state")
@@ -62,7 +65,7 @@ def list_queue(
             {
                 "id": r[0], "event_type": r[1], "channel": r[2],
                 "recipient": r[3], "state": r[4], "attempts": r[5],
-                "last_error": r[6],
+                "last_error": sanitize_for_audit(r[6], context="notification_queue"),
                 "created_at": r[7].isoformat() if r[7] else None,
                 "sent_at": r[8].isoformat() if r[8] else None,
             }
@@ -78,6 +81,7 @@ def retry_notification(request: Request,
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):
     """Retry a failed notification."""
+    idempotency_key = require_idempotency_key(request, operation="notification retry")
     tenant_id = _get_tenant_id(current_user)
     conn = get_db_connection(tenant_id)
     try:
@@ -87,19 +91,19 @@ def retry_notification(request: Request,
                 SET state = 'pending', next_attempt_at = now(), last_error = NULL
                 WHERE id = :nid AND tenant_id = :tnt AND state IN ('failed', 'dlq')
             """),
-            {"nid": notif_id, "tnt": int(tenant_id)},
+            {"nid": notif_id, "tnt": str(tenant_id)},
         )
         if result.rowcount == 0:
             raise HTTPException(**http_error(404, "notification_not_found_or_not_retryable", request))
         conn.commit()
-        return {"retried": True, "id": notif_id}
+        return {"retried": True, "id": notif_id, "idempotency_key": idempotency_key}
     finally:
         conn.close()
 
 
 @router.get("/dlq")
 def list_dlq(
-    limit: int = 50,
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):
     """List dead-letter queue entries."""
@@ -115,13 +119,14 @@ def list_dlq(
                 ORDER BY dlq_at DESC
                 LIMIT :limit
             """),
-            {"tnt": int(tenant_id), "limit": limit},
+            {"tnt": str(tenant_id), "limit": limit},
         ).fetchall()
 
         return [
             {
                 "id": r[0], "event_type": r[1], "channel": r[2],
-                "recipient": r[3], "attempts": r[4], "last_error": r[5],
+                "recipient": r[3], "attempts": r[4],
+                "last_error": sanitize_for_audit(r[5], context="notification_dlq"),
                 "dlq_at": r[6].isoformat() if r[6] else None,
                 "created_at": r[7].isoformat() if r[7] else None,
             }
@@ -137,6 +142,7 @@ def requeue_from_dlq(request: Request,
     current_user=Depends(require_sensitive_permission("notifications.admin")),
 ):
     """Requeue a notification from the DLQ."""
+    idempotency_key = require_idempotency_key(request, operation="notification DLQ requeue")
     tenant_id = _get_tenant_id(current_user)
     conn = get_db_connection(tenant_id)
     try:
@@ -147,11 +153,11 @@ def requeue_from_dlq(request: Request,
                     attempts = 0, last_error = NULL
                 WHERE id = :nid AND tenant_id = :tnt AND state = 'dlq'
             """),
-            {"nid": notif_id, "tnt": int(tenant_id)},
+            {"nid": notif_id, "tnt": str(tenant_id)},
         )
         if result.rowcount == 0:
             raise HTTPException(**http_error(404, "notification_not_found_in_dlq", request))
         conn.commit()
-        return {"requeued": True, "id": notif_id}
+        return {"requeued": True, "id": notif_id, "idempotency_key": idempotency_key}
     finally:
         conn.close()

@@ -1,10 +1,10 @@
 """Sales orders endpoints."""
-from fastapi import APIRouter, Depends, HTTPException, status, Request
+from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
@@ -83,7 +83,7 @@ def preview_sales_order(data: SalesDocumentPreviewRequest, current_user: dict = 
     branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
     db = get_db_connection(_company_id(current_user))
     try:
-        return preview_sales_totals(
+        result = preview_sales_totals(
             db,
             lines=data.lines,
             branch_id=branch_id,
@@ -94,6 +94,7 @@ def preview_sales_order(data: SalesDocumentPreviewRequest, current_user: dict = 
             header_discount_pct=data.header_discount_pct,
             markup_amount=data.markup_amount,
         )
+        return result
     finally:
         db.close()
 
@@ -223,23 +224,48 @@ def get_sales_order(order_id: int, current_user: dict = Depends(get_current_user
         """
         lines_result = db.execute(text(lines_query), {"id": order_id}).fetchall()
 
+        items = []
+        for r in lines_result:
+            d = dict(r._mapping)
+            qty = _dec(d.get("quantity"))
+            delivered = _dec(d.get("delivered_quantity"))
+
+            d["remaining_quantity"] = str(qty - delivered)
+            d["quantity"] = str(qty)
+            d["delivered_quantity"] = str(delivered)
+            items.append(d)
+
         return {
             **dict(header_row._mapping),
-            "items": [dict(r._mapping) for r in lines_result]
+            "items": items
         }
     finally:
         db.close()
 
 
 @orders_router.post("/orders", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
-def create_sales_order(request: Request, data: SOCreate, current_user: dict = Depends(get_current_user)):
+def create_sales_order(
+    request: Request,
+    data: SOCreate,
+    current_user: dict = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
+):
     """إنشاء أمر بيع جديد"""
     company_id = _company_id(current_user)
     user_id = _user_id(current_user)
     username = _username(current_user)
     db = get_db_connection(company_id)
     try:
-        # 0. Validate quotation if provided
+        # 0a. Idempotency pre-check
+        if idempotency_key:
+            existing = db.execute(text("""
+                SELECT id, so_number FROM sales_orders
+                WHERE idempotency_key = :key
+            """), {"key": idempotency_key}).fetchone()
+            if existing:
+                return {"id": existing.id, "so_number": existing.so_number, "idempotent": True}
+
+        # 0b. Validate quotation if provided
         if data.quotation_id:
             quot = db.execute(text("""
                 SELECT id, party_id, status
@@ -298,6 +324,11 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         total_discount = totals["total_discount"]
         grand_total = totals["grand_total"]
 
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        if data.submitted_grand_total is not None:
+            if abs(grand_total - data.submitted_grand_total) > Decimal("0.01"):
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
+
         # 3. Save Header
         cols = [
             "so_number", "party_id", "order_date", "expected_delivery_date",
@@ -315,6 +346,9 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
         if data.party_site_id and "party_site_id" in order_cols:
             cols.append("party_site_id")
             vals.append(":party_site_id")
+        if idempotency_key and "idempotency_key" in order_cols:
+            cols.append("idempotency_key")
+            vals.append(":idempotency_key")
         res = db.execute(text(f"""
             INSERT INTO sales_orders ({', '.join(cols)})
             VALUES ({', '.join(vals)})
@@ -326,6 +360,7 @@ def create_sales_order(request: Request, data: SOCreate, current_user: dict = De
             "bid": validated_branch_id, "whid": data.warehouse_id, "qid": data.quotation_id,
             "currency": data.currency, "exchange_rate": data.exchange_rate,
             "party_site_id": data.party_site_id,
+            "idempotency_key": idempotency_key,
         }).fetchone()
 
         so_id = res[0]

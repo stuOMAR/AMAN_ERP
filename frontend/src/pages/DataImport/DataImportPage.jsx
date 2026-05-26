@@ -1,16 +1,20 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { Download, AlertTriangle, FileText, Play, Info, Eye } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
-import api from '../../utils/api';
+import { dataImportAPI } from '../../services/dataImport';
 import { useToast } from '../../context/ToastContext';
 import { hasPermission } from '../../utils/auth';
 import { Spinner } from '../../components/common/LoadingStates'
 
+const makeIdempotencyKey = (prefix) => (
+    `${prefix}:${globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`}`
+)
+
 const DataImportPage = () => {
     const { t } = useTranslation();
     const { showToast } = useToast();
-    const canImport = hasPermission('data_import.execute');
+    const canImport = hasPermission(['data_import.create', 'data_import.manage', 'data_import.execute']);
 
     const [entity, setEntity] = useState('');
     const [file, setFile] = useState(null);
@@ -18,12 +22,34 @@ const DataImportPage = () => {
     const [loading, setLoading] = useState(false);
     const [importing, setImporting] = useState(false);
 
-    const entities = [
+    const fallbackEntities = [
         { value: 'accounts', label: t('data_import.accounts') },
         { value: 'parties', label: t('data_import.parties') },
+        { value: 'customers', label: t('data_import.customers', 'Customers') },
+        { value: 'suppliers', label: t('data_import.suppliers', 'Suppliers') },
         { value: 'products', label: t('data_import.products') },
         { value: 'employees', label: t('data_import.employees') }
     ];
+    const [entities, setEntities] = useState(fallbackEntities);
+
+    useEffect(() => {
+        let cancelled = false;
+        dataImportAPI.getEntityTypes()
+            .then((response) => {
+                if (!cancelled && Array.isArray(response.data)) {
+                    setEntities(response.data.map((item) => ({
+                        value: item.value,
+                        label: item.label || item.value
+                    })));
+                }
+            })
+            .catch(() => {
+                if (!cancelled) setEntities(fallbackEntities);
+            });
+        return () => {
+            cancelled = true;
+        };
+    }, [t]);
 
     const handleFileChange = (e) => {
         setFile(e.target.files[0]);
@@ -36,8 +62,17 @@ const DataImportPage = () => {
             return;
         }
         try {
-            // In a real app, this would be a direct download link or a blob response
-            window.open(`${api.defaults.baseURL}/data-import/export/${entity}?format=csv&template=true`, '_blank');
+            const response = await dataImportAPI.getTemplate(entity);
+            const url = URL.createObjectURL(new Blob([response.data], {
+                type: response.headers?.['content-type'] || 'text/csv'
+            }));
+            const link = document.createElement('a');
+            link.href = url;
+            link.download = `${entity}_template.csv`;
+            document.body.appendChild(link);
+            link.click();
+            link.remove();
+            URL.revokeObjectURL(url);
         } catch (error) {
             showToast(t('common.error'), "error");
         }
@@ -51,13 +86,10 @@ const DataImportPage = () => {
 
         const formData = new FormData();
         formData.append('file', file);
-        formData.append('entity', entity);
 
         setLoading(true);
         try {
-            const response = await api.post('/data-import/preview', formData, {
-                headers: { 'Content-Type': 'multipart/form-data' }
-            });
+            const response = await dataImportAPI.previewImport(formData, entity);
             setPreviewData(response.data);
             showToast(t('common.success'), "success");
         } catch (error) {
@@ -72,12 +104,16 @@ const DataImportPage = () => {
 
         if (!window.confirm(t('common.confirm_action'))) return;
 
+        const formData = new FormData();
+        formData.append('file', file);
+
         setImporting(true);
         try {
-            await api.post('/data-import/execute', {
+            await dataImportAPI.executeImport(
+                formData,
                 entity,
-                data: previewData.data
-            });
+                makeIdempotencyKey(`data-import:${entity}`)
+            );
 
             showToast(t('common.success'), "success");
             setPreviewData(null);
@@ -169,14 +205,19 @@ const DataImportPage = () => {
                             </div>
                         ) : (
                             <div className="space-y-4">
+                                {(() => {
+                                    const previewRows = previewData.preview_rows || [];
+                                    const hasErrors = (previewData.invalid_count || 0) > 0 || (previewData.errors?.length || 0) > 0;
+                                    return (
+                                        <>
                                 <div className="flex justify-between items-center bg-info/10 p-3 rounded-lg border border-info/20 text-info text-sm">
                                     <div className="flex items-center gap-2">
                                         <Info size={16} />
-                                        <span>{t('data_import.found_records', { count: previewData.data.length })}</span>
+                                        <span>{t('data_import.found_records', { count: previewData.total_rows || 0 })}</span>
                                     </div>
-                                    {previewData.errors?.length > 0 && (
+                                    {hasErrors && (
                                         <div className="text-error font-bold text-xs">
-                                            {previewData.errors.length} {t('data_import.validation_errors')}
+                                            {previewData.invalid_count || previewData.errors.length} {t('data_import.validation_errors')}
                                         </div>
                                     )}
                                 </div>
@@ -191,18 +232,18 @@ const DataImportPage = () => {
                                             </tr>
                                         </thead>
                                         <tbody>
-                                            {previewData.data.slice(0, 10).map((row, i) => (
-                                                <tr key={i}>
+                                            {previewRows.slice(0, 10).map((row, i) => (
+                                                <tr key={i} className={row.valid ? '' : 'bg-error/10'}>
                                                     {previewData.columns.map(col => (
-                                                        <td key={col} className="text-xs">{String(row[col] || '')}</td>
+                                                        <td key={col} className="text-xs">{String(row.data?.[col] || '')}</td>
                                                     ))}
                                                 </tr>
                                             ))}
                                         </tbody>
                                     </table>
-                                    {previewData.data.length > 10 && (
+                                    {previewRows.length > 10 && (
                                         <div className="p-2 text-center text-xs opacity-50 bg-base-200">
-                                            {t('data_import.showing_rows', { count: 10, total: previewData.data.length })}
+                                            {t('data_import.showing_rows', { count: 10, total: previewRows.length })}
                                         </div>
                                     )}
                                 </div>
@@ -216,19 +257,22 @@ const DataImportPage = () => {
                                     </button>
                                     <button
                                         className="btn btn-success gap-2"
-                                        disabled={importing || previewData.errors?.length > 0 || !canImport}
+                                        disabled={importing || hasErrors || !canImport}
                                         onClick={handleImport}
                                     >
                                         {importing ? <Spinner size="sm"/> : <Play size={18} />}
                                         {t('data_import.start_import')}
                                     </button>
                                 </div>
-                                {previewData.errors?.length > 0 && (
+                                {hasErrors && (
                                     <div className="alert alert-error text-xs p-2 mt-2">
                                         <AlertTriangle size={14} />
                                         {t('data_import.fix_errors')}
                                     </div>
                                 )}
+                                        </>
+                                    );
+                                })()}
                             </div>
                         )}
                     </div>

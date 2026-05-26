@@ -121,7 +121,7 @@ class TestSalesTaxPrecision:
         """)
         rows = db.fetchall()
         for r in rows:
-            inv_id, inv_num = r[0], r[1]
+            _inv_id, inv_num = r[0], r[1]
             subtotal = Decimal(str(r[2] or 0))
             discount = Decimal(str(r[3] or 0))
             tax = Decimal(str(r[4] or 0))
@@ -337,7 +337,7 @@ class TestFiscalPeriodLock:
         if not isinstance(locks, list) or not locks:
             pytest.skip("No fiscal lock data to test")
 
-        locked = [l for l in locks if l.get("is_locked")]
+        locked = [line for line in locks if line.get("is_locked")]
         if not locked:
             pytest.skip("No locked periods exist — skipping rejection test")
 

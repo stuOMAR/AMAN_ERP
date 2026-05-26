@@ -7,6 +7,7 @@ import { Gauge, Plus, Activity, Settings, Edit3 } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
 import '../../components/ModuleStyles.css';
 import DateInput from '../../components/common/DateInput';
+import { formatNumber } from '../../utils/format';
 
 const CapacityPlanning = () => {
     const { t } = useTranslation();
@@ -39,7 +40,7 @@ const CapacityPlanning = () => {
         try {
             setLoading(true);
             const res = await manufacturingAPI.calculateOEE(oeeParams);
-            setOeeData(res.data);
+            setOeeData(Array.isArray(res.data) ? (res.data[0] || null) : res.data);
         } catch (err) {
             showToast(err.response?.data?.detail || t('capacity_planning.oee_error', 'خطأ في حساب OEE'), 'error');
         } finally { setLoading(false); }
@@ -64,9 +65,9 @@ const CapacityPlanning = () => {
         setForm({ work_center_id: '', plan_name: '', plan_date_from: '', plan_date_to: '', planned_capacity_hours: '', planned_output_units: '', notes: '' });
     };
 
-    const oeeColorGauge = (val) => {
-        if (val >= 85) return '#28a745';
-        if (val >= 60) return '#ffc107';
+    const oeeColorGauge = (direction) => {
+        if (direction === 'high') return '#28a745';
+        if (direction === 'medium') return '#ffc107';
         return '#dc3545';
     };
 
@@ -136,8 +137,8 @@ const CapacityPlanning = () => {
                             <div className="metric-card">
                                 <div className="metric-icon" style={{ background: '#e8f5e9' }}><Activity size={22} color="#2e7d32" /></div>
                                 <div className="metric-info">
-                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.availability || 0) }}>
-                                        {(oeeData.availability || 0).toFixed(1)}%
+                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.availability_direction) }}>
+                                        {formatNumber(oeeData.availability || 0, 1)}%
                                     </span>
                                     <span className="metric-label">{t('capacity_planning.availability', 'التوفر')}</span>
                                     <small className="text-muted">{t('capacity_planning.uptime_planned', 'وقت التشغيل / الوقت المخطط')}</small>
@@ -146,8 +147,8 @@ const CapacityPlanning = () => {
                             <div className="metric-card">
                                 <div className="metric-icon" style={{ background: '#e3f2fd' }}><Gauge size={22} color="#1565c0" /></div>
                                 <div className="metric-info">
-                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.performance || 0) }}>
-                                        {(oeeData.performance || 0).toFixed(1)}%
+                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.performance_direction) }}>
+                                        {formatNumber(oeeData.performance || 0, 1)}%
                                     </span>
                                     <span className="metric-label">{t('capacity_planning.performance', 'الأداء')}</span>
                                     <small className="text-muted">{t('capacity_planning.actual_ideal_speed', 'السرعة الفعلية / المُخططة')}</small>
@@ -156,18 +157,18 @@ const CapacityPlanning = () => {
                             <div className="metric-card">
                                 <div className="metric-icon" style={{ background: '#fff3e0' }}><Settings size={22} color="#e65100" /></div>
                                 <div className="metric-info">
-                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.quality || 0) }}>
-                                        {(oeeData.quality || 0).toFixed(1)}%
+                                    <span className="metric-value" style={{ color: oeeColorGauge(oeeData.quality_direction) }}>
+                                        {formatNumber(oeeData.quality || 0, 1)}%
                                     </span>
                                     <span className="metric-label">{t('capacity_planning.quality', 'الجودة')}</span>
                                     <small className="text-muted">{t('capacity_planning.good_total_units', 'المنتجات الصالحة / الإجمالي')}</small>
                                 </div>
                             </div>
-                            <div className="metric-card" style={{ borderLeft: `4px solid ${oeeColorGauge(oeeData.oee || 0)}` }}>
+                            <div className="metric-card" style={{ borderLeft: `4px solid ${oeeColorGauge(oeeData.oee_direction)}` }}>
                                 <div className="metric-icon" style={{ background: '#f3e5f5' }}><Gauge size={22} color="#7b1fa2" /></div>
                                 <div className="metric-info">
-                                    <span className="metric-value" style={{ fontSize: '1.6rem', color: oeeColorGauge(oeeData.oee || 0) }}>
-                                        {(oeeData.oee || 0).toFixed(1)}%
+                                    <span className="metric-value" style={{ fontSize: '1.6rem', color: oeeColorGauge(oeeData.oee_direction) }}>
+                                        {formatNumber(oeeData.oee || 0, 1)}%
                                     </span>
                                     <span className="metric-label" style={{ fontWeight: 700 }}>{t('capacity_planning.overall_oee', 'OEE الإجمالي')}</span>
                                     <small className="text-muted">{t('capacity_planning.avail_perf_quality', 'التوفر × الأداء × الجودة')}</small>

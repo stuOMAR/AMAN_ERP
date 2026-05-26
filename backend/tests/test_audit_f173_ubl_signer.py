@@ -21,7 +21,7 @@ import pytest
 _BACKEND = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(_BACKEND))
 
-from services.einvoicing.ubl_signer import (
+from services.einvoicing.ubl_signer import (  # noqa: E402
     sign_xml,
     SignerCredentialsMissing,
     SignerCryptoError,

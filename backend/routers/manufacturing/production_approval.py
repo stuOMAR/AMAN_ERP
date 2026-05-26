@@ -7,21 +7,45 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from database import get_db
+from database import get_company_db
+from routers.auth import get_current_user
+from schemas import UserResponse
+from utils.i18n import http_error
+from utils.permissions import require_module, require_permission
 
-router = APIRouter(prefix="/manufacturing/orders", tags=["manufacturing"])
+router = APIRouter(
+    prefix="/manufacturing/orders",
+    tags=["manufacturing"],
+    dependencies=[Depends(require_module("manufacturing"))],
+)
 
 
-@router.post("/{order_id}/approve")
+def get_db(current_user: UserResponse = Depends(get_current_user)):
+    yield from get_company_db(current_user.company_id)
+
+
+def _actor(current_user: UserResponse) -> dict:
+    return {
+        "id": current_user.id,
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role,
+        "company_id": current_user.company_id,
+        "tenant_id": current_user.company_id,
+        "permissions": current_user.permissions or [],
+    }
+
+
+@router.post("/{order_id}/approve", dependencies=[Depends(require_permission("manufacturing.manage"))])
 async def approve_production_order(
     order_id: int,
     request: Request,
+    current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from utils.permissions import get_current_user
     from sqlalchemy import text
 
-    user = get_current_user(request)
+    user = _actor(current_user)
     tid = user.get("tenant_id", 0)
 
     result = db.execute(

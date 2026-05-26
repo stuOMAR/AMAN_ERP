@@ -15,7 +15,6 @@ class TreasuryAccountCreate(BaseModel):
     account_number: Optional[str] = None
     iban: Optional[str] = None
     opening_balance: Optional[Decimal] = Decimal("0.0")
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
     allow_overdraft: bool = False
 
 
@@ -23,6 +22,8 @@ class TreasuryAccountResponse(TreasuryAccountCreate):
     id: int
     current_balance: Decimal
     balance_in_currency: Optional[Decimal] = Decimal("0.0")
+    current_balance_direction: Optional[str] = None
+    balance_in_currency_direction: Optional[str] = None
     gl_account_id: Optional[int] = None
     branch_name: Optional[str] = None
     is_active: bool
@@ -41,7 +42,6 @@ class TransactionCreate(BaseModel):
     reference_number: Optional[str] = None
     branch_id: Optional[int] = None
     cost_center_id: Optional[int] = None
-    exchange_rate: Optional[Decimal] = Decimal("1.0")
 
 
 class TransactionResponse(BaseModel):

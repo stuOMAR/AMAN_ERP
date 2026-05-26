@@ -107,9 +107,11 @@ export { dashboardAPI } from '../services/dashboard'
 // Data Import
 export { dataImportAPI } from '../services/dataImport'
 
+// DMS
+export { dmsAPI } from '../services/dms'
+
 // Parties
 export { partiesAPI } from '../services/parties'
 
 // Cash Flow Forecast
 export { cashflowAPI } from '../services/cashflow'
-

@@ -2,22 +2,18 @@
 
 Mounted under the parent router via pos/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy.orm import Session
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.audit import log_activity
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from schemas import UserResponse
-from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from schemas.pos import POSProductResponse
 
 logger = logging.getLogger(__name__)
 
@@ -103,6 +99,9 @@ def _get_populated_session(db: Session, session_id: int, current_user_id: int):
     session_data['total_bank'] = str(_dec(bank).quantize(_D2, ROUND_HALF_UP))
     session_data['total_returns'] = str(_dec(returns).quantize(_D2, ROUND_HALF_UP))
     session_data['total_returns_cash'] = str(_dec(returns_cash).quantize(_D2, ROUND_HALF_UP))
+    session_data['expected_cash'] = str((
+        _dec(session_data.get('opening_balance')) + _dec(cash) - _dec(returns_cash)
+    ).quantize(_D2, ROUND_HALF_UP))
     session_data['order_count'] = int(order_count)
     
     return session_data
@@ -202,4 +201,3 @@ def get_pos_products(
         
     results = db.execute(text(query), params).fetchall()
     return [dict(row._mapping) for row in results]
-

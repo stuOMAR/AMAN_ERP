@@ -12,15 +12,41 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("payroll_runs", sa.Column(
-        "wps_superseded_by_run_id", sa.BigInteger(), nullable=True,
-    ))
-    op.create_foreign_key(
-        "fk_payroll_runs_superseded", "payroll_runs", "payroll_runs",
-        ["wps_superseded_by_run_id"], ["id"],
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'payroll_runs') THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'payroll_runs' AND column_name = 'wps_superseded_by_run_id'
+                ) THEN
+                    ALTER TABLE payroll_runs ADD COLUMN wps_superseded_by_run_id BIGINT;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints 
+                    WHERE constraint_name = 'fk_payroll_runs_superseded'
+                ) THEN
+                    ALTER TABLE payroll_runs 
+                    ADD CONSTRAINT fk_payroll_runs_superseded 
+                    FOREIGN KEY (wps_superseded_by_run_id) REFERENCES payroll_runs(id);
+                END IF;
+            END IF;
+        END $$;
+        """
     )
 
 
 def downgrade() -> None:
-    op.drop_constraint("fk_payroll_runs_superseded", "payroll_runs", type_="foreignkey")
-    op.drop_column("payroll_runs", "wps_superseded_by_run_id")
+    op.execute(
+        """
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'payroll_runs') THEN
+                ALTER TABLE payroll_runs DROP CONSTRAINT IF EXISTS fk_payroll_runs_superseded;
+                ALTER TABLE payroll_runs DROP COLUMN IF EXISTS wps_superseded_by_run_id;
+            END IF;
+        END $$;
+        """
+    )

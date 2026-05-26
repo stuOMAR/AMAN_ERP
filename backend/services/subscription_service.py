@@ -424,6 +424,14 @@ def prorate_plan_change(db, *, enrollment_id: int, new_plan_id: int, user: str |
     ).fetchone()
     if not new_plan:
         raise ValueError(f"New plan {new_plan_id} not found or inactive")
+    if enrollment.plan_id == new_plan_id:
+        return {
+            "credit_amount": str(_ZERO.quantize(_D4, rounding=ROUND_HALF_UP)),
+            "charge_amount": str(_ZERO.quantize(_D4, rounding=ROUND_HALF_UP)),
+            "net_amount": str(_ZERO.quantize(_D4, rounding=ROUND_HALF_UP)),
+            "new_invoice_id": None,
+            "duplicate": True,
+        }
 
     today = date.today()
     old_amount = _dec(enrollment.old_amount)

@@ -27,7 +27,7 @@ import os
 import time
 import uuid as _uuid
 from datetime import datetime, timezone
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, List, Optional
 
 import requests
 
@@ -35,8 +35,8 @@ from .base import EInvoiceAdapter, SubmissionResult
 
 logger = logging.getLogger(__name__)
 
-from utils.masking import redact_token
-from utils.tax_precision import dec as _dec, q_money, q_qty, q_rate, money_str, rate_str
+from utils.masking import redact_token  # noqa: E402
+from utils.tax_precision import dec as _dec, q_money, q_qty, q_rate, money_str, qty_str, rate_str  # noqa: E402
 
 _DEFAULT_BASE_URL = "https://api.invoicing.eta.gov.eg"
 _DEFAULT_TOKEN_URL = "https://id.eta.gov.eg/connect/token"
@@ -65,15 +65,9 @@ def build_eta_document(
     dicts with ``description``, ``quantity``, ``unit_price``, ``tax_amount``).
     """
     lines: List[dict] = []
-    # F-NEW-023 (R-FLOAT-MONEY) — PR16-fix: replace every ``float()``
-    # cast on the money/tax/rate/qty axes with Decimal+ROUND_HALF_UP via
-    # ``utils.tax_precision``. The previous implementation routed
-    # ``exchange_rate``, ``quantity``, ``unit_price``, ``tax_amount``,
-    # ``tax_rate``, ``discount`` and the running totals through
-    # ``float(...)``, which (a) silently coerced exact decimal inputs to
-    # binary floats and (b) made the ETA payload non-deterministic
-    # across runs. We now keep the inputs in Decimal end-to-end and
-    # only quantize when serialising to wire numbers.
+    # Keep the inputs in Decimal end-to-end and serialize monetary/rate/qty
+    # values as fixed decimal strings so JSON payloads cannot reintroduce
+    # binary floating-point rounding.
     from decimal import Decimal as _Decimal
     total_sales = _Decimal("0")
     total_tax = _Decimal("0")
@@ -100,29 +94,24 @@ def build_eta_document(
             "itemType": ln.get("item_type") or "GS1",
             "itemCode": str(ln.get("item_code") or ln.get("sku") or ""),
             "unitType": ln.get("unit_type") or "EA",
-            # ETA expects numerics on the wire; we keep the precision
-            # promised by Decimal_Money_Rule by emitting the quantized
-            # string and parsing back to a deterministic float-shaped
-            # numeric for JSON. ``float(money_str(x))`` is exact at the
-            # 2dp/4dp tax granularity so the round-trip is loss-free.
-            "quantity": float(qty),
+            "quantity": qty_str(qty),
             "internalCode": str(ln.get("internal_code") or ""),
-            "salesTotal": {"currencySold": currency, "amountEGP": float(money_str(sales))},
-            "total": float(money_str(net + tax_amt)),
+            "salesTotal": {"currencySold": currency, "amountEGP": money_str(sales)},
+            "total": money_str(net + tax_amt),
             "valueDifference": 0,
             "totalTaxableFees": 0,
-            "netTotal": {"currencySold": currency, "amountEGP": float(money_str(net))},
+            "netTotal": {"currencySold": currency, "amountEGP": money_str(net)},
             "itemsDiscount": 0,
-            "discount": {"rate": 0, "amount": float(money_str(discount))},
+            "discount": {"rate": "0.0000", "amount": money_str(discount)},
             "taxableItems": [{
                 "taxType": "T1",        # T1 = VAT
-                "amount": float(money_str(tax_amt)),
+                "amount": money_str(tax_amt),
                 "subType": "V001",
-                "rate": float(rate_str(tax_rate)),
+                "rate": rate_str(tax_rate),
             }],
             "unitValue": {"currencySold": currency,
-                          "amountEGP": float(money_str(unit_price)),
-                          "currencyExchangeRate": float(rate_str(fx_rate))},
+                          "amountEGP": money_str(unit_price),
+                          "currencyExchangeRate": rate_str(fx_rate)},
         })
 
     # ``total`` / ``net_total`` / ``vat_amount`` may be supplied
@@ -155,11 +144,11 @@ def build_eta_document(
         "purchaseOrderDescription": invoice.get("po_description") or "",
         "salesOrderReference": str(invoice.get("sales_order_ref") or ""),
         "proformaInvoiceNumber": str(invoice.get("proforma_number") or ""),
-        "totalDiscountAmount": float(money_str(total_discount)),
-        "totalSalesAmount": float(money_str(total_sales)),
-        "netAmount": float(money_str(net_total)),
-        "taxTotals": [{"taxType": "T1", "amount": float(money_str(vat_total))}],
-        "totalAmount": float(money_str(grand_total)),
+        "totalDiscountAmount": money_str(total_discount),
+        "totalSalesAmount": money_str(total_sales),
+        "netAmount": money_str(net_total),
+        "taxTotals": [{"taxType": "T1", "amount": money_str(vat_total)}],
+        "totalAmount": money_str(grand_total),
         "extraDiscountAmount": 0,
         "totalItemsDiscountAmount": 0,
         "invoiceLines": lines,
@@ -219,7 +208,7 @@ class EgyptETAAdapter(EInvoiceAdapter):
         resp.raise_for_status()
         body = resp.json()
         self._token = body["access_token"]
-        self._token_exp = time.time() + float(body.get("expires_in", 3600))
+        self._token_exp = time.time() + int(_dec(body.get("expires_in", 3600)))
         return self._token
 
     # ─── document build + sign ─────────────────────────────────────────

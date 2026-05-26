@@ -73,12 +73,12 @@ def ecl_compute(body: ECLComputeRequest, request: Request, current_user=Depends(
             user_id=current_user.id,
             username=getattr(current_user, "username", None),
         )
-    except ValueError as e:
+    except ValueError:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
-    except RuntimeError as e:
+        raise HTTPException(**http_error(400, "invalid_request", request))
+    except RuntimeError:
         db.rollback()
-        raise HTTPException(status.HTTP_412_PRECONDITION_FAILED, str(e))
+        raise HTTPException(**http_error(412, "invalid_request", request))
     except Exception:
         db.rollback()
         logger.exception("ECL compute failed")
@@ -136,9 +136,9 @@ def nrv_run(body: NRVRunRequest, request: Request, current_user=Depends(get_curr
             user_id=current_user.id,
             username=getattr(current_user, "username", None),
         )
-    except ValueError as e:
+    except ValueError:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        raise HTTPException(**http_error(400, "invalid_request", request))
     except Exception:
         db.rollback()
         logger.exception("NRV run failed")
@@ -244,9 +244,9 @@ def impairment_test(body: ImpairmentTestRequest,
             username=getattr(current_user, "username", None),
             details=body.details,
         )
-    except ValueError as e:
+    except ValueError:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        raise HTTPException(**http_error(400, "invalid_request", request))
     except Exception:
         db.rollback()
         logger.exception("Impairment test failed")
@@ -306,9 +306,9 @@ def ifrs15_create_contract(body: ContractCreateRequest,
             obligations=[ob.model_dump() for ob in body.obligations],
         )
         return {"contract_id": contract_id}
-    except ValueError as e:
+    except ValueError:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        raise HTTPException(**http_error(400, "invalid_request", request))
     except Exception:
         db.rollback()
         logger.exception("IFRS15 contract create failed")
@@ -363,9 +363,9 @@ def ifrs15_recognise(body: RevenueRecogniseRequest,
             user_id=current_user.id,
             username=getattr(current_user, "username", None),
         )
-    except ValueError as e:
+    except ValueError:
         db.rollback()
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+        raise HTTPException(**http_error(400, "invalid_request", request))
     except Exception:
         db.rollback()
         logger.exception("IFRS15 recognise failed")
@@ -395,8 +395,8 @@ def einvoice_submit(body: EInvoiceSubmitRequest,
     """Einvoice Submit."""
     try:
         adapter = get_adapter(body.jurisdiction)
-    except ValueError as e:
-        raise HTTPException(status.HTTP_400_BAD_REQUEST, str(e))
+    except ValueError:
+        raise HTTPException(**http_error(400, "invalid_request", request))
 
     # Fiscal-lock check needs DB access; do it in a short read-only block
     # so we fail fast (and *before* any network round-trip) when the

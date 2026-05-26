@@ -72,10 +72,13 @@ export default function ContractDetails() {
     const handleGenerateInvoice = async () => {
         setActionLoading(true)
         try {
-            const res = await contractsAPI.generateInvoice(id)
+            const preview = await contractsAPI.previewBillingCycle(id)
+            const submitted_grand_total = String(preview.data?.invoice?.grand_total || '0')
+            const res = await contractsAPI.generateInvoice(id, { submitted_grand_total })
             showToast(
                 `${t('contracts.details.invoice_generated')}: ${res.data.invoice_number}`, 'success'
             )
+            fetchContract()
         } catch (err) {
             showToast(err.response?.data?.detail || t('contracts.details.invoice_error'), 'error')
         } finally {

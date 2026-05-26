@@ -10,6 +10,10 @@ import BackButton from '../../components/common/BackButton';
 import { PageLoading, Spinner } from '../../components/common/LoadingStates'
 import DataTable from '../../components/common/DataTable'
 
+function looksLikeDecimalText(value) {
+    return value !== null && value !== '' && /^-?\d+(\.\d+)?$/.test(String(value).trim())
+}
+
 const COUNTRY_FLAGS = {
     SA: '🇸🇦', SY: '🇸🇾', AE: '🇦🇪', EG: '🇪🇬', JO: '🇯🇴',
     KW: '🇰🇼', BH: '🇧🇭', OM: '🇴🇲', QA: '🇶🇦', IQ: '🇮🇶',
@@ -386,7 +390,7 @@ function TaxCompliance() {
                                         {Object.entries(reportData.summary).map(([key, val]) => (
                                             <div key={key}>
                                                 <div style={{ fontSize: '12px', color: 'var(--text-muted)' }}>{t(`tax_compliance.summary_${key}`) || key.replace(/_/g, ' ')}</div>
-                                                <div style={{ fontSize: '18px', fontWeight: 700 }}>{typeof val === 'number' || (!Number.isNaN(Number(val)) && val !== null && val !== '') ? formatNumber(val) : String(val)}</div>
+                                                <div style={{ fontSize: '18px', fontWeight: 700 }}>{looksLikeDecimalText(val) ? formatNumber(val) : String(val)}</div>
                                             </div>
                                         ))}
                                     </div>

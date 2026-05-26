@@ -8,7 +8,6 @@ from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from sqlalchemy import text
@@ -19,12 +18,13 @@ from utils.accounting import (
 )
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from utils.treasury_balance import recalc_treasury_from_gl
 import logging
 
 logger = logging.getLogger(__name__)
 
-from schemas.expenses import ExpenseCreate, ExpenseUpdate, ExpenseApproval, ExpensePolicyCreate, ExpensePolicyUpdate, ExpenseValidation
+from schemas.expenses import ExpenseCreate, ExpenseUpdate, ExpenseApproval, ExpensePolicyCreate, ExpensePolicyUpdate, ExpenseValidation  # noqa: E402
 
 router = APIRouter(prefix="/expenses", tags=["Expenses"], dependencies=[Depends(require_module("expenses"))])
 
@@ -178,7 +178,15 @@ def _evaluate_expense_policy(
     }
 
 
-def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_currency: str, *, je_status: str = "posted"):
+def create_expense_journal_entry(
+    db,
+    expense_data: dict,
+    user_id: int,
+    base_currency: str,
+    *,
+    je_status: str = "posted",
+    idempotency_key: Optional[str] = None,
+):
     """إنشاء قيد محاسبي للمصروف.
 
     T3.11: ``je_status`` controls whether the JE is posted immediately
@@ -218,9 +226,10 @@ def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_curr
         reference=je_number,
         status=je_status,
         currency=base_currency,
-        exchange_rate=1.0,
+        exchange_rate=Decimal("1"),
         source="expense",
         source_id=expense_data.get("expense_id"),
+        idempotency_key=idempotency_key,
         # F-NEW-110 (GL-4.4 posted-immutability): pre-allocate the EXP-
         # prefixed number and hand it to gl_service so the row is born
         # with the correct entry_number. The previous implementation
@@ -232,6 +241,85 @@ def create_expense_journal_entry(db, expense_data: dict, user_id: int, base_curr
     )
 
     return je_id, je_number
+
+
+def _replace_expense_draft_journal_entry(
+    db,
+    je_id: int,
+    expense_data: dict,
+    user_id: int,
+    base_currency: str,
+    *,
+    request: Optional[Request] = None,
+) -> None:
+    row = db.execute(text("""
+        SELECT id, status
+        FROM journal_entries
+        WHERE id = :id
+        FOR UPDATE
+    """), {"id": je_id}).fetchone()
+    if not row:
+        raise HTTPException(**http_error(404, "je_not_found", request))
+    if row.status != "draft":
+        raise HTTPException(**http_error(400, "journal_entry_status_invalid_post", request, status=row.status))
+
+    amount = Decimal(str(expense_data["amount"]))
+    description = f"مصروف {expense_data['expense_type']}: {expense_data.get('description', '')}"
+    check_fiscal_period_open(db, str(expense_data["expense_date"]), raise_error=True)
+
+    db.execute(text("""
+        UPDATE journal_entries
+        SET entry_date = :entry_date,
+            description = :description,
+            branch_id = :branch_id,
+            currency = :currency,
+            exchange_rate = :exchange_rate,
+            updated_at = CURRENT_TIMESTAMP
+        WHERE id = :id
+    """), {
+        "id": je_id,
+        "entry_date": expense_data["expense_date"],
+        "description": description,
+        "branch_id": expense_data.get("branch_id"),
+        "currency": base_currency,
+        "exchange_rate": Decimal("1"),
+    })
+    db.execute(text("DELETE FROM journal_lines WHERE journal_entry_id = :id"), {"id": je_id})
+    lines = [
+        {
+            "account_id": expense_data["expense_account_id"],
+            "debit": amount,
+            "credit": Decimal("0"),
+            "description": expense_data.get("description"),
+        },
+        {
+            "account_id": expense_data["cash_account_id"],
+            "debit": Decimal("0"),
+            "credit": amount,
+            "description": expense_data.get("description"),
+        },
+    ]
+    # TODO: move to gl_service - draft only, no GL impact yet
+    for line in lines:
+        db.execute(text("""
+            INSERT INTO journal_lines
+                (journal_entry_id, account_id, debit, credit, description, cost_center_id,
+                 amount_currency, currency, txn_currency, txn_amount)
+            VALUES
+                (:jid, :account_id, :debit, :credit, :description, :cost_center_id,
+                 :amount_currency, :currency, :txn_currency, :txn_amount)
+        """), {
+            "jid": je_id,
+            "account_id": line["account_id"],
+            "debit": line["debit"],
+            "credit": line["credit"],
+            "description": line["description"] or description,
+            "cost_center_id": expense_data.get("cost_center_id"),
+            "amount_currency": amount,
+            "currency": base_currency,
+            "txn_currency": base_currency,
+            "txn_amount": amount,
+        })
 
 
 # ═══════════════════════════════════════════════════════════
@@ -502,9 +590,26 @@ async def create_expense(
     current_user: dict = Depends(get_current_user)
 ):
     """إنشاء مصروف جديد"""
+    idempotency_key = require_idempotency_key(request, operation="expense create")
     expense.branch_id = validate_branch_access(current_user, expense.branch_id)
     with transactional(current_user.company_id) as db:
         try:
+            existing_expense = db.execute(text("""
+                SELECT id, expense_number, approval_status
+                FROM expenses
+                WHERE idempotency_key = :key AND is_deleted = false
+                LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if existing_expense:
+                return {
+                    "success": True,
+                    "id": existing_expense.id,
+                    "expense_number": existing_expense.expense_number,
+                    "approval_status": existing_expense.approval_status,
+                    "idempotency_replayed": True,
+                    "message": i18n_message("expense_created_success", request),
+                }
+
             # Check fiscal period is open for the expense date
             check_fiscal_period_open(db, str(expense.expense_date), raise_error=True)
             
@@ -572,13 +677,16 @@ async def create_expense(
                     expense_number, expense_date, expense_type, amount, description,
                     category, payment_method, treasury_id, expense_account_id,
                     cost_center_id, project_id, branch_id, policy_id, approval_status,
-                    receipt_number, vendor_name, created_by
+                    receipt_number, vendor_name, created_by, idempotency_key
                 ) VALUES (
                     :num, :date, :type, :amt, :desc,
                     :cat, :pm, :tid, :eaid,
                     :ccid, :pid, :bid, :policy_id, :status,
-                    :receipt, :vendor, :uid
-                ) RETURNING id
+                    :receipt, :vendor, :uid, :idempotency_key
+                )
+                ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+                DO NOTHING
+                RETURNING id
             """), {
                 "num": expense_number, "date": expense.expense_date, "type": expense.expense_type,
                 "amt": str(expense.amount), "desc": expense.description,
@@ -586,8 +694,26 @@ async def create_expense(
                 "eaid": expense_account_id,
                 "ccid": expense.cost_center_id, "pid": expense.project_id, "bid": expense.branch_id,
                 "policy_id": policy_result["policy_id"], "status": approval_status,
-                "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id
+                "receipt": expense.receipt_number, "vendor": expense.vendor_name, "uid": current_user.id,
+                "idempotency_key": idempotency_key,
             }).scalar()
+            if expense_id is None:
+                replay = db.execute(text("""
+                    SELECT id, expense_number, approval_status
+                    FROM expenses
+                    WHERE idempotency_key = :key AND is_deleted = false
+                    LIMIT 1
+                """), {"key": idempotency_key}).fetchone()
+                if replay:
+                    return {
+                        "success": True,
+                        "id": replay.id,
+                        "expense_number": replay.expense_number,
+                        "approval_status": replay.approval_status,
+                        "idempotency_replayed": True,
+                        "message": i18n_message("expense_created_success", request),
+                    }
+                raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
             
             # T3.11: ALWAYS create a journal entry. Auto-approved expenses
             # post immediately; pending expenses get a `draft` JE so the
@@ -608,7 +734,12 @@ async def create_expense(
                 "expense_id": expense_id
             }
             je_id, je_number = create_expense_journal_entry(
-                db, expense_data, current_user.id, base_currency, je_status=je_status
+                db,
+                expense_data,
+                current_user.id,
+                base_currency,
+                je_status=je_status,
+                idempotency_key=f"expense:{idempotency_key}:je",
             )
     
             # Update expense with journal entry reference (always — even
@@ -713,11 +844,12 @@ async def update_expense(
     current_user: dict = Depends(get_current_user)
 ):
     """تعديل مصروف"""
+    require_idempotency_key(request, operation="expense update")
     with transactional(current_user.company_id) as db:
         try:
             # Check if expense exists and is pending
             existing = db.execute(text(
-                "SELECT id, approval_status, branch_id FROM expenses WHERE id = :id AND is_deleted = false"
+                "SELECT * FROM expenses WHERE id = :id AND is_deleted = false FOR UPDATE"
             ), {"id": expense_id}).fetchone()
             
             if not existing:
@@ -729,10 +861,59 @@ async def update_expense(
 
             if expense.treasury_id is not None:
                 validate_treasury_account_access(db, current_user, expense.treasury_id, existing.branch_id, request=request)
+            existing_data = dict(existing._mapping)
+            merged = dict(existing_data)
+            for field in ["expense_date", "expense_type", "amount", "description", "category",
+                         "payment_method", "treasury_id", "cost_center_id",
+                         "project_id", "receipt_number", "vendor_name"]:
+                value = getattr(expense, field)
+                if value is not None:
+                    merged[field] = value
+
+            check_fiscal_period_open(db, str(merged["expense_date"]), raise_error=True)
+            if merged["expense_type"] and merged["expense_type"] not in EXPENSE_TYPES:
+                raise HTTPException(status_code=400, detail=i18n_message("invalid_expense_type", request))
+
+            require_cost_center = db.execute(text("""
+                SELECT LOWER(setting_value) IN ('1', 'true', 'yes', 'on')
+                FROM company_settings
+                WHERE setting_key = 'expenses_require_cost_center'
+            """)).scalar() or False
+            if require_cost_center and not merged.get("cost_center_id"):
+                raise HTTPException(**http_error(400, "cost_center_required", request))
+
+            policy_result = _evaluate_expense_policy(
+                db,
+                expense_type=merged["expense_type"],
+                amount=merged["amount"],
+                current_user_id=existing_data["created_by"],
+                expense_date=merged["expense_date"],
+                cost_center_id=merged.get("cost_center_id"),
+                has_receipt=bool(merged.get("receipt_number")),
+            )
+            if not policy_result["valid"]:
+                raise HTTPException(status_code=400, detail={
+                    "code": "expense_policy_violation",
+                    "violations": policy_result["violations"],
+                })
+
+            expense_account_id = merged.get("expense_account_id") or get_expense_account_by_type(db, merged["expense_type"])
+            if not expense_account_id:
+                raise HTTPException(**http_error(400, "expense_account_required", request))
+            cash_account_id = None
+            if merged.get("treasury_id"):
+                treasury_row = validate_treasury_account_access(
+                    db, current_user, merged["treasury_id"], existing.branch_id, request=request
+                )
+                cash_account_id = treasury_row["gl_account_id"]
+            if not cash_account_id:
+                cash_account_id = get_mapped_account_id(db, "acc_map_cash_main")
+            if not cash_account_id:
+                raise HTTPException(**http_error(400, "cash_account_required", request))
             
             # Build update fields
             update_fields = []
-            params = {"id": expense_id}
+            params = {"id": expense_id, "policy_id": policy_result["policy_id"]}
             
             for field in ["expense_date", "expense_type", "amount", "description", "category",
                          "payment_method", "treasury_id", "expense_account_id", "cost_center_id",
@@ -745,12 +926,37 @@ async def update_expense(
             if not update_fields:
                 raise HTTPException(**http_error(400, "no_data_to_update"))
             
+            update_fields.append("expense_account_id = :expense_account_id")
+            params["expense_account_id"] = expense_account_id
+            update_fields.append("policy_id = :policy_id")
             update_fields.append("updated_at = CURRENT_TIMESTAMP")
             
             db.execute(text(f"""
                 UPDATE expenses SET {', '.join(update_fields)}
                 WHERE id = :id
             """), params)
+
+            if existing_data.get("journal_entry_id"):
+                expense_data = {
+                    "expense_date": merged["expense_date"],
+                    "expense_type": merged["expense_type"],
+                    "amount": str(merged["amount"]),
+                    "description": merged.get("description"),
+                    "expense_account_id": expense_account_id,
+                    "cash_account_id": cash_account_id,
+                    "cost_center_id": merged.get("cost_center_id"),
+                    "branch_id": existing.branch_id,
+                    "company_id": current_user.company_id,
+                    "expense_id": expense_id,
+                }
+                _replace_expense_draft_journal_entry(
+                    db,
+                    existing_data["journal_entry_id"],
+                    expense_data,
+                    current_user.id,
+                    get_base_currency(db),
+                    request=request,
+                )
             
             
             log_activity(
@@ -776,6 +982,7 @@ async def approve_expense(
     current_user: dict = Depends(get_current_user)
 ):
     """اعتماد أو رفض مصروف"""
+    idempotency_key = require_idempotency_key(request, operation="expense approval")
     with transactional(current_user.company_id) as db:
         try:
             # T3.12: lock the expense row for the duration of the approval
@@ -800,13 +1007,18 @@ async def approve_expense(
                 raise HTTPException(**http_error(404, "expense_not_found"))
             
             expense = dict(expense_row._mapping)
+            validate_branch_access(current_user, expense.get("branch_id"), request)
             
             if expense["approval_status"] != "pending":
+                if expense.get("approval_idempotency_key") == idempotency_key:
+                    return {"success": True, "message": "تمت معالجة طلب الاعتماد سابقاً", "idempotency_replayed": True}
                 raise HTTPException(**http_error(400, "expense_already_approved_or_rejected", request))
             
             # Validate approval_status value
             if approval.approval_status not in VALID_APPROVAL_STATUSES:
                 raise HTTPException(**http_error(400, "invalid_approval_status", request, statuses=', '.join(VALID_APPROVAL_STATUSES)))
+            if approval.approval_status == "approved":
+                check_fiscal_period_open(db, expense["expense_date"], raise_error=True)
             
             # Update approval status
             db.execute(text("""
@@ -814,12 +1026,14 @@ async def approve_expense(
                 SET approval_status = :status, 
                     approved_by = :uid, 
                     approved_at = CURRENT_TIMESTAMP,
-                    approval_notes = :notes
+                    approval_notes = :notes,
+                    approval_idempotency_key = :idempotency_key
                 WHERE id = :id
             """), {
                 "status": approval.approval_status, 
                 "uid": current_user.id, 
                 "notes": approval.approval_notes,
+                "idempotency_key": idempotency_key,
                 "id": expense_id
             })
             
@@ -865,7 +1079,12 @@ async def approve_expense(
                         "expense_id": expense_id
                     }
                     je_id, je_number = create_expense_journal_entry(
-                        db, expense_data, current_user.id, base_currency, je_status="posted"
+                        db,
+                        expense_data,
+                        current_user.id,
+                        base_currency,
+                        je_status="posted",
+                        idempotency_key=f"expense-approval:{idempotency_key}:je",
                     )
                     db.execute(text(
                         "UPDATE expenses SET journal_entry_id = :jid WHERE id = :id"
@@ -905,7 +1124,7 @@ async def approve_expense(
                 if submitted_by:
                     icon = "✅" if approval.approval_status == "approved" else "❌"
                     status_ar = "اعتُمد" if approval.approval_status == "approved" else "رُفض"
-                    exp_num = expense.get('expense_number', '') if isinstance(expense, dict) else ''
+                    expense.get('expense_number', '') if isinstance(expense, dict) else ''
                     db.execute(text("""
                         INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
                         VALUES (:uid, 'expense_status', :title, :message, :link, FALSE, NOW())
@@ -1107,7 +1326,7 @@ async def get_expenses_by_type(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 expense_type,
@@ -1150,7 +1369,7 @@ async def get_expenses_by_cost_center(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 COALESCE(cc.center_name, 'غير محدد') as cost_center_name,
@@ -1187,7 +1406,7 @@ async def get_monthly_expenses(
         
         where_clause = " AND ".join(filters)
         
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 EXTRACT(MONTH FROM expense_date) as month,

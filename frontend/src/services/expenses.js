@@ -14,14 +14,18 @@ const withPermission = (permission, request) => {
     return request()
 }
 
+const idempotencyHeaders = () => ({
+    headers: { 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` }
+})
+
 export const expensesAPI = {
     list: (params) => api.get('/expenses/', { params: cleanParams(params) }),
     summary: (params) => api.get('/expenses/summary', { params: cleanParams(params) }),
     get: (id) => api.get(`/expenses/${id}`),
-    create: (data) => api.post('/expenses/', data),
-    update: (id, data) => withPermission('expenses.edit', () => api.put(`/expenses/${id}`, data)),
-    approve: (id, data) => withPermission('expenses.approve', () => api.post(`/expenses/${id}/approve`, data)),
-    reverse: (id, data) => withPermission('expenses.approve', () => api.post(`/expenses/${id}/reverse`, data)),
+    create: (data) => api.post('/expenses/', data, idempotencyHeaders()),
+    update: (id, data) => withPermission('expenses.edit', () => api.put(`/expenses/${id}`, data, idempotencyHeaders())),
+    approve: (id, data) => withPermission('expenses.approve', () => api.post(`/expenses/${id}/approve`, data, idempotencyHeaders())),
+    reverse: (id, data) => withPermission('expenses.approve', () => api.post(`/expenses/${id}/reverse`, data, idempotencyHeaders())),
     delete: (id) => withPermission('expenses.delete', () => api.delete(`/expenses/${id}`)),
     getReportByType: (params) => api.get('/expenses/reports/by-type', { params: cleanParams(params) }),
     getReportByCostCenter: (params) => api.get('/expenses/reports/by-cost-center', { params: cleanParams(params) }),

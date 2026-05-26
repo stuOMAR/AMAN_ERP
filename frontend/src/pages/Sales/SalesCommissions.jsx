@@ -46,7 +46,13 @@ const SalesCommissions = () => {
     const handleCreateRule = async (e) => {
         e.preventDefault();
         try {
-            await salesAPI.createCommissionRule({ salesperson_id: parseInt(ruleForm.salesperson_id), rate: Number(ruleForm.rate), min_amount: Number(ruleForm.min_amount) || 0, branch_id: currentBranch?.id });
+            await salesAPI.createCommissionRule({
+                name: `Commission ${ruleForm.salesperson_id}`,
+                salesperson_id: parseInt(ruleForm.salesperson_id, 10),
+                rate: String(ruleForm.rate || '0'),
+                min_amount: String(ruleForm.min_amount || '0'),
+                branch_id: currentBranch?.id
+            });
             showToast(t('sales.rule_created'), 'success');
             setShowRuleModal(false); fetchAll();
         } catch (err) { showToast(err.response?.data?.detail || t('common.error'), 'error'); }
@@ -80,9 +86,9 @@ const SalesCommissions = () => {
             {/* Summary */}
             {summary && (
                 <div className="metrics-grid mb-4">
-                    <div className="metric-card"><div className="metric-label">{t('sales.total_commissions')}</div><div className="metric-value text-primary">{formatNumber(summary.total_commissions || 0)} <small>{currency}</small></div></div>
-                    <div className="metric-card"><div className="metric-label">{t('sales.paid_metric')}</div><div className="metric-value text-success">{formatNumber(summary.total_paid || 0)} <small>{currency}</small></div></div>
-                    <div className="metric-card"><div className="metric-label">{t('sales.pending_metric')}</div><div className="metric-value text-warning">{formatNumber(summary.total_pending || 0)} <small>{currency}</small></div></div>
+                    <div className="metric-card"><div className="metric-label">{t('sales.total_commissions')}</div><div className="metric-value text-primary">{formatNumber(summary.total_commissions ?? summary.total_commission ?? 0)} <small>{currency}</small></div></div>
+                    <div className="metric-card"><div className="metric-label">{t('sales.paid_metric')}</div><div className="metric-value text-success">{formatNumber(summary.total_paid ?? summary.paid ?? 0)} <small>{currency}</small></div></div>
+                    <div className="metric-card"><div className="metric-label">{t('sales.pending_metric')}</div><div className="metric-value text-warning">{formatNumber(summary.total_pending ?? summary.pending ?? 0)} <small>{currency}</small></div></div>
                 </div>
             )}
 

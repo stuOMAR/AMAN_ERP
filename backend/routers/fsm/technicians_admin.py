@@ -9,7 +9,7 @@ from __future__ import annotations
 import json
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
 from typing import List, Optional
@@ -20,8 +20,13 @@ from services.fsm.technicians import (
     technician_assignment_matcher,
 )
 from utils.i18n import i18n_message
+from utils.permissions import require_module, require_permission
 
-router = APIRouter(prefix="/api/fsm/technicians", tags=["FSM Technicians"])
+router = APIRouter(
+    prefix="/fsm/technicians",
+    tags=["FSM Technicians"],
+    dependencies=[Depends(require_module("services"))],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -47,7 +52,7 @@ def _get_tenant_id(current_user) -> str:
 
 
 @router.get("")
-def list_technicians(current_user=None):
+def list_technicians(current_user=Depends(require_permission("services.view"))):
     """List all active technicians."""
     tenant_id = _get_tenant_id(current_user)
     conn = get_db_connection(tenant_id)
@@ -80,7 +85,7 @@ def list_technicians(current_user=None):
 def create_technician(
     request: Request,
     body: TechnicianProfileCreate,
-    current_user=None,
+    current_user=Depends(require_permission("services.edit")),
 ):
     """Create or update a technician profile."""
     tenant_id = _get_tenant_id(current_user)
@@ -96,7 +101,7 @@ def create_technician(
             availability=body.availability,
         )
         return result
-    except Exception as e:
+    except Exception:
         logger.exception("Error creating technician profile")
         raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
@@ -106,7 +111,7 @@ def create_technician(
 @router.post("/match")
 def match_technicians(
     body: MatchRequest,
-    current_user=None,
+    current_user=Depends(require_permission("services.view")),
 ):
     """Find technicians matching required skills."""
     tenant_id = _get_tenant_id(current_user)

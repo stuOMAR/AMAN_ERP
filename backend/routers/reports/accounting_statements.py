@@ -2,22 +2,19 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import Request, APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from utils.i18n import http_error
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_sensitive_permission, validate_branch_access, resolve_branch_scope, branch_scope_filter_from_scope
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -26,6 +23,10 @@ _D2 = Decimal("0.01")
 
 def _q_money(value) -> Decimal:
     return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _money_str(value) -> str:
+    return format(_q_money(value), "f")
 
 
 def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None, branch_param="branch_id"):
@@ -64,13 +65,13 @@ def _get_rate_map(db):
     base_currency = base_cur_row[0] if base_cur_row else "SAR"
     rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
     rate_map = {r[0]: Decimal(str(r[1])) for r in rate_rows}
-    rate_map[base_currency] = 1.0
+    rate_map[base_currency] = Decimal("1")
     return rate_map, base_currency
 
 
 def _convert_amount(amount, currency, rate_map):
     """Convert amount from account currency to base currency."""
-    rate = rate_map.get(currency, 1.0)
+    rate = rate_map.get(currency, Decimal("1"))
     return Decimal(str(amount)) * Decimal(str(rate))
 
 
@@ -136,6 +137,7 @@ class TrialBalanceResponse(BaseModel):
     period: Dict[str, date]
     data: List[TrialBalanceItem]
     totals: Dict[str, Decimal]
+    group_totals: Optional[Dict[str, Dict[str, Decimal]]] = None
 
 class FinancialStatementItem(BaseModel):
     id: int
@@ -152,6 +154,8 @@ class FinancialStatementResponse(BaseModel):
     period: Dict[str, date]
     data: List[FinancialStatementItem]
     total: Decimal
+    summary: Optional[Dict[str, Any]] = None
+    base_currency: Optional[str] = None
 
 def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_scope=None, ledger_id=None):
     """Internal helper: returns trial balance data for programmatic use."""
@@ -165,7 +169,7 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
     base_currency = base_cur_row[0] if base_cur_row else "SAR"
     rate_rows = db.execute(text("SELECT code, current_rate FROM currencies WHERE is_active = TRUE")).fetchall()
     rate_map = {r[0]: Decimal(str(r[1])) for r in rate_rows}
-    rate_map[base_currency] = 1.0
+    rate_map[base_currency] = Decimal("1")
 
     query = f"""
         WITH opening_bal AS (
@@ -212,7 +216,8 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
     result = db.execute(text(query), params).fetchall()
     
     data = []
-    total_open_dr = total_open_cr = total_period_dr = total_period_cr = total_close_dr = total_close_cr = 0
+    group_totals: Dict[str, Dict[str, Decimal]] = {}
+    total_open_dr = total_open_cr = total_period_dr = total_period_cr = total_close_dr = total_close_cr = Decimal("0")
     
     for row in result:
         acct_type = row.account_type
@@ -257,6 +262,11 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
             "closing_debit": c_dr,
             "closing_credit": c_cr
         })
+
+        if acct_type not in group_totals:
+            group_totals[acct_type] = {"closing_debit": Decimal("0"), "closing_credit": Decimal("0")}
+        group_totals[acct_type]["closing_debit"] += c_dr
+        group_totals[acct_type]["closing_credit"] += c_cr
         
         total_open_dr += o_dr
         total_open_cr += o_cr
@@ -274,8 +284,10 @@ def _get_trial_balance_data(db, start_date, end_date, branch_id=None, branch_sco
             "period_debit": total_period_dr,
             "period_credit": total_period_cr,
             "closing_debit": total_close_dr,
-            "closing_credit": total_close_cr
-        }
+            "closing_credit": total_close_cr,
+            "closing_difference": (total_close_dr - total_close_cr).copy_abs(),
+        },
+        "group_totals": group_totals,
     }
 
 @router.get("/accounting/trial-balance", response_model=TrialBalanceResponse, dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))])
@@ -356,8 +368,8 @@ def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope
         node["balance"] = Decimal(str(node["balance"])) + child_sum
         return node["balance"]
 
-    total_revenue = 0
-    total_expense = 0
+    total_revenue = Decimal("0")
+    total_expense = Decimal("0")
     for root in roots:
         bal = rollup(root, 0)
         if root["account_type"] == 'revenue':
@@ -371,7 +383,12 @@ def _get_profit_loss_data(db, start_date, end_date, branch_id=None, branch_scope
         "period": {"start": start_date, "end": end_date},
         "data": roots,
         "total": net_income,
-        "base_currency": base_currency
+        "base_currency": base_currency,
+        "summary": {
+            "total_revenue": _money_str(total_revenue),
+            "total_expense": _money_str(total_expense),
+            "net_income": _money_str(net_income),
+        },
     }
 
 @router.get("/accounting/profit-loss", response_model=FinancialStatementResponse, dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))])
@@ -479,6 +496,8 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None, l
     total_assets = sum(r["balance"] for r in roots if r.get("account_type") == "asset")
     total_liabilities = sum(r["balance"] for r in roots if r.get("account_type") == "liability")
     total_equity = sum(r["balance"] for r in roots if r.get("account_type") == "equity")
+    total_liabilities_and_equity = total_liabilities + total_equity
+    difference = total_assets - total_liabilities_and_equity
 
     return {
         "period": {"start": as_of_date, "end": as_of_date},
@@ -488,7 +507,17 @@ def _get_balance_sheet_data(db, as_of_date, branch_id=None, branch_scope=None, l
         "net_income": retained_earnings,
         "total_assets": total_assets,
         "total_liabilities": total_liabilities,
-        "total_equity": total_equity
+        "total_equity": total_equity,
+        "base_currency": base_currency,
+        "summary": {
+            "total_assets": _money_str(total_assets),
+            "total_liabilities": _money_str(total_liabilities),
+            "total_equity": _money_str(total_equity),
+            "total_liabilities_and_equity": _money_str(total_liabilities_and_equity),
+            "difference": _money_str(difference.copy_abs()),
+            "is_balanced": difference.copy_abs() < _D2,
+            "net_income": _money_str(retained_earnings),
+        },
     }
 
 @router.get("/accounting/balance-sheet", response_model=FinancialStatementResponse, dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))])
@@ -510,7 +539,18 @@ def get_balance_sheet(
     finally:
         db.close()
 
-def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=None, branch_scope=None, ledger_id=None):
+def _get_general_ledger_data(
+    db,
+    account_id,
+    start_date,
+    end_date,
+    branch_id=None,
+    branch_scope=None,
+    ledger_id=None,
+    *,
+    skip: int = 0,
+    limit: Optional[int] = 25,
+):
     """Internal helper: returns general ledger data for programmatic use."""
     # ── Recursive CTE: collect selected account + all descendants ──
     tree_rows = db.execute(text("""
@@ -584,10 +624,14 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
     result = db.execute(text(query), params).fetchall()
     
     running_balance = opening_balance
+    total_debit = Decimal("0")
+    total_credit = Decimal("0")
     entries = []
     for row in result:
         debit = Decimal(str(row.debit))
         credit = Decimal(str(row.credit))
+        total_debit += debit
+        total_credit += credit
         if acct_type in ('asset', 'expense'):
             running_balance += debit - credit
         else:
@@ -597,18 +641,46 @@ def _get_general_ledger_data(db, account_id, start_date, end_date, branch_id=Non
             "entry_number": row.entry_number,
             "description": row.line_description or row.description,
             "reference": row.reference,
-            "debit": debit,
-            "credit": credit,
-            "running_balance": _q_money(running_balance),
+            "debit": _money_str(debit),
+            "credit": _money_str(credit),
+            "running_balance": _money_str(running_balance),
+            "running_balance_abs": _money_str(running_balance.copy_abs()),
+            "balance_side": "debit" if running_balance >= 0 else "credit",
             "account_name": account_map.get(row.account_id, "") if is_aggregated else None,
         })
+
+    closing_balance = _q_money(running_balance)
     
+    total_entries = len(entries)
+    if limit is None:
+        paginated_entries = entries[skip:]
+        pagination_limit = total_entries
+    else:
+        paginated_entries = entries[skip:skip + limit]
+        pagination_limit = limit
+
     return {
         "account_id": account_id,
         "period": {"start": start_date, "end": end_date},
-        "opening_balance": _q_money(opening_balance),
-        "entries": entries,
-        "closing_balance": _q_money(running_balance),
+        "opening_balance": _money_str(opening_balance),
+        "entries": paginated_entries,
+        "closing_balance": _money_str(closing_balance),
+        "closing_balance_abs": _money_str(closing_balance.copy_abs()),
+        "balance_side": "debit" if closing_balance >= 0 else "credit",
+        "pagination": {
+            "skip": skip,
+            "limit": pagination_limit,
+            "total": total_entries,
+            "returned": len(paginated_entries),
+        },
+        "summary": {
+            "opening_balance": _money_str(opening_balance),
+            "total_debit": _money_str(total_debit),
+            "total_credit": _money_str(total_credit),
+            "closing_balance": _money_str(closing_balance),
+            "closing_balance_abs": _money_str(closing_balance.copy_abs()),
+            "balance_side": "debit" if closing_balance >= 0 else "credit",
+        },
         "is_aggregated": is_aggregated,
         "child_accounts_count": len(account_ids) - 1,
     }
@@ -620,6 +692,8 @@ def get_general_ledger(request: Request,
     end_date: Optional[date] = None,
     branch_id: Optional[int] = None,
     ledger_id: Optional[int] = None,
+    skip: int = Query(0, ge=0),
+    limit: int = Query(25, ge=1, le=100),
     current_user: dict = Depends(get_current_user)
 ):
     """جلب دفتر الأستاذ العام - حركات حساب محدد مع كل حساباته الفرعية"""
@@ -634,7 +708,16 @@ def get_general_ledger(request: Request,
         if not end_date:
             end_date = date.today()
         resolved_ledger_id = _resolve_report_ledger_id(db, ledger_id)
-        return _get_general_ledger_data(db, account_id, start_date, end_date, branch_scope=branch_scope, ledger_id=resolved_ledger_id)
+        return _get_general_ledger_data(
+            db,
+            account_id,
+            start_date,
+            end_date,
+            branch_scope=branch_scope,
+            ledger_id=resolved_ledger_id,
+            skip=skip,
+            limit=limit,
+        )
     finally:
         db.close()
 

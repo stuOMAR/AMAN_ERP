@@ -16,7 +16,7 @@ request_id_var: ContextVar[str] = ContextVar("request_id", default="-")
 
 
 # ── Log injection sanitization ────────────────────────────────────────────────
-import re
+import re  # noqa: E402
 
 _CONTROL_CHAR_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 

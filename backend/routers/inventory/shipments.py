@@ -76,13 +76,17 @@ def create_shipment(
 
         for pid, requested_qty in aggregated.items():
             inv_row = db.execute(text("""
-                SELECT quantity, COALESCE(reserved_quantity, 0) AS reserved_quantity
+                SELECT quantity,
+                       COALESCE(reserved_quantity, 0) AS reserved_quantity,
+                       COALESCE(damaged_quantity, 0) AS damaged_quantity,
+                       available_quantity
                 FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": pid, "wh": shipment.source_warehouse_id}).fetchone()
             current_qty = Decimal(str(inv_row.quantity)) if inv_row else Decimal("0")
             reserved_qty = Decimal(str(inv_row.reserved_quantity or 0)) if inv_row else Decimal("0")
+            damaged_qty = Decimal(str(inv_row.damaged_quantity or 0)) if inv_row else Decimal("0")
             pending_qty = db.execute(text("""
                 SELECT COALESCE(SUM(si.quantity), 0)
                 FROM stock_shipment_items si
@@ -91,7 +95,12 @@ def create_shipment(
                   AND s.status = 'pending'
                   AND si.product_id = :pid
             """), {"pid": pid, "wh": shipment.source_warehouse_id}).scalar() or 0
-            available_qty = current_qty - reserved_qty - Decimal(str(pending_qty))
+            base_available_qty = (
+                Decimal(str(inv_row.available_quantity))
+                if inv_row and inv_row.available_quantity is not None
+                else current_qty - reserved_qty - damaged_qty
+            )
+            available_qty = base_available_qty - Decimal(str(pending_qty))
             if available_qty < requested_qty:
                 raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
 
@@ -115,15 +124,32 @@ def create_shipment(
         for item in shipment.items:
             # Validate stock availability with row lock to prevent race conditions
             inv_row = db.execute(text("""
-                SELECT quantity, COALESCE(reserved_quantity, 0) as reserved_quantity
+                SELECT quantity,
+                       COALESCE(reserved_quantity, 0) AS reserved_quantity,
+                       COALESCE(damaged_quantity, 0) AS damaged_quantity,
+                       available_quantity
                 FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": item.product_id, "wh": shipment.source_warehouse_id}).fetchone()
 
-            current_qty = inv_row.quantity if inv_row else 0
-            reserved_qty = inv_row.reserved_quantity if inv_row else 0
-            available_qty = current_qty - reserved_qty
+            current_qty = Decimal(str(inv_row.quantity)) if inv_row else Decimal("0")
+            reserved_qty = Decimal(str(inv_row.reserved_quantity or 0)) if inv_row else Decimal("0")
+            damaged_qty = Decimal(str(inv_row.damaged_quantity or 0)) if inv_row else Decimal("0")
+            pending_qty = db.execute(text("""
+                SELECT COALESCE(SUM(si.quantity), 0)
+                FROM stock_shipment_items si
+                JOIN stock_shipments s ON s.id = si.shipment_id
+                WHERE s.source_warehouse_id = :wh
+                  AND s.status = 'pending'
+                  AND si.product_id = :pid
+            """), {"pid": item.product_id, "wh": shipment.source_warehouse_id}).scalar() or 0
+            base_available_qty = (
+                Decimal(str(inv_row.available_quantity))
+                if inv_row and inv_row.available_quantity is not None
+                else current_qty - reserved_qty - damaged_qty
+            )
+            available_qty = base_available_qty - Decimal(str(pending_qty))
 
             if available_qty < item.quantity:
                 # Don't manually rollback — let the outer except handler do it.
@@ -361,7 +387,7 @@ def dispatch_shipment(
             raise HTTPException(status_code=400, detail=i18n_message("shipment_invalid_status", request))
 
         # Branch access check
-        dst_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.destination_warehouse_id}).scalar()
+        db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.destination_warehouse_id}).scalar()
         allowed = getattr(current_user, 'allowed_branches', []) or []
         if allowed and "*" not in getattr(current_user, 'permissions', []):
             src_branch = db.execute(text("SELECT branch_id FROM warehouses WHERE id = :id"), {"id": shipment.source_warehouse_id}).scalar()
@@ -401,7 +427,7 @@ def dispatch_shipment(
             item_qty = Decimal(str(item.quantity))
             available = src_qty - reserved
             if available < item_qty:
-                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
+                db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
                 raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
 
             # T054: Consume FIFO/LIFO source layers before deducting source qty.
@@ -421,8 +447,8 @@ def dispatch_shipment(
                 else:
                     source_cost = CostingService.get_cogs_cost(db, item.product_id, shipment.source_warehouse_id)
                     item_value = (item_qty * source_cost).quantize(Decimal("0.0001"), ROUND_HALF_UP)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+            except ValueError:
+                raise HTTPException(**http_error(400, "invalid_request", request))
 
             # T053: Atomically deduct source quantity and increase in_transit_quantity
             db.execute(text("""
@@ -570,7 +596,7 @@ def confirm_shipment(
 
             in_transit = Decimal(str(src_inv.in_transit_quantity or 0)) if src_inv else Decimal("0")
             if in_transit < Decimal(str(item.quantity)):
-                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
+                db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
                 raise HTTPException(status_code=400, detail=i18n_message("transit_qty_insufficient", request))
 
             # T055: Deduct from source in_transit_quantity

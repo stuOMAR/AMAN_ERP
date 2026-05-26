@@ -36,6 +36,7 @@ class CostLayerRead(BaseModel):
     original_quantity: Decimal
     remaining_quantity: Decimal
     unit_cost: Decimal
+    total_value: Decimal = Decimal("0")
     source_document_type: str
     source_document_id: Optional[int] = None
     is_exhausted: bool
@@ -82,17 +83,19 @@ class ConsumptionHistoryRead(BaseModel):
 class ValuationLineItem(BaseModel):
     product_id: int
     product_name: Optional[str] = None
-    warehouse_id: int
+    warehouse_id: Optional[int] = None
     warehouse_name: Optional[str] = None
     costing_method: str
     total_quantity: Decimal = Decimal("0")
     total_value: Decimal = Decimal("0")
+    weighted_avg_cost: Optional[Decimal] = None
     weighted_unit_cost: Optional[Decimal] = None
     layer_count: int = 0
 
 
 class InventoryValuationReport(BaseModel):
-    as_of_date: date
+    as_of_date: str
     items: list[ValuationLineItem] = []
+    grand_total: Decimal = Decimal("0")
     grand_total_value: Decimal = Decimal("0")
     grand_total_quantity: Decimal = Decimal("0")

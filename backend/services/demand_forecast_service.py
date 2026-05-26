@@ -52,7 +52,7 @@ def _moving_average(monthly_qty: list[Decimal], horizon: int) -> list[dict]:
     avg = sum(monthly_qty) / len(monthly_qty)
     # Std-dev for confidence
     if len(monthly_qty) > 1:
-        mean_f = float(avg)
+        float(avg)
         std = Decimal(str(statistics.stdev([float(q) for q in monthly_qty])))
     else:
         std = avg * Decimal("0.2")  # fallback 20%

@@ -1,6 +1,6 @@
 """T121: KPI admin CRUD endpoints.
 
-Gated by require_sensitive_permission('kpi.admin').
+KPI reads are gated by dashboard.analytics_view; mutations by dashboard.analytics_manage.
 """
 
 from __future__ import annotations
@@ -9,9 +9,11 @@ import logging
 import json
 from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from pydantic import BaseModel
+from routers.auth import get_current_user
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -41,9 +43,13 @@ class KPIDefinitionResponse(BaseModel):
     is_active: bool
 
 
-@router.post("/definitions", response_model=KPIDefinitionResponse)
-async def create_kpi_definition(body: KPIDefinitionCreate, request: Request):
-    """Create a new KPI definition. Gated by kpi.admin permission."""
+@router.post(
+    "/definitions",
+    response_model=KPIDefinitionResponse,
+    dependencies=[Depends(require_permission("dashboard.analytics_manage"))],
+)
+async def create_kpi_definition(body: KPIDefinitionCreate, request: Request, current_user=Depends(get_current_user)):
+    """Create a new KPI definition."""
     from database import get_tenant_db
     from sqlalchemy import text
     import uuid
@@ -59,7 +65,7 @@ async def create_kpi_definition(body: KPIDefinitionCreate, request: Request):
         raise HTTPException(**http_error(400, "kpi_interval_min", request))
 
     try:
-        with get_tenant_db() as db:
+        with get_tenant_db(current_user.company_id) as db:
             db.execute(
                 text("""
                     INSERT INTO kpi_definitions
@@ -85,19 +91,19 @@ async def create_kpi_definition(body: KPIDefinitionCreate, request: Request):
                 },
             )
             db.commit()
-    except Exception as exc:
+    except Exception:
         raise HTTPException(**http_error(500, "kpi_create_failed", request))
 
     return KPIDefinitionResponse(id=kpi_id, **body.model_dump())
 
 
-@router.get("/definitions")
-async def list_kpi_definitions():
+@router.get("/definitions", dependencies=[Depends(require_permission("dashboard.analytics_view"))])
+async def list_kpi_definitions(current_user=Depends(get_current_user)):
     """List all KPI definitions."""
     from database import get_tenant_db
     from sqlalchemy import text
 
-    with get_tenant_db() as db:
+    with get_tenant_db(current_user.company_id) as db:
         result = db.execute(text("SELECT id, kpi_code, metric_source, metric_reference, threshold_value, comparison_op, channels, evaluation_interval_minutes, is_active FROM kpi_definitions ORDER BY kpi_code"))
         rows = result.fetchall()
 
@@ -111,8 +117,12 @@ async def list_kpi_definitions():
     ]
 
 
-@router.get("/evaluations")
-async def list_kpi_evaluations(kpi_id: Optional[str] = None, limit: int = 20):
+@router.get("/evaluations", dependencies=[Depends(require_permission("dashboard.analytics_view"))])
+async def list_kpi_evaluations(
+    kpi_id: Optional[str] = None,
+    limit: int = 20,
+    current_user=Depends(get_current_user),
+):
     """List KPI evaluations, optionally filtered by kpi_id."""
     from database import get_tenant_db
     from sqlalchemy import text
@@ -125,7 +135,7 @@ async def list_kpi_evaluations(kpi_id: Optional[str] = None, limit: int = 20):
     query += " ORDER BY created_at DESC LIMIT :limit"
     params["limit"] = limit
 
-    with get_tenant_db() as db:
+    with get_tenant_db(current_user.company_id) as db:
         result = db.execute(text(query), params)
         rows = result.fetchall()
 

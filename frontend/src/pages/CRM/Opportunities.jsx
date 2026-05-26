@@ -48,7 +48,7 @@ function Opportunities() {
         customer_id: '',
         stage: 'lead',
         probability: 50,
-        expected_value: 0,
+        expected_value: '0.00',
         expected_close_date: '',
         source: '',
         notes: ''
@@ -96,7 +96,7 @@ function Opportunities() {
             customer_id: opp.customer_id || '',
             stage: opp.stage || 'lead',
             probability: opp.probability ?? 50,
-            expected_value: opp.expected_value || 0,
+            expected_value: opp.expected_value || '0.00',
             expected_close_date: opp.expected_close_date || '',
             source: opp.source || '',
             notes: opp.notes || ''
@@ -117,7 +117,7 @@ function Opportunities() {
             const payload = {
                 ...formData,
                 probability: Number(formData.probability),
-                expected_value: Number(formData.expected_value),
+                expected_value: formData.expected_value || '0.00',
                 customer_id: formData.customer_id ? Number(formData.customer_id) : null
             }
             if (isEdit) {

@@ -269,7 +269,7 @@ function IntegrationDLQ() {
                                             <td>{it.provider || '-'}</td>
                                             {tab === 'payment' ? (
                                                 <>
-                                                    <td>{it.amount?.toLocaleString?.() || it.amount}</td>
+                                                    <td>{it.amount || '-'}</td>
                                                     <td>{it.currency}</td>
                                                 </>
                                             ) : (

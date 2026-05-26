@@ -3,25 +3,18 @@
 Mounted under the parent router via core/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
+from utils.tax_precision import require_idempotency_key
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from routers.roles import DEFAULT_ROLES
-from pydantic import BaseModel
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
+from decimal import Decimal
 import logging
-from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from repositories import EmployeeRepository
-from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, check_permission, require_module
-from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.permissions import branch_scope_filter, require_permission
 from utils.audit import log_activity
-from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from schemas.hr import LeaveRequestCreate, LeaveRequestResponse
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
@@ -31,12 +24,24 @@ def _dec(v: Any) -> Decimal:
 
 router = APIRouter()
 
-from .core import LeaveCarryoverRequest, _D2, _dec, has_permission
+from .core import LeaveCarryoverRequest, _dec, has_permission  # noqa: E402
 
 @router.post("/leaves", response_model=LeaveRequestResponse, dependencies=[Depends(require_permission("hr.leaves.manage"))])
-def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
+def create_leave_request(raw_request: Request, request: LeaveRequestCreate, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
     """Create Leave Request."""
+    idempotency_key = require_idempotency_key(raw_request, operation="leave request")
     with transactional(company_id) as conn:
+        # Check idempotency replay
+        existing_leave = conn.execute(text("""
+            SELECT lr.*, CONCAT(e.first_name, ' ', e.last_name) as employee_name
+            FROM leave_requests lr
+            JOIN employees e ON lr.employee_id = e.id
+            WHERE lr.idempotency_key = :key
+            LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing_leave:
+            return dict(existing_leave._mapping)
+
         try:
             # Determine employee ID
             employee_id = request.employee_id
@@ -53,65 +58,67 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
                      emp_res = conn.execute(text("SELECT id FROM employees WHERE user_id = :uid"), {"uid": current_user.get("id") if isinstance(current_user, dict) else current_user.id}).fetchone()
                      if not emp_res or emp_res[0] != employee_id:
                          raise HTTPException(**http_error(403, "not_authorized_leave_others", request))
-    
+
             # Validate dates
             if request.start_date > request.end_date:
                 raise HTTPException(**http_error(400, "start_date_after_end", request))
-            
+
             leave_days = (request.end_date - request.start_date).days + 1
-            
+
             # Check for overlapping leave requests
             overlap = conn.execute(text("""
-                SELECT id FROM leave_requests 
-                WHERE employee_id = :eid 
+                SELECT id FROM leave_requests
+                WHERE employee_id = :eid
                 AND status IN ('pending', 'approved')
                 AND (
-                    (start_date <= :end AND end_date >= :start)
+                     (start_date <= :end AND end_date >= :start)
                 )
             """), {"eid": employee_id, "start": request.start_date, "end": request.end_date}).fetchone()
-            
+
             if overlap:
                 raise HTTPException(**http_error(400, "overlapping_leave_request", request))
-            
+
             # Check leave balance for annual leave type
             if request.leave_type in ('annual', 'سنوية'):
                 # Get total approved leave days in current year
                 year_start = date(date.today().year, 1, 1)
                 used_days = conn.execute(text("""
-                    SELECT COALESCE(SUM(end_date - start_date + 1), 0) 
-                    FROM leave_requests 
-                    WHERE employee_id = :eid 
+                    SELECT COALESCE(SUM(end_date - start_date + 1), 0)
+                    FROM leave_requests
+                    WHERE employee_id = :eid
                     AND status = 'approved'
                     AND leave_type IN ('annual', 'سنوية')
                     AND start_date >= :year_start
                 """), {"eid": employee_id, "year_start": year_start}).scalar() or 0
-                
+
                 # Get annual leave allowance (default 21 days per Saudi labor law)
                 leave_allowance = conn.execute(text("""
                     SELECT COALESCE(annual_leave_days, 21) FROM employees WHERE id = :eid
                 """), {"eid": employee_id}).scalar() or 21
-                
+
                 remaining_balance = int(leave_allowance) - int(used_days)
                 if leave_days > remaining_balance:
                     raise HTTPException(
-                        status_code=400, 
+                        status_code=400,
                         detail=f"رصيد الإجازات السنوية غير كافٍ. المتبقي: {remaining_balance} يوم، المطلوب: {leave_days} يوم"
                     )
-    
+
             # Create - CORRECT TABLE NAME 'leave_requests'
             result = conn.execute(text("""
-                INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status)
-                VALUES (:eid, :type, :start, :end, :reason, 'pending')
+                INSERT INTO leave_requests (employee_id, leave_type, start_date, end_date, reason, status, idempotency_key)
+                VALUES (:eid, :type, :start, :end, :reason, 'pending', :idempotency_key)
                 RETURNING id, created_at, status
             """), {
                 "eid": employee_id,
                 "type": request.leave_type,
                 "start": request.start_date,
                 "end": request.end_date,
-                "reason": request.reason
+                "reason": request.reason,
+                "idempotency_key": idempotency_key
             }).fetchone()
-            
-            
+
+
+
             # Submit for approval workflow if exists
             approval_info = None
             try:
@@ -131,13 +138,12 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
                     conn.commit()
             except Exception:
                 pass  # Non-blocking
-            
+
             # Notify HR admins/superusers about new leave request
             try:
-                emp_name_row = conn.execute(text("""
+                conn.execute(text("""
                     SELECT CONCAT(first_name, ' ', last_name) as name FROM employees WHERE id = :eid
                 """), {"eid": employee_id}).fetchone()
-                emp_name = emp_name_row.name if emp_name_row else f"موظف #{employee_id}"
                 conn.execute(text("""
                     INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
                     SELECT DISTINCT u.id, 'leave_request', :title, :message, :link, FALSE, NOW()
@@ -149,10 +155,33 @@ def create_leave_request(request: LeaveRequestCreate, current_user: UserResponse
                     "message": i18n_message("leave_request_notification", request),
                     "link": "/hr/leaves"
                 })
+                from services.notifications.dispatcher import dispatch_user_notification
+
+                admin_rows = conn.execute(text("""
+                    SELECT DISTINCT u.id
+                    FROM company_users u
+                    WHERE u.is_active = TRUE
+                      AND u.role IN ('admin', 'superuser')
+                """)).fetchall()
+                for admin in admin_rows:
+                    dispatch_user_notification(
+                        conn,
+                        tenant_id=company_id,
+                        recipient_id=admin.id,
+                        event_type="hr.leave.requested",
+                        channel="in_app",
+                        title=i18n_message("notif_leave_request", request),
+                        body=i18n_message("leave_request_notification", request),
+                        feature_source="hr",
+                        reference_type="leave_request",
+                        reference_id=result.id,
+                        link="/hr/leaves",
+                        commit=False,
+                    )
                 conn.commit()
             except Exception:
                 pass  # Non-blocking
-    
+
             response = {
                 "id": result.id,
                 "employee_id": employee_id,
@@ -177,14 +206,14 @@ def list_leave_requests(branch_id: Optional[int] = None, current_user: UserRespo
     """List Leave Requests."""
     # Basic view permission required
     if not has_permission(current_user, "hr.leaves.view"):
-        pass 
+        pass
         # Actually, let's enforce view permission to be safe, but typically all employees should have "hr.leaves.view" or "hr.view".
         # If strict: raise HTTPException(**http_error(403, "not_authorized", request))
-    
+
     with transactional(company_id) as conn:
         is_manager = has_permission(current_user, "hr.leaves.manage")
         query = """
-            SELECT l.*, e.first_name || ' ' || e.last_name as employee_name 
+            SELECT l.*, e.first_name || ' ' || e.last_name as employee_name
             FROM leave_requests l
             JOIN employees e ON l.employee_id = e.id
             WHERE 1=1
@@ -200,7 +229,7 @@ def list_leave_requests(branch_id: Optional[int] = None, current_user: UserRespo
 
         query += " " + branch_scope_filter(current_user, branch_id, "e.branch_id", params, branch_param="bid")
         query += " ORDER BY l.created_at DESC"
-        
+
         records = conn.execute(text(query), params).fetchall()
         return [dict(row._mapping) for row in records]
 
@@ -209,7 +238,7 @@ def update_leave_status(request: Request, leave_id: int, status_in: str, current
     """Update Leave Status."""
     with transactional(company_id) as conn:
         conn.execute(text("""
-            UPDATE leave_requests 
+            UPDATE leave_requests
             SET status = :status, approved_by = :uid, updated_at = NOW()
             WHERE id = :id
         """), {"status": status_in, "uid": current_user.get("id") if isinstance(current_user, dict) else current_user.id, "id": leave_id})
@@ -234,6 +263,22 @@ def update_leave_status(request: Request, leave_id: int, status_in: str, current
                     "title": f"{icon} طلب إجازتك {status_ar}",
                     "message": i18n_message("leave_status_update", request)
                 })
+                from services.notifications.dispatcher import dispatch_user_notification
+
+                dispatch_user_notification(
+                    conn,
+                    tenant_id=company_id,
+                    recipient_id=emp_info.user_id,
+                    event_type=f"hr.leave.{status_in}",
+                    channel="in_app",
+                    title=f"{icon} طلب إجازتك {status_ar}",
+                    body=i18n_message("leave_status_update", request),
+                    feature_source="hr",
+                    reference_type="leave_request",
+                    reference_id=leave_id,
+                    link="/hr/leaves",
+                    commit=False,
+                )
         except Exception:
             pass  # Non-blocking
 

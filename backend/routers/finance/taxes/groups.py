@@ -3,22 +3,17 @@
 Mounted under the parent router via taxes/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
+from typing import Any, Dict, List
+from decimal import Decimal
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
 from utils.tax_precision import rate_str
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from schemas.taxes import TaxGroupCreate
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +25,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _dec  # noqa: E402
 
 @router.get("/groups", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_groups(current_user: dict = Depends(get_current_user)):
@@ -50,7 +45,7 @@ def list_tax_groups(current_user: dict = Depends(get_current_user)):
                 if safe_ids:
                     placeholders = ",".join([f":tid_{i}" for i in range(len(safe_ids))])
                     id_params = {f"tid_{i}": tid for i, tid in enumerate(safe_ids)}
-                    taxes = db.execute(text(f"SELECT id, tax_name, rate_value FROM tax_rates WHERE id IN ({placeholders})"), id_params).fetchall()  # noqa: sql-lint
+                    taxes = db.execute(text(f"SELECT id, tax_name, rate_value FROM tax_rates WHERE id IN ({placeholders})"), id_params).fetchall()  # noqa
                     item["taxes"] = [dict(t._mapping) for t in taxes]
                     combined_rate = sum((_dec(t.rate_value) for t in taxes), Decimal("0"))
                     item["combined_rate"] = rate_str(combined_rate)

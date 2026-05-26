@@ -23,7 +23,7 @@ import json
 import logging
 from datetime import date as _date, timedelta
 from decimal import Decimal
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import HTTPException
 from sqlalchemy import text
@@ -567,7 +567,6 @@ def _resolve_tax_group(tax_group_id: int, db, as_of_date=None, branch_country=No
     ).fetchone()
     if not group:
         return []
-    import json
     raw_ids = group.tax_ids
     tax_ids = raw_ids if isinstance(raw_ids, list) else json.loads(raw_ids) if raw_ids else []
     taxes = []

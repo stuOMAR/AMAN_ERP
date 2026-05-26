@@ -8,7 +8,6 @@ import { formatShortDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 import { formatNumber } from '../../utils/format'
-import Decimal from 'decimal.js'
 
 function BuyingOrderDetails() {
     const { t } = useTranslation()
@@ -56,7 +55,7 @@ function BuyingOrderDetails() {
                 </div>
                 <div className="header-actions">
                     {/* T039: Disable convert-to-invoice when no uninvoiced received qty remains */}
-                    {order.items && order.items.some(item => new Decimal(item.remaining_to_invoice || 0).gt(0)) && (
+                    {order.has_remaining_to_invoice && (
                         <button
                             className="btn btn-primary"
                             onClick={() => navigate('/buying/invoices/new', { state: { fromOrder: order } })}

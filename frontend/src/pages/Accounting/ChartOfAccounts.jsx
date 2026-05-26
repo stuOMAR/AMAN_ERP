@@ -21,6 +21,21 @@ const MODULE_TAG_LABELS = {
     projects:      { ar: 'مشاريع', en: 'PRJ', color: '#f97316' },
 }
 
+// display-only — compares backend balance strings for secondary-currency visibility.
+const compareAbsDecimal = (left, right) => {
+    const normalize = (value) => {
+        const raw = String(value ?? '0').trim().replace(/^[+-]/, '')
+        const [whole = '0', fraction = ''] = raw.split('.')
+        return { whole: whole.replace(/^0+(?=\d)/, '') || '0', fraction }
+    }
+    const a = normalize(left)
+    const b = normalize(right)
+    const scale = Math.max(a.fraction.length, b.fraction.length)
+    const ai = BigInt(`${a.whole}${a.fraction.padEnd(scale, '0')}`)
+    const bi = BigInt(`${b.whole}${b.fraction.padEnd(scale, '0')}`)
+    return ai === bi ? 0 : ai > bi ? 1 : -1
+}
+
 function ChartOfAccounts() {
     const { t, i18n } = useTranslation()
     const { currentBranch, loading: branchLoading, displayCurrency } = useBranch()
@@ -184,7 +199,7 @@ function ChartOfAccounts() {
         const hasChildren = node.is_header || (node.children && node.children.length > 0)
         const rowCurrency = node.display_currency || currency || displayCurrency?.currency || ''
         const accountCurrency = node.currency || ''
-        const showSecondaryCurrency = accountCurrency && accountCurrency !== rowCurrency && Math.abs(Number(node.balance_currency || 0)) >= 0.005
+        const showSecondaryCurrency = accountCurrency && accountCurrency !== rowCurrency && compareAbsDecimal(node.balance_currency, '0.005') >= 0
         const isAggregateBalance = Boolean(node.is_aggregated_balance || node.balance_origin === 'aggregate' || node.is_header)
 
         return (

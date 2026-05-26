@@ -1,5 +1,5 @@
 """
-Static regression test: no router file may use detail=str(e).
+Static regression test: no router/service file may expose raw exceptions.
 Constitution §4: 'raise HTTPException(detail=str(e)) is forbidden.'
 """
 import pathlib
@@ -10,9 +10,9 @@ ROUTERS = BACKEND / "routers"
 
 
 def test_no_detail_str_e_in_routers():
-    """Assert no router file contains detail=str(e) pattern."""
+    """Assert no router file contains detail=str(e/exc) patterns."""
     violations = []
-    pattern = re.compile(r'detail\s*=\s*str\s*\(\s*e\s*\)')
+    pattern = re.compile(r'detail\s*=\s*str\s*\(\s*(?:e|exc)\s*\)|HTTPException\([^)]*,\s*str\s*\(\s*(?:e|exc)\s*\)\s*\)')
     
     for py_file in ROUTERS.rglob("*.py"):
         content = py_file.read_text(encoding="utf-8", errors="ignore")
@@ -21,15 +21,15 @@ def test_no_detail_str_e_in_routers():
                 violations.append(f"{py_file.relative_to(BACKEND)}:{lineno}: {line.strip()}")
     
     assert not violations, (
-        "Constitution §4 violation — detail=str(e) found in routers:\n"
+        "Constitution §4 violation — raw exception detail found in routers:\n"
         + "\n".join(violations)
     )
 
 
 def test_no_detail_str_e_in_services():
-    """Assert no service file contains detail=str(e) pattern."""
+    """Assert no service file contains detail=str(e/exc) patterns."""
     violations = []
-    pattern = re.compile(r'detail\s*=\s*str\s*\(\s*e\s*\)')
+    pattern = re.compile(r'detail\s*=\s*str\s*\(\s*(?:e|exc)\s*\)|HTTPException\([^)]*,\s*str\s*\(\s*(?:e|exc)\s*\)\s*\)')
     services_dir = BACKEND / "services"
     
     for py_file in services_dir.rglob("*.py"):
@@ -39,6 +39,6 @@ def test_no_detail_str_e_in_services():
                 violations.append(f"{py_file.relative_to(BACKEND)}:{lineno}: {line.strip()}")
     
     assert not violations, (
-        "Constitution §4 violation — detail=str(e) found in services:\n"
+        "Constitution §4 violation — raw exception detail found in services:\n"
         + "\n".join(violations)
     )

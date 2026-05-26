@@ -1,15 +1,17 @@
 """kpi_service.procurement — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
-    build_branch_filter, kpi_item, ratio_status, _gl_balance, _count_table, _sum_column
+from .common import (  # noqa: E402
+    build_branch_filter, kpi_item, ratio_status, _gl_balance, _count_table
 )
-from utils.accounting import get_base_currency
-from utils.currency_display import document_amount_base_sql
+from utils.accounting import get_base_currency  # noqa: E402
+from utils.currency_display import document_amount_base_sql  # noqa: E402
+from utils.i18n import i18n_message  # noqa: E402
+from decimal import Decimal  # noqa: E402
 
 
 def get_procurement_kpis(db, start_date: date, end_date: date,

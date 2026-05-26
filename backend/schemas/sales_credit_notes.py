@@ -22,6 +22,7 @@ class SalesCreditNoteCreate(BaseModel):
     exchange_rate: Decimal = Decimal("1")
     branch_id: Optional[int] = None
     notes: str = ""
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class SalesDebitNoteCreate(BaseModel):
@@ -33,3 +34,4 @@ class SalesDebitNoteCreate(BaseModel):
     exchange_rate: Decimal = Decimal("1")
     branch_id: Optional[int] = None
     notes: str = ""
+    submitted_grand_total: Optional[Decimal] = None

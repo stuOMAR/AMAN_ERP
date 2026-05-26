@@ -87,7 +87,7 @@ def _load_gateway_config(db, provider: str, *, tenant_id: Optional[str] = None) 
         raise HTTPException(**http_error(status.HTTP_412_PRECONDITION_FAILED, "payment_gateway_not_configured"))
     try:
         cfg = row[0] if isinstance(row[0], dict) else json.loads(row[0])
-    except Exception as e:
+    except Exception:
         raise HTTPException(**http_error(500, "payment_config_invalid_json"))
     if tenant_id:
         try:
@@ -222,7 +222,7 @@ def create_charge(body: ChargeRequest, current_user=Depends(get_current_user)):
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("payment charge failed")
         raise HTTPException(**http_error(500, "payment_charge_failed"))
@@ -422,7 +422,7 @@ def refund_charge(provider: str, charge_id: str, body: RefundRequest,
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("refund failed")
         raise HTTPException(**http_error(500, "payment_refund_failed"))

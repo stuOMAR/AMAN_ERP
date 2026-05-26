@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import Decimal from 'decimal.js';
 import { useTranslation } from 'react-i18next';
 import { hrAdvancedAPI, hrAPI } from '../../utils/api';
 import { formatNumber } from '../../utils/format';
@@ -9,6 +10,9 @@ import '../../components/ModuleStyles.css';
 
 import DateInput from '../../components/common/DateInput';
 import BackButton from '../../components/common/BackButton';
+
+const isPositiveMoney = (value) => new Decimal(value || '0').gt(0);
+
 const Violations = () => {
     const { t, i18n } = useTranslation();
     const isRTL = i18n.language === 'ar';
@@ -111,7 +115,7 @@ const Violations = () => {
                                 <td>{v.violation_date}</td>
                                 <td style={{ maxWidth: 200, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{v.description || '-'}</td>
                                 <td>{getActionBadge(v.action_taken)}</td>
-                                <td>{v.deduction_amount > 0 ? formatNumber(v.deduction_amount) : '-'}</td>
+                                <td>{isPositiveMoney(v.deduction_amount) ? formatNumber(v.deduction_amount) : '-'}</td>
                                 <td>
                                     <button className="btn btn-sm btn-secondary" onClick={() => { setEditItem(v); setForm({ employee_id: v.employee_id, violation_type: v.violation_type || '', violation_date: v.violation_date || '', description: v.description || '', action_taken: v.action_taken || 'warning', deduction_amount: v.deduction_amount || 0 }); setShowModal(true); }}><Edit2 size={14} /></button>
                                 </td>

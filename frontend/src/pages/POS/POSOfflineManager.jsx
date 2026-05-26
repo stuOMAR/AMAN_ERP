@@ -126,7 +126,8 @@ function POSOfflineManager() {
             const orders = await getPendingOrders();
             for (const order of orders) {
                 try {
-                    await posAPI.createOrder(order.orderData);
+                    const idempotencyKey = order.idempotencyKey || order.orderData?.client_order_id;
+                    await posAPI.createOrder(order.orderData, idempotencyKey);
                     await markSynced(order.localId);
                     log.push({ localId: order.localId, status: 'success', time: new Date().toLocaleTimeString() });
                 } catch (err) {
@@ -198,7 +199,7 @@ function POSOfflineManager() {
                                         <td>{i + 1}</td>
                                         <td>{new Date(o.createdAt).toLocaleString('ar-SA')}</td>
                                         <td>{o.orderData?.items?.length || 0}</td>
-                                        <td>{formatNumber(o.orderData?.total || 0)}</td>
+                                        <td>{o.preview?.total_amount ? formatNumber(o.preview.total_amount) : '—'}</td>
                                     </tr>
                                 ))}
                             </tbody>

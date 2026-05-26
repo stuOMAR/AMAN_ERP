@@ -20,6 +20,7 @@ import { formatShortDate, formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 import { useBranch } from '../../context/BranchContext';
+import { downloadBlob } from '../../utils/fileDownload';
 
 export default function ProjectDetails() {
     const { t } = useTranslation();
@@ -228,7 +229,15 @@ export default function ProjectDetails() {
                 }]
             };
 
-            await projectsAPI.createInvoice(id, payload);
+            const previewRes = await projectsAPI.previewInvoice(id, payload);
+            const preview = previewRes.data || {};
+            if (!preview.grand_total) {
+                throw new Error('project_invoice_preview_total_missing');
+            }
+            await projectsAPI.createInvoice(id, {
+                ...payload,
+                submitted_grand_total: preview.grand_total
+            });
             toastEmitter.emit(t('projects.messages.invoice_created'), 'success');
             setShowInvoiceModal(false);
             setInvoiceForm({ ...invoiceForm, amount: '', notes: '' });
@@ -274,6 +283,23 @@ export default function ProjectDetails() {
             fetchDocuments();
         } catch (err) {
             toastEmitter.emit(t('common.delete_error'), 'error');
+        }
+    };
+
+    const handleDownloadDocument = async (doc) => {
+        if (doc.dms_state === 'quarantined') {
+            toastEmitter.emit(t('dms.status.quarantined'), 'error');
+            return;
+        }
+        if (!doc.file_url) {
+            toastEmitter.emit(t('common.download_error', 'Download failed'), 'error');
+            return;
+        }
+        try {
+            const res = await projectsAPI.downloadDocument(doc.file_url);
+            downloadBlob(res, doc.file_name || `project-document-${doc.id}`);
+        } catch (err) {
+            toastEmitter.emit(err.response?.data?.detail || t('common.download_error', 'Download failed'), 'error');
         }
     };
 
@@ -410,7 +436,7 @@ export default function ProjectDetails() {
                     </div>
                     <div className="d-flex justify-content-between mt-2">
                         <small className="text-muted">
-                            {t('projects.fields.budget_consumed')}: {(fs.budget_consumed_pct || 0).toFixed(1)}%
+                            {t('projects.fields.budget_consumed')}: {formatNumber(fs.budget_consumed_pct || 0)}%
                         </small>
                         <small className="text-muted">
                             {tasks.filter(t => t.status === 'completed').length}/{tasks.length} {t('projects.fields.tasks_completed')}
@@ -575,10 +601,21 @@ export default function ProjectDetails() {
                                                 <div className="mb-2 text-primary"><FileText size={32} /></div>
                                                 <h6 className="text-truncate w-100" title={doc.file_name}>{doc.file_name}</h6>
                                                 <small className="text-muted d-block mb-2">{formatShortDate(doc.created_at)}</small>
+                                                {doc.dms_state && (
+                                                    <span className={`badge ${doc.dms_state === 'quarantined' ? 'badge-danger' : doc.dms_state === 'pending_scan' ? 'badge-warning' : 'badge-success'}`}>
+                                                        {t(`dms.status.${doc.dms_state}`, doc.dms_state)}
+                                                    </span>
+                                                )}
                                                 <div className="mt-auto d-flex gap-2">
-                                                    <a href={`/api${doc.file_url}`} target="_blank" className="btn btn-sm btn-light btn-icon" download>
+                                                    <button
+                                                        type="button"
+                                                        className="btn btn-sm btn-light btn-icon"
+                                                        onClick={() => handleDownloadDocument(doc)}
+                                                        disabled={doc.dms_state === 'quarantined'}
+                                                        title={t('common.download', 'Download')}
+                                                    >
                                                         <Download size={14} />
-                                                    </a>
+                                                    </button>
                                                     <button className="btn btn-sm btn-light btn-icon text-danger" onClick={() => handleDeleteDocument(doc.id)}>
                                                         <Trash2 size={14} />
                                                     </button>

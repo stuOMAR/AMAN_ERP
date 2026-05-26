@@ -20,12 +20,14 @@ export const reportsAPI = {
     getSalesByProduct: (limit = 5, branch_id = null) => api.get('/reports/sales/by-product', { params: { limit, branch_id } }),
     getCustomerStatement: (customerId, params) => api.get(`/reports/sales/customer-statement/${customerId}`, { params }),
     getAgingReport: (branch_id = null) => api.get('/reports/sales/aging', { params: { branch_id } }),
+    getAgingSummary: (branch_id = null) => api.get('/reports/sales/aging/summary', { params: { branch_id } }),
 
     getPurchasesSummary: (params) => api.get('/reports/purchases/summary', { params }),
     getPurchasesTrend: (days = 30, branch_id = null) => api.get('/reports/purchases/trend', { params: { days, branch_id } }),
     getPurchasesBySupplier: (limit = 5, branch_id = null) => api.get('/reports/purchases/by-supplier', { params: { limit, branch_id } }),
     getSupplierStatement: (supplierId, params) => api.get(`/reports/purchases/supplier-statement/${supplierId}`, { params }),
     getPurchasesAging: (branch_id = null) => api.get('/reports/purchases/aging', { params: { branch_id } }),
+    getPurchasesAgingSummary: (branch_id = null) => api.get('/reports/purchases/aging/summary', { params: { branch_id } }),
 
     // Cashflow IAS 7
     getCashFlowIAS7: (params) => api.get('/reports/accounting/cashflow-ias7', { params }),

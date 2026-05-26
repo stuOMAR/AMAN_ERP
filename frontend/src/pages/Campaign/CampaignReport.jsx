@@ -25,18 +25,18 @@ const DELIVERY_CLASSES = {
     failed: 'status-danger',
 };
 
-function MetricBar({ label, value, total, color }) {
-    const pct = total > 0 ? Math.min((value / total) * 100, 100) : 0;
+function MetricBar({ label, value, rate, color }) {
+    const rateValue = rate || '0.0000';
     return (
         <div style={{ marginBottom: 12 }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: 4 }}>
                 <span style={{ fontSize: 13, color: '#64748b' }}>{label}</span>
                 <span style={{ fontSize: 13, fontWeight: 600 }}>
-                    {formatNumber(value)} ({pct.toFixed(1)}%)
+                    {formatNumber(value)} ({formatNumber(rateValue)}%)
                 </span>
             </div>
             <div style={{ height: 8, background: '#e2e8f0', borderRadius: 4 }}>
-                <div style={{ height: '100%', width: `${pct}%`, background: color, borderRadius: 4, transition: 'width 0.4s' }} />
+                <div style={{ height: '100%', width: `${rateValue}%`, background: color, borderRadius: 4, transition: 'width 0.4s' }} />
             </div>
         </div>
     );
@@ -117,7 +117,6 @@ export default function CampaignReport() {
     if (loading) return <div className="workspace"><PageLoading /></div>;
     if (!campaign) return <div className="workspace"><div className="empty-state">{t('campaign.not_found', 'Campaign not found')}</div></div>;
 
-    const sent = campaign.total_sent || 0;
     const filteredRecipients = recipientFilter
         ? recipients.filter(r => r.delivery_status === recipientFilter)
         : recipients;
@@ -188,10 +187,10 @@ export default function CampaignReport() {
             {/* Engagement Funnel */}
             <div className="card section-card" style={{ marginBottom: 24, padding: 20 }}>
                 <h3 className="section-title">{t('campaign.funnel', 'Engagement Funnel')}</h3>
-                <MetricBar label={t('campaign.delivered', 'Delivered')} value={campaign.total_delivered || 0} total={sent} color="#22c55e" />
-                <MetricBar label={t('campaign.opened', 'Opened')} value={campaign.total_opened || 0} total={sent} color="#3b82f6" />
-                <MetricBar label={t('campaign.clicked', 'Clicked')} value={campaign.total_clicked || 0} total={sent} color="#f59e0b" />
-                <MetricBar label={t('campaign.responded', 'Responded')} value={campaign.total_responded || 0} total={sent} color="#7c3aed" />
+                <MetricBar label={t('campaign.delivered', 'Delivered')} value={campaign.total_delivered || 0} rate={campaign.delivery_rate} color="#22c55e" />
+                <MetricBar label={t('campaign.opened', 'Opened')} value={campaign.total_opened || 0} rate={campaign.open_rate} color="#3b82f6" />
+                <MetricBar label={t('campaign.clicked', 'Clicked')} value={campaign.total_clicked || 0} rate={campaign.click_rate} color="#f59e0b" />
+                <MetricBar label={t('campaign.responded', 'Responded')} value={campaign.total_responded || 0} rate={campaign.response_rate} color="#7c3aed" />
             </div>
 
             {/* Cost Summary */}

@@ -14,6 +14,7 @@ from database import get_db_connection
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access
 from utils.audit import log_activity
+from utils.i18n import http_error, i18n_message
 from schemas.performance import (
     ReviewCycleCreate, GoalCreate, SelfAssessmentSubmit, ManagerAssessmentSubmit,
 )

@@ -14,7 +14,6 @@ from __future__ import annotations
 import re
 from pathlib import Path
 
-import pytest
 
 _BACKEND = Path(__file__).resolve().parent.parent
 _ETA_ADAPTER = _BACKEND / "integrations" / "einvoicing" / "eta_adapter.py"
@@ -118,6 +117,6 @@ class TestRoundingBehavior:
         assert doc1 == doc2
         # HALF_UP: 1.005 → 1.01 (not 1.00 banker)
         line = doc1["invoiceLines"][0]
-        assert line["unitValue"]["amountEGP"] == 1.01
+        assert line["unitValue"]["amountEGP"] == "1.01"
         # tax_amount 0.455 → 0.46 (HALF_UP)
-        assert line["taxableItems"][0]["amount"] == 0.46
+        assert line["taxableItems"][0]["amount"] == "0.46"

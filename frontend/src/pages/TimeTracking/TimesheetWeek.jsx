@@ -1,7 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { timesheetAPI, projectsAPI } from '../../utils/api';
-import Decimal from 'decimal.js';
 import { toastEmitter } from '../../utils/toastEmitter';
 import { CheckCircle, Plus, Trash2, Send } from 'lucide-react';
 import '../../index.css';
@@ -50,6 +49,7 @@ const TimesheetWeek = () => {
     const [saving, setSaving] = useState(false);
     const [submitting, setSubmitting] = useState(false);
     const [savedEntries, setSavedEntries] = useState([]);
+    const [weekSummary, setWeekSummary] = useState(null);
     const [successMsg, setSuccessMsg] = useState('');
 
     const weekDates = getWeekDates(weekStart);
@@ -70,6 +70,10 @@ const TimesheetWeek = () => {
             date_from: weekStart,
             date_to: weekDates[6],
         }).then(res => setSavedEntries(res.data || [])).catch(() => {});
+        timesheetAPI.getWeekSummary({
+            date_from: weekStart,
+            date_to: weekDates[6],
+        }).then(res => setWeekSummary(res.data || null)).catch(() => setWeekSummary(null));
     }, [weekStart]);
 
     const loadTasks = useCallback((projectId) => {
@@ -101,7 +105,7 @@ const TimesheetWeek = () => {
             for (const row of rows) {
                 if (!row.project_id) continue;
                 for (const [date, hrs] of Object.entries(row.hours)) {
-                    if (!hrs || Number(hrs) <= 0) continue;
+                    if (!hrs) continue;
                     entries.push({
                         project_id: parseInt(row.project_id),
                         task_id: row.task_id ? parseInt(row.task_id) : null,
@@ -110,7 +114,7 @@ const TimesheetWeek = () => {
                         is_billable: row.is_billable,
                         billing_rate: row.billing_rate || null,
                         description: row.description || null,
-                        employee_id: currentUser?.employee_id || 1,
+                        employee_id: currentUser?.employee_id,
                     });
                 }
             }
@@ -132,22 +136,19 @@ const TimesheetWeek = () => {
         try {
             const res = await timesheetAPI.submitWeek({
                 week_start: weekStart,
-                employee_id: currentUser?.employee_id || 1,
+                employee_id: currentUser?.employee_id,
             });
             setSuccessMsg(t('timetracking.submitted_count', { count: res.data?.submitted_count || 0 }));
             const refresh = await timesheetAPI.listOwn({ date_from: weekStart, date_to: weekDates[6] });
             setSavedEntries(refresh.data || []);
+            const summary = await timesheetAPI.getWeekSummary({ date_from: weekStart, date_to: weekDates[6] });
+            setWeekSummary(summary.data || null);
         } catch (err) {
             toastEmitter.emit(t('common.error'), 'error');
         } finally {
             setSubmitting(false);
         }
     };
-
-    const totalHours = (date) =>
-        rows.reduce((sum, r) => sum.plus(new Decimal(r.hours[date] || '0')), new Decimal('0'));
-
-    const grandTotal = weekDates.reduce((s, d) => s.plus(totalHours(d)), new Decimal('0'));
 
     const dayLabels = weekDates.map(d => {
         const dt = new Date(d + 'T00:00:00');
@@ -193,14 +194,11 @@ const TimesheetWeek = () => {
                             {dayLabels.map(d => (
                                 <th key={d.date} style={{ minWidth: 80, textAlign: 'center' }}>{d.label}</th>
                             ))}
-                            <th style={{ minWidth: 70, textAlign: 'center' }}>{t('timetracking.total')}</th>
                             <th></th>
                         </tr>
                     </thead>
                     <tbody>
-                        {rows.map(row => {
-                            const rowTotal = weekDates.reduce((s, d) => s.plus(new Decimal(row.hours[d] || '0')), new Decimal('0'));
-                            return (
+                        {rows.map(row => (
                                 <tr key={row._key}>
                                     <td>
                                         <select
@@ -261,9 +259,6 @@ const TimesheetWeek = () => {
                                             />
                                         </td>
                                     ))}
-                                    <td style={{ textAlign: 'center', fontWeight: 600 }}>
-                                        {rowTotal.toFixed(1)}
-                                    </td>
                                     <td>
                                         <button
                                             className="btn btn-sm btn-ghost"
@@ -274,21 +269,20 @@ const TimesheetWeek = () => {
                                         </button>
                                     </td>
                                 </tr>
-                            );
-                        })}
+                        ))}
                     </tbody>
-                    <tfoot>
-                        <tr style={{ fontWeight: 700 }}>
-                            <td colSpan={4}>{t('timetracking.daily_total')}</td>
-                            {weekDates.map(d => (
-                                <td key={d} style={{ textAlign: 'center' }}>{totalHours(d).toFixed(1)}</td>
-                            ))}
-                            <td style={{ textAlign: 'center' }}>{grandTotal.toFixed(1)}</td>
-                            <td></td>
-                        </tr>
-                    </tfoot>
                 </table>
             </div>
+
+            {weekSummary && (
+                <div className="card" style={{ marginTop: 12, padding: 12 }}>
+                    <div style={{ display: 'flex', gap: 16, flexWrap: 'wrap' }}>
+                        <strong>{t('timetracking.week_total')}: {weekSummary.grand_total_hours} h</strong>
+                        <span>{t('timetracking.billable')}: {weekSummary.billable_total_hours} h</span>
+                        <span>{t('timetracking.non_billable')}: {weekSummary.non_billable_total_hours} h</span>
+                    </div>
+                </div>
+            )}
 
             <button className="btn btn-secondary" style={{ marginTop: 12 }} onClick={addRow}>
                 <Plus size={14} /> {t('timetracking.add_row')}

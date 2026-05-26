@@ -3,19 +3,16 @@
 Mounted under the parent router via accounting/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from utils.i18n import http_error, i18n_message
+from typing import Any, Dict, Optional
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
-from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
+from utils.permissions import require_permission, resolve_branch_scope
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import (
@@ -23,7 +20,7 @@ from services.gl_service import (
     reverse_journal_entry as gl_reverse_journal_entry,
 )
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
+from schemas.accounting import AccountCreate, AccountUpdate
 from utils.cache import cache
 from utils.limiter import limiter
 
@@ -136,7 +133,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, _account_code_to_module
+from .core import _D2, _D4, _dec, _account_code_to_module  # noqa: E402
 
 @router.get("/accounts", dependencies=[Depends(require_permission("accounting.view"))], response_model=Any)
 @limiter.limit("200/minute")
@@ -155,7 +152,6 @@ async def get_chart_of_accounts(
     
     # Balances are computed live from journal_lines — no caching
     # (accounts/treasury/journal entries can change at any time)
-    use_cache = False
 
     try:
 
@@ -634,7 +630,7 @@ def get_opening_balances(
                 WHERE journal_entry_id = :eid
             """), {"eid": ob_entry.id}).fetchall()
 
-        ob_map = {l.account_id: {"debit": _dec(l.debit or 0), "credit": _dec(l.credit or 0)} for l in ob_lines}
+        ob_map = {line.account_id: {"debit": _dec(line.debit or 0), "credit": _dec(line.credit or 0)} for line in ob_lines}
 
         result = []
         for a in accounts:
@@ -665,12 +661,12 @@ def save_opening_balances(
             check_fiscal_period_open(db, entry_date)
     
             # Filter to only lines with actual values
-            valid_lines = [l for l in lines if _dec(l.get("debit", 0)) != 0 or _dec(l.get("credit", 0)) != 0]
+            valid_lines = [line for line in lines if _dec(line.get("debit", 0)) != 0 or _dec(line.get("credit", 0)) != 0]
             if not valid_lines:
                 raise HTTPException(**http_error(400, "no_balances_to_save", request))
     
-            total_debit = sum(_dec(l.get("debit", 0)) for l in valid_lines)
-            total_credit = sum(_dec(l.get("credit", 0)) for l in valid_lines)
+            total_debit = sum(_dec(line.get("debit", 0)) for line in valid_lines)
+            total_credit = sum(_dec(line.get("credit", 0)) for line in valid_lines)
     
             # Find existing opening balance entry
             existing = db.execute(text("""

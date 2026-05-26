@@ -29,8 +29,8 @@ def detect_mime(file_path: str) -> Optional[str]:
     except ImportError:
         logger.warning("python-magic not available; falling back to extension-based detection")
         return _detect_by_extension(file_path)
-    except Exception as e:
-        logger.error("MIME detection failed: %s", e)
+    except Exception:
+        logger.warning("MIME detection failed")
         return None
 
 

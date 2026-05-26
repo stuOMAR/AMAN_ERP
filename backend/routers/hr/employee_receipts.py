@@ -14,7 +14,8 @@ import logging
 from decimal import Decimal
 from typing import Any, Dict, List, Optional
 
-from fastapi import Request, APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException, status, Header
+from utils.tax_precision import require_idempotency_key
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -84,7 +85,9 @@ def list_settlements(
 def submit_settlement(request: Request, 
     payload: SettlementCreate,
     current_user: dict = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
 ):
+    require_idempotency_key(request, operation="submit_settlement")
     """Create and submit a new employee receipt settlement."""
     tenant_id = current_user.get("tenant_id") or current_user.get("company_id")
     conn = get_db_connection(current_user["company_id"])
@@ -96,7 +99,7 @@ def submit_settlement(request: Request,
         )
         conn.commit()
         return result
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in submit_settlement")
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
@@ -113,7 +116,9 @@ def submit_settlement(request: Request,
 def approve_settlement(request: Request, 
     settlement_id: int,
     current_user: dict = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
 ):
+    require_idempotency_key(request, operation="approve_settlement")
     """Approve a submitted settlement."""
     tenant_id = current_user.get("tenant_id") or current_user.get("company_id")
     actor_id = current_user.get("id")
@@ -123,7 +128,7 @@ def approve_settlement(request: Request,
         result = approve_settlement(conn, tenant_id, settlement_id, actor_id)
         conn.commit()
         return result
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in approve_settlement %s", settlement_id)
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
@@ -144,7 +149,9 @@ def reject_settlement(request: Request,
     settlement_id: int,
     body: RejectBody,
     current_user: dict = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
 ):
+    require_idempotency_key(request, operation="reject_settlement")
     """Reject a submitted settlement."""
     tenant_id = current_user.get("tenant_id") or current_user.get("company_id")
     actor_id = current_user.get("id")
@@ -154,7 +161,7 @@ def reject_settlement(request: Request,
         reject_settlement(conn, tenant_id, settlement_id, actor_id, body.reason)
         conn.commit()
         return {"status": "rejected", "id": settlement_id}
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in reject_settlement %s", settlement_id)
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
@@ -174,7 +181,9 @@ def reject_settlement(request: Request,
 def post_settlement(request: Request, 
     settlement_id: int,
     current_user: dict = Depends(get_current_user),
+    idempotency_key: Optional[str] = Header(None, alias="Idempotency-Key", max_length=64),
 ):
+    require_idempotency_key(request, operation="post_settlement")
     """Post an approved settlement — creates a journal entry via gl_service."""
     tenant_id = current_user.get("tenant_id") or current_user.get("company_id")
     actor_id = current_user.get("id")
@@ -184,7 +193,7 @@ def post_settlement(request: Request,
         result = post_settlement(conn, tenant_id, settlement_id, actor_id)
         conn.commit()
         return result
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in post_settlement %s", settlement_id)
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")

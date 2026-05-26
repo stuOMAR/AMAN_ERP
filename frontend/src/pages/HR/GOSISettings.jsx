@@ -110,7 +110,7 @@ const GOSISettings = () => {
                             <strong>{t('hr.gosi.total_employee')}</strong> {form.employee_share_percentage}%
                         </p>
                         <p style={{ margin: '0.25rem 0', fontSize: '0.9rem' }}>
-                            <strong>{t('hr.gosi.total_employer')}</strong> {new Decimal(form.employer_share_percentage || '0').plus(new Decimal(form.occupational_hazard_percentage || '0')).toFixed(2)}%
+                            <strong>{t('hr.gosi.total_employer')}</strong> {new Decimal(form.employer_share_percentage || '0').plus(new Decimal(form.occupational_hazard_percentage || '0')).toDecimalPlaces(2).toString()}%
                         </p>
                     </div>
 

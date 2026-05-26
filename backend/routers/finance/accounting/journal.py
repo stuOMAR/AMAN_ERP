@@ -3,21 +3,18 @@
 Mounted under the parent router via accounting/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache, invalidate_aggregates
+from utils.cache import invalidate_aggregates
 from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, validate_branch_access
 from utils.audit import log_activity
-from utils.accounting import get_base_currency
 from utils.idempotency import find_je_by_idempotency_key
 from services.gl_service import (
     create_journal_entry as gl_create_journal_entry,
@@ -25,8 +22,6 @@ from services.gl_service import (
     post_draft_journal_entry as gl_post_draft_journal_entry,
 )
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -34,11 +29,13 @@ _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
 
 def _dec(v) -> Decimal:
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return Decimal("0")
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _D4, _dec  # noqa: E402
 
 @router.post("/journal-entries", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_sensitive_permission("accounting.edit", critical=True))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
@@ -195,7 +192,7 @@ def list_journal_entries(
         where_clause = " AND ".join(conditions) if conditions else "1=1"
 
         # Count
-        total = db.execute(text(  # noqa: sql-lint
+        total = db.execute(text(  # noqa
             f"""
             SELECT COUNT(*) FROM journal_entries je WHERE {where_clause}
         """), params).scalar()
@@ -205,7 +202,7 @@ def list_journal_entries(
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT je.*,
                    cu.username AS created_by_name,
@@ -250,6 +247,46 @@ def list_journal_entries(
             "limit": limit,
             "pages": (total + limit - 1) // limit
         }
+
+
+@router.post("/journal-entries/preview", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
+@limiter.limit("200/minute")
+def preview_journal_entry(
+    request: Request,
+    entry_data: dict = Body(...),
+    current_user: dict = Depends(get_current_user)
+):
+    """Backend-authoritative journal line totals for draft UI previews."""
+    lines = entry_data.get("lines", [])
+    total_debit = Decimal("0")
+    total_credit = Decimal("0")
+    invalid_both_count = 0
+    negative_count = 0
+
+    for line in lines:
+        debit = _dec(line.get("debit", 0)).quantize(_D2, ROUND_HALF_UP)
+        credit = _dec(line.get("credit", 0)).quantize(_D2, ROUND_HALF_UP)
+        if debit < 0 or credit < 0:
+            negative_count += 1
+        if debit > 0 and credit > 0:
+            invalid_both_count += 1
+        total_debit += debit
+        total_credit += credit
+
+    difference = (total_debit - total_credit).quantize(_D2, ROUND_HALF_UP)
+    return {
+        "total_debit": str(total_debit.quantize(_D2, ROUND_HALF_UP)),
+        "total_credit": str(total_credit.quantize(_D2, ROUND_HALF_UP)),
+        "difference": str(difference.copy_abs()),
+        "is_balanced": difference.copy_abs() < _D2,
+        "has_amount": total_debit > 0 or total_credit > 0,
+        "has_debit": total_debit > 0,
+        "has_credit": total_credit > 0,
+        "invalid_both_count": invalid_both_count,
+        "negative_count": negative_count,
+    }
+
+
 @router.get("/journal-entries/{entry_id}", dependencies=[Depends(require_permission("accounting.view"))], response_model=Dict[str, Any])
 @limiter.limit("200/minute")
 def get_journal_entry(
@@ -279,6 +316,8 @@ def get_journal_entry(
             WHERE jl.journal_entry_id = :id
             ORDER BY jl.id
         """), {"id": entry_id}).fetchall()
+        total_debit = sum((_dec(line.debit) for line in lines), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
+        total_credit = sum((_dec(line.credit) for line in lines), Decimal("0")).quantize(_D2, ROUND_HALF_UP)
 
         return {
             "id": entry.id,
@@ -296,19 +335,21 @@ def get_journal_entry(
             "posted_at": str(entry.posted_at) if entry.posted_at else None,
             "source": entry.source,
             "source_id": entry.source_id,
+            "total_debit": str(total_debit),
+            "total_credit": str(total_credit),
             "lines": [{
-                "id": l.id,
-                "account_id": l.account_id,
-                "account_number": l.account_number,
-                "account_name": l.account_name,
-                "account_name_en": l.account_name_en,
-                "debit": str(_dec(l.debit).quantize(_D2, ROUND_HALF_UP)),
-                "credit": str(_dec(l.credit).quantize(_D2, ROUND_HALF_UP)),
-                "description": l.description,
-                "currency": l.currency,
-                "amount_currency": str(_dec(l.amount_currency).quantize(_D2, ROUND_HALF_UP)) if l.amount_currency else "0.00",
-                "cost_center_id": l.cost_center_id,
-            } for l in lines]
+                "id": line.id,
+                "account_id": line.account_id,
+                "account_number": line.account_number,
+                "account_name": line.account_name,
+                "account_name_en": line.account_name_en,
+                "debit": str(_dec(line.debit).quantize(_D2, ROUND_HALF_UP)),
+                "credit": str(_dec(line.credit).quantize(_D2, ROUND_HALF_UP)),
+                "description": line.description,
+                "currency": line.currency,
+                "amount_currency": str(_dec(line.amount_currency).quantize(_D2, ROUND_HALF_UP)) if line.amount_currency else "0.00",
+                "cost_center_id": line.cost_center_id,
+            } for line in lines]
         }
 @router.post("/journal-entries/{entry_id}/post", dependencies=[Depends(require_sensitive_permission("accounting.manage", critical=True))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
@@ -626,7 +667,7 @@ def reverse_journal_entry_endpoint(
             }
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error reversing journal entry")
             raise HTTPException(**http_error(500, "internal_error"))
 

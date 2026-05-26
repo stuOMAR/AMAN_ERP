@@ -27,8 +27,7 @@ function TransferForm() {
         treasury_id: '',
         target_treasury_id: '',
         notes: '',
-        reference_number: '',
-        exchange_rate: '1'
+        reference_number: ''
     })
 
     useEffect(() => {
@@ -66,8 +65,7 @@ function TransferForm() {
                 target_treasury_id: form.target_treasury_id ? parseInt(form.target_treasury_id, 10) : null,
                 branch_id: currentBranch?.id || null,
                 description: form.notes || form.reference_number || t('treasury.menu.transfer'),
-                reference_number: form.reference_number || null,
-                exchange_rate: form.exchange_rate || '1'
+                reference_number: form.reference_number || null
             })
             toastEmitter.emit(t('treasury.success_create_transfer'), 'success')
             navigate('/treasury')
@@ -122,16 +120,6 @@ function TransferForm() {
                                     onChange={e => setForm({ ...form, amount: e.target.value })}
                                 />
                             </div>
-                        </FormField>
-                        <FormField label={t('common.exchange_rate', 'سعر الصرف')} style={{ flex: 1 }}>
-                            <input
-                                type="number"
-                                className="form-input"
-                                step="0.000001"
-                                min="0"
-                                value={form.exchange_rate}
-                                onChange={e => setForm({ ...form, exchange_rate: e.target.value || '1' })}
-                            />
                         </FormField>
                     </div>
 

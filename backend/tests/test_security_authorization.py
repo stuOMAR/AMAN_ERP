@@ -10,9 +10,9 @@ AMAN ERP - Security Tests: Authorization
 ═══════════════════════════════════════
 """
 
-import pytest
-from fastapi.testclient import TestClient
-from main import app
+import pytest  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
 
 client = TestClient(app)
 
@@ -43,7 +43,7 @@ class TestAuthorizationSecurity:
         
         # يجب أن يعيد فقط بيانات الشركة الخاصة بالمستخدم
         if response.status_code == 200:
-            data = response.json()
+            response.json()
             # التحقق من أن البيانات تعود للشركة الصحيحة فقط
             # (يعتمد على التطبيق)
 
@@ -176,7 +176,6 @@ class TestAuthorizationSecurity:
 
     def test_privilege_escalation(self, client, company_user_token):
         """🛡️ منع تصعيد الصلاحيات"""
-        headers = {"Authorization": f"Bearer {company_user_token}"}
         
         # محاولة تغيير الدور أو الصلاحيات
         # Note: يعتمد على وجود endpoint لتعديل الأدوار

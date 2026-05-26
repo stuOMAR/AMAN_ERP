@@ -15,7 +15,7 @@ import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.permissions import require_permission
+from utils.permissions import require_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_mapped_account_id, get_base_currency
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
@@ -353,28 +353,40 @@ def calculate_commission(request: Request, data: dict, current_user=Depends(get_
         db.close()
 
 
-@sales_improvements_router.get("/commissions/summary", dependencies=[Depends(require_permission("sales.view"))], response_model=List[Dict[str, Any]])
-def commission_summary(current_user=Depends(get_current_user)):
+@sales_improvements_router.get("/commissions/summary", dependencies=[Depends(require_permission("sales.view"))], response_model=Dict[str, Any])
+def commission_summary(branch_id: Optional[int] = None, current_user=Depends(get_current_user)):
     """Commission Summary."""
     db = get_db_connection(current_user.company_id)
     try:
-        rows = db.execute(text("""
-            SELECT salesperson_id, salesperson_name,
+        params = {}
+        branch_filter = ""
+        if branch_id is not None:
+            branch_id = validate_branch_access(current_user, branch_id)
+            branch_filter = "WHERE branch_id = :branch_id"
+            params["branch_id"] = branch_id
+
+        row = db.execute(text(f"""
+            SELECT
                    COUNT(*) as total_invoices,
-                   SUM(invoice_total) as total_sales,
-                   SUM(commission_amount) as total_commission,
-                   SUM(CASE WHEN status='pending' THEN commission_amount ELSE 0 END) as pending,
-                   SUM(CASE WHEN status='paid' THEN commission_amount ELSE 0 END) as paid
+                   COALESCE(SUM(invoice_total), 0) as total_sales,
+                   COALESCE(SUM(commission_amount), 0) as total_commissions,
+                   COALESCE(SUM(CASE WHEN status='pending' THEN commission_amount ELSE 0 END), 0) as total_pending,
+                   COALESCE(SUM(CASE WHEN status='paid' THEN commission_amount ELSE 0 END), 0) as total_paid
             FROM sales_commissions
-            GROUP BY salesperson_id, salesperson_name
-            ORDER BY total_commission DESC
-        """)).fetchall()
-        return [dict(r._mapping) for r in rows]
+            {branch_filter}
+        """), params).fetchone()
+        return {
+            "total_invoices": int(row.total_invoices or 0),
+            "total_sales": str(Decimal(str(row.total_sales or 0))),
+            "total_commissions": str(Decimal(str(row.total_commissions or 0))),
+            "total_pending": str(Decimal(str(row.total_pending or 0))),
+            "total_paid": str(Decimal(str(row.total_paid or 0))),
+        }
     finally:
         db.close()
 
 
-from fastapi import Header
+from fastapi import Header  # noqa: E402
 
 @sales_improvements_router.post("/commissions/pay", dependencies=[Depends(require_permission("sales.create"))], response_model=Dict[str, Any])
 def pay_commission(

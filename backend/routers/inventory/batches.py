@@ -14,7 +14,6 @@ from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel, Field
 import logging
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
@@ -59,6 +58,13 @@ def _require_idempotency_key(idempotency_key: Optional[str], request: Request) -
     if not idempotency_key:
         raise HTTPException(**http_error(400, "idempotency_key_required", request))
     return idempotency_key
+
+
+def _json_ready(row: Any) -> dict:
+    return {
+        key: (str(value) if isinstance(value, Decimal) else value)
+        for key, value in dict(row._mapping).items()
+    }
 
 
 # ============ SCHEMAS ============
@@ -128,65 +134,90 @@ def list_batches(
     """قائمة الدفعات مع إمكانية الفلترة"""
     with transactional(_company_id(current_user)) as db:
         allowed = _allowed_branches(current_user)
-        query = """
-            SELECT b.*, 
-                   p.product_name, p.product_code,
-                   w.warehouse_name,
-                   s.name as supplier_name
+        base_from = """
             FROM product_batches b
             JOIN products p ON b.product_id = p.id
             JOIN warehouses w ON b.warehouse_id = w.id
             LEFT JOIN parties s ON b.supplier_id = s.id
-            WHERE 1=1
         """
-        params = {"limit": limit, "skip": skip}
+        conditions = ["1=1"]
+        params = {"limit": min(limit, 100), "skip": skip}
 
         if product_id:
-            query += " AND b.product_id = :pid"
+            conditions.append("b.product_id = :pid")
             params["pid"] = product_id
         if warehouse_id:
             _validate_warehouse_access(db, current_user, warehouse_id, request)
-            query += " AND b.warehouse_id = :wid"
+            conditions.append("b.warehouse_id = :wid")
             params["wid"] = warehouse_id
         elif allowed and "*" not in _permissions(current_user):
-            query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
+            conditions.append("(w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)")
             params["allowed_branches"] = allowed
         if status:
-            query += " AND b.status = :status"
+            conditions.append("b.status = :status")
             params["status"] = status
         if expiring_within_days:
-            query += " AND b.expiry_date IS NOT NULL AND b.expiry_date <= CURRENT_DATE + :days * INTERVAL '1 day' AND b.expiry_date >= CURRENT_DATE"
+            conditions.append("b.expiry_date IS NOT NULL")
+            conditions.append("b.expiry_date <= CURRENT_DATE + :days * INTERVAL '1 day'")
+            conditions.append("b.expiry_date >= CURRENT_DATE")
             params["days"] = expiring_within_days
         if search:
-            query += " AND (b.batch_number ILIKE :search OR p.product_name ILIKE :search)"
+            conditions.append("(b.batch_number ILIKE :search OR p.product_name ILIKE :search)")
             params["search"] = f"%{search}%"
 
-        query += " ORDER BY b.created_at DESC LIMIT :limit OFFSET :skip"
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT b.*,
+                   p.product_name, p.product_code,
+                   w.warehouse_name,
+                   s.name as supplier_name,
+                   CASE
+                       WHEN b.expiry_date IS NULL THEN 'no_expiry'
+                       WHEN b.expiry_date < CURRENT_DATE THEN 'expired'
+                       WHEN b.expiry_date <= CURRENT_DATE + INTERVAL '30 days' THEN 'near_expiry'
+                       ELSE 'ok'
+                   END AS expiry_status,
+                   CASE
+                       WHEN b.expiry_date IS NULL THEN NULL
+                       ELSE (b.expiry_date - CURRENT_DATE)
+                   END AS days_remaining,
+                   CASE
+                       WHEN b.expiry_date IS NULL THEN NULL
+                       ELSE ABS(b.expiry_date - CURRENT_DATE)
+                   END AS days_remaining_abs
+            {base_from}
+            WHERE {where_clause}
+            ORDER BY b.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """
 
         rows = db.execute(text(query), params).fetchall()
-        
-        # Count
-        count_query = """
-            SELECT COUNT(*) FROM product_batches b
-            JOIN products p ON b.product_id = p.id
-            WHERE 1=1
-        """
-        count_params = {}
-        if product_id:
-            count_query += " AND b.product_id = :pid"
-            count_params["pid"] = product_id
-        if warehouse_id:
-            count_query += " AND b.warehouse_id = :wid"
-            count_params["wid"] = warehouse_id
-        if status:
-            count_query += " AND b.status = :status"
-            count_params["status"] = status
 
-        total = db.execute(text(count_query), count_params).scalar() or 0
+        total = db.execute(text(f"SELECT COUNT(*) {base_from} WHERE {where_clause}"), params).scalar() or 0
+        summary = db.execute(text(f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE b.status = 'active') AS active_count,
+                COUNT(*) FILTER (
+                    WHERE b.status = 'active'
+                      AND b.expiry_date IS NOT NULL
+                      AND b.expiry_date >= CURRENT_DATE
+                      AND b.expiry_date <= CURRENT_DATE + INTERVAL '30 days'
+                ) AS near_expiry_count,
+                COUNT(*) FILTER (WHERE b.expiry_date IS NOT NULL AND b.expiry_date < CURRENT_DATE) AS expired_count
+            {base_from}
+            WHERE {where_clause}
+        """), params).fetchone()
 
         return {
-            "items": [dict(r._mapping) for r in rows],
-            "total": total
+            "items": [_json_ready(r) for r in rows],
+            "total": total,
+            "summary": _json_ready(summary) if summary else {
+                "total_count": 0,
+                "active_count": 0,
+                "near_expiry_count": 0,
+                "expired_count": 0,
+            }
         }
 
 
@@ -502,7 +533,7 @@ def update_batch(request: Request,
     
             if updates:
                 updates.append("updated_at = NOW()")
-                db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
+                db.execute(text(f"UPDATE product_batches SET {', '.join(updates)} WHERE id = :id"), params) # noqa
                 db.commit()
     
             return {"message": i18n_message("batch_updated_success", request)}
@@ -555,57 +586,81 @@ def list_serials(
     search: Optional[str] = None,
     skip: int = 0,
     limit: int = 100,
+    request: Request = None,
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة الأرقام التسلسلية"""
-    with transactional(current_user.company_id) as db:
-        query = """
-            SELECT s.*, 
-                   p.product_name, p.product_code,
-                   w.warehouse_name,
-                   b.batch_number
+    with transactional(_company_id(current_user)) as db:
+        allowed = _allowed_branches(current_user)
+        base_from = """
             FROM product_serials s
             JOIN products p ON s.product_id = p.id
             LEFT JOIN warehouses w ON s.warehouse_id = w.id
             LEFT JOIN product_batches b ON s.batch_id = b.id
-            WHERE 1=1
         """
-        params = {"limit": limit, "skip": skip}
+        conditions = ["1=1"]
+        params = {"limit": min(limit, 100), "skip": skip}
 
         if product_id:
-            query += " AND s.product_id = :pid"
+            conditions.append("s.product_id = :pid")
             params["pid"] = product_id
         if warehouse_id:
-            query += " AND s.warehouse_id = :wid"
+            _validate_warehouse_access(db, current_user, warehouse_id, request)
+            conditions.append("s.warehouse_id = :wid")
             params["wid"] = warehouse_id
+        elif allowed and "*" not in _permissions(current_user):
+            conditions.append("(w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)")
+            params["allowed_branches"] = allowed
         if batch_id:
-            query += " AND s.batch_id = :bid"
+            conditions.append("s.batch_id = :bid")
             params["bid"] = batch_id
         if status:
-            query += " AND s.status = :status"
+            conditions.append("s.status = :status")
             params["status"] = status
         if search:
-            query += " AND (s.serial_number ILIKE :search OR p.product_name ILIKE :search)"
+            conditions.append("(s.serial_number ILIKE :search OR p.product_name ILIKE :search)")
             params["search"] = f"%{search}%"
 
-        query += " ORDER BY s.created_at DESC LIMIT :limit OFFSET :skip"
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT s.*,
+                   p.product_name, p.product_code,
+                   w.warehouse_name,
+                   b.batch_number,
+                   (s.status = 'available') AS is_available,
+                   (s.status = 'reserved') AS is_reserved,
+                   (s.status = 'defective') AS is_defective
+            {base_from}
+            WHERE {where_clause}
+            ORDER BY s.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """
         rows = db.execute(text(query), params).fetchall()
 
-        # Count
-        count_query = "SELECT COUNT(*) FROM product_serials s WHERE 1=1"
-        count_params = {}
-        if product_id:
-            count_query += " AND s.product_id = :pid"
-            count_params["pid"] = product_id
-        if status:
-            count_query += " AND s.status = :status"
-            count_params["status"] = status
-
-        total = db.execute(text(count_query), count_params).scalar() or 0
+        total = db.execute(text(f"SELECT COUNT(*) {base_from} WHERE {where_clause}"), params).scalar() or 0
+        summary = db.execute(text(f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE s.status = 'available') AS available_count,
+                COUNT(*) FILTER (WHERE s.status = 'sold') AS sold_count,
+                COUNT(*) FILTER (WHERE s.status = 'reserved') AS reserved_count,
+                COUNT(*) FILTER (WHERE s.status = 'defective') AS defective_count,
+                COUNT(*) FILTER (WHERE s.status = 'returned') AS returned_count
+            {base_from}
+            WHERE {where_clause}
+        """), params).fetchone()
 
         return {
-            "items": [dict(r._mapping) for r in rows],
-            "total": total
+            "items": [_json_ready(r) for r in rows],
+            "total": total,
+            "summary": _json_ready(summary) if summary else {
+                "total_count": 0,
+                "available_count": 0,
+                "sold_count": 0,
+                "reserved_count": 0,
+                "defective_count": 0,
+                "returned_count": 0,
+            }
         }
 
 
@@ -872,7 +927,7 @@ def update_serial(request: Request,
     
             if updates:
                 updates.append("updated_at = NOW()")
-                db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
+                db.execute(text(f"UPDATE product_serials SET {', '.join(updates)} WHERE id = :id"), params) # noqa
                 db.commit()
     
             return {"message": i18n_message("serial_number_updated", request)}
@@ -923,7 +978,7 @@ def update_product_tracking(request: Request,
                 params["ead"] = expiry_alert_days
     
             if updates:
-                db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params) # noqa: sql-lint
+                db.execute(text(f"UPDATE products SET {', '.join(updates)}, updated_at = NOW() WHERE id = :id"), params) # noqa
                 db.commit()
     
             return {"message": i18n_message("tracking_settings_updated", request)}
@@ -947,38 +1002,73 @@ def list_quality_inspections(
     current_user: dict = Depends(get_current_user)
 ):
     """قائمة فحوصات الجودة"""
-    with transactional(current_user.company_id) as db:
-        query = """
-            SELECT qi.*, 
-                   p.product_name, p.product_code,
-                   w.warehouse_name,
-                   b.batch_number,
-                   ins.full_name as inspector_name
+    with transactional(_company_id(current_user)) as db:
+        allowed = _allowed_branches(current_user)
+        base_from = """
             FROM quality_inspections qi
             JOIN products p ON qi.product_id = p.id
             LEFT JOIN warehouses w ON qi.warehouse_id = w.id
             LEFT JOIN product_batches b ON qi.batch_id = b.id
             LEFT JOIN company_users ins ON qi.inspector_id = ins.id
-            WHERE 1=1
         """
-        params = {"limit": limit, "skip": skip}
+        conditions = ["1=1"]
+        params = {"limit": min(limit, 100), "skip": skip}
 
         if product_id:
-            query += " AND qi.product_id = :pid"
+            conditions.append("qi.product_id = :pid")
             params["pid"] = product_id
+        if allowed and "*" not in _permissions(current_user):
+            conditions.append("(w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)")
+            params["allowed_branches"] = allowed
         if status:
-            query += " AND qi.status = :status"
+            conditions.append("qi.status = :status")
             params["status"] = status
         if inspection_type:
-            query += " AND qi.inspection_type = :itype"
+            conditions.append("qi.inspection_type = :itype")
             params["itype"] = inspection_type
 
-        query += " ORDER BY qi.created_at DESC LIMIT :limit OFFSET :skip"
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT qi.*,
+                   CASE WHEN qi.status IN ('passed', 'failed', 'partial') THEN qi.status ELSE NULL END AS result,
+                   p.product_name, p.product_code,
+                   w.warehouse_name,
+                   b.batch_number,
+                   ins.full_name as inspector_name
+            {base_from}
+            WHERE {where_clause}
+            ORDER BY qi.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """
         rows = db.execute(text(query), params).fetchall()
 
-        total = db.execute(text("SELECT COUNT(*) FROM quality_inspections"), {}).scalar() or 0
+        total = db.execute(text(f"SELECT COUNT(*) {base_from} WHERE {where_clause}"), params).scalar() or 0
+        summary = db.execute(text(f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE qi.status = 'pending') AS pending_count,
+                COUNT(*) FILTER (WHERE qi.status = 'in_progress') AS in_progress_count,
+                COUNT(*) FILTER (WHERE qi.status = 'completed') AS completed_count,
+                COUNT(*) FILTER (WHERE qi.status = 'passed') AS passed_count,
+                COUNT(*) FILTER (WHERE qi.status = 'failed') AS failed_count,
+                COUNT(*) FILTER (WHERE qi.status = 'partial') AS partial_count
+            {base_from}
+            WHERE {where_clause}
+        """), params).fetchone()
 
-        return {"items": [dict(r._mapping) for r in rows], "total": total}
+        return {
+            "items": [_json_ready(r) for r in rows],
+            "total": total,
+            "summary": _json_ready(summary) if summary else {
+                "total_count": 0,
+                "pending_count": 0,
+                "in_progress_count": 0,
+                "completed_count": 0,
+                "passed_count": 0,
+                "failed_count": 0,
+                "partial_count": 0,
+            },
+        }
 
 
 @batches_router.get("/quality-inspections/{inspection_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
@@ -1178,43 +1268,74 @@ def list_cycle_counts(
     """قائمة الجرد الدوري"""
     with transactional(_company_id(current_user)) as db:
         allowed = _allowed_branches(current_user)
-        query = """
-            SELECT cc.*, w.warehouse_name, cu.full_name as created_by_name
+        base_from = """
             FROM cycle_counts cc
             JOIN warehouses w ON cc.warehouse_id = w.id
             LEFT JOIN company_users cu ON cc.created_by = cu.id
-            WHERE 1=1
+            LEFT JOIN cycle_count_items cci ON cci.cycle_count_id = cc.id
         """
-        params = {"limit": limit, "skip": skip}
+        conditions = ["1=1"]
+        params = {"limit": min(limit, 100), "skip": skip}
 
         if warehouse_id:
             _validate_warehouse_access(db, current_user, warehouse_id, request)
-            query += " AND cc.warehouse_id = :wid"
+            conditions.append("cc.warehouse_id = :wid")
             params["wid"] = warehouse_id
         elif allowed and "*" not in _permissions(current_user):
-            query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
+            conditions.append("(w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)")
             params["allowed_branches"] = allowed
         if status:
-            query += " AND cc.status = :status"
+            conditions.append("cc.status = :status")
             params["status"] = status
 
-        query += " ORDER BY cc.created_at DESC LIMIT :limit OFFSET :skip"
+        where_clause = " AND ".join(conditions)
+        query = f"""
+            SELECT cc.*,
+                   w.warehouse_name,
+                   cu.full_name as created_by_name,
+                   COALESCE(SUM(cci.variance), 0) AS total_variance,
+                   COALESCE(SUM(cci.variance_value), 0) AS total_variance_value,
+                   (COALESCE(SUM(ABS(COALESCE(cci.variance, 0))), 0) > 0) AS has_variance,
+                   CASE
+                       WHEN COALESCE(SUM(cci.variance), 0) > 0 THEN 'positive'
+                       WHEN COALESCE(SUM(cci.variance), 0) < 0 THEN 'negative'
+                       ELSE 'none'
+                   END AS variance_direction
+            {base_from}
+            WHERE {where_clause}
+            GROUP BY cc.id, w.warehouse_name, cu.full_name
+            ORDER BY cc.created_at DESC
+            LIMIT :limit OFFSET :skip
+        """
         rows = db.execute(text(query), params).fetchall()
 
-        total_query = "SELECT COUNT(*) FROM cycle_counts cc JOIN warehouses w ON cc.warehouse_id = w.id WHERE 1=1"
-        total_params = {}
-        if warehouse_id:
-            total_query += " AND cc.warehouse_id = :wid"
-            total_params["wid"] = warehouse_id
-        elif allowed and "*" not in _permissions(current_user):
-            total_query += " AND (w.branch_id = ANY(:allowed_branches) OR w.branch_id IS NULL)"
-            total_params["allowed_branches"] = allowed
-        if status:
-            total_query += " AND cc.status = :status"
-            total_params["status"] = status
-        total = db.execute(text(total_query), total_params).scalar() or 0
+        count_from = """
+            FROM cycle_counts cc
+            JOIN warehouses w ON cc.warehouse_id = w.id
+            WHERE {where_clause}
+        """
+        total = db.execute(text(f"SELECT COUNT(*) {count_from.format(where_clause=where_clause)}"), params).scalar() or 0
+        summary = db.execute(text(f"""
+            SELECT
+                COUNT(*) AS total_count,
+                COUNT(*) FILTER (WHERE cc.status = 'draft') AS draft_count,
+                COUNT(*) FILTER (WHERE cc.status = 'in_progress') AS in_progress_count,
+                COUNT(*) FILTER (WHERE cc.status = 'completed') AS completed_count,
+                COUNT(*) FILTER (WHERE cc.status = 'cancelled') AS cancelled_count
+            {count_from.format(where_clause=where_clause)}
+        """), params).fetchone()
 
-        return {"items": [dict(r._mapping) for r in rows], "total": total}
+        return {
+            "items": [_json_ready(r) for r in rows],
+            "total": total,
+            "summary": _json_ready(summary) if summary else {
+                "total_count": 0,
+                "draft_count": 0,
+                "in_progress_count": 0,
+                "completed_count": 0,
+                "cancelled_count": 0,
+            },
+        }
 
 
 @batches_router.get("/cycle-counts/{count_id}", dependencies=[Depends(require_permission("stock.view"))], response_model=Dict[str, Any])
@@ -1233,12 +1354,19 @@ def get_cycle_count(count_id: int, request: Request, current_user: dict = Depend
             raise HTTPException(**http_error(404, "inventory_not_found"))
         _validate_warehouse_access(db, current_user, cc.warehouse_id, request)
 
-        result = dict(cc._mapping)
+        result = _json_ready(cc)
 
         # Get items
         items = db.execute(text("""
             SELECT cci.*, p.product_name, p.product_code,
-                   cu.full_name as counted_by_name
+                   cu.full_name as counted_by_name,
+                   (COALESCE(cci.variance, 0) != 0) AS has_variance,
+                   CASE
+                       WHEN COALESCE(cci.variance, 0) > 0 THEN 'positive'
+                       WHEN COALESCE(cci.variance, 0) < 0 THEN 'negative'
+                       ELSE 'none'
+                   END AS variance_direction,
+                   CASE WHEN COALESCE(cci.variance, 0) > 0 THEN '+' ELSE '' END AS variance_prefix
             FROM cycle_count_items cci
             JOIN products p ON cci.product_id = p.id
             LEFT JOIN company_users cu ON cci.counted_by = cu.id
@@ -1246,7 +1374,7 @@ def get_cycle_count(count_id: int, request: Request, current_user: dict = Depend
             ORDER BY p.product_name
         """), {"ccid": count_id}).fetchall()
 
-        result["items"] = [dict(i._mapping) for i in items]
+        result["items"] = [_json_ready(i) for i in items]
         return result
 
 
@@ -1482,8 +1610,8 @@ def complete_cycle_count(request: Request,
                                     sale_document_id=count_id,
                                     costing_method=costing_method,
                                 )
-                            except ValueError as exc:
-                                raise HTTPException(status_code=400, detail=str(exc))
+                            except ValueError:
+                                raise HTTPException(**http_error(400, "invalid_request", request))
                             movement_total_abs = Decimal(str(consumed_value)).quantize(Decimal("0.01"), ROUND_HALF_UP)
                             movement_unit_cost = (movement_total_abs / abs(variance_dec)).quantize(Decimal("0.0001"), ROUND_HALF_UP)
 

@@ -343,11 +343,8 @@ def seed_journal_entries(conn):
     start_num = 1
     total_seeded = 0
     while total_seeded < NUM_JOURNAL_ENTRIES:
-        entries_batch = []
-        lines_batch = []
         
         # Create Header Batch
-        current_batch_ids = []
         
         # Generate JE IDs and Numbers
         # We need to insert JEs first to get their IDs, OR rely on a known sequence.

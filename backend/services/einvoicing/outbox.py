@@ -5,7 +5,6 @@ Feature 023 — T061.  Contract: contracts/zatca-outbox.md
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 from sqlalchemy import text
@@ -78,9 +77,9 @@ def process_batch(db: Any, batch_size: int = 25) -> int:
         try:
             _process_one(db, row)
             processed += 1
-        except Exception as e:
-            logger.warning(f"outbox: failed for invoice_id={row['invoice_id']}: {e}")
-            _handle_failure(db, row, str(e))
+        except Exception:
+            logger.warning("outbox: failed for invoice_id=%s", row.get("invoice_id"))
+            _handle_failure(db, row, "zatca_outbox_processing_failed")
 
     return processed
 
@@ -107,7 +106,7 @@ def _process_one(db: Any, row: dict) -> None:
     ).fetchone()
 
     if not invoice:
-        raise ValueError(f"Invoice {invoice_id} not found")
+        raise ValueError("invoice_not_found")
 
     invoice = dict(invoice._mapping)
 
@@ -115,15 +114,15 @@ def _process_one(db: Any, row: dict) -> None:
     try:
         from services.einvoicing.ubl_builder import build_ubl
         xml = build_ubl(invoice)
-    except Exception as e:
-        raise ValueError(f"UBL build failed: {e}")
+    except Exception as exc:
+        raise ValueError("ubl_build_failed") from exc
 
     # Sign
     try:
         from services.einvoicing.ubl_signer import sign_xml
         signed_xml = sign_xml(xml, tenant_id=tenant_id)
-    except Exception as e:
-        raise ValueError(f"Signing failed: {e}")
+    except Exception as exc:
+        raise ValueError("ubl_signing_failed") from exc
 
     # Submit to ZATCA (placeholder — real HTTP call would go here)
     # For now, mark as submitted

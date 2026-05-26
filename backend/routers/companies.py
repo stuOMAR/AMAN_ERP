@@ -45,8 +45,8 @@ def _cleanup_company_database(db_name: str, db_user: str) -> None:
         ddl_conn.execute(text(f'DROP USER IF EXISTS {db_user}'))
 
 
-from fastapi import Request
-from config import settings as _settings
+from fastapi import Request  # noqa: E402
+from config import settings as _settings  # noqa: E402
 
 _REGISTER_RATE_LIMIT = "100/hour" if _settings.APP_ENV == "development" else "3/hour"
 
@@ -299,9 +299,9 @@ def list_companies(
         db.close()
 
 
-from routers.auth import get_current_user
-from utils.tx import transactional
-from schemas import UserResponse
+from routers.auth import get_current_user  # noqa: E402
+from utils.tx import transactional  # noqa: E402
+from schemas import UserResponse  # noqa: E402
 
 
 # ===================== Public Templates (MUST be before /{company_id}) =====================
@@ -622,7 +622,6 @@ async def upload_company_logo(
             buffer.write(content)
         
         # Save to company_settings
-        from database import get_db_connection
         with transactional(company_id) as db:
             logo_url = f"/uploads/logos/{filename}"
             # Check if key exists

@@ -20,6 +20,18 @@ depends_on = None
 def upgrade() -> None:
     op.execute(
         """
+        -- Safely drop view first to avoid DuplicateTable conflict when transitioning from view to table
+        DO $$
+        BEGIN
+            IF EXISTS (
+                SELECT 1 FROM pg_class c 
+                JOIN pg_namespace n ON n.oid = c.relnamespace 
+                WHERE n.nspname = 'public' AND c.relname = 'returns_unified' AND c.relkind = 'v'
+            ) THEN
+                DROP VIEW returns_unified;
+            END IF;
+        END $$;
+
         -- 1. Main returns table
         CREATE TABLE IF NOT EXISTS returns_unified (
             id                  BIGSERIAL       PRIMARY KEY,
@@ -70,36 +82,95 @@ def upgrade() -> None:
             WHERE state = 'draft' AND original_pos_sale_id IS NOT NULL;
 
         -- 3. Migrate existing sales_returns data (if table exists)
-        DO $$ BEGIN
+        DO $$ 
+        DECLARE
+            has_tenant_id boolean;
+        BEGIN
             IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'sales_returns') THEN
-                INSERT INTO returns_unified (tenant_id, source, original_invoice_id, state, total_amount, reason, created_at, created_by)
-                SELECT tenant_id, 'sales', invoice_id, COALESCE(status, 'draft'), COALESCE(total_amount, 0), reason, created_at, created_by
-                FROM sales_returns
-                ON CONFLICT DO NOTHING;
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'sales_returns' AND column_name = 'tenant_id'
+                ) INTO has_tenant_id;
+                
+                IF has_tenant_id THEN
+                    INSERT INTO returns_unified (id, tenant_id, source, original_invoice_id, state, total_amount, reason, created_at, created_by)
+                    SELECT id, tenant_id, 'sales', invoice_id, COALESCE(status, 'draft'), COALESCE(refund_amount, total, 0), notes, created_at, created_by
+                    FROM sales_returns
+                    ON CONFLICT DO NOTHING;
+                ELSE
+                    INSERT INTO returns_unified (id, tenant_id, source, original_invoice_id, state, total_amount, reason, created_at, created_by)
+                    SELECT id, current_setting('app.tenant_id', true)::bigint, 'sales', invoice_id, COALESCE(status, 'draft'), COALESCE(refund_amount, total, 0), notes, created_at, created_by
+                    FROM sales_returns
+                    ON CONFLICT DO NOTHING;
+                END IF;
 
-                -- Replace with view
-                DROP TABLE sales_returns;
+                -- Replace with view (CASCADE drops the sales_return_lines_return_id_fkey constraint)
+                DROP TABLE sales_returns CASCADE;
                 CREATE VIEW sales_returns AS
-                SELECT id, tenant_id, original_invoice_id AS invoice_id, state AS status, total_amount, reason, created_at, created_by, updated_at
+                SELECT id, current_setting('app.tenant_id', true)::bigint AS tenant_id, original_invoice_id AS invoice_id, state AS status, total_amount, reason, created_at, created_by, updated_at
                 FROM returns_unified WHERE source = 'sales' AND deleted_at IS NULL;
             END IF;
         END $$;
 
         -- 4. Migrate existing pos_returns data (if table exists)
-        DO $$ BEGIN
+        DO $$ 
+        DECLARE
+            has_tenant_id boolean;
+        BEGIN
             IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'pos_returns') THEN
-                INSERT INTO returns_unified (tenant_id, source, original_pos_sale_id, state, total_amount, reason, created_at, created_by)
-                SELECT tenant_id, 'pos', pos_sale_id, COALESCE(status, 'draft'), COALESCE(total_amount, 0), reason, created_at, created_by
-                FROM pos_returns
-                ON CONFLICT DO NOTHING;
+                SELECT EXISTS (
+                    SELECT 1 FROM information_schema.columns 
+                    WHERE table_name = 'pos_returns' AND column_name = 'tenant_id'
+                ) INTO has_tenant_id;
+                
+                IF has_tenant_id THEN
+                    INSERT INTO returns_unified (id, tenant_id, source, original_pos_sale_id, state, total_amount, reason, created_at, created_by)
+                    SELECT id, tenant_id, 'pos', original_order_id, 'completed', COALESCE(refund_amount, 0), notes, created_at, CASE WHEN created_by ~ '^[0-9]+$' THEN created_by::bigint ELSE NULL END
+                    FROM pos_returns
+                    ON CONFLICT DO NOTHING;
+                ELSE
+                    INSERT INTO returns_unified (id, tenant_id, source, original_pos_sale_id, state, total_amount, reason, created_at, created_by)
+                    SELECT id, current_setting('app.tenant_id', true)::bigint, 'pos', original_order_id, 'completed', COALESCE(refund_amount, 0), notes, created_at, CASE WHEN created_by ~ '^[0-9]+$' THEN created_by::bigint ELSE NULL END
+                    FROM pos_returns
+                    ON CONFLICT DO NOTHING;
+                END IF;
 
-                -- Replace with view
-                DROP TABLE pos_returns;
+                -- Replace with view (CASCADE drops the pos_return_items_return_id_fkey constraint)
+                DROP TABLE pos_returns CASCADE;
                 CREATE VIEW pos_returns AS
-                SELECT id, tenant_id, original_pos_sale_id AS pos_sale_id, state AS status, total_amount, reason, created_at, created_by, updated_at
+                SELECT id, current_setting('app.tenant_id', true)::bigint AS tenant_id, original_pos_sale_id AS pos_sale_id, state AS status, total_amount, reason, created_at, created_by, updated_at
                 FROM returns_unified WHERE source = 'pos' AND deleted_at IS NULL;
             END IF;
         END $$;
+
+        -- 5. Restore foreign key constraints referencing physical returns_unified table
+        DO $$
+        BEGIN
+            IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'sales_return_lines') THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints 
+                    WHERE constraint_name = 'sales_return_lines_return_id_fkey'
+                ) THEN
+                    ALTER TABLE sales_return_lines 
+                    ADD CONSTRAINT sales_return_lines_return_id_fkey 
+                    FOREIGN KEY (return_id) REFERENCES returns_unified(id) ON DELETE CASCADE;
+                END IF;
+            END IF;
+
+            IF EXISTS (SELECT 1 FROM pg_tables WHERE tablename = 'pos_return_items') THEN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.table_constraints 
+                    WHERE constraint_name = 'pos_return_items_return_id_fkey'
+                ) THEN
+                    ALTER TABLE pos_return_items 
+                    ADD CONSTRAINT pos_return_items_return_id_fkey 
+                    FOREIGN KEY (return_id) REFERENCES returns_unified(id) ON DELETE CASCADE;
+                END IF;
+            END IF;
+        END $$;
+
+        -- 6. Sync BIGSERIAL primary key sequence
+        SELECT setval(pg_get_serial_sequence('returns_unified', 'id'), COALESCE(MAX(id), 1)) FROM returns_unified;
         """
     )
 
@@ -107,6 +178,8 @@ def upgrade() -> None:
 def downgrade() -> None:
     op.execute(
         """
+        ALTER TABLE IF EXISTS sales_return_lines DROP CONSTRAINT IF EXISTS sales_return_lines_return_id_fkey;
+        ALTER TABLE IF EXISTS pos_return_items DROP CONSTRAINT IF EXISTS pos_return_items_return_id_fkey;
         DROP VIEW IF EXISTS pos_returns;
         DROP VIEW IF EXISTS sales_returns;
         DROP INDEX IF EXISTS uix_return_draft_pos;

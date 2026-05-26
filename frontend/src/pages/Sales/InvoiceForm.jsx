@@ -348,6 +348,7 @@ function InvoiceForm() {
                 effect_type: totals.globalEffectType,
                 effect_percentage: totals.globalEffectPercent,
                 markup_amount: totals.globalMakeupAmount,
+                submitted_grand_total: String(totals.total || '0'),
                 items: items.map(item => ({
                     product_id: item.product_id ? parseInt(item.product_id) : null,
                     quantity: String(item.quantity || '0'),

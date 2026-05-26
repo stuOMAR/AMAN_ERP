@@ -1,8 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { reportsAPI } from '../../utils/api';
-import Decimal from 'decimal.js';
 import { getCurrency } from '../../utils/auth';
+import { formatNumber as formatDecimal } from '../../utils/format';
 import { useToast } from '../../context/ToastContext';
 import { BarChart3, TrendingUp, TrendingDown, DollarSign, Package, Users, Wallet, ArrowUpRight, ArrowDownRight, RefreshCw } from 'lucide-react';
 import BackButton from '../../components/common/BackButton';
@@ -31,25 +31,36 @@ const KPIDashboard = () => {
         } finally { setLoading(false); }
     };
 
-    const formatCurrency = (val) => {
-        if (!val && val !== 0) return '—';
-        return new Intl.NumberFormat(t('reports.ensa'), {
-            style: 'currency', currency: currency, maximumFractionDigits: 0
-        }).format(val);
+    const amountAbs = (value) => {
+        const raw = String(value || '0').trim();
+        return raw.startsWith('-') ? raw.slice(1) : raw;
     };
 
-    const formatNumber = (val) => {
-        if (!val && val !== 0) return '—';
-        return new Intl.NumberFormat(t('reports.ensa')).format(val);
+    const isZeroAmount = (value) => /^[-+]?0+(\.0+)?$/.test(String(value || '0').trim());
+    const isNegativeAmount = (value) => String(value || '0').trim().startsWith('-') && !isZeroAmount(value);
+    const isAtLeastOne = (value) => {
+        const raw = String(value || '0').trim();
+        if (raw.startsWith('-')) return false;
+        return !/^0*(\.|$)/.test(raw);
+    };
+
+    const formatCurrency = (val) => {
+        if (val === null || val === undefined || val === '') return '—';
+        return `${formatDecimal(val)} ${currency}`;
+    };
+
+    const formatCount = (val) => {
+        if (val === null || val === undefined || val === '') return '—';
+        return formatDecimal(String(val), 0);
     };
 
     const changeIndicator = (val) => {
-        if (!val || val == 0) return null;
-        const isPositive = val > 0;
+        if (!val || isZeroAmount(val)) return null;
+        const isPositive = !isNegativeAmount(val);
         return (
             <span className="d-flex align-items-center gap-1" style={{ fontSize: '0.8rem', color: isPositive ? '#2e7d32' : '#c62828' }}>
                 {isPositive ? <ArrowUpRight size={14} /> : <ArrowDownRight size={14} />}
-                {Math.abs(val).toFixed(1)}%
+                {amountAbs(val)}%
             </span>
         );
     };
@@ -106,7 +117,7 @@ const KPIDashboard = () => {
         },
         {
             label: t('reports.employee_count'),
-            value: formatNumber(kpiData.employee_count),
+            value: formatCount(kpiData.employee_count),
             change: kpiData.employee_change,
             icon: <Users size={24} />,
             iconBg: '#fce4ec', iconColor: '#ad1457',
@@ -114,23 +125,7 @@ const KPIDashboard = () => {
         }
     ] : [];
 
-    // Calculate key financial ratios
-    const ratios = kpiData ? (() => {
-        const revenue = new Decimal(kpiData.revenue || '0');
-        const expenses = new Decimal(kpiData.expenses || '0');
-        const ar = new Decimal(kpiData.accounts_receivable || '0');
-        const ap = new Decimal(kpiData.accounts_payable || '0');
-        const cash = new Decimal(kpiData.cash_balance || '0');
-        const inv = new Decimal(kpiData.inventory_value || '0');
-        const netIncome = revenue.minus(expenses);
-        return {
-            netIncome: netIncome.toNumber(),
-            profitMargin: !revenue.isZero() ? netIncome.div(revenue).times(100).toFixed(1) : '0.0',
-            currentRatio: !ap.isZero() ? cash.plus(ar).plus(inv).div(ap).toFixed(2) : '0.00',
-            cashRatio: !ap.isZero() ? cash.div(ap).toFixed(2) : '0.00',
-            arTurnover: !ar.isZero() ? revenue.div(ar).toFixed(1) : '0.0',
-        };
-    })() : null;
+    const ratios = kpiData?.financial_ratios || null;
 
     return (
         <div className="workspace fade-in">
@@ -184,9 +179,9 @@ const KPIDashboard = () => {
                             <h4 className="mb-3">{t('reports.key_financial_ratios')}</h4>
                             <div className="row g-3">
                                 <div className="col-md-3">
-                                    <div className="p-3 rounded" style={{ background: ratios.netIncome >= 0 ? '#e8f5e9' : '#fce4ec', textAlign: 'center' }}>
-                                        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: ratios.netIncome >= 0 ? '#2e7d32' : '#c62828' }}>
-                                            {formatCurrency(ratios.netIncome)}
+                                    <div className="p-3 rounded" style={{ background: !isNegativeAmount(ratios.net_income) ? '#e8f5e9' : '#fce4ec', textAlign: 'center' }}>
+                                        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: !isNegativeAmount(ratios.net_income) ? '#2e7d32' : '#c62828' }}>
+                                            {formatCurrency(ratios.net_income)}
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.net_income')}</div>
                                         <small className="text-muted">{t('reports.revenue_expenses')}</small>
@@ -194,17 +189,17 @@ const KPIDashboard = () => {
                                 </div>
                                 <div className="col-md-3">
                                     <div className="p-3 rounded" style={{ background: '#f3f4f6', textAlign: 'center' }}>
-                                        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: ratios.profitMargin >= 0 ? '#2e7d32' : '#c62828' }}>
-                                            {ratios.profitMargin}%
+                                        <div style={{ fontSize: '1.4rem', fontWeight: 700, color: !isNegativeAmount(ratios.profit_margin) ? '#2e7d32' : '#c62828' }}>
+                                            {ratios.profit_margin}%
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.profit_margin')}</div>
                                         <small className="text-muted">{t('reports.net_income_revenue')}</small>
                                     </div>
                                 </div>
                                 <div className="col-md-3">
-                                    <div className="p-3 rounded" style={{ background: ratios.currentRatio >= 1 ? '#e8f5e9' : '#fff3e0', textAlign: 'center' }}>
+                                    <div className="p-3 rounded" style={{ background: isAtLeastOne(ratios.current_ratio) ? '#e8f5e9' : '#fff3e0', textAlign: 'center' }}>
                                         <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                                            {ratios.currentRatio}x
+                                            {ratios.current_ratio}x
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.current_ratio')}</div>
                                         <small className="text-muted">{t('reports.current_assets_current_liabilities')}</small>
@@ -213,7 +208,7 @@ const KPIDashboard = () => {
                                 <div className="col-md-3">
                                     <div className="p-3 rounded" style={{ background: '#f3f4f6', textAlign: 'center' }}>
                                         <div style={{ fontSize: '1.4rem', fontWeight: 700 }}>
-                                            {ratios.arTurnover}x
+                                            {ratios.ar_turnover}x
                                         </div>
                                         <div style={{ fontWeight: 600 }}>{t('reports.ar_turnover')}</div>
                                         <small className="text-muted">{t('reports.sales_avg_ar')}</small>

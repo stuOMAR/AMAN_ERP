@@ -23,5 +23,6 @@ export const servicesAPI = {
     uploadVersion: (id, formData) => api.post(`/services/documents/${id}/versions`, formData, {
         headers: { 'Content-Type': 'multipart/form-data' }
     }),
+    downloadDocument: (id) => api.get(`/services/documents/${id}/download`, { responseType: 'blob', skipAbort: true }),
     deleteDocument: (id) => api.delete(`/services/documents/${id}`),
 }

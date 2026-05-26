@@ -45,6 +45,8 @@ class TaxReturnCreate(BaseModel):
     due_date: Optional[date] = None
     notes: Optional[str] = None
     branch_id: Optional[int] = None
+    submitted_tax_due: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class TaxPaymentCreate(BaseModel):

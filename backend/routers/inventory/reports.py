@@ -2,7 +2,7 @@
 Inventory Module - Reports (Summary, Warehouse Stock, Movements, Valuation)
 """
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -131,12 +131,20 @@ def get_warehouse_stock(
     db = get_db_connection(current_user.company_id)
     try:
         query = """
+            WITH stock AS (
             SELECT 
                 w.warehouse_name as warehouse,
                 p.product_name as item_name,
                 p.product_code as item_code,
                 u.unit_name as unit,
-                i.quantity
+                i.quantity,
+                COALESCE(i.reserved_quantity, 0) AS reserved_quantity,
+                COALESCE(i.damaged_quantity, 0) AS damaged_quantity,
+                COALESCE(
+                    i.available_quantity,
+                    GREATEST(i.quantity - COALESCE(i.reserved_quantity, 0) - COALESCE(i.damaged_quantity, 0), 0)
+                ) AS available_quantity,
+                COALESCE(p.reorder_level, 0) AS reorder_level
             FROM inventory i
             JOIN products p ON i.product_id = p.id
             JOIN warehouses w ON i.warehouse_id = w.id
@@ -146,10 +154,33 @@ def get_warehouse_stock(
         params = {}
         query += " " + branch_scope_filter(current_user, branch_id, "w.branch_id", params)
 
-        query += " ORDER BY w.warehouse_name, p.product_name"
+        query += """
+            )
+            SELECT
+                warehouse,
+                item_name,
+                item_code,
+                unit,
+                quantity,
+                reserved_quantity,
+                damaged_quantity,
+                available_quantity,
+                reorder_level,
+                CASE
+                    WHEN available_quantity < 0 THEN 'negative'
+                    WHEN available_quantity <= 0 THEN 'out_of_stock'
+                    WHEN reorder_level > 0 AND available_quantity <= reorder_level THEN 'low'
+                    ELSE 'good'
+                END AS stock_status,
+                (available_quantity > 0) AS has_available_stock,
+                (available_quantity < 0) AS has_negative_available,
+                (reorder_level > 0 AND available_quantity > 0 AND available_quantity <= reorder_level) AS is_low_stock
+            FROM stock
+            ORDER BY warehouse, item_name
+        """
 
         result = db.execute(text(query), params).fetchall()
-        return [dict(row._mapping) for row in result]
+        return [{k: (str(v) if isinstance(v, Decimal) else v) for k, v in dict(row._mapping).items()} for row in result]
     except Exception as e:
         logger.error(f"Error fetching warehouse stock: {str(e)}")
         logger.exception("Internal error")
@@ -242,6 +273,12 @@ def get_stock_movements(
                    p.product_name, p.product_code,
                    w.warehouse_name,
                    t.quantity,
+                   CASE
+                       WHEN t.quantity > 0 THEN 'in'
+                       WHEN t.quantity < 0 THEN 'out'
+                       ELSE 'neutral'
+                   END AS quantity_direction,
+                   CASE WHEN t.quantity > 0 THEN '+' ELSE '' END AS quantity_prefix,
                    u.full_name as user_name
             {base_from}
             WHERE {where_clause}

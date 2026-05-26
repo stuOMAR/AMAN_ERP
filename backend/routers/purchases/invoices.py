@@ -7,30 +7,37 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
 from utils.cache import invalidate_company_cache
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import require_permission, require_module, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, check_permission
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
+from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, check_permission
+from utils.accounting import get_mapped_account_id, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
-from utils.tax_precision import require_idempotency_key
+from utils.tax_precision import money_str, require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
-from services.tax_engine import resolve_line_tax
+from services.tax_engine import resolve_line_tax_group
 from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
-    SupplierPaymentCreate,
+    PurchaseCreate,
 )
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _resolve_purchase_line_tax(db, branch_id: int, product_id: int, document_date, party_id: int) -> dict:
+    taxes = resolve_line_tax_group(branch_id, product_id, db, document_date, customer_id=party_id)
+    tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+    return {
+        "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+        "tax_rate": tax_rate,
+    }
 
 
 def _require_account_map(db, key: str, label_ar: str) -> int:
@@ -74,7 +81,9 @@ def preview_purchase_invoice_totals(request: Request, invoice: PurchaseCreate, c
         line_details = []
         preview_lines_data = []
         for item in invoice.items:
-            tax_info = resolve_line_tax(invoice.branch_id, item.product_id, db, invoice.invoice_date, customer_id=invoice.supplier_id)
+            if not item.product_id:
+                raise HTTPException(**http_error(400, "product_required", request))
+            tax_info = _resolve_purchase_line_tax(db, invoice.branch_id, item.product_id, invoice.invoice_date, invoice.supplier_id)
             effective_tax_rate = tax_info["tax_rate"]
             la = compute_line_amounts(item.quantity, item.unit_price, effective_tax_rate, item.discount, discount_is_percent=False)
             line_details.append({
@@ -147,7 +156,7 @@ def list_purchase_invoices(
                 "currency": r.get("currency") or base_currency,
                 "exchange_rate": r.get("exchange_rate") or 1,
                 "base_currency": base_currency,
-                "total_base": str(_dec(r["total"]) * _dec(r.get("exchange_rate") or 1)),
+                "total_base": money_str(_dec(r["total"]) * _dec(r.get("exchange_rate") or 1)),
                 "status": r["status"],
             }
             for r in rows
@@ -204,6 +213,8 @@ def get_purchase_invoice(
 
         returned_map = {row.product_id: _dec(row.returned_qty or 0) for row in returned_stats}
 
+        exchange_rate = _dec(invoice.exchange_rate or Decimal("1"))
+
         # 3. Construct Response
         return {
             "id": invoice.id,
@@ -218,22 +229,32 @@ def get_purchase_invoice(
             "discount": invoice.discount,
             "total": invoice.total,
             "paid_amount": str(invoice.paid_amount or 0),
+            "remaining_balance": money_str(_dec(invoice.total) - _dec(invoice.paid_amount or 0)),
             "currency": invoice.currency or base_currency,
-            "exchange_rate": str(invoice.exchange_rate or Decimal("1")),
+            "base_currency": base_currency,
+            "exchange_rate": str(exchange_rate),
+            "subtotal_base": money_str(_dec(invoice.subtotal) * exchange_rate),
+            "tax_amount_base": money_str(_dec(invoice.tax_amount) * exchange_rate),
+            "discount_base": money_str(_dec(invoice.discount) * exchange_rate),
+            "total_base": money_str(_dec(invoice.total) * exchange_rate),
+            "paid_amount_base": money_str(_dec(invoice.paid_amount or 0) * exchange_rate),
+            "remaining_balance_base": money_str((_dec(invoice.total) - _dec(invoice.paid_amount or 0)) * exchange_rate),
             "notes": invoice.notes,
             "items": [{
-                "id": l.id,
-                "product_id": l.product_id,
-                "product_name": l.product_name or l.description,
-                "description": l.description,
-                "quantity": l.quantity,
-                "unit_price": l.unit_price,
-                "tax_rate": l.tax_rate,
-                "discount": l.discount,
-                "total": l.total,
-                "returned_quantity": str(returned_map.get(l.product_id, Decimal('0'))),
-                "remaining_quantity": str(max(Decimal('0'), _dec(l.quantity) - returned_map.get(l.product_id, Decimal('0'))))
-            } for l in lines]
+                "id": line.id,
+                "product_id": line.product_id,
+                "product_name": line.product_name or line.description,
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "tax_rate": line.tax_rate,
+                "discount": line.discount,
+                "total": line.total,
+                "unit_price_base": money_str(_dec(line.unit_price) * exchange_rate),
+                "total_base": money_str(_dec(line.total) * exchange_rate),
+                "returned_quantity": str(returned_map.get(line.product_id, Decimal('0'))),
+                "remaining_quantity": str(max(Decimal('0'), _dec(line.quantity) - returned_map.get(line.product_id, Decimal('0'))))
+            } for line in lines]
         }
 
 @router.post("/invoices", status_code=status.HTTP_201_CREATED, dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -383,7 +404,9 @@ async def create_purchase_invoice(
             _branch_id = validated_branch_id or invoice.branch_id
             _doc_date = invoice.invoice_date if hasattr(invoice, 'invoice_date') and invoice.invoice_date else None
             for item in invoice.items:
-                tax_info = resolve_line_tax(_branch_id, item.product_id, db, _doc_date, customer_id=invoice.supplier_id)
+                if not item.product_id:
+                    raise HTTPException(**http_error(400, "product_required", request))
+                tax_info = _resolve_purchase_line_tax(db, _branch_id, item.product_id, _doc_date, invoice.supplier_id)
                 la = _cla(
                     item.quantity,
                     item.unit_price,
@@ -428,6 +451,11 @@ async def create_purchase_invoice(
             total_tax = _totals["total_tax"]
             total_discount = _totals["total_discount"]
             grand_total = _totals["grand_total"]
+
+            # Strict validation: compare client-submitted grand total with authoritative backend grand total
+            if invoice.submitted_grand_total is not None:
+                if abs(grand_total - invoice.submitted_grand_total) > _D2:
+                    raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
             # 3. Handle Payment & Debt
             paid_amount = _dec(invoice.paid_amount)
@@ -708,7 +736,7 @@ async def create_purchase_invoice(
 
             # 6. Update Supplier Balance via party_site_balances
             if remaining_balance > _D2:
-                gl_remaining = to_base(remaining_balance)
+                to_base(remaining_balance)
                 update_party_site_balance(
                     db,
                     party_id=invoice.supplier_id,
@@ -776,7 +804,7 @@ async def create_purchase_invoice(
                 if not acc_inventory:
                     raise HTTPException(
                         status_code=400,
-                        detail=f"لم يتم ضبط حساب المخزون في إعدادات ربط الحسابات (acc_map_inventory)"
+                        detail="لم يتم ضبط حساب المخزون في إعدادات ربط الحسابات (acc_map_inventory)"
                     )
 
             acc_vat_in = _require_account_map(db, "acc_map_vat_in", "ضريبة مدخلات") if _dec(total_tax) > _D2 else None
@@ -1227,8 +1255,8 @@ def cancel_purchase_invoice(
                         original_source_document_type="purchase_invoice",
                         original_source_document_id=id,
                     )
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc))
+                except ValueError:
+                    raise HTTPException(**http_error(400, "invalid_request", request))
             else:
                 CostingService.update_cost(
                     db,

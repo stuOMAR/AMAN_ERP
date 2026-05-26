@@ -7,7 +7,6 @@ import { formatShortDate } from '../../utils/dateUtils'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import { useBranch } from '../../context/BranchContext'
 import { formatNumber } from '../../utils/format'
-import Decimal from 'decimal.js'
 import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
@@ -45,7 +44,7 @@ function BuyingReturnForm() {
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
+        { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
     ])
 
     useEffect(() => {
@@ -100,8 +99,8 @@ function BuyingReturnForm() {
             // Map items with max_quantity
             const returnItems = invoice.items.map(item => {
                 const remaining = item.remaining_quantity !== undefined
-                    ? new Decimal(item.remaining_quantity || 0).toString()
-                    : new Decimal(item.quantity || 0).toString()
+                    ? String(item.remaining_quantity || '0')
+                    : String(item.quantity || '0')
 
                 return {
                     product_id: item.product_id,
@@ -109,7 +108,6 @@ function BuyingReturnForm() {
                     quantity: remaining,
                     max_quantity: remaining,
                     unit_price: String(item.unit_price || '0'),
-                    tax_rate: null,
                     discount: String(item.discount || '0')
                 }
             })
@@ -150,10 +148,10 @@ function BuyingReturnForm() {
                 })),
                 branch_id: currentBranch?.id || null,
                 supplier_id: formData.supplier_id ? parseInt(formData.supplier_id, 10) : null,
-                currency,
+                currency: formData.currency || currency,
             })
         }
-    }, [items, formData.supplier_id, currentBranch, currency, previewDebounced])
+    }, [items, formData.supplier_id, formData.currency, currentBranch, currency, previewDebounced])
 
     // Handlers
     const handleItemChange = (index, field, value) => {
@@ -167,16 +165,6 @@ function BuyingReturnForm() {
                         updatedItem.description = product.item_name || ''
                         // Use buying price or last purchase price
                         updatedItem.unit_price = String(product.last_buying_price || product.buying_price || '')
-                        updatedItem.tax_rate = null
-                    }
-                }
-
-                if (field === 'quantity') {
-                    // Validation against max_quantity if linked
-                    if (item.max_quantity && new Decimal(value || 0).gt(item.max_quantity)) {
-                        showToast(`Cannot return more than purchased: ${item.max_quantity}`, 'error')
-                        updatedItem[field] = item.max_quantity
-                        value = item.max_quantity
                     }
                 }
 
@@ -190,7 +178,7 @@ function BuyingReturnForm() {
     }
 
     const addItem = () => {
-        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }])
+        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }])
     }
 
     const removeItem = (index) => {
@@ -233,9 +221,9 @@ function BuyingReturnForm() {
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: null,
                     discount: String(item.discount || 0)
-                }))
+                })),
+                submitted_grand_total: backendTotals?.grandTotal ? String(backendTotals.grandTotal) : null,
             }
 
             await purchasesAPI.createReturn(payload)
@@ -409,11 +397,13 @@ function BuyingReturnForm() {
                                             />
                                         </td>
                                         <td>
-                                            <span>—</span>
+                                            <span>{backendLines?.[index]?.tax_rate ?? '—'}</span>
                                         </td>
                                         <td>
                                             <div style={{ fontWeight: 'bold' }}>
-                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+                                                {backendLines?.[index]?.line_total != null || backendLines?.[index]?.total != null
+                                                    ? formatNumber(backendLines[index].line_total ?? backendLines[index].total)
+                                                    : '—'}
                                             </div>
                                         </td>
                                         <td>

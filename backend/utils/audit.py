@@ -1,9 +1,7 @@
-from datetime import datetime, timezone
 from sqlalchemy import text
-from fastapi import Request, HTTPException
+from fastapi import Request
 from database import engine
 import hashlib
-import json
 import logging
 
 logger = logging.getLogger(__name__)
@@ -136,7 +134,7 @@ def log_activity(
                 details = {**details, "ip_address": ip_address}
 
         # Feature 022: delegate to outbox-backed writer
-        from services.audit_writer import log_activity as _outbox_log, AuditWriteError
+        from services.audit_writer import log_activity as _outbox_log
 
         # Enrich details with legacy context fields
         enriched = dict(details) if details else {}
@@ -157,15 +155,16 @@ def log_activity(
         logger.info(f"📝 AUDIT[enqueue]: {username} -> {action} ({resource_id})")
 
     except Exception as e:
-        # Never swallow silently — emit full stack for observability
         logger.error(
-            f"❌ FAILED TO LOG AUDIT: user={username} action={action} resource={resource_type}:{resource_id} err={e}",
-            exc_info=True,
+            "FAILED TO LOG AUDIT: action=%s resource=%s:%s",
+            action,
+            resource_type,
+            resource_id,
         )
         if critical:
             # fail-closed — reject the operation so the caller rolls back.
             from services.audit_writer import AuditWriteError as _AWE
-            raise _AWE(f"Audit write failed for critical action {action}: {e}")
+            raise _AWE(f"Audit write failed for critical action {action}") from e
 
 
 def log_system_activity(
@@ -205,5 +204,5 @@ def log_system_activity(
                 }
             )
             conn.commit()
-    except Exception as e:
-        logger.error(f"❌ FAILED TO LOG SYSTEM ACTIVITY: {e}")
+    except Exception:
+        logger.error("FAILED TO LOG SYSTEM ACTIVITY")

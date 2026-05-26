@@ -26,7 +26,7 @@ from sqlalchemy import text
 
 from . import gl_service
 from utils.fiscal_lock import check_fiscal_period_open
-from utils.tax_precision import money_str, q_money
+from utils.tax_precision import q_money
 
 logger = logging.getLogger(__name__)
 

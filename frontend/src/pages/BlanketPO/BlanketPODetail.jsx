@@ -109,9 +109,9 @@ const BlanketPODetail = () => {
     if (loading) return <div className="workspace fade-in"><div className="text-center p-8">{t('common.loading')}</div></div>;
     if (!bpo) return <div className="workspace fade-in"><div className="text-center p-8">{t('blanket_po.not_found')}</div></div>;
 
-    const remainingQty = (bpo.total_quantity || 0) - (bpo.released_quantity || 0);
-    const remainingAmt = (bpo.total_amount || 0) - (bpo.released_amount || 0);
-    const progressPct = bpo.total_quantity > 0 ? Math.min(((bpo.released_quantity || 0) / bpo.total_quantity) * 100, 100) : 0;
+    const remainingQty = bpo.remaining_quantity;
+    const remainingAmt = bpo.remaining_amount;
+    const progressPct = bpo.consumption_progress_pct || '0';
 
     return (
         <div className="workspace fade-in">
@@ -168,10 +168,10 @@ const BlanketPODetail = () => {
             <div className="card section-card mb-4 p-4">
                 <div className="d-flex justify-content-between mb-2">
                     <span className="font-semibold">{t('blanket_po.consumption_progress')}</span>
-                    <span>{progressPct.toFixed(1)}%</span>
+                    <span>{formatNumber(progressPct, 1)}%</span>
                 </div>
                 <div style={{ height: 10, background: '#e5e7eb', borderRadius: 5, overflow: 'hidden' }}>
-                    <div style={{ width: `${progressPct}%`, height: '100%', background: progressPct >= 100 ? '#3b82f6' : '#22c55e', borderRadius: 5, transition: 'width 0.3s' }} />
+                    <div style={{ width: `${progressPct}%`, height: '100%', background: bpo.is_fully_released ? '#3b82f6' : '#22c55e', borderRadius: 5, transition: 'width 0.3s' }} />
                 </div>
                 <div className="d-flex justify-content-between mt-2 text-sm text-muted">
                     <span>{t('blanket_po.released')}: {formatNumber(bpo.released_quantity)} ({formatNumber(bpo.released_amount)} {currency})</span>
@@ -249,7 +249,7 @@ const BlanketPODetail = () => {
                 <div className="modal-overlay" onClick={() => setShowReleaseModal(false)}>
                     <div className="modal-content" onClick={e => e.stopPropagation()} style={{ maxWidth: 450 }}>
                         <h3 className="modal-title">{t('blanket_po.create_release')}</h3>
-                        {remainingQty <= 0 && (
+                        {bpo.is_fully_released && (
                             <div className="d-flex align-items-center gap-2 p-3 mb-3 bg-yellow-50 text-yellow-700 rounded">
                                 <AlertTriangle size={16} />
                                 <span>{t('blanket_po.fully_consumed_warning')}</span>

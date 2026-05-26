@@ -17,6 +17,7 @@ import logging
 
 from config import settings
 from database import engine
+from utils.i18n import http_error
 
 # ── Observability ──────────────────────────────────────────────────────────────
 _SENTRY_DSN = os.environ.get("SENTRY_DSN", "")
@@ -37,44 +38,44 @@ if _SENTRY_DSN:
         pass  # sentry-sdk not installed — skip silently
 
 # ── Core & Auth ────────────────────────────────────────────────────────────────
-from routers import auth, companies, roles, branches, settings as company_settings
-from routers import audit, notifications, approvals, security, data_import
+from routers import auth, companies, roles, branches, settings as company_settings  # noqa: E402
+from routers import audit, notifications, approvals, security, data_import  # noqa: E402
 
 # ── Accounting & Finance (routers/finance/) ─────────────────────────────────────
-from routers import finance
+from routers import finance  # noqa: E402
 
 # ── Sales, Purchases & Inventory ───────────────────────────────────────────────
-from routers import sales, purchases, inventory, parties
+from routers import sales, purchases, inventory, parties  # noqa: E402
 
 # ── HR (routers/hr/) & Manufacturing (routers/manufacturing/) ───────────────────
-from routers import hr, manufacturing
+from routers import hr, manufacturing  # noqa: E402
 
 # ── Projects & Reports ─────────────────────────────────────────────────────────
-from routers import projects, reports, scheduled_reports, dashboard
+from routers import projects, reports, scheduled_reports, dashboard  # noqa: E402
 
 # ── Commerce & External ────────────────────────────────────────────────────────
-from routers import pos, contracts, crm, external, services
-from routers import calculator as calculator_router
+from routers import pos, contracts, crm, external, services  # noqa: E402
+from routers import calculator as calculator_router  # noqa: E402
 
 # ── Role-Based KPI Dashboards ──────────────────────────────────────────────────
-from routers import role_dashboards
+from routers import role_dashboards  # noqa: E402
 
 # ── System Completion (Phase 100%) ─────────────────────────────────────────────
-from routers import delivery_orders, landed_costs, hr_wps_compliance
-from routers import system_completion
-from routers import sso, matching, mobile
-from routers import sms as sms_router  # SMS gateways
-from routers import shipping as shipping_router  # carriers
-from routers import governance as governance_router
-from routers import search as search_router  # T7.2 unified search
+from routers import delivery_orders, landed_costs, hr_wps_compliance  # noqa: E402
+from routers import system_completion  # noqa: E402
+from routers import sso, matching, mobile  # noqa: E402
+from routers import sms as sms_router  # SMS gateways  # noqa: E402
+from routers import shipping as shipping_router  # carriers  # noqa: E402
+from routers import governance as governance_router  # noqa: E402
+from routers import search as search_router  # T7.2 unified search  # noqa: E402
 
 # ── Feature 022: Audit, Security, Finance Integrity ────────────────────────────
-from routers import credentials as credentials_router
-from routers import account_classifications as account_classifications_router
-from routers import recurring_review as recurring_review_router
+from routers import credentials as credentials_router  # noqa: E402
+from routers import account_classifications as account_classifications_router  # noqa: E402
+from routers import recurring_review as recurring_review_router  # noqa: E402
 
 # OPS-001: Structured logging — JSON in production, human-readable in dev
-from utils.logging_config import setup_logging, RequestIDMiddleware
+from utils.logging_config import setup_logging, RequestIDMiddleware  # noqa: E402
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -83,6 +84,11 @@ logger = logging.getLogger(__name__)
 async def lifespan(app: FastAPI):
     """إدارة دورة حياة التطبيق"""
     logger.info("🚀 Starting AMAN ERP System...")
+    try:
+        from services.webhooks.event_bridge import register_webhook_event_bridge
+        register_webhook_event_bridge()
+    except Exception:
+        logger.warning("Webhook event bridge registration failed")
     
     # SEC-004: Warn if SECRET_KEY is weak/default
     if len(settings.SECRET_KEY) < 32 or settings.SECRET_KEY.startswith("your-"):
@@ -460,9 +466,9 @@ app.add_middleware(
 )
 
 # API-001: Rate Limiting — مشترك عبر shared limiter
-from utils.limiter import limiter
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
+from utils.limiter import limiter  # noqa: E402
+from slowapi import _rate_limit_exceeded_handler  # noqa: E402
+from slowapi.errors import RateLimitExceeded  # noqa: E402
 app.state.limiter = limiter
 app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 
@@ -473,7 +479,7 @@ app.add_middleware(RequestIDMiddleware)
 # `request.state.lang` so backend `utils/i18n.http_error()` can return the
 # correct locale without every router parsing the header. Frontend's
 # `services/apiClient.js` injects this header automatically.
-from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.middleware.base import BaseHTTPMiddleware  # noqa: E402
 
 
 class AcceptLanguageMiddleware(BaseHTTPMiddleware):
@@ -519,7 +525,7 @@ app.add_middleware(RequestSizeLimitMiddleware)
 
 # SEC-203: HTTPS Enforcement + Security Headers
 # SEC-204: Input Sanitization (XSS/SQLi detection)
-from utils.security_middleware import HTTPSRedirectMiddleware, InputSanitizationMiddleware
+from utils.security_middleware import HTTPSRedirectMiddleware, InputSanitizationMiddleware  # noqa: E402
 # FORCE_HTTPS must be explicitly enabled (e.g. after SSL cert is installed).
 # When running on plain HTTP (IP-only, no domain/cert) keep it off to prevent
 # the 301→HTTPS loop that causes ERR_CONNECTION_REFUSED in the browser.
@@ -533,11 +539,11 @@ app.add_middleware(InputSanitizationMiddleware)
 
 # SEC / TASK-030: CSRF double-submit-cookie protection. Enforcement mode is
 # controlled via settings.CSRF_ENFORCEMENT (off | permissive | strict).
-from utils.csrf_middleware import CSRFMiddleware
+from utils.csrf_middleware import CSRFMiddleware  # noqa: E402
 app.add_middleware(CSRFMiddleware)
 
 # Optional N+1 query observer (disabled unless ENABLE_QUERY_COUNTER=1).
-from utils.query_counter import QueryCounterMiddleware, install_engine_listener
+from utils.query_counter import QueryCounterMiddleware, install_engine_listener  # noqa: E402
 app.add_middleware(QueryCounterMiddleware)
 
 # Feature 022: Audit body capture — sanitise request bodies on sensitive routes
@@ -641,10 +647,7 @@ async def sanitize_http_exception(request: Request, exc: FastAPIHTTPException):
 # Global unhandled exception handler
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}")
-    import traceback
-    tb = traceback.format_exc()
-    logger.error(tb)
+    logger.error("Unhandled exception on %s %s", request.method, request.url.path)
     return JSONResponse(
         status_code=500,
         content={"detail": "حدث خطأ داخلي في الخادم. يرجى المحاولة لاحقاً."}
@@ -672,13 +675,13 @@ app.include_router(sales.router, prefix="/api")
 app.include_router(purchases.router, prefix="/api")
 app.include_router(inventory.router, prefix="/api")
 app.include_router(parties.router, prefix="/api")
-from routers.party_balances import router as party_balances_router
+from routers.party_balances import router as party_balances_router  # noqa: E402
 app.include_router(party_balances_router, prefix="/api")
-from routers.party_sites import router as party_sites_router
+from routers.party_sites import router as party_sites_router  # noqa: E402
 app.include_router(party_sites_router, prefix="/api")
-from routers.price_lists import router as price_lists_router
+from routers.price_lists import router as price_lists_router  # noqa: E402
 app.include_router(price_lists_router, prefix="/api")
-from routers.price_sync import router as price_sync_router
+from routers.price_sync import router as price_sync_router  # noqa: E402
 app.include_router(price_sync_router, prefix="/api")
 
 # ── HR (2 sub-routers) & Manufacturing ────────────────────────────
@@ -709,7 +712,7 @@ app.include_router(landed_costs.router, prefix="/api")
 app.include_router(hr_wps_compliance.router, prefix="/api")
 
 # Feature 022: Employee receipt settlement endpoints
-from routers.hr.employee_receipts import router as employee_receipts_router
+from routers.hr.employee_receipts import router as employee_receipts_router  # noqa: E402
 app.include_router(employee_receipts_router, prefix="/api")
 app.include_router(system_completion.router, prefix="/api")
 app.include_router(sso.router, prefix="/api")
@@ -799,7 +802,6 @@ try:
     from routers.reports import router as reports_router
     from routers.kpi import router as kpi_router
     from routers.health import router as health_detailed_router
-    from routers.search import router as search_registry_router
     from routers.ops_scheduler import router as ops_scheduler_router
     from routers.ops_restore import router as ops_restore_router
     from routers.locale import router as locale_router
@@ -807,7 +809,6 @@ try:
     app.include_router(reports_router, prefix="/api")
     app.include_router(kpi_router, prefix="/api")
     app.include_router(health_detailed_router)
-    app.include_router(search_registry_router, prefix="/api")
     app.include_router(ops_scheduler_router, prefix="/api")
     app.include_router(ops_restore_router, prefix="/api")
     app.include_router(locale_router, prefix="/api")

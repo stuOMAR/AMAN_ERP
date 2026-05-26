@@ -21,6 +21,7 @@ function QualityInspections() {
     const [showCompleteModal, setShowCompleteModal] = useState(false)
     const [selectedInspection, setSelectedInspection] = useState(null)
     const [total, setTotal] = useState(0)
+    const [summary, setSummary] = useState({})
 
     const [form, setForm] = useState({
         product_id: '',
@@ -59,6 +60,7 @@ function QualityInspections() {
             const res = await inventoryAPI.listQualityInspections(params)
             setInspections(res.data.items || [])
             setTotal(res.data.total || 0)
+            setSummary(res.data.summary || {})
         } catch (err) {
             console.error(err)
         } finally {
@@ -140,9 +142,9 @@ function QualityInspections() {
         setError(null)
         try {
             await inventoryAPI.completeQualityInspection(selectedInspection.id, {
-                result: completeForm.result,
-                defect_quantity: parseInt(completeForm.defect_quantity || 0),
-                inspector_notes: completeForm.inspector_notes || null
+                status: completeForm.result === 'conditional' ? 'partial' : completeForm.result,
+                rejected_quantity: String(completeForm.defect_quantity || 0),
+                result_notes: completeForm.inspector_notes || null
             })
             setShowCompleteModal(false)
             setSelectedInspection(null)
@@ -170,7 +172,8 @@ function QualityInspections() {
         const map = {
             passed: { label: `✅ ${t('stock.quality.result_passed')}`, cls: 'badge-success' },
             failed: { label: `❌ ${t('stock.quality.result_failed')}`, cls: 'badge-danger' },
-            conditional: { label: `⚠️ ${t('stock.quality.result_conditional')}`, cls: 'badge-warning' }
+            conditional: { label: `⚠️ ${t('stock.quality.result_conditional')}`, cls: 'badge-warning' },
+            partial: { label: `⚠️ ${t('stock.quality.result_conditional')}`, cls: 'badge-warning' }
         }
         const s = map[result] || { label: result, cls: 'badge-secondary' }
         return <span className={`badge ${s.cls}`}>{s.label}</span>
@@ -212,7 +215,7 @@ function QualityInspections() {
                     </svg>
                     <div className="small text-muted">{t('stock.quality.pending')}</div>
                     <div className="fw-bold fs-4 text-warning">
-                        {inspections.filter(i => i.status === 'pending').length}
+                        {summary.pending_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -222,7 +225,7 @@ function QualityInspections() {
                     </svg>
                     <div className="small text-muted">{t('stock.quality.passed')}</div>
                     <div className="fw-bold fs-4 text-success">
-                        {inspections.filter(i => i.result === 'passed').length}
+                        {summary.passed_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -233,7 +236,7 @@ function QualityInspections() {
                     </svg>
                     <div className="small text-muted">{t('stock.quality.failed')}</div>
                     <div className="fw-bold fs-4 text-danger">
-                        {inspections.filter(i => i.result === 'failed').length}
+                        {summary.failed_count || 0}
                     </div>
                 </div>
             </div>

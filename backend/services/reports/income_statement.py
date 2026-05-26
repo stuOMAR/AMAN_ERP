@@ -99,7 +99,7 @@ def get_income_statement(db: Any, tenant_id: str, company_id: str,
     categories: dict[str, list[dict]] = {}
     for row in rows:
         category = row[0] or "unknown"
-        normal_side = row[4] or "debit"
+        row[4] or "debit"
         debit = to_decimal(row[5])
         credit = to_decimal(row[6])
 

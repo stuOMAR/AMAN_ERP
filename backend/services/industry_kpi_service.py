@@ -609,7 +609,6 @@ def get_services_kpis(db, start_date: date, end_date: date,
     rev_per_emp = revenue / headcount if headcount > 0 else 0
 
     # Billable Utilization (from project_timesheets — no billable/planned_hours columns)
-    billable_hours = 0
     total_hours = 0
     try:
         ts = db.execute(text("""
@@ -618,7 +617,6 @@ def get_services_kpis(db, start_date: date, end_date: date,
             WHERE date BETWEEN :s AND :e
         """), {"s": start_date, "e": end_date}).scalar()
         total_hours = float(ts or 0)
-        billable_hours = total_hours  # All logged hours assumed billable
     except Exception:
         pass
     # Without separate billable flag, estimate utilization from hours logged vs capacity
@@ -764,7 +762,7 @@ def get_wholesale_kpis(db, start_date: date, end_date: date,
     # Customer Concentration
     top_customer_rev = 0
     try:
-        tcr = db.execute(text(f"""  # noqa: sql-lint
+        tcr = db.execute(text(f"""  # noqa
             SELECT COALESCE(SUM(total), 0) FROM invoices
             WHERE invoice_type = 'sales' AND invoice_date BETWEEN :s AND :e AND status != 'cancelled' {branch_sql}
             AND party_id = (
@@ -772,7 +770,7 @@ def get_wholesale_kpis(db, start_date: date, end_date: date,
                 WHERE invoice_type = 'sales' AND invoice_date BETWEEN :s AND :e AND status != 'cancelled'
                 GROUP BY party_id ORDER BY SUM(total) DESC LIMIT 1
             )
-        """), {"s": start_date, "e": end_date, **bp}).scalar()  # noqa: sql-lint
+        """), {"s": start_date, "e": end_date, **bp}).scalar()  # noqa
         top_customer_rev = float(tcr or 0)
     except Exception:
         pass
@@ -856,7 +854,6 @@ def get_general_kpis(db, start_date: date, end_date: date,
         current_liabilities = abs(total_liabilities)
 
     current_ratio = current_assets / current_liabilities if current_liabilities > 0 else 0
-    quick_ratio = current_ratio  # simplified
     debt_to_equity = abs(total_liabilities) / total_equity if total_equity > 0 else 0
     roa = (net_income / total_assets * 100) if total_assets > 0 else 0
     roe = (net_income / total_equity * 100) if total_equity > 0 else 0

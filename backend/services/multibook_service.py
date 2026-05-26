@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 def _remap_lines(db, ledger_id: int, lines: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
     """Apply the ``ledger_account_maps`` rules for this ledger."""
-    src_ids = [l["account_id"] for l in lines if l.get("account_id")]
+    src_ids = [line["account_id"] for line in lines if line.get("account_id")]
     if not src_ids:
         return lines
     rows = db.execute(

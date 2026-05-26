@@ -23,6 +23,7 @@ function CycleCounts() {
     const [selectedCount, setSelectedCount] = useState(null)
     const [countDetail, setCountDetail] = useState(null)
     const [total, setTotal] = useState(0)
+    const [summary, setSummary] = useState({})
 
     const [form, setForm] = useState({
         warehouse_id: '',
@@ -52,6 +53,7 @@ function CycleCounts() {
             const res = await inventoryAPI.listCycleCounts(params)
             setCycleCounts(res.data.items || [])
             setTotal(res.data.total || 0)
+            setSummary(res.data.summary || {})
         } catch (err) {
             console.error(err)
         } finally {
@@ -207,7 +209,7 @@ function CycleCounts() {
                     </svg>
                     <div className="small text-muted">{t('stock.cycle.in_progress')}</div>
                     <div className="fw-bold fs-4 text-warning">
-                        {cycleCounts.filter(c => c.status === 'in_progress').length}
+                        {summary.in_progress_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -217,7 +219,7 @@ function CycleCounts() {
                     </svg>
                     <div className="small text-muted">{t('stock.cycle.completed')}</div>
                     <div className="fw-bold fs-4 text-success">
-                        {cycleCounts.filter(c => c.status === 'completed').length}
+                        {summary.completed_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -227,7 +229,7 @@ function CycleCounts() {
                     </svg>
                     <div className="small text-muted">{t('stock.cycle.drafts')}</div>
                     <div className="fw-bold fs-4 text-primary">
-                        {cycleCounts.filter(c => c.status === 'draft').length}
+                        {summary.draft_count || 0}
                     </div>
                 </div>
             </div>
@@ -276,7 +278,7 @@ function CycleCounts() {
                                     <td>{cc.total_items || '-'}</td>
                                     <td>
                                         {cc.total_variance != null ? (
-                                            <span style={{ color: cc.total_variance !== 0 ? 'var(--danger)' : 'var(--success)' }}>
+                                            <span style={{ color: cc.has_variance ? 'var(--danger)' : 'var(--success)' }}>
                                                 {cc.total_variance}
                                             </span>
                                         ) : '-'}
@@ -412,8 +414,6 @@ function CycleCounts() {
                                     {(countDetail.items || []).map(item => {
                                         const update = itemUpdates.find(u => u.item_id === item.id)
                                         const variance = item.variance ?? '0'
-                                        const hasVariance = String(variance) !== '0' && String(variance) !== '0.0000'
-                                        const isPositiveVariance = String(variance).trim().startsWith('-') === false && hasVariance
                                         return (
                                             <tr key={item.id}>
                                                 <td>{item.product_name}</td>
@@ -429,8 +429,8 @@ function CycleCounts() {
                                                     )}
                                                 </td>
                                                 <td>
-                                                    <span style={{ color: hasVariance ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
-                                                        {selectedCount?.status === 'in_progress' ? '-' : `${isPositiveVariance ? '+' : ''}${variance}`}
+                                                    <span style={{ color: item.has_variance ? 'var(--danger)' : 'var(--success)', fontWeight: 'bold' }}>
+                                                        {selectedCount?.status === 'in_progress' ? '-' : `${item.variance_prefix || ''}${variance}`}
                                                     </span>
                                                 </td>
                                                 <td>

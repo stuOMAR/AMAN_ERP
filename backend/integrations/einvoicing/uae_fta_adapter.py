@@ -34,7 +34,7 @@ import os
 import uuid as _uuid
 from datetime import datetime, timezone
 from decimal import Decimal
-from typing import Any, Callable, List, Optional
+from typing import Any, Callable, Optional
 
 import requests
 

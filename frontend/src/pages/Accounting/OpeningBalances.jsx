@@ -1,6 +1,5 @@
 import React, { useState, useEffect } from 'react'
 import { useTranslation } from 'react-i18next'
-import Decimal from 'decimal.js'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
@@ -26,6 +25,17 @@ export default function OpeningBalances() {
     const [entryDate, setEntryDate] = useState(new Date().toISOString().slice(0, 10))
     const [searchTerm, setSearchTerm] = useState('')
     const [filterType, setFilterType] = useState('')
+    const [preview, setPreview] = useState({
+        total_debit: '0.00',
+        total_credit: '0.00',
+        difference: '0.00',
+        is_balanced: true,
+    })
+
+    const hasAmount = (value) => {
+        const raw = String(value || '').trim()
+        return raw !== '' && !/^[-+]?0+(\.0+)?$/.test(raw)
+    }
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -33,6 +43,23 @@ export default function OpeningBalances() {
         }, 300)
         return () => clearTimeout(timer)
     }, [currentBranch])
+
+    useEffect(() => {
+        const timer = setTimeout(async () => {
+            try {
+                const lines = accounts.map(a => ({
+                    account_id: a.id,
+                    debit: a.debit || '0',
+                    credit: a.credit || '0',
+                }))
+                const res = await accountingAPI.previewJournalEntry({ lines })
+                setPreview(res.data)
+            } catch {
+                setPreview(prev => ({ ...prev, is_balanced: false }))
+            }
+        }, 250)
+        return () => clearTimeout(timer)
+    }, [accounts])
 
     const fetchData = async () => {
         setLoading(true)
@@ -67,7 +94,7 @@ export default function OpeningBalances() {
         setSaving(true)
         try {
             const lines = accounts
-                .filter(a => a.debit > 0 || a.credit > 0)
+                .filter(a => hasAmount(a.debit) || hasAmount(a.credit))
                 .map(a => ({
                     account_id: a.id,
                     debit: a.debit,
@@ -85,10 +112,9 @@ export default function OpeningBalances() {
         }
     }
 
-    const totalDebit = accounts.reduce((s, a) => s.plus(new Decimal(a.debit || '0')), new Decimal('0'))
-    const totalCredit = accounts.reduce((s, a) => s.plus(new Decimal(a.credit || '0')), new Decimal('0'))
-    const difference = totalDebit.minus(totalCredit)
-    const isBalanced = difference.abs().lt('0.01')
+    const totalDebit = preview.total_debit || '0.00'
+    const totalCredit = preview.total_credit || '0.00'
+    const isBalanced = preview.is_balanced
 
     const filteredAccounts = accounts.filter(a => {
         if (filterType && a.account_type !== filterType) return false
@@ -157,7 +183,7 @@ export default function OpeningBalances() {
                     {isBalanced ? <CheckCircle size={24} className="text-success mb-2" /> : <AlertTriangle size={24} className="text-danger mb-2" />}
                     <div className="small text-muted">{t('opening.difference')}</div>
                     <div className={`fw-bold fs-4 ${isBalanced ? 'text-success' : 'text-danger'}`}>
-                        {isBalanced ? '✅ 0.00' : formatNum(difference.abs().toString())} <small>{currency}</small>
+                        {isBalanced ? '✅ 0.00' : formatNum(preview.difference || '0.00')} <small>{currency}</small>
                     </div>
                 </div>
             </div>
@@ -184,7 +210,7 @@ export default function OpeningBalances() {
                 </div>
                 <div className="col-md-3 text-end">
                     <span className="badge bg-secondary">
-                        {filteredAccounts.filter(a => new Decimal(a.debit || '0').gt(0) || new Decimal(a.credit || '0').gt(0)).length} / {filteredAccounts.length} {t('opening.accounts')}
+                        {filteredAccounts.filter(a => hasAmount(a.debit) || hasAmount(a.credit)).length} / {filteredAccounts.length} {t('opening.accounts')}
                     </span>
                 </div>
             </div>
@@ -208,7 +234,7 @@ export default function OpeningBalances() {
                             {filteredAccounts.map(a => {
                                 const tl = TYPE_LABELS[a.account_type] || {}
                                 return (
-                                    <tr key={a.id} className={(new Decimal(a.debit || '0').gt(0) || new Decimal(a.credit || '0').gt(0)) ? 'table-light' : ''}>
+                                    <tr key={a.id} className={(hasAmount(a.debit) || hasAmount(a.credit)) ? 'table-light' : ''}>
                                         <td className="text-muted small">{a.account_number}</td>
                                         <td>{i18n.language === 'ar' ? a.name : (a.name_en || a.name)}</td>
                                         <td><span className={`badge bg-${tl.color || 'secondary'}`}>{tl.label || a.account_type}</span></td>

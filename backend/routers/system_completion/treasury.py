@@ -2,28 +2,20 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Response, Request
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Request
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
-from pydantic import BaseModel
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import datetime
+from decimal import Decimal
 import io
 import csv
-import json
 import logging
-import subprocess
-import os
-from database import get_db_connection, engine as system_engine
+import hashlib
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
-from utils.audit import log_activity
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import create_fiscal_lock_table, check_fiscal_period_open
-from utils.duplicate_detection import find_duplicate_parties, find_duplicate_products
-from services.gl_service import create_journal_entry
+from utils.permissions import require_permission
+from utils.tax_precision import require_idempotency_key
 
 logger = logging.getLogger(__name__)
 
@@ -46,14 +38,54 @@ async def import_bank_statement(
     استيراد كشف حساب بنكي من ملف CSV
     Expected columns: date, description, reference, debit, credit, balance
     """
+    idempotency_key = require_idempotency_key(request, operation="legacy bank statement import")
     company_id = _u(current_user, "company_id")
-    user_id = _u(current_user, "user_id")
+    user_id = _u(current_user, "user_id") or _u(current_user, "id")
     with transactional(company_id) as db:
         try:
-            if not file.filename.lower().endswith(('.csv', '.txt')):
-                raise HTTPException(**http_error(400, "csv_file_required", request))
-    
             content = await file.read()
+            from utils.sql_safety import (
+                MAX_IMPORT_FILE_SIZE,
+                validate_file_extension,
+                validate_file_mime_and_signature,
+                validate_file_size,
+            )
+
+            validate_file_size(content, MAX_IMPORT_FILE_SIZE, "كشف البنك", request)
+            safe_filename = (file.filename or "").lower()
+            validate_file_extension(safe_filename, {".csv", ".txt"}, "كشف البنك", request)
+            validate_file_mime_and_signature(safe_filename, file.content_type or "", content, "كشف البنك", request)
+            file_hash = hashlib.sha256(content).hexdigest()
+
+            existing = db.execute(
+                text("""
+                    SELECT id, file_name, total_lines, imported_lines, created_at
+                      FROM bank_import_batches
+                     WHERE idempotency_key = :idempotency_key
+                        OR (
+                            bank_account_id IS NOT DISTINCT FROM :bank_account_id
+                            AND source_file_hash = :source_file_hash
+                        )
+                     ORDER BY id DESC
+                     LIMIT 1
+                """),
+                {
+                    "idempotency_key": idempotency_key,
+                    "bank_account_id": bank_account_id,
+                    "source_file_hash": file_hash,
+                },
+            ).fetchone()
+            if existing:
+                return {
+                    "batch_id": existing.id,
+                    "file_name": existing.file_name,
+                    "total_lines": existing.total_lines,
+                    "imported": existing.imported_lines,
+                    "idempotent": True,
+                    "errors": [],
+                    "message": i18n_message("bank_transactions_imported", request),
+                }
+
             try:
                 text_content = content.decode('utf-8')
             except UnicodeDecodeError:
@@ -92,14 +124,17 @@ async def import_bank_statement(
             # Create batch
             batch_result = db.execute(text("""
                 INSERT INTO bank_import_batches (
-                    file_name, bank_account_id, total_lines, status, uploaded_by
-                ) VALUES (:fn, :baid, :total, 'pending', :uid)
+                    file_name, bank_account_id, total_lines, status, uploaded_by,
+                    idempotency_key, source_file_hash
+                ) VALUES (:fn, :baid, :total, 'pending', :uid, :idempotency_key, :source_file_hash)
                 RETURNING id
             """), {
                 "fn": file.filename,
                 "baid": bank_account_id,
                 "total": len(rows_list) - 1,
-                "uid": user_id
+                "uid": user_id,
+                "idempotency_key": idempotency_key,
+                "source_file_hash": file_hash,
             })
             batch_id = batch_result.fetchone()[0]
     
@@ -162,7 +197,7 @@ async def import_bank_statement(
                     imported += 1
     
                 except Exception:
-                    logger.warning("Bank import line %d failed", idx, exc_info=True)
+                    logger.warning("Bank import line %d failed", idx)
                     errors.append(f"سطر {idx}: خطأ في البيانات")
     
             # Update batch
@@ -186,8 +221,7 @@ async def import_bank_statement(
         except HTTPException:
             raise
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.warning("Internal error in legacy bank import")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -314,8 +348,7 @@ def auto_match_bank_lines(request: Request, batch_id: int, current_user: dict = 
                 "message": i18n_message("bank_transactions_matched", request)
             }
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.warning("Internal error in bank import auto-match")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -333,4 +366,3 @@ def auto_match_bank_lines(request: Request, batch_id: int, current_user: dict = 
 #
 #     المراجع: ZATCA، AAOIFI، بيت الزكاة الكويتي
 # ═══════════════════════════════════════════════════════════════════════════════
-

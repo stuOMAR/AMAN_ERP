@@ -19,7 +19,8 @@ const idempotencyHeaders = () => ({
 
 export const treasuryAPI = {
     listAccounts: (branchId) => withPermission('treasury.view', () => api.get('/treasury/accounts', { params: { branch_id: branchId } })),
-    createAccount: (data) => withPermission('treasury.create', () => api.post('/treasury/accounts', data)),
+    previewOpeningBalance: (params) => withPermission('treasury.view', () => api.get('/treasury/accounts/opening-balance-preview', { params })),
+    createAccount: (data) => withPermission('treasury.create', () => api.post('/treasury/accounts', data, idempotencyHeaders())),
     updateAccount: (id, data) => withPermission('treasury.edit', () => api.put(`/treasury/accounts/${id}`, data, idempotencyHeaders())),
     deleteAccount: (id) => withPermission('treasury.delete', () => api.delete(`/treasury/accounts/${id}`, idempotencyHeaders())),
     createExpense: (data) => withPermission('treasury.manage', () => api.post('/treasury/transactions/expense', data, idempotencyHeaders())),
@@ -31,16 +32,45 @@ export const treasuryAPI = {
     getCashflowReport: (params) => withPermission('treasury.view', () => api.get('/treasury/reports/cashflow', { params })),
 
     // Bank Import
-    importBankStatement: (file) => {
+    importBankStatement: (file, options = {}) => {
+        const formData = new FormData();
+        formData.append('file', file);
+        const extension = (file?.name || '').split('.').pop()?.toLowerCase();
+        const sourceFormat = options.sourceFormat || (
+            extension === 'csv' ? 'csv' :
+            ['xml', 'camt', 'camt053'].includes(extension) ? 'camt053' :
+            'mt940'
+        );
+        formData.append('source_format', sourceFormat);
+        if (options.bankAccountId) formData.append('bank_account_id', options.bankAccountId);
+        if (options.csvConfig) formData.append('csv_config', JSON.stringify(options.csvConfig));
+        return withPermission('finance.reconciliation_manage', () => api.post('/finance/bank-feeds/import', formData, {
+            headers: {
+                'Content-Type': 'multipart/form-data',
+                ...idempotencyHeaders().headers
+            }
+        }));
+    },
+    listBankImports: (params) => api.get('/finance/bank-feeds/statements', {
+        params: { limit: params?.limit || 50 }
+    }),
+    getBankImportLines: (statementId) => api.get(`/finance/bank-feeds/statements/${statementId}/lines`),
+    autoMatchBankImport: (batchId) => withPermission('reconciliation.create', () => api.post(`/treasury/bank-import/${batchId}/auto-match`, null, idempotencyHeaders())),
+
+    // Legacy bank-import endpoints kept for older screens that still need batch matching.
+    importLegacyBankStatement: (file) => {
         const formData = new FormData();
         formData.append('file', file);
         return api.post('/treasury/bank-import', formData, {
-            headers: { 'Content-Type': 'multipart/form-data' }
+            headers: {
+                'Content-Type': 'multipart/form-data',
+                ...idempotencyHeaders().headers
+            }
         });
     },
-    listBankImports: () => api.get('/treasury/bank-import/batches'),
-    getBankImportLines: (batchId) => api.get(`/treasury/bank-import/${batchId}/lines`),
-    autoMatchBankImport: (batchId) => api.post(`/treasury/bank-import/${batchId}/auto-match`),
+    listLegacyBankImports: () => api.get('/treasury/bank-import/batches'),
+    getLegacyBankImportLines: (batchId) => api.get(`/treasury/bank-import/${batchId}/lines`),
+    autoMatchLegacyBankImport: (batchId) => api.post(`/treasury/bank-import/${batchId}/auto-match`, null, idempotencyHeaders()),
 }
 
 export const reconciliationAPI = {

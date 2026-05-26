@@ -11,8 +11,7 @@ Requirements:
 """
 
 import requests
-import json
-from datetime import date, timedelta
+from datetime import date
 
 BASE_URL = "http://localhost:8000/api"
 COMPANY_CODE = "test"  # Change to your test company code
@@ -199,7 +198,7 @@ def main():
     print("\n🎯 Step 3: Creating cost centers...")
     cc1 = create_cost_center(token, "مركز التكلفة - المبيعات", "Sales Cost Center", "CC-001")
     cc2 = create_cost_center(token, "مركز التكلفة - الإدارة", "Admin Cost Center", "CC-002")
-    cc3 = create_cost_center(token, "مركز التكلفة - الإنتاج", "Production Cost Center", "CC-003")
+    create_cost_center(token, "مركز التكلفة - الإنتاج", "Production Cost Center", "CC-003")
     
     # Create Budgets
     print("\n📊 Step 4: Creating budgets...")
@@ -306,7 +305,7 @@ def main():
     )
     if resp.status_code == 200:
         stats = resp.json()
-        print(f"\n✅ Budget Stats:")
+        print("\n✅ Budget Stats:")
         print(f"   Total: {stats.get('total_budgets')}")
         print(f"   Active: {stats.get('active_count')}")
         print(f"   Draft: {stats.get('draft_count')}")

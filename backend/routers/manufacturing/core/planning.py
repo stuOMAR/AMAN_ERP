@@ -4,30 +4,17 @@ Mounted under the parent router via core/__init__.py.
 """
 import logging
 from decimal import Decimal
-from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
-from services.gl_service import create_journal_entry
 from schemas import UserResponse
 from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
+    MRPPlanResponse
 )
 
 logger = logging.getLogger(__name__)
@@ -88,7 +75,7 @@ def calculate_mrp_for_order(request: Request, order_id: int, current_user: UserR
             on_order = Decimal(str(on_order))
 
             available = on_hand + on_order
-            shortage = max(0.0, round(required - available, 4))
+            shortage = max(Decimal("0"), round(required - available, 4))
 
             if shortage > 0:
                 action = "purchase_order"

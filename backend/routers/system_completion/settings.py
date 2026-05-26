@@ -2,28 +2,14 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import Request, APIRouter, Depends, HTTPException, UploadFile, File, Response
-from utils.i18n import http_error
+from fastapi import Request, APIRouter, Depends, HTTPException
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
-from pydantic import BaseModel
-from decimal import Decimal, ROUND_HALF_UP
-import io
-import csv
-import json
 import logging
-import subprocess
-import os
-from database import get_db_connection, engine as system_engine
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
-from utils.audit import log_activity
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import create_fiscal_lock_table, check_fiscal_period_open
-from utils.duplicate_detection import find_duplicate_parties, find_duplicate_products
-from services.gl_service import create_journal_entry
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -34,7 +20,7 @@ def _u(current_user, key, default=None):
 
 router = APIRouter()
 
-from .core import PrintTemplateCreate
+from .core import PrintTemplateCreate  # noqa: E402
 
 @router.get("/settings/print-templates", dependencies=[Depends(require_permission("settings.view"))],
             tags=["Print Templates"], response_model=List[Dict[str, Any]])

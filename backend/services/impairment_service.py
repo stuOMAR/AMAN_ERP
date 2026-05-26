@@ -65,10 +65,10 @@ def record_impairment_test(
             description=f"IAS 36 impairment loss CGU#{cgu_id} as of {as_of}",
             lines=[
                 {"account_id": impairment_expense_account_id,
-                 "debit": float(impairment_loss), "credit": 0,
+                 "debit": impairment_loss, "credit": 0,
                  "description": "Impairment loss (IAS 36)"},
                 {"account_id": accumulated_impairment_account_id,
-                 "debit": 0, "credit": float(impairment_loss),
+                 "debit": 0, "credit": impairment_loss,
                  "description": "Accumulated impairment"},
             ],
             user_id=user_id,

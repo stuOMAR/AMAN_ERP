@@ -152,6 +152,7 @@ def preview_sales_totals(
     )
     paid = dec(paid_amount)
     grand = totals["grand_total"]
+
     return {
         "subtotal": money_str(totals["subtotal"]),
         "total_discount": money_str(totals["total_discount"]),

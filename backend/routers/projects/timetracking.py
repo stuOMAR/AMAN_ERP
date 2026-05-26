@@ -18,6 +18,8 @@ from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from sqlalchemy import text
 from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.permissions import validate_branch_access
+from utils.tax_precision import money_str, qty_str, rate_str, require_idempotency_key
 import logging
 
 logger = logging.getLogger(__name__)
@@ -27,17 +29,33 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.projects import (
+from schemas.projects import (  # noqa: E402
     TimesheetCreate, TimesheetUpdate, TimesheetApprove
 )
-from schemas.timetracking import (
+from schemas.timetracking import (  # noqa: E402
     TimesheetEntryCreate, TimesheetEntryUpdate,
     WeeklySubmitRequest, RejectRequest
 )
 
 router = APIRouter()
 
-from .core import _D2, _dec, _fetch_timesheet_entry
+from .core import _D2, _dec, _fetch_timesheet_entry  # noqa: E402
+
+def _current_employee_id(db, current_user: dict) -> int:
+    employee_id = db.execute(text(
+        "SELECT id FROM employees WHERE user_id = :uid LIMIT 1"
+    ), {"uid": current_user.id}).scalar()
+    if not employee_id:
+        raise HTTPException(status_code=400, detail=i18n_message("employee_profile_required"))
+    return employee_id
+
+def _serialize_time_entry(row_or_dict: Any) -> Dict[str, Any]:
+    data = dict(row_or_dict._mapping) if hasattr(row_or_dict, "_mapping") else dict(row_or_dict)
+    if data.get("hours") is not None:
+        data["hours"] = qty_str(data["hours"])
+    if data.get("billing_rate") is not None:
+        data["billing_rate"] = money_str(data["billing_rate"])
+    return data
 
 @router.get("/timetracking", dependencies=[Depends(require_permission("projects.time_view"))], response_model=List[Dict[str, Any]])
 async def list_own_time_entries(
@@ -45,13 +63,21 @@ async def list_own_time_entries(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     entry_status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب سجلات الوقت الخاصة بالمستخدم (قابلة للفلترة)"""
     db = get_db_connection(current_user.company_id)
     try:
-        filters = ["te.employee_id = (SELECT id FROM employees WHERE user_id = :uid LIMIT 1)"]
-        params: dict = {"uid": current_user.id}
+        page = max(page, 1)
+        page_size = min(max(page_size, 1), 100)
+        filters = ["te.employee_id = :employee_id"]
+        params: dict = {
+            "employee_id": _current_employee_id(db, current_user),
+            "limit": page_size,
+            "offset": (page - 1) * page_size,
+        }
         if project_id:
             filters.append("te.project_id = :project_id")
             params["project_id"] = project_id
@@ -79,13 +105,75 @@ async def list_own_time_entries(
                 LEFT JOIN employees ae ON ae.id = te.approved_by
                 WHERE  {where}
                 ORDER BY te.date DESC
+                LIMIT :limit OFFSET :offset
             """), params).fetchall()
         except Exception as e:
             db.rollback()
             if "does not exist" in str(e):
                 return []
             raise
-        return [dict(r._mapping) for r in rows]
+        return [_serialize_time_entry(r) for r in rows]
+    finally:
+        db.close()
+
+
+@router.get("/timetracking/week-summary", dependencies=[Depends(require_permission("projects.time_view"))], response_model=Dict[str, Any])
+async def get_own_week_summary(
+    date_from: date,
+    date_to: date,
+    project_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Backend-owned weekly time totals for the current employee."""
+    db = get_db_connection(current_user.company_id)
+    try:
+        filters = [
+            "te.employee_id = :employee_id",
+            "te.date >= :date_from",
+            "te.date <= :date_to",
+        ]
+        params: dict = {
+            "employee_id": _current_employee_id(db, current_user),
+            "date_from": date_from,
+            "date_to": date_to,
+        }
+        if project_id:
+            filters.append("te.project_id = :project_id")
+            params["project_id"] = project_id
+        where = " AND ".join(filters)
+        daily_rows = db.execute(text(f"""
+            SELECT te.date,
+                   COALESCE(SUM(te.hours), 0) AS total_hours,
+                   COALESCE(SUM(CASE WHEN te.is_billable THEN te.hours ELSE 0 END), 0) AS billable_hours,
+                   COALESCE(SUM(CASE WHEN NOT te.is_billable THEN te.hours ELSE 0 END), 0) AS non_billable_hours
+            FROM timesheet_entries te
+            WHERE {where}
+            GROUP BY te.date
+            ORDER BY te.date
+        """), params).fetchall()
+        totals = db.execute(text(f"""
+            SELECT COALESCE(SUM(te.hours), 0) AS grand_total_hours,
+                   COALESCE(SUM(CASE WHEN te.is_billable THEN te.hours ELSE 0 END), 0) AS billable_total_hours,
+                   COALESCE(SUM(CASE WHEN NOT te.is_billable THEN te.hours ELSE 0 END), 0) AS non_billable_total_hours
+            FROM timesheet_entries te
+            WHERE {where}
+        """), params).fetchone()
+        return {
+            "date_from": str(date_from),
+            "date_to": str(date_to),
+            "daily_totals": [
+                {
+                    "date": str(row.date),
+                    "total_hours": qty_str(row.total_hours),
+                    "billable_hours": qty_str(row.billable_hours),
+                    "non_billable_hours": qty_str(row.non_billable_hours),
+                }
+                for row in daily_rows
+            ],
+            "grand_total_hours": qty_str(totals.grand_total_hours if totals else 0),
+            "billable_total_hours": qty_str(totals.billable_total_hours if totals else 0),
+            "non_billable_total_hours": qty_str(totals.non_billable_total_hours if totals else 0),
+        }
     finally:
         db.close()
 
@@ -95,6 +183,11 @@ async def list_project_timesheets(project_id: int, current_user: dict = Depends(
     """جلب سجلات الوقت لمشروع"""
     db = get_db_connection(current_user.company_id)
     try:
+        project = db.execute(text("SELECT branch_id FROM projects WHERE id = :id"), {"id": project_id}).fetchone()
+        if not project:
+            raise HTTPException(**http_error(404, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
+
         timesheets = db.execute(text("""
             SELECT ts.*,
                 CONCAT(u.first_name, ' ', u.last_name) as employee_name,
@@ -257,9 +350,11 @@ async def delete_timesheet(timesheet_id: int, current_user: dict = Depends(get_c
 async def approve_timesheets(
     project_id: int,
     approval: TimesheetApprove,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """اعتماد سجلات الوقت وتوليد القيود المحاسبية"""
+    idempotency_key = require_idempotency_key(request, operation="project timesheet approval")
     db = get_db_connection(current_user.company_id)
     trans = db.begin()
     try:
@@ -302,7 +397,7 @@ async def approve_timesheets(
 
             if total_cost > 0:
                 # A. Create Project Expense Record
-                exp_id = db.execute(text("""
+                db.execute(text("""
                     INSERT INTO project_expenses (
                         project_id, expense_type, expense_date, amount,
                         description, status, created_by
@@ -349,7 +444,8 @@ async def approve_timesheets(
                     user_id=current_user.id,
                     branch_id=project.branch_id,
                     source="project_timesheet",
-                    source_id=ts_id
+                    source_id=ts_id,
+                    idempotency_key=f"project-timesheet:{idempotency_key}:{ts_id}:je",
                 )
 
             # D. Update Timesheet Status
@@ -380,35 +476,61 @@ async def log_time_entry(
     """تسجيل ساعات العمل على مشروع (US17)"""
     db = get_db_connection(current_user.company_id)
     try:
+        idempotency_key = require_idempotency_key(request, operation="time entry create")
+        replay = db.execute(text("""
+            SELECT id FROM timesheet_entries WHERE idempotency_key = :key LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if replay:
+            return _serialize_time_entry(_fetch_timesheet_entry(db, replay.id))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": entry.project_id}).fetchone()
+        if not project:
+            raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
+        employee_id = _current_employee_id(db, current_user)
+        if entry.employee_id is not None and entry.employee_id != employee_id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail=i18n_message("not_allowed_log_time_for_employee"))
         result = db.execute(text("""
             INSERT INTO timesheet_entries
                 (employee_id, project_id, task_id, date, hours,
-                 is_billable, billing_rate, description, status, created_by)
+                 is_billable, billing_rate, description, status, created_by, idempotency_key)
             VALUES
                 (:employee_id, :project_id, :task_id, :date, :hours,
-                 :is_billable, :billing_rate, :description, 'draft', :created_by)
+                 :is_billable, :billing_rate, :description, 'draft', :created_by, :idempotency_key)
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
             RETURNING id
         """), {
-            "employee_id": entry.employee_id,
+            "employee_id": entry.employee_id if current_user.role == "admin" and entry.employee_id is not None else employee_id,
             "project_id":  entry.project_id,
             "task_id":     entry.task_id,
             "date":        entry.date,
-            "hours":       float(entry.hours),
+            "hours":       entry.hours,
             "is_billable": entry.is_billable,
-            "billing_rate": float(entry.billing_rate) if entry.billing_rate else None,
+            "billing_rate": entry.billing_rate,
             "description": entry.description,
             "created_by":  current_user.id,
+            "idempotency_key": idempotency_key,
         })
-        entry_id = result.fetchone()[0]
+        inserted = result.fetchone()
+        if not inserted:
+            replay = db.execute(text("""
+                SELECT id FROM timesheet_entries WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if replay:
+                return _serialize_time_entry(_fetch_timesheet_entry(db, replay.id))
+            raise HTTPException(**http_error(status.HTTP_409_CONFLICT, "duplicate_idempotency_key"))
+        entry_id = inserted[0]
         db.commit()
         log_activity(
             db, user_id=current_user.id, username=current_user.username,
             action="project.time_log", resource_type="timesheet_entry",
             resource_id=str(entry_id),
-            details={"project_id": entry.project_id, "hours": float(entry.hours)},
+            details={"project_id": entry.project_id, "hours": qty_str(entry.hours)},
             request=request
         )
-        return _fetch_timesheet_entry(db, entry_id)
+        return _serialize_time_entry(_fetch_timesheet_entry(db, entry_id))
     except Exception as e:
         db.rollback()
         logger.error(f"Error logging time entry: {e}")
@@ -430,28 +552,40 @@ async def update_time_entry(
         existing = _fetch_timesheet_entry(db, entry_id)
         if not existing:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "entry_not_found"))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": existing["project_id"]}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         if existing["status"] != "draft":
             raise HTTPException(**http_error(status.HTTP_400_BAD_REQUEST, "only_draft_entries_editable"))
+        if existing.get("created_by") != current_user.id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail=i18n_message("not_allowed_edit_record"))
         updates, params = [], {"id": entry_id}
         if entry.task_id is not None:
-            updates.append("task_id = :task_id"); params["task_id"] = entry.task_id
+            updates.append("task_id = :task_id")
+            params["task_id"] = entry.task_id
         if entry.date is not None:
-            updates.append("date = :date"); params["date"] = entry.date
+            updates.append("date = :date")
+            params["date"] = entry.date
         if entry.hours is not None:
-            updates.append("hours = :hours"); params["hours"] = float(entry.hours)
+            updates.append("hours = :hours")
+            params["hours"] = entry.hours
         if entry.is_billable is not None:
-            updates.append("is_billable = :is_billable"); params["is_billable"] = entry.is_billable
+            updates.append("is_billable = :is_billable")
+            params["is_billable"] = entry.is_billable
         if entry.billing_rate is not None:
             updates.append("billing_rate = :billing_rate")
-            params["billing_rate"] = float(entry.billing_rate)
+            params["billing_rate"] = entry.billing_rate
         if entry.description is not None:
-            updates.append("description = :description"); params["description"] = entry.description
+            updates.append("description = :description")
+            params["description"] = entry.description
         if not updates:
-            return existing
+            return _serialize_time_entry(existing)
         updates.append("updated_at = now()")
         db.execute(text(f"UPDATE timesheet_entries SET {', '.join(updates)} WHERE id = :id"), params)
         db.commit()
-        return _fetch_timesheet_entry(db, entry_id)
+        return _serialize_time_entry(_fetch_timesheet_entry(db, entry_id))
     except HTTPException:
         raise
     except Exception as e:
@@ -466,11 +600,17 @@ async def update_time_entry(
              dependencies=[Depends(require_permission("projects.time_log"))], response_model=Dict[str, Any])
 async def submit_weekly_timesheet(
     req: WeeklySubmitRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """رفع الجدول الزمني الأسبوعي للموافقة"""
+    require_idempotency_key(request, operation="weekly timesheet submit")
     db = get_db_connection(current_user.company_id)
     try:
+        employee_id = _current_employee_id(db, current_user)
+        if req.employee_id is not None and req.employee_id != employee_id and current_user.role != "admin":
+            raise HTTPException(status_code=403, detail=i18n_message("not_allowed_submit_timesheet"))
+        target_employee_id = req.employee_id if current_user.role == "admin" and req.employee_id is not None else employee_id
         week_end = req.week_start + timedelta(days=6)
         result = db.execute(text("""
             UPDATE timesheet_entries
@@ -479,7 +619,7 @@ async def submit_weekly_timesheet(
                AND date BETWEEN :ws AND :we
                AND status = 'draft'
             RETURNING id
-        """), {"emp_id": req.employee_id, "ws": req.week_start, "we": week_end})
+        """), {"emp_id": target_employee_id, "ws": req.week_start, "we": week_end})
         updated_ids = [r[0] for r in result.fetchall()]
         db.commit()
         return {"submitted_count": len(updated_ids), "entry_ids": updated_ids}
@@ -498,21 +638,34 @@ async def list_team_time_entries(
     date_from: Optional[date] = None,
     date_to: Optional[date] = None,
     entry_status: Optional[str] = None,
+    page: int = 1,
+    page_size: int = 25,
     current_user: dict = Depends(get_current_user)
 ):
     """جلب سجلات وقت الفريق (للمدير)"""
     db = get_db_connection(current_user.company_id)
     try:
+        page = max(page, 1)
+        page_size = min(max(page_size, 1), 100)
         filters = ["1=1"]
-        params: dict = {}
+        params: dict = {"limit": page_size, "offset": (page - 1) * page_size}
         if project_id:
-            filters.append("te.project_id = :project_id"); params["project_id"] = project_id
+            filters.append("te.project_id = :project_id")
+            params["project_id"] = project_id
+            project = db.execute(text(
+                "SELECT branch_id FROM projects WHERE id = :id"
+            ), {"id": project_id}).fetchone()
+            if project:
+                validate_branch_access(current_user, project.branch_id)
         if date_from:
-            filters.append("te.date >= :date_from"); params["date_from"] = date_from
+            filters.append("te.date >= :date_from")
+            params["date_from"] = date_from
         if date_to:
-            filters.append("te.date <= :date_to"); params["date_to"] = date_to
+            filters.append("te.date <= :date_to")
+            params["date_to"] = date_to
         if entry_status:
-            filters.append("te.status = :entry_status"); params["entry_status"] = entry_status
+            filters.append("te.status = :entry_status")
+            params["entry_status"] = entry_status
         where = " AND ".join(filters)
         rows = db.execute(text(f"""
             SELECT te.*,
@@ -527,8 +680,9 @@ async def list_team_time_entries(
             LEFT JOIN employees ae ON ae.id = te.approved_by
             WHERE  {where}
             ORDER BY te.date DESC, e.full_name
+            LIMIT :limit OFFSET :offset
         """), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+        return [_serialize_time_entry(r) for r in rows]
     finally:
         db.close()
 
@@ -541,11 +695,17 @@ async def approve_time_entry(
     current_user: dict = Depends(get_current_user)
 ):
     """الموافقة على سجل وقت"""
+    require_idempotency_key(request, operation="time entry approval")
     db = get_db_connection(current_user.company_id)
     try:
         existing = _fetch_timesheet_entry(db, entry_id)
         if not existing:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "entry_not_found"))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": existing["project_id"]}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         if existing["status"] != "submitted":
             raise HTTPException(**http_error(status.HTTP_400_BAD_REQUEST, "only_submitted_entries_approvable"))
         approver_emp = db.execute(text(
@@ -565,7 +725,7 @@ async def approve_time_entry(
             details={"entry_id": entry_id},
             request=request
         )
-        return _fetch_timesheet_entry(db, entry_id)
+        return _serialize_time_entry(_fetch_timesheet_entry(db, entry_id))
     except HTTPException:
         raise
     except Exception as e:
@@ -585,11 +745,17 @@ async def reject_time_entry(
     current_user: dict = Depends(get_current_user)
 ):
     """رفض سجل وقت مع سبب"""
+    require_idempotency_key(request, operation="time entry rejection")
     db = get_db_connection(current_user.company_id)
     try:
         existing = _fetch_timesheet_entry(db, entry_id)
         if not existing:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "entry_not_found"))
+        project = db.execute(text(
+            "SELECT branch_id FROM projects WHERE id = :id"
+        ), {"id": existing["project_id"]}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         if existing["status"] != "submitted":
             raise HTTPException(**http_error(status.HTTP_400_BAD_REQUEST, "only_submitted_entries_rejectable"))
         db.execute(text("""
@@ -607,7 +773,7 @@ async def reject_time_entry(
             details={"entry_id": entry_id, "reason": req.rejection_reason},
             request=request
         )
-        return _fetch_timesheet_entry(db, entry_id)
+        return _serialize_time_entry(_fetch_timesheet_entry(db, entry_id))
     except HTTPException:
         raise
     except Exception as e:
@@ -628,11 +794,12 @@ async def get_project_profitability(
     db = get_db_connection(current_user.company_id)
     try:
         project = db.execute(text("""
-            SELECT id, project_name, planned_budget, actual_cost
+            SELECT id, project_name, planned_budget, actual_cost, branch_id
             FROM   projects WHERE id = :pid
         """), {"pid": project_id}).fetchone()
         if not project:
             raise HTTPException(**http_error(status.HTTP_404_NOT_FOUND, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
 
         ts = db.execute(text("""
             SELECT
@@ -648,29 +815,41 @@ async def get_project_profitability(
 
         expenses = db.execute(text("""
             SELECT COALESCE(SUM(amount), 0) AS total_expenses
-            FROM   project_expenses
-            WHERE  project_id = :pid
+            FROM (
+                SELECT amount FROM project_expenses WHERE project_id = :pid
+                UNION ALL
+                SELECT amount FROM expenses WHERE project_id = :pid AND approval_status = 'approved' AND is_deleted = false
+            ) combined
         """), {"pid": project_id}).fetchone()
 
-        billable_revenue = float(ts.billable_revenue)
-        total_expenses = float(expenses.total_expenses)
-        total_cost = total_expenses + float(project.actual_cost or 0)
+        billable_revenue = _dec(ts.billable_revenue)
+        total_expenses = _dec(expenses.total_expenses)
+        total_cost = total_expenses + _dec(project.actual_cost or 0)
         profit = billable_revenue - total_cost
-        planned_budget = float(project.planned_budget or 0)
-        margin_pct = (profit / billable_revenue * 100) if billable_revenue else 0
+        planned_budget = _dec(project.planned_budget or 0)
+        margin_pct = (profit / billable_revenue * Decimal("100")) if billable_revenue else Decimal("0")
+        revenue_bar_pct = Decimal("100")
+        cost_bar_pct = Decimal("0")
+        max_bar = max(billable_revenue, total_cost, Decimal("1"))
+        revenue_bar_pct = (billable_revenue / max_bar * Decimal("100")).quantize(_D2, ROUND_HALF_UP)
+        cost_bar_pct = (total_cost / max_bar * Decimal("100")).quantize(_D2, ROUND_HALF_UP)
 
         return {
             "project_id":        project_id,
             "project_name":      project.project_name,
-            "planned_budget":    planned_budget,
-            "total_hours":       float(ts.total_hours),
-            "billable_hours":    float(ts.billable_hours),
-            "non_billable_hours": float(ts.non_billable_hours),
-            "billable_revenue":  billable_revenue,
-            "total_expenses":    total_expenses,
-            "total_cost":        total_cost,
-            "profit":            profit,
-            "margin_pct":        round(margin_pct, 2),
+            "planned_budget":    money_str(planned_budget),
+            "total_hours":       qty_str(ts.total_hours),
+            "billable_hours":    qty_str(ts.billable_hours),
+            "non_billable_hours": qty_str(ts.non_billable_hours),
+            "billable_revenue":  money_str(billable_revenue),
+            "total_expenses":    money_str(total_expenses),
+            "total_cost":        money_str(total_cost),
+            "profit":            money_str(profit),
+            "margin_pct":        rate_str(margin_pct),
+            "profit_status":     "profitable" if profit >= 0 else "loss",
+            "budget_status":     "over_budget" if billable_revenue > planned_budget and planned_budget > 0 else "within_budget",
+            "revenue_bar_pct":   rate_str(revenue_bar_pct),
+            "cost_bar_pct":      rate_str(cost_bar_pct),
         }
     except HTTPException:
         raise
@@ -684,6 +863,3 @@ async def get_project_profitability(
 # ═══════════════════════════════════════════════════════════
 # US18 — Resource Planning  (/projects/resources/...)
 # ═══════════════════════════════════════════════════════════
-
-
-

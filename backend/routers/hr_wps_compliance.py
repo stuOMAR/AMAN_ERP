@@ -4,9 +4,10 @@ AMAN ERP — WPS Export, Saudization Tracking, End of Service Settlement
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
+from utils.tax_precision import require_idempotency_key
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 from pydantic import BaseModel
@@ -14,7 +15,6 @@ import io
 import csv
 import logging
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, check_permission
@@ -99,6 +99,11 @@ def _validate_mol_establishment_id(value: str) -> str:
     return mol_id
 
 
+def _requires_wps_labor_compliance(entry) -> bool:
+    nationality = str(getattr(entry, "nat_code", "") or "").strip().upper()
+    return bool(nationality and nationality != REGION_SA)
+
+
 @router.post("/wps/export", dependencies=[Depends(require_permission(["hr.manage", "hr.pii"]))])
 def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depends(get_current_user)):
     """
@@ -136,6 +141,7 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
                 SELECT pe.*,
                        e.first_name, e.last_name, e.employee_code,
                        COALESCE(e.iqama_number, e.tax_id, e.social_security) as national_id,
+                       e.labor_card_number, e.insurance_number, e.visa_status,
                        ta.bank_name, ta.account_number as bank_account_number,
                        ta.iban as iban_number, e.nationality,
                        COALESCE(e.nationality, 'SA') as nat_code
@@ -186,6 +192,13 @@ def export_wps_file(body: WPSExportRequest, request: Request, current_user=Depen
                         raise HTTPException(**http_error(400, "wps_missing_iban_for_employee", request))
                     if not nat_id:
                         raise HTTPException(**http_error(400, "wps_missing_national_id_for_employee", request))
+                    if _requires_wps_labor_compliance(entry):
+                        if not getattr(entry, "labor_card_number", None):
+                            raise HTTPException(**http_error(400, "wps_missing_labor_card_for_employee", request))
+                        if not getattr(entry, "insurance_number", None):
+                            raise HTTPException(**http_error(400, "wps_missing_insurance_number_for_employee", request))
+                        if not getattr(entry, "visa_status", None):
+                            raise HTTPException(**http_error(400, "wps_missing_visa_status_for_employee", request))
 
                 emp_name = f"{entry.first_name} {entry.last_name}".strip()
     
@@ -546,11 +559,16 @@ def saudization_report(branch_id: Optional[int] = None, current_user=Depends(get
             saudi = int(br.saudi or 0)
             pct = round((saudi / total * 100), 1) if total > 0 else 0
 
-            if pct >= 40: band = "بلاتيني"
-            elif pct >= 26: band = "أخضر مرتفع"
-            elif pct >= 16: band = "أخضر منخفض"
-            elif pct >= 10: band = "أصفر"
-            else: band = "أحمر"
+            if pct >= 40:
+                band = "بلاتيني"
+            elif pct >= 26:
+                band = "أخضر مرتفع"
+            elif pct >= 16:
+                band = "أخضر منخفض"
+            elif pct >= 10:
+                band = "أصفر"
+            else:
+                band = "أحمر"
 
             results.append({
                 "branch_id": br.id,
@@ -587,6 +605,7 @@ def settle_end_of_service(body: EOSSettlementRequest, request: Request, current_
     تسوية نهاية الخدمة — إنشاء قيد محاسبي وتسجيل المبلغ
     يشمل: مكافأة نهاية الخدمة + رصيد إجازات + راتب مستحق
     """
+    idempotency_key = require_idempotency_key(request, operation="end of service settlement")
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
     user_id = current_user.get("user_id") if isinstance(current_user, dict) else current_user.id
     with transactional(company_id) as db:
@@ -721,6 +740,7 @@ def settle_end_of_service(body: EOSSettlementRequest, request: Request, current_
                     exchange_rate=1.0,
                     source="eos_settlement",
                     source_id=body.employee_id,
+                    idempotency_key=f"eos_settlement:{body.employee_id}:{idempotency_key}",
                     lines=lines,
                     user_id=user_id
                 )

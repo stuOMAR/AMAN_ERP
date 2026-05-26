@@ -28,9 +28,9 @@ try:
 except Exception:  # pragma: no cover - bcrypt always available in test env
     pass
 
-from fastapi.testclient import TestClient
-from main import app
-from database import get_db_connection
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
+from database import get_db_connection  # noqa: E402
 
 DB_URL = os.environ.get(
     "AMAN_TEST_DB_URL",

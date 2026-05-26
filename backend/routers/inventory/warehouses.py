@@ -3,7 +3,7 @@ Inventory Module - Warehouses CRUD + Current Stock
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from decimal import Decimal
@@ -356,12 +356,36 @@ def get_warehouse_current_stock(id: int, current_user: dict = Depends(get_curren
             raise HTTPException(**http_error(404, "warehouse_not_found"))
 
         result = db.execute(text("""
-            SELECT p.id, p.product_name, p.product_code, i.quantity, u.unit_name
-            FROM inventory i
-            JOIN products p ON i.product_id = p.id
-            LEFT JOIN product_units u ON p.unit_id = u.id
-            WHERE i.warehouse_id = :id AND i.quantity != 0
-            ORDER BY p.product_name
+            WITH stock AS (
+                SELECT p.id,
+                       p.product_name,
+                       p.product_code,
+                       i.quantity,
+                       COALESCE(i.reserved_quantity, 0) AS reserved_quantity,
+                       COALESCE(i.damaged_quantity, 0) AS damaged_quantity,
+                       COALESCE(
+                           i.available_quantity,
+                           GREATEST(i.quantity - COALESCE(i.reserved_quantity, 0) - COALESCE(i.damaged_quantity, 0), 0)
+                       ) AS available_quantity,
+                       COALESCE(p.reorder_level, 0) AS reorder_level,
+                       u.unit_name
+                FROM inventory i
+                JOIN products p ON i.product_id = p.id
+                LEFT JOIN product_units u ON p.unit_id = u.id
+                WHERE i.warehouse_id = :id AND i.quantity != 0
+            )
+            SELECT *,
+                   CASE
+                       WHEN available_quantity < 0 THEN 'negative'
+                       WHEN available_quantity <= 0 THEN 'out_of_stock'
+                       WHEN reorder_level > 0 AND available_quantity <= reorder_level THEN 'low'
+                       ELSE 'good'
+                   END AS stock_status,
+                   (available_quantity > 0) AS has_available_stock,
+                   (available_quantity < 0) AS has_negative_available,
+                   (reorder_level > 0 AND available_quantity > 0 AND available_quantity <= reorder_level) AS is_low_stock
+            FROM stock
+            ORDER BY product_name
         """), {"id": id}).fetchall()
 
         return [
@@ -370,6 +394,14 @@ def get_warehouse_current_stock(id: int, current_user: dict = Depends(get_curren
                 "product_name": row.product_name,
                 "product_code": row.product_code,
                 "quantity": str(row.quantity),
+                "reserved_quantity": str(row.reserved_quantity),
+                "damaged_quantity": str(row.damaged_quantity),
+                "available_quantity": str(row.available_quantity),
+                "reorder_level": str(row.reorder_level),
+                "stock_status": row.stock_status,
+                "has_available_stock": row.has_available_stock,
+                "has_negative_available": row.has_negative_available,
+                "is_low_stock": row.is_low_stock,
                 "unit_name": row.unit_name or "قطعة"
             }
             for row in result

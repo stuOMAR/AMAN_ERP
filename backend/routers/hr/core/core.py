@@ -2,26 +2,17 @@
 
 Mounted under the parent router via core/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import List, Optional, Any, Dict
-from routers.roles import DEFAULT_ROLES
+from typing import Optional, Any
 from pydantic import BaseModel
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
+from decimal import Decimal
 import logging
-from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from repositories import EmployeeRepository
-from utils.permissions import require_permission, validate_branch_access, check_permission, require_module
-from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.audit import log_activity
-from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.permissions import check_permission, require_module
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
@@ -70,6 +61,8 @@ class PayslipGenerateRequest(BaseModel):
     employee_id: int
     month: int
     year: int
+    submitted_grand_total: Optional[Decimal] = None
+
 
 
 class JobOpeningCreate(BaseModel):

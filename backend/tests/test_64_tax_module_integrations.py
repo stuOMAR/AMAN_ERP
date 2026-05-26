@@ -5,8 +5,6 @@ introduced in the tax module fix plan.
 """
 from decimal import Decimal
 
-import pytest
-from fastapi import HTTPException
 
 from utils.tax_precision import money_str, rate_str, serialize_tax_row
 

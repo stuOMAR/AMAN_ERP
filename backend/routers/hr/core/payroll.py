@@ -4,24 +4,22 @@ Mounted under the parent router via core/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error, i18n_message
+from utils.tax_precision import require_idempotency_key
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from routers.roles import DEFAULT_ROLES
-from pydantic import BaseModel
-from datetime import date, datetime
+from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from database import get_db_connection, hash_password
+from database import get_db_connection
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from repositories import EmployeeRepository
-from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission, validate_branch_access, check_permission, require_module
-from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
+from utils.permissions import branch_scope_filter, require_permission, require_sensitive_permission
+from utils.permissions import has_pii_access, mask_pii, mask_pii_list, PAYROLL_PII_FIELDS
 from utils.accounting import get_mapped_account_id, get_base_currency
 import calendar as cal_module
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
-from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
+from schemas.hr import LoanCreate, LoanResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.treasury_balance import recalc_treasury_from_gl
 
@@ -57,7 +55,153 @@ def _expected_working_days(start, end, work_days_iso: set) -> int:
 
 router = APIRouter()
 
-from .core import PayslipGenerateRequest, _D2, _dec
+from .core import PayslipGenerateRequest, _D2, _dec  # noqa: E402
+
+def _single_payslip_period(data: PayslipGenerateRequest) -> tuple[str, str, str]:
+    last_day = cal_module.monthrange(data.year, data.month)[1]
+    start_date = f"{data.year}-{data.month:02d}-01"
+    end_date = f"{data.year}-{data.month:02d}-{last_day}"
+    period_name = f"Payroll {data.month}/{data.year}"
+    return start_date, end_date, period_name
+
+
+def _calculate_single_payslip(conn, request: Request, data: PayslipGenerateRequest, start_date: str, end_date: str) -> Dict[str, Any]:
+    emp = conn.execute(text("""
+        SELECT e.id, e.salary,
+               COALESCE(e.salary, 0) as basic_salary,
+               COALESCE(e.housing_allowance, 0) as housing_allowance,
+               COALESCE(e.transport_allowance, 0) as transport_allowance,
+               COALESCE(e.other_allowances, 0) as other_allowances
+        FROM employees e
+        WHERE e.id = :id
+    """), {"id": data.employee_id}).fetchone()
+
+    if not emp:
+        raise HTTPException(**http_error(404, "employee_not_found", request))
+
+    basic = _dec(emp.basic_salary)
+    housing = _dec(emp.housing_allowance)
+    transport = _dec(emp.transport_allowance)
+    other = _dec(emp.other_allowances)
+
+    gosi_settings = conn.execute(text(
+        "SELECT * FROM gosi_settings WHERE is_active = TRUE ORDER BY id DESC LIMIT 1"
+    )).fetchone()
+    gosi_max_sal = Decimal('45000')
+    emp_rate = Decimal('9.75')
+    empr_rate = Decimal('11.75')
+    occ_rate = Decimal('2.00')
+    if gosi_settings:
+        if gosi_settings.max_contributable_salary is not None:
+            gosi_max_sal = _dec(gosi_settings.max_contributable_salary)
+        if gosi_settings.employee_share_percentage is not None:
+            emp_rate = _dec(gosi_settings.employee_share_percentage)
+        if gosi_settings.employer_share_percentage is not None:
+            empr_rate = _dec(gosi_settings.employer_share_percentage)
+        occ_raw = getattr(gosi_settings, "occupational_hazard_percentage", None)
+        if occ_raw is not None:
+            occ_rate = _dec(occ_raw)
+
+    contributable = min(basic + housing, gosi_max_sal)
+    gosi_emp = (contributable * emp_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
+    gosi_empr = (contributable * (empr_rate + occ_rate) / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
+
+    overtime_total = conn.execute(text("""
+        SELECT COALESCE(SUM(calculated_amount), 0)
+        FROM overtime_requests
+        WHERE employee_id = :eid
+          AND status = 'approved'
+          AND overtime_date >= :start
+          AND overtime_date <= :end
+    """), {"eid": data.employee_id, "start": start_date, "end": end_date}).scalar() or 0
+    overtime_amount = _dec(overtime_total)
+
+    violation_total = conn.execute(text("""
+        SELECT COALESCE(SUM(penalty_amount), 0)
+        FROM employee_violations
+        WHERE employee_id = :eid
+          AND deduct_from_salary = TRUE
+          AND status = 'open'
+          AND payroll_period_id IS NULL
+    """), {"eid": data.employee_id}).scalar() or 0
+    violation_deduction = _dec(violation_total)
+
+    loan_deduction = Decimal('0')
+    active_loan = conn.execute(text("""
+        SELECT monthly_installment, amount, paid_amount
+        FROM employee_loans
+        WHERE employee_id = :eid AND status = 'active' AND paid_amount < amount
+        LIMIT 1
+    """), {"eid": data.employee_id}).fetchone()
+    if active_loan:
+        loan_deduction = min(
+            _dec(active_loan.monthly_installment),
+            _dec(active_loan.amount) - _dec(active_loan.paid_amount),
+        )
+
+    comp_earning = Decimal('0')
+    comp_deduction = Decimal('0')
+    components = conn.execute(text("""
+        SELECT esc.amount, sc.component_type, sc.calculation_type,
+               sc.percentage_of, sc.percentage_value
+        FROM employee_salary_components esc
+        JOIN salary_components sc ON esc.component_id = sc.id
+        WHERE esc.employee_id = :eid
+          AND esc.is_active = TRUE
+          AND sc.is_active = TRUE
+    """), {"eid": data.employee_id}).fetchall()
+    for comp in components:
+        if comp.calculation_type == 'percentage':
+            base_val = basic if (comp.percentage_of or 'basic') == 'basic' else (basic + housing)
+            amount = (_dec(comp.percentage_value) / Decimal('100') * base_val).quantize(_D2, ROUND_HALF_UP)
+        else:
+            amount = _dec(comp.amount)
+        if comp.component_type == 'earning':
+            comp_earning += amount
+        elif comp.component_type == 'deduction':
+            comp_deduction += amount
+
+    total_earnings = basic + housing + transport + other + comp_earning + overtime_amount
+    total_deductions = gosi_emp + violation_deduction + loan_deduction + comp_deduction
+    net = (total_earnings - total_deductions).quantize(_D2, ROUND_HALF_UP)
+
+    return {
+        "employee_id": data.employee_id,
+        "basic": basic,
+        "housing": housing,
+        "transport": transport,
+        "other": other,
+        "comp_earning": comp_earning,
+        "comp_deduction": comp_deduction,
+        "overtime": overtime_amount,
+        "gosi_emp": gosi_emp,
+        "gosi_empr": gosi_empr,
+        "violation": violation_deduction,
+        "loan": loan_deduction,
+        "deductions": total_deductions,
+        "total_earnings": total_earnings,
+        "net": net,
+    }
+
+
+def _draft_payslip_journal_lines(calc: Dict[str, Any]) -> List[Dict[str, str]]:
+    lines = [
+        {"side": "debit", "account_key": "acc_map_salaries_exp", "amount": str(calc["total_earnings"].quantize(_D2, ROUND_HALF_UP))},
+    ]
+    if calc["gosi_empr"] > Decimal('0'):
+        lines.append({"side": "debit", "account_key": "acc_map_gosi_expense", "amount": str(calc["gosi_empr"])})
+    total_gosi = calc["gosi_emp"] + calc["gosi_empr"]
+    if total_gosi > Decimal('0'):
+        lines.append({"side": "credit", "account_key": "acc_map_gosi_payable", "amount": str(total_gosi)})
+    if calc["loan"] > Decimal('0'):
+        lines.append({"side": "credit", "account_key": "acc_map_loans_adv", "amount": str(calc["loan"])})
+    if calc["violation"] > Decimal('0'):
+        lines.append({"side": "credit", "account_key": "acc_map_violations", "amount": str(calc["violation"])})
+    if calc["comp_deduction"] > Decimal('0'):
+        lines.append({"side": "credit", "account_key": "acc_map_other_deductions", "amount": str(calc["comp_deduction"])})
+    lines.append({"side": "credit", "account_key": "acc_map_bank", "amount": str(calc["net"])})
+    return lines
+
 
 @router.get("/payroll-periods", response_model=List[PayrollPeriodResponse], dependencies=[Depends(require_permission(["hr.view", "hr.payroll.view"]))])
 def list_payroll_periods(branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
@@ -277,7 +421,7 @@ def approve_loan(request: Request, loan_id: int, current_user: UserResponse = De
         
         if acc_loan and acc_cash:
             from utils.accounting import generate_sequential_number
-            je_num = generate_sequential_number(conn, f"LOAN-{datetime.now().year}", "journal_entries", "entry_number")
+            generate_sequential_number(conn, f"LOAN-{datetime.now().year}", "journal_entries", "entry_number")
             base_currency = get_base_currency(conn)
             user_id = current_user.get("id") if isinstance(current_user, dict) else current_user.id
             
@@ -957,7 +1101,7 @@ def post_payroll(request: Request, period_id: int, current_user: UserResponse = 
 
         # 8. Notify HR admins about payroll posting
         try:
-            emp_count = conn.execute(text("SELECT COUNT(*) FROM payroll_entries WHERE period_id = :id"), {"id": period_id}).scalar() or 0
+            conn.execute(text("SELECT COUNT(*) FROM payroll_entries WHERE period_id = :id"), {"id": period_id}).scalar() or 0
             conn.execute(text("""
                 INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
                 SELECT DISTINCT u.id, 'payroll', :title, :message, :link, FALSE, NOW()
@@ -1056,14 +1200,60 @@ def get_payslip_detail(request: Request,
         return data
 
 
+@router.post("/payslips/preview", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
+def preview_single_payslip(request: Request, data: PayslipGenerateRequest, company_id: str = Depends(get_current_user_company)):
+    """Preview Single Payslip."""
+    start_date, end_date, period_name = _single_payslip_period(data)
+    with transactional(company_id) as conn:
+        calc = _calculate_single_payslip(conn, request, data, start_date, end_date)
+        submitted_matches = None
+        if data.submitted_grand_total is not None:
+            submitted_matches = abs(calc["net"] - data.submitted_grand_total) <= _D2
+
+        return {
+            "employee_id": data.employee_id,
+            "month": data.month,
+            "year": data.year,
+            "period_name": period_name,
+            "basic_salary": str(calc["basic"]),
+            "housing_allowance": str(calc["housing"]),
+            "transport_allowance": str(calc["transport"]),
+            "other_allowances": str(calc["other"]),
+            "salary_components_earning": str(calc["comp_earning"]),
+            "salary_components_deduction": str(calc["comp_deduction"]),
+            "overtime_amount": str(calc["overtime"]),
+            "gosi_employee_share": str(calc["gosi_emp"]),
+            "gosi_employer_share": str(calc["gosi_empr"]),
+            "violation_deduction": str(calc["violation"]),
+            "loan_deduction": str(calc["loan"]),
+            "total_earnings": str(calc["total_earnings"].quantize(_D2, ROUND_HALF_UP)),
+            "deductions": str(calc["deductions"]),
+            "net_salary": str(calc["net"]),
+            "submitted_total_matches": submitted_matches,
+            "draft_journal_lines": _draft_payslip_journal_lines(calc),
+        }
+
+
 @router.post("/payslips/generate", dependencies=[Depends(require_permission("hr.manage"))], response_model=Dict[str, Any])
 def generate_single_payslip(request: Request, data: PayslipGenerateRequest, company_id: str = Depends(get_current_user_company)):
     """Generate Single Payslip."""
+    idempotency_key = require_idempotency_key(request, operation="generate payslip")
     with transactional(company_id) as conn:
-        last_day = cal_module.monthrange(data.year, data.month)[1]
-        start_date = f"{data.year}-{data.month:02d}-01"
-        end_date = f"{data.year}-{data.month:02d}-{last_day}"
-        period_name = f"Payroll {data.month}/{data.year}"
+        # Check idempotency replay
+        existing_entry = conn.execute(text("""
+            SELECT id FROM payroll_entries
+            WHERE idempotency_key = :key
+            LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing_entry:
+            return {
+                "message": i18n_message("payslip_generated_success", request),
+                "id": existing_entry.id,
+                "net_salary": str(existing_entry.net_salary),
+                "replayed": True,
+            }
+
+        start_date, end_date, period_name = _single_payslip_period(data)
 
         period = conn.execute(text("""
             SELECT id FROM payroll_periods
@@ -1079,20 +1269,6 @@ def generate_single_payslip(request: Request, data: PayslipGenerateRequest, comp
         else:
             period_id = period.id
 
-        emp = conn.execute(text("""
-            SELECT e.id, e.salary,
-                   COALESCE(ss.basic_salary, e.salary, 0) as basic_salary,
-                   COALESCE(ss.housing_allowance, 0) as housing_allowance,
-                   COALESCE(ss.transport_allowance, 0) as transport_allowance,
-                   COALESCE(ss.other_allowances, 0) as other_allowances
-            FROM employees e
-            LEFT JOIN salary_structures ss ON e.salary_structure_id = ss.id
-            WHERE e.id = :id
-        """), {"id": data.employee_id}).fetchone()
-
-        if not emp:
-            raise HTTPException(**http_error(404, "employee_not_found", request))
-
         existing = conn.execute(text(
             "SELECT id FROM payroll_entries WHERE period_id=:pid AND employee_id=:eid"
         ), {"pid": period_id, "eid": data.employee_id}).fetchone()
@@ -1100,78 +1276,32 @@ def generate_single_payslip(request: Request, data: PayslipGenerateRequest, comp
         if existing:
             raise HTTPException(**http_error(400, "payslip_already_exists", request))
 
-        basic = _dec(emp.basic_salary)
-        housing = _dec(emp.housing_allowance)
-        transport = _dec(emp.transport_allowance)
-        other = _dec(emp.other_allowances)
-        gross = basic + housing + transport + other
+        calc = _calculate_single_payslip(conn, request, data, start_date, end_date)
+        if data.submitted_grand_total is not None:
+            if abs(calc["net"] - data.submitted_grand_total) > _D2:
+                raise HTTPException(status_code=422, detail="submitted_grand_total_mismatch")
 
-        # Calculate GOSI deductions
-        # T10.2 #185: must use *active* settings and the actual column names
-        # (`employee_share_percentage` / `employer_share_percentage`) to match
-        # `generate_payroll` and the gosi_settings schema. Employer share
-        # excludes occupational hazard, which is added separately below.
-        gosi_settings = conn.execute(text(
-            "SELECT * FROM gosi_settings WHERE is_active = TRUE ORDER BY id DESC LIMIT 1"
-        )).fetchone()
-        gosi_emp = Decimal('0')
-        gosi_empr = Decimal('0')
-        if gosi_settings:
-            gosi_max_sal = _dec(gosi_settings.max_contributable_salary) if gosi_settings.max_contributable_salary else Decimal('45000')
-            emp_rate = _dec(gosi_settings.employee_share_percentage) if gosi_settings.employee_share_percentage else Decimal('9.75')
-            empr_rate = _dec(gosi_settings.employer_share_percentage) if gosi_settings.employer_share_percentage else Decimal('11.75')
-            occ_rate = _dec(getattr(gosi_settings, "occupational_hazard_percentage", None)) if getattr(gosi_settings, "occupational_hazard_percentage", None) else Decimal('2.00')
-            contributable = min(basic + housing, gosi_max_sal)
-            gosi_emp = (contributable * emp_rate / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
-            gosi_empr = (contributable * (empr_rate + occ_rate) / Decimal('100')).quantize(_D2, ROUND_HALF_UP)
-
-        # Calculate violation deductions for the month
-        violation_total = conn.execute(text("""
-            SELECT COALESCE(SUM(deduction_amount), 0) FROM employee_violations
-            WHERE employee_id = :eid AND violation_date BETWEEN :start AND :end AND status = 'approved'
-        """), {"eid": data.employee_id, "start": start_date, "end": end_date}).scalar() or 0
-        violation_deduction = _dec(violation_total)
-
-        # Calculate loan deductions
-        loan_deduction = Decimal('0')
-        active_loan = conn.execute(text("""
-            SELECT monthly_deduction FROM employee_loans
-            WHERE employee_id = :eid AND status = 'active' AND paid_amount < amount
-            LIMIT 1
-        """), {"eid": data.employee_id}).fetchone()
-        if active_loan:
-            loan_deduction = _dec(active_loan.monthly_deduction)
-
-        # Calculate salary component earnings/deductions
-        comp_earning = Decimal('0')
-        comp_deduction = Decimal('0')
-        components = conn.execute(text("""
-            SELECT sc.amount, sc.component_type
-            FROM salary_components sc
-            WHERE sc.employee_id = :eid AND sc.is_active = TRUE
-        """), {"eid": data.employee_id}).fetchall()
-        for comp in components:
-            if comp.component_type == 'earning':
-                comp_earning += _dec(comp.amount)  # pyre-ignore
-            elif comp.component_type == 'deduction':
-                comp_deduction += _dec(comp.amount)  # pyre-ignore
-
-        total_deductions = gosi_emp + violation_deduction + loan_deduction + comp_deduction  # pyre-ignore
-        net = gross + comp_earning - total_deductions  # pyre-ignore
-
-        conn.execute(text("""
+        inserted = conn.execute(text("""
             INSERT INTO payroll_entries
             (period_id,employee_id,basic_salary,housing_allowance,transport_allowance,other_allowances,
              salary_components_earning,salary_components_deduction,overtime_amount,
-             gosi_employee_share,gosi_employer_share,violation_deduction,loan_deduction,deductions,net_salary)
-            VALUES (:pid,:eid,:basic,:housing,:transport,:other,:comp_earn,:comp_ded,0,:gosi_emp,:gosi_empr,:violation,:loan,:deductions,:net)
-        """), {"pid": period_id, "eid": data.employee_id, "basic": str(basic),
-               "housing": str(housing), "transport": str(transport), "other": str(other),
-               "comp_earn": str(comp_earning), "comp_ded": str(comp_deduction),
-               "gosi_emp": str(gosi_emp), "gosi_empr": str(gosi_empr),
-               "violation": str(violation_deduction), "loan": str(loan_deduction),
-               "deductions": str(total_deductions), "net": str(net)})
-        return {"message": i18n_message("payslip_generated_success", request)}
+             gosi_employee_share,gosi_employer_share,violation_deduction,loan_deduction,deductions,net_salary, idempotency_key)
+            VALUES (:pid,:eid,:basic,:housing,:transport,:other,:comp_earn,:comp_ded,:overtime,:gosi_emp,:gosi_empr,:violation,:loan,:deductions,:net, :idempotency_key)
+            RETURNING id
+        """), {"pid": period_id, "eid": data.employee_id, "basic": str(calc["basic"]),
+               "housing": str(calc["housing"]), "transport": str(calc["transport"]), "other": str(calc["other"]),
+               "comp_earn": str(calc["comp_earning"]), "comp_ded": str(calc["comp_deduction"]),
+               "overtime": str(calc["overtime"]),
+               "gosi_emp": str(calc["gosi_emp"]), "gosi_empr": str(calc["gosi_empr"]),
+               "violation": str(calc["violation"]), "loan": str(calc["loan"]),
+               "deductions": str(calc["deductions"]), "net": str(calc["net"]),
+               "idempotency_key": idempotency_key}).fetchone()
+        return {
+            "message": i18n_message("payslip_generated_success", request),
+            "id": inserted.id if inserted else None,
+            "net_salary": str(calc["net"]),
+            "replayed": False,
+        }
 
 
 # --- Recruitment ---

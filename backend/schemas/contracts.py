@@ -1,4 +1,4 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 from typing import List, Optional
 from datetime import date, datetime
 from decimal import Decimal
@@ -48,6 +48,18 @@ class ContractUpdate(BaseModel):
     notes: Optional[str] = None
     branch_id: Optional[int] = None
     items: Optional[List[ContractItemCreate]] = None
+
+class ContractPreviewRequest(ContractBase):
+    items: List[ContractItemCreate]
+
+class ContractBillingCyclePreviewRequest(BaseModel):
+    contract_id: int
+    billing_start: Optional[date] = None
+    cycles: int = Field(default=1, ge=1, le=12)
+
+class ContractInvoiceGenerateRequest(BaseModel):
+    submitted_grand_total: Optional[Decimal] = None
+    billing_start: Optional[date] = None
 
 class ContractAmendmentCreate(BaseModel):
     """Typed schema for contract amendments — replaces raw dict."""

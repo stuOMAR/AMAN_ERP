@@ -24,10 +24,14 @@ depends_on = None
 
 
 def upgrade():
-    op.drop_column("marketing_campaigns", "sent_count")
-    op.drop_column("marketing_campaigns", "open_count")
-    op.drop_column("marketing_campaigns", "click_count")
-    op.drop_column("marketing_campaigns", "conversion_count")
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    tables = inspector.get_table_names()
+    if "marketing_campaigns" in tables:
+        columns = [c["name"] for c in inspector.get_columns("marketing_campaigns")]
+        for col in ["sent_count", "open_count", "click_count", "conversion_count"]:
+            if col in columns:
+                op.drop_column("marketing_campaigns", col)
 
 
 def downgrade():

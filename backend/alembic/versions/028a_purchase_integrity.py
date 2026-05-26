@@ -5,7 +5,6 @@ Revises: 025l_zakat_branch_scope
 Create Date: 2026-05-10
 """
 from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers
 revision = '028a_purchase_integrity'

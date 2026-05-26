@@ -5,13 +5,14 @@ Data Import / Export Router - DI-001, DI-002
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import require_permission
+from utils.tax_precision import require_idempotency_key
 import logging
 import io
+import json
 from datetime import datetime
 
 logger = logging.getLogger("aman.data_import")
@@ -97,6 +98,8 @@ def download_template(entity_type: str, request: Request, current_user=Depends(g
     example = {
         "accounts": "1001,حساب نقدي,asset,,true,,1,SAR",
         "parties": "شركة أمان,customer,,0500000000,info@aman.com,الرياض,الرياض,50000",
+        "customers": "عميل تجريبي,CUST-001,300000000000003,0500000000,customer@example.com,الرياض,الرياض,50000",
+        "suppliers": "مورد تجريبي,SUP-001,300000000000004,0500000001,supplier@example.com,جدة,جدة,25000",
         "products": "لابتوب,PROD-001,لابتوب 15 بوصة,إلكترونيات,قطعة,3000,4500,10,",
         "employees": "EMP-001,أحمد محمد,,1,مدير,2024-01-01,15000,,",
     }
@@ -109,7 +112,7 @@ def download_template(entity_type: str, request: Request, current_user=Depends(g
     )
 
 
-@router.post("/preview", dependencies=[Depends(require_permission(["data_import.create", "data_import.manage"]))])
+@router.post("/preview", dependencies=[Depends(require_permission(["data_import.create", "data_import.execute", "data_import.manage"]))])
 async def preview_import(
     request: Request,
     file: UploadFile = File(...),
@@ -128,15 +131,28 @@ async def preview_import(
     filename = file.filename.lower()
 
     # SEC-FIX-013/014: Validate file size and extension
-    from utils.sql_safety import validate_file_size, validate_file_extension, MAX_IMPORT_FILE_SIZE, ALLOWED_IMPORT_EXTENSIONS
-    validate_file_size(content, MAX_IMPORT_FILE_SIZE, "ملف الاستيراد")
-    validate_file_extension(filename, ALLOWED_IMPORT_EXTENSIONS, "ملف الاستيراد")
+    from utils.sql_safety import (
+        ALLOWED_IMPORT_EXTENSIONS,
+        MAX_IMPORT_FILE_SIZE,
+        validate_file_extension,
+        validate_file_mime_and_signature,
+        validate_file_size,
+    )
+    validate_file_size(content, MAX_IMPORT_FILE_SIZE, "ملف الاستيراد", request)
+    validate_file_extension(filename, ALLOWED_IMPORT_EXTENSIONS, "ملف الاستيراد", request)
+    validate_file_mime_and_signature(
+        filename,
+        file.content_type or "",
+        content,
+        "ملف الاستيراد",
+        request,
+    )
 
     try:
         rows = _parse_file(content, filename)
     except Exception:
         logger.exception("Error parsing import file")
-        raise HTTPException(**http_error(400, "file_read_error"))
+        raise HTTPException(**http_error(400, "file_read_error", request))
 
     if not rows:
         raise HTTPException(**http_error(400, "file_empty"))
@@ -179,17 +195,18 @@ async def preview_import(
     }
 
 
-@router.post("/execute", dependencies=[Depends(require_permission(["data_import.create", "data_import.manage"]))])
+@router.post("/execute", dependencies=[Depends(require_permission(["data_import.create", "data_import.execute", "data_import.manage"]))])
 async def execute_import(
     request: Request,
     file: UploadFile = File(...),
     entity_type: str = Query(...),
-    skip_errors: bool = Query(True),
+    skip_errors: bool = Query(False),
     current_user=Depends(get_current_user)
 ):
     """
     تنفيذ الاستيراد الفعلي
     """
+    idempotency_key = require_idempotency_key(request, operation="data import execute")
     if entity_type not in IMPORT_CONFIGS:
         raise HTTPException(**http_error(400, "unsupported_entity_type", request, type=entity_type))
 
@@ -205,21 +222,47 @@ async def execute_import(
     filename = file.filename.lower()
 
     # SEC-FIX-013/014: Validate file size and extension
-    from utils.sql_safety import validate_file_size, validate_file_extension, MAX_IMPORT_FILE_SIZE, ALLOWED_IMPORT_EXTENSIONS
-    validate_file_size(content, MAX_IMPORT_FILE_SIZE, "ملف الاستيراد")
-    validate_file_extension(filename, ALLOWED_IMPORT_EXTENSIONS, "ملف الاستيراد")
+    from utils.sql_safety import (
+        ALLOWED_IMPORT_EXTENSIONS,
+        MAX_IMPORT_FILE_SIZE,
+        validate_file_extension,
+        validate_file_mime_and_signature,
+        validate_file_size,
+    )
+    validate_file_size(content, MAX_IMPORT_FILE_SIZE, "ملف الاستيراد", request)
+    validate_file_extension(filename, ALLOWED_IMPORT_EXTENSIONS, "ملف الاستيراد", request)
+    validate_file_mime_and_signature(
+        filename,
+        file.content_type or "",
+        content,
+        "ملف الاستيراد",
+        request,
+    )
 
     try:
         rows = _parse_file(content, filename)
     except Exception:
         logger.exception("Error parsing import file")
-        raise HTTPException(**http_error(400, "file_read_error"))
+        raise HTTPException(**http_error(400, "file_read_error", request))
 
     if not rows:
         raise HTTPException(**http_error(400, "file_empty"))
 
     with transactional(current_user.company_id) as db:
         try:
+            existing = _find_completed_import_by_idempotency_key(db, idempotency_key)
+            if existing:
+                return {
+                    "message": i18n_message("import_successful", request),
+                    "idempotent": True,
+                    "policy": existing.get("policy", "all_or_nothing"),
+                    "inserted": existing.get("inserted", 0),
+                    "updated": existing.get("updated", 0),
+                    "skipped": existing.get("skipped", 0),
+                    "total": existing.get("total", 0),
+                    "errors": [],
+                }
+
             inserted = 0
             updated = 0
             skipped = 0
@@ -252,7 +295,7 @@ async def execute_import(
                     unique_key = config["unique_key"]
                     if unique_key in params:
                         # Check if exists
-                        existing = db.execute(text( # noqa: sql-lint
+                        existing = db.execute(text( # noqa
                                     f"""
                             SELECT id FROM {config['table']} WHERE {unique_key} = :ukey
                         """), {"ukey": params[unique_key]}).fetchone()
@@ -261,7 +304,7 @@ async def execute_import(
                             # Update
                             set_clause = ", ".join([f"{c} = :{c}" for c in row_cols if c != unique_key])
                             if set_clause:
-                                db.execute(text( # noqa: sql-lint
+                                db.execute(text( # noqa
                                             f"""
                                     UPDATE {config['table']} SET {set_clause} WHERE {unique_key} = :{unique_key}
                                 """), params)
@@ -270,13 +313,13 @@ async def execute_import(
                                 skipped += 1
                         else:
                             # Insert
-                            db.execute(text( # noqa: sql-lint
+                            db.execute(text( # noqa
                                         f"""
                                 INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
                             """), params)
                             inserted += 1
                     else:
-                        db.execute(text( # noqa: sql-lint
+                        db.execute(text( # noqa
                                     f"""
                             INSERT INTO {config['table']} ({col_names}) VALUES ({col_params})
                         """), params)
@@ -297,12 +340,22 @@ async def execute_import(
             try:
                 log_activity(db, current_user.id, current_user.username, "import",
                              config["table"], "batch",
-                             {"entity_type": entity_type, "inserted": inserted, "updated": updated, "skipped": skipped})
+                             {
+                                 "entity_type": entity_type,
+                                 "inserted": inserted,
+                                 "updated": updated,
+                                 "skipped": skipped,
+                                 "total": len(rows),
+                                 "policy": "skip_invalid_rows" if skip_errors else "all_or_nothing",
+                                 "idempotency_key": idempotency_key,
+                             })
             except Exception:
                 pass
     
             return {
                 "message": i18n_message("import_successful", request),
+                "idempotent": False,
+                "policy": "skip_invalid_rows" if skip_errors else "all_or_nothing",
                 "inserted": inserted,
                 "updated": updated,
                 "skipped": skipped,
@@ -353,7 +406,7 @@ def export_data(
             
             col_list = ", ".join(col_list_filtered)
     
-            rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall() # noqa: sql-lint
+            rows = db.execute(text(f"SELECT {col_list} FROM {config['table']}")).fetchall() # noqa
             data = [dict(r._mapping) for r in rows]
     
             if format == "json":
@@ -435,3 +488,36 @@ def _csv_escape(value: str) -> str:
     if "," in value or '"' in value or "\n" in value:
         return f'"{value.replace(chr(34), chr(34)+chr(34))}"'
     return value
+
+
+def _find_completed_import_by_idempotency_key(db, idempotency_key: str) -> dict | None:
+    """Return a prior import audit payload for the same idempotency key."""
+    row = db.execute(
+        text("""
+            SELECT payload AS details
+              FROM audit_outbox
+             WHERE action = 'import'
+               AND payload #>> '{legacy,idempotency_key}' = :key
+             UNION ALL
+            SELECT details
+              FROM audit_logs
+             WHERE action = 'import'
+               AND (
+                    details #>> '{legacy,idempotency_key}' = :key
+                    OR details ->> 'idempotency_key' = :key
+               )
+             LIMIT 1
+        """),
+        {"key": idempotency_key},
+    ).fetchone()
+    if not row:
+        return None
+    details = row[0]
+    if isinstance(details, str):
+        try:
+            details = json.loads(details)
+        except json.JSONDecodeError:
+            return {}
+    if not isinstance(details, dict):
+        return {}
+    return details.get("legacy", details)

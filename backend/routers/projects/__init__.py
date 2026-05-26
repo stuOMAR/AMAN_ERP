@@ -13,9 +13,11 @@ from .change_orders import router as _change_orders_router
 from .risks import router as _risks_router
 
 router = APIRouter(prefix="/projects", tags=['Projects'], dependencies=[Depends(require_module("projects"))])
-router.include_router(_core_router)
+# Static one-segment paths such as /timetracking must be registered before
+# core's /{project_id} route or FastAPI may treat them as project IDs.
 router.include_router(_timetracking_router)
 router.include_router(_resources_router)
+router.include_router(_core_router)
 router.include_router(_finance_router)
 router.include_router(_monitoring_router)
 router.include_router(_tasks_router)

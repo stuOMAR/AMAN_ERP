@@ -88,6 +88,7 @@ class ProductKitUpdate(BaseModel):
 
 @advanced_router.get("/variants", response_model=Dict[str, Any], dependencies=[Depends(require_permission("products.view"))])
 async def list_variants(
+    request: Request,
     product_id: Optional[int] = None,
     limit: int = Query(100, le=500),
     offset: int = 0,
@@ -205,6 +206,7 @@ async def update_variant(variant_id: int, data: ProductVariantUpdate, request: R
 
 @advanced_router.get("/bins", response_model=Dict[str, Any], dependencies=[Depends(require_permission("stock.view"))])
 async def list_bins(
+    request: Request,
     warehouse_id: Optional[int] = None,
     limit: int = Query(100, le=500),
     offset: int = 0,
@@ -301,6 +303,7 @@ async def update_bin(bin_id: int, data: BinLocationUpdate, request: Request, cur
 
 @advanced_router.get("/kits", response_model=Dict[str, Any], dependencies=[Depends(require_permission("products.view"))])
 async def list_kits(
+    request: Request,
     limit: int = Query(100, le=500),
     offset: int = 0,
     current_user: dict = Depends(get_current_user)
@@ -327,7 +330,7 @@ async def list_kits(
 
 
 @advanced_router.get("/kits/{kit_id}", response_model=Dict[str, Any], dependencies=[Depends(require_permission("products.view"))])
-async def get_kit(kit_id: int, current_user: dict = Depends(get_current_user)):
+async def get_kit(kit_id: int, request: Request, current_user: dict = Depends(get_current_user)):
     """Get Kit."""
     db = get_db_connection(current_user.company_id)
     try:

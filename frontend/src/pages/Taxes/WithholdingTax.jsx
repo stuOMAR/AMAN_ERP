@@ -12,10 +12,15 @@ import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import { useBranch } from '../../context/BranchContext'
 import DataTable from '../../components/common/DataTable'
+import { Decimal } from '../../utils/decimal'
 
 function makeIdempotencyKey(prefix) {
     if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
     return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+function sumMoney(rows, field) {
+    return rows.reduce((total, row) => total.add(row?.[field] || '0.00'), new Decimal(0)).toString()
 }
 
 export default function WithholdingTax() {
@@ -44,6 +49,7 @@ export default function WithholdingTax() {
     // Calculator state
     const [calcRateId, setCalcRateId] = useState('')
     const [calcSupplierId, setCalcSupplierId] = useState('')
+    const [calcPaymentId, setCalcPaymentId] = useState('')
     const [calcGross, setCalcGross] = useState('')
     const [calcResult, setCalcResult] = useState(null)
     const [calcLoading, setCalcLoading] = useState(false)
@@ -144,12 +150,12 @@ export default function WithholdingTax() {
     }
 
     const handleCreateTransaction = async () => {
-        if (!calcResult || !calcSupplierId || txSubmitting) return
+        if (!calcResult || !calcSupplierId || !calcPaymentId || txSubmitting) return
         try {
             setTxSubmitting(true)
             await externalAPI.createWhtTransaction({
                 invoice_id: null,
-                payment_id: null,
+                payment_id: parseInt(calcPaymentId),
                 supplier_id: parseInt(calcSupplierId),
                 wht_rate_id: parseInt(calcRateId),
                 gross_amount: String(calcGross),
@@ -158,6 +164,7 @@ export default function WithholdingTax() {
             setCalcResult(null)
             setCalcRateId('')
             setCalcSupplierId('')
+            setCalcPaymentId('')
             setCalcGross('')
             fetchTransactions()
         } catch (e) {
@@ -227,8 +234,8 @@ export default function WithholdingTax() {
     }
 
     // Summary stats
-    const totalWht = transactions.reduce((s, tx) => s + Number(tx.wht_amount || 0), 0);
-    const totalGross = transactions.reduce((s, tx) => s + Number(tx.gross_amount || 0), 0);
+    const totalWht = sumMoney(transactions, 'wht_amount');
+    const totalGross = sumMoney(transactions, 'gross_amount');
     const displayCurrency = transactions[0]?.currency || calcResult?.currency || currency
 
     const rateColumns = [
@@ -351,9 +358,20 @@ export default function WithholdingTax() {
                                 <input
                                     type="number"
                                     className="form-input"
-                                    placeholder="Supplier ID"
+                                    placeholder={t('wht.supplier_id')}
                                     value={calcSupplierId}
                                     onChange={(e) => setCalcSupplierId(e.target.value)}
+                                    min="1"
+                                />
+                            </div>
+                            <div className="form-group" style={{ flex: 1, minWidth: '160px', marginBottom: 0 }}>
+                                <label className="form-label">{t('wht.payment_id')}</label>
+                                <input
+                                    type="number"
+                                    className="form-input"
+                                    placeholder={t('wht.payment_id')}
+                                    value={calcPaymentId}
+                                    onChange={(e) => setCalcPaymentId(e.target.value)}
                                     min="1"
                                 />
                             </div>
@@ -407,7 +425,7 @@ export default function WithholdingTax() {
                                     <button
                                         className="btn btn-success"
                                         onClick={handleCreateTransaction}
-                                        disabled={txSubmitting || !currentBranch?.id || !calcSupplierId}
+                                        disabled={txSubmitting || !currentBranch?.id || !calcSupplierId || !calcPaymentId}
                                         style={{ marginRight: 'auto' }}
                                     >
                                         {txSubmitting ? t('wht.saving') : t('wht.create_transaction')}

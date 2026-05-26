@@ -4,7 +4,7 @@ Feature 023 — T035.  POST /sales/orders/{order_id}/invoice
 """
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from fastapi import APIRouter, Depends, Header, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 
@@ -30,7 +30,6 @@ async def order_to_invoice(
 ):
     """Convert a confirmed sales order to a posted invoice (idempotent)."""
     from services.sales.order_to_invoice import convert_order_to_invoice as do_convert
-    import json
 
     body = {}
     try:

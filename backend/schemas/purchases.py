@@ -11,7 +11,7 @@ class PurchaseLineItem(BaseModel):
     description: str
     quantity: Decimal = Field(..., gt=0)
     unit_price: Decimal = Field(..., gt=0)
-    tax_rate: Decimal
+    tax_rate: Optional[Decimal] = None
     tax_rate_id: Optional[int] = None
     discount: Decimal = Field(default=Decimal("0"), ge=0)
     markup: Decimal = Decimal("0")
@@ -39,6 +39,9 @@ class PurchaseCreate(BaseModel):
     effect_type: str = "discount"
     effect_percentage: Decimal = Decimal("0")
     markup_amount: Decimal = Decimal("0")
+
+    # Backend authority verification
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class SupplierGroupCreate(BaseModel):
@@ -68,6 +71,9 @@ class POCreate(BaseModel):
     effect_type: str = "discount"
     effect_percentage: Decimal = Decimal("0")
     markup_amount: Decimal = Decimal("0")
+
+    # Backend authority verification
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class ReceiveItem(BaseModel):

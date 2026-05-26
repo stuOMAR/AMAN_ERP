@@ -3,7 +3,6 @@
 Feature 024 — T012.
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "024p_notifications_queue"
 down_revision = "024o_storage_quotas"
@@ -12,35 +11,35 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.create_table(
-        "notifications_queue",
-        sa.Column("id", sa.BigInteger(), primary_key=True, autoincrement=True),
-        sa.Column("tenant_id", sa.BigInteger(), nullable=False),
-        sa.Column("idempotency_key", sa.CHAR(32), nullable=False),
-        sa.Column("event_type", sa.String(64), nullable=False),
-        sa.Column("channel", sa.String(16), nullable=False),
-        sa.Column("recipient", sa.String(512), nullable=False),
-        sa.Column("template_code", sa.String(64), nullable=True),
-        sa.Column("locale", sa.CHAR(5), nullable=True),
-        sa.Column("payload", sa.JSON(), nullable=True),
-        sa.Column("state", sa.String(16), server_default="pending"),
-        sa.Column("attempts", sa.SmallInteger(), server_default="0"),
-        sa.Column("next_attempt_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("last_error", sa.Text(), nullable=True),
-        sa.Column("claimed_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("sent_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("dlq_at", sa.DateTime(timezone=True), nullable=True),
-        sa.Column("created_at", sa.DateTime(timezone=True), server_default=sa.func.clock_timestamp()),
-        sa.Column("updated_at", sa.DateTime(timezone=True), server_default=sa.func.clock_timestamp()),
-    )
-    op.create_index(
-        "uq_notif_inflight", "notifications_queue",
-        ["tenant_id", "idempotency_key"],
-        unique=True,
-        postgresql_where=sa.text("state IN ('pending','sending')"),
-    )
-    op.create_index("ix_notif_worker", "notifications_queue", ["channel", "state", "next_attempt_at"])
-    op.create_index("ix_notif_dlq", "notifications_queue", ["state", "dlq_at"])
+    op.execute("""
+        CREATE TABLE IF NOT EXISTS notifications_queue (
+            id BIGSERIAL PRIMARY KEY,
+            tenant_id BIGINT NOT NULL,
+            idempotency_key CHAR(32),
+            event_type VARCHAR(64) NOT NULL,
+            channel VARCHAR(16) NOT NULL,
+            recipient VARCHAR(512) NOT NULL,
+            template_code VARCHAR(64),
+            locale CHAR(5),
+            payload JSONB,
+            state VARCHAR(16) DEFAULT 'pending',
+            attempts SMALLINT DEFAULT 0,
+            next_attempt_at TIMESTAMPTZ,
+            last_error TEXT,
+            claimed_at TIMESTAMPTZ,
+            sent_at TIMESTAMPTZ,
+            dlq_at TIMESTAMPTZ,
+            created_at TIMESTAMPTZ DEFAULT clock_timestamp(),
+            updated_at TIMESTAMPTZ DEFAULT clock_timestamp()
+        );
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_notif_inflight
+            ON notifications_queue (tenant_id, idempotency_key)
+            WHERE state IN ('pending', 'sending') AND idempotency_key IS NOT NULL;
+        CREATE INDEX IF NOT EXISTS ix_notif_worker
+            ON notifications_queue (channel, state, next_attempt_at);
+        CREATE INDEX IF NOT EXISTS ix_notif_dlq
+            ON notifications_queue (state, dlq_at);
+    """)
 
 
 def downgrade() -> None:

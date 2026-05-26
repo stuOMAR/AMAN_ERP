@@ -145,9 +145,9 @@ export default function PeriodComparison() {
         return formatNumber(n)
     }
 
-    const changeColor = (val) => {
-        if (val > 0) return 'text-success'
-        if (val < 0) return 'text-danger'
+    const changeColor = (direction) => {
+        if (direction === 'increase') return 'text-success'
+        if (direction === 'decrease') return 'text-danger'
         return ''
     }
 
@@ -262,7 +262,7 @@ export default function PeriodComparison() {
                                                 </div>
                                                 <div className="col">
                                                     <div className="small text-muted">{t('comparison.net_income')}</div>
-                                                    <div className={`fw-bold ${s.net_income >= 0 ? 'text-success' : 'text-danger'}`}>
+                                                    <div className={`fw-bold ${s.result_type === 'loss' ? 'text-danger' : 'text-success'}`}>
                                                         {formatNum(s.net_income)} <small>{currency}</small>
                                                     </div>
                                                 </div>
@@ -348,11 +348,11 @@ export default function PeriodComparison() {
                                                         {row.periods.map((val, pi) => (
                                                             <td key={pi} className="text-end">{formatNum(val)}</td>
                                                         ))}
-                                                        <td className={`text-end fw-bold ${changeColor(row.change)}`}>
-                                                            {row.change > 0 ? '+' : ''}{formatNum(row.change)}
+                                                        <td className={`text-end fw-bold ${changeColor(row.change_direction)}`}>
+                                                            {row.change_prefix || ''}{formatNum(row.change)}
                                                         </td>
-                                                        <td className={`text-end ${changeColor(row.change_pct)}`}>
-                                                            {row.change_pct > 0 ? '+' : ''}{row.change_pct}%
+                                                        <td className={`text-end ${changeColor(row.change_pct_direction)}`}>
+                                                            {row.change_pct_prefix || ''}{row.change_pct}%
                                                         </td>
                                                     </>
                                                 )}

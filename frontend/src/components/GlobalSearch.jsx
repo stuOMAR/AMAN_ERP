@@ -3,7 +3,8 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { hasPermission, getUser } from '../utils/auth'
 import useDebounce from '../hooks/useDebounce'
-import api from '../services/apiClient'
+import { searchAPI } from '../services/search'
+import { fetchSearchRegistry } from '../services/searchRegistry'
 
 // All searchable pages in the ERP system
 function useSearchablePages() {
@@ -100,6 +101,8 @@ function useSearchablePages() {
 
     // Admin / Settings
     add('/settings', 'الإعدادات', 'Settings', '⚙️', 'Admin', 'الإدارة', 'settings.view', null, ['settings', 'إعدادات', 'ضبط'])
+    add('/settings/notifications/queue', 'مراقبة طابور الإشعارات', 'Notification Queue Monitor', '🔔', 'Admin', 'الإدارة', 'notifications.admin', null, ['notifications', 'queue', 'إشعارات', 'طابور'])
+    add('/settings/notifications/templates', 'قوالب البريد للإشعارات', 'Notification Email Templates', '✉️', 'Admin', 'الإدارة', 'email_templates.admin', null, ['email', 'templates', 'notifications', 'قوالب', 'بريد', 'إشعارات'])
     add('/admin/audit-logs', 'سجلات المراقبة', 'Audit Logs', '📋', 'Admin', 'الإدارة', 'audit.view', 'audit', ['audit', 'سجل', 'مراقبة'])
 
     return pages
@@ -153,8 +156,8 @@ export default function GlobalSearch({ isOpen, onClose }) {
 
   // Fetch search registry on mount
   useEffect(() => {
-    api.get('/search/registry')
-      .then(res => setRegistry(res.data?.entities || []))
+    fetchSearchRegistry()
+      .then(entities => setRegistry(entities || []))
       .catch(() => setRegistry(null))
   }, [])
 
@@ -168,10 +171,10 @@ export default function GlobalSearch({ isOpen, onClose }) {
     let cancelled = false
     setSearching(true)
 
-    api.get('/search', { params: { q: debouncedQuery.trim(), limit: 10 } })
+    searchAPI.search(debouncedQuery.trim(), { limit: 10 })
       .then(res => {
         if (cancelled) return
-        const data = res.data || []
+        const data = res.data?.results || res.data || []
         // Flatten entity results into a list
         const items = []
         for (const entity of data) {

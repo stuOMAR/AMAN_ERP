@@ -1018,3 +1018,264 @@ Some finance endpoints are intentionally API-facing rather than page-facing. The
 - ✅ Diagnostics نظيفة على كل الملفات المعدّلة
 
 التكامل بين الوحدات (المبيعات/المشتريات/POS/التصنيع/المحاسبة/المخزون) سليم، مع GL guards، Tenant isolation، RBAC متعدد الطبقات، و Audit hash chain.
+
+
+
+
+
+
+
+
+
+
+
+
+
+##############################################
+أنت Senior ERP Auditor. مهمتك فحص حالة وحدة واحدة فقط
+وإصدار تقرير دقيق بدون تعديل أي ملف.
+
+══════════════════════════════════════
+■ الوحدة المطلوب فحصها
+══════════════════════════════════════
+
+الوحدة: Accounting / GL / Budgets / Financial Reports
+
+══════════════════════════════════════
+■ الخطوة 0 — اكتشاف الملفات الفعلية أولاً
+══════════════════════════════════════
+
+قبل أي فحص، اكتشف كل الملفات المرتبطة بالوحدة
+بدون الاعتماد على القائمة الثابتة في البرومت.
+
+شغّل هذه الأوامر:
+
+# 1. كل ملفات الباك اند المرتبطة بالمحاسبة والـ GL
+find backend/ -type f -name "*.py" | \
+  xargs grep -l \
+  "gl_service\|journal\|ledger\|fiscal\|budget\|accounting\|revenue_recogn\|trial_balance\|balance_sheet\|income_statement\|cash_flow\|financial_report\|kpi.*financ" \
+  2>/dev/null | sort
+
+# 2. كل ملفات الفرونت المرتبطة
+find frontend/src/ -type f \( -name "*.jsx" -o -name "*.js" -o -name "*.tsx" \) | \
+  xargs grep -l \
+  "accounting\|gl\|journal\|ledger\|fiscal\|budget\|revenue.*recogn\|trial.*balance\|balance.*sheet\|income.*statement\|financial" \
+  2>/dev/null | \
+  grep -iv "node_modules\|\.test\.\|\.stories\." | sort
+
+# 3. كل ملفات الاختبارات المرتبطة
+find backend/tests/ frontend/src/ -type f -name "*.test.*" -o -name "test_*.py" | \
+  xargs grep -l \
+  "accounting\|gl\|journal\|budget\|fiscal\|revenue_recogn\|financial" \
+  2>/dev/null | sort
+
+# 4. كل الـ schemas المرتبطة
+find backend/schemas/ -type f -name "*.py" | \
+  xargs grep -l \
+  "journal\|budget\|fiscal\|accounting\|ledger\|revenue" \
+  2>/dev/null | sort
+
+# 5. كل الـ services غير المذكورة في البرومت الأصلي
+find backend/services/ -type f -name "*.py" | \
+  xargs grep -l \
+  "gl_service\|journal\|ledger\|fiscal\|budget\|accounting\|revenue_recogn" \
+  2>/dev/null | sort
+
+# 6. أي ملف يستدعي gl_service مباشرة
+rg -l "from.*gl_service import\|import.*gl_service" backend/ \
+  -g "!*.test.*" | sort
+
+# 7. أي ملف يكتب journal entries مباشرة بدون gl_service (خطر)
+rg -l "INSERT.*journal\|journal_entries.*VALUES\|\.add.*JournalEntry\|session\.add.*journal" \
+  backend/ -g "!*.test.*" | sort
+
+أجب:
+  - قائمة كل الملفات المكتشفة مقسمة حسب النوع
+  - هل يوجد ملفات لم تكن في القائمة الأصلية؟ اذكرها تحديداً
+  - هل يوجد ملفات تكتب journal entries بدون gl_service؟
+
+══════════════════════════════════════
+■ الخطوة 1 — فحص Git
+══════════════════════════════════════
+
+شغّل:
+  git status
+  git log --oneline -10
+
+أجب:
+  - هل الـ worktree نظيف؟
+  - ما آخر commit يخص هذه الوحدة؟
+  - هل يوجد تغييرات غير مُرحَّلة تخص الوحدة؟
+
+══════════════════════════════════════
+■ الخطوة 2 — فحص FORBIDDEN
+══════════════════════════════════════
+
+شغّل الـ scan على كل الملفات المكتشفة في الخطوة 0
+وليس فقط المسارات الثابتة:
+
+# على كل ملفات الفرونت المكتشفة
+rg -n "parseFloat|Number\(|\.(?:plus|minus|times|dividedBy)\(" \
+  [كل مسارات الفرونت المكتشفة في الخطوة 0] \
+  -g "!*.test.*" -g "!node_modules" | \
+  grep -v "// display-only\|format\|label\|userId\|year\|id\|index\|count\|page"
+
+أجب:
+  - كم نتيجة FORBIDDEN في الملفات المعروفة؟
+  - كم نتيجة FORBIDDEN في ملفات لم تكن في القائمة الأصلية؟
+  - اذكر كل نتيجة: الملف + رقم السطر + الكود + التصنيف
+
+══════════════════════════════════════
+■ الخطوة 3 — فحص payload المرسل
+══════════════════════════════════════
+
+شغّل على كل ملفات الفرونت المكتشفة:
+
+rg -n "(?:body|data|payload)\s*=.*\b(total|tax|amount|net|vat|subtotal|balance|debit|credit)\b" \
+  [كل مسارات الفرونت المكتشفة] \
+  -g "!*.test.*"
+
+أجب:
+  - هل يُرسل الفرونت قيم مالية محسوبة في الـ payload؟
+  - في أي ملف وسطر؟
+
+══════════════════════════════════════
+■ الخطوة 4 — فحص الباك اند
+══════════════════════════════════════
+
+شغّل على كل ملفات الباك اند المكتشفة:
+
+# float بدلاً من Decimal
+rg -n "float\(|round\(" \
+  [كل مسارات الباك اند المكتشفة] \
+  -g "!*.test.*"
+
+# journal entries مباشرة بدون gl_service
+rg -n "\.add\(.*[Jj]ournal|INSERT.*journal_entr" \
+  [كل مسارات الباك اند المكتشفة] \
+  -g "!*.test.*" | \
+  grep -v "gl_service\|test_"
+
+أجب:
+  - هل يستخدم الباك اند float أو round؟ أين؟
+  - هل يوجد journal entries تُكتب بدون gl_service؟
+
+══════════════════════════════════════
+■ الخطوة 5 — فحص Idempotency
+══════════════════════════════════════
+
+شغّل على كل ملفات الباك اند المكتشفة:
+
+rg -n "Idempotency|idempotency_key" \
+  [كل مسارات الباك اند المكتشفة]
+
+# المسارات الحساسة التي يجب أن تكون مغطاة
+rg -n "@router\.(post|put|patch)" \
+  [كل مسارات الباك اند المكتشفة] | \
+  grep -i "close\|recogni\|journal\|post\|commit\|settle\|approv"
+
+أجب:
+  - على أي endpoints يوجد Idempotency-Key؟
+  - ما المسارات الحساسة التي لا تزال بدون Idempotency؟
+
+══════════════════════════════════════
+■ الخطوة 6 — فحص الاختبارات
+══════════════════════════════════════
+
+شغّل:
+
+POSTGRES_PASSWORD=x SECRET_KEY=x \
+.venv/bin/python -m pytest \
+  [كل ملفات الاختبار المكتشفة في الخطوة 0] \
+  -v --tb=short 2>/dev/null | tail -30
+
+أجب:
+  - كم اختبار نجح؟ كم فشل؟
+  - ما الصفحات والمسارات التي يغطيها الـ guard؟
+  - هل يوجد ملفات مكتشفة في الخطوة 0 ليس لها اختبارات؟
+
+══════════════════════════════════════
+■ الخطوة 7 — فحص Build
+══════════════════════════════════════
+
+شغّل:
+
+cd frontend && npm run build 2>&1 | tail -5
+
+أجب:
+  - هل البناء يمر؟
+  - هل يوجد warnings تخص الملفات المكتشفة؟
+
+══════════════════════════════════════
+■ المخرج المطلوب — تقرير منظم
+══════════════════════════════════════
+
+بعد تشغيل كل الفحوصات، أصدر هذا التقرير:
+
+---
+## تقرير حالة: Accounting / GL / Budgets / Financial Reports
+**التاريخ:** [اليوم]
+
+### 0. الملفات المكتشفة
+| النوع | الملفات المعروفة | ملفات إضافية مكتشفة |
+|-------|-----------------|---------------------|
+| Backend routers | X | Y جديد: [أسماؤها] |
+| Backend services | X | Y جديد: [أسماؤها] |
+| Backend schemas | X | Y جديد: [أسماؤها] |
+| Frontend pages | X | Y جديد: [أسماؤها] |
+| Frontend services | X | Y جديد: [أسماؤها] |
+| Tests | X | Y جديد: [أسماؤها] |
+| يكتب GL بدون gl_service | — | [اذكر أو "لا يوجد"] |
+
+### 1. حالة Git
+| البند | الحالة |
+|-------|--------|
+| Worktree | نظيف / dirty (X ملف) |
+| آخر commit للوحدة | [hash] [رسالة] |
+| تغييرات معلقة للوحدة | [اذكر أو "لا يوجد"] |
+
+### 2. نتائج الـ Scan
+| النوع | في ملفات معروفة | في ملفات مكتشفة | التفاصيل |
+|-------|----------------|----------------|----------|
+| FORBIDDEN | X | Y | [كل واحدة: ملف+سطر+كود] |
+| DISPLAY-OK | X | Y | [موثقة؟] |
+| Payload مالي | X | Y | [كل واحدة] |
+| float/round في باك اند | X | Y | [كل واحدة] |
+| GL بدون gl_service | X | Y | [كل واحدة] |
+
+### 3. Idempotency
+| المسار | مغطى؟ | الملف |
+|--------|--------|-------|
+| GL Closing | ✅ / ❌ | |
+| Revenue Recognition | ✅ / ❌ | |
+| Journal Entry | ✅ / ❌ | |
+| [مسارات إضافية مكتشفة] | ✅ / ❌ | |
+
+### 4. الاختبارات
+| البند | النتيجة |
+|-------|---------|
+| إجمالي الاختبارات | X passed / Y failed |
+| الصفحات المغطاة | [قائمة] |
+| ملفات بدون اختبارات | [اذكر أو "لا يوجد"] |
+
+### 5. Build
+| البند | النتيجة |
+|-------|---------|
+| Frontend Build | ✅ / ❌ |
+| Warnings للملفات المكتشفة | [اذكرها أو "لا يوجد"] |
+
+### 6. الحكم النهائي
+| المعيار | الحالة |
+|---------|--------|
+| FORBIDDEN = صفر (كل الملفات) | ✅ / ❌ |
+| GL يمر دائماً عبر gl_service | ✅ / ❌ |
+| Idempotency مكتمل | ✅ / ❌ / ⚠️ جزئي |
+| الاختبارات تمر | ✅ / ❌ |
+| Build نظيف | ✅ / ❌ |
+| **الوحدة جاهزة للإغلاق** | ✅ نعم / ❌ لا / ⚠️ شروط |
+
+### 7. الإجراءات المطلوبة (إن وجدت)
+[مرتبة حسب الأولوية: FORBIDDEN أولاً، ثم GL بدون service، ثم Idempotency، ثم اختبارات]
+
+---
+لا تعدّل أي ملف. التقرير فقط.

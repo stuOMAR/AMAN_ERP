@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useLocation } from 'react-router-dom';
-import Decimal from 'decimal.js';
 import { format, startOfWeek, addDays, eachDayOfInterval } from 'date-fns';
 import { ar, enUS } from 'date-fns/locale';
 import { ChevronRight, ChevronLeft, Save, CheckCircle2 } from 'lucide-react';
@@ -106,7 +105,7 @@ export default function Timesheets({ projectId, tasks = [] }) {
                             // Update
                             promises.push(projectsAPI.updateTimesheet(existing.id, { hours: rawValue }));
                         }
-                    } else if (hours && new Decimal(hours).gt(0)) {
+                    } else if (hours) {
                         // Create
                         promises.push(projectsAPI.createTimesheet(projectId, {
                             task_id: parseInt(taskId),
@@ -198,7 +197,6 @@ export default function Timesheets({ projectId, tasks = [] }) {
                                     <div>{format(day, 'd')}</div>
                                 </th>
                             ))}
-                            <th className="text-center" style={{ width: '5%' }}>{t('projects.total')}</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -236,10 +234,6 @@ export default function Timesheets({ projectId, tasks = [] }) {
                                         </td>
                                     );
                                 })}
-                                <td className="text-center align-middle fw-bold timesheet-total-cell">
-                                    {/* Calculated Total for Row */}
-                                    {weekDays.reduce((acc, day) => acc.plus(new Decimal(getHours(task.id, day) || '0')), new Decimal('0')).toString()}
-                                </td>
                             </tr>
                         ))}
                     </tbody>

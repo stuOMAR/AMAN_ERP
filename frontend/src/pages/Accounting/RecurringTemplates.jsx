@@ -1,6 +1,5 @@
 import React, { useState, useEffect, useCallback } from 'react'
 import { useTranslation } from 'react-i18next'
-import Decimal from 'decimal.js'
 import { accountingAPI } from '../../utils/api'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
@@ -42,6 +41,13 @@ export default function RecurringTemplates() {
             { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' },
         ],
     })
+    const [preview, setPreview] = useState({
+        total_debit: '0.00',
+        total_credit: '0.00',
+        difference: '0.00',
+        is_balanced: true,
+        has_amount: false,
+    })
 
     const fetchTemplates = useCallback(async () => {
         setLoading(true)
@@ -73,6 +79,17 @@ export default function RecurringTemplates() {
         return () => clearTimeout(timer)
     }, [fetchTemplates])
     useEffect(() => { fetchAccounts() }, [])
+    useEffect(() => {
+        const timer = setTimeout(async () => {
+            try {
+                const res = await accountingAPI.previewJournalEntry({ lines: form.lines })
+                setPreview(res.data)
+            } catch {
+                setPreview(prev => ({ ...prev, is_balanced: false }))
+            }
+        }, 250)
+        return () => clearTimeout(timer)
+    }, [form.lines])
 
     const resetForm = () => {
         setForm({
@@ -253,9 +270,9 @@ export default function RecurringTemplates() {
         })
     }
 
-    const totalDebit = form.lines.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0'))
-    const totalCredit = form.lines.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0'))
-    const isBalanced = totalDebit.minus(totalCredit).abs().lt('0.01')
+    const totalDebit = preview.total_debit || '0.00'
+    const totalCredit = preview.total_credit || '0.00'
+    const isBalanced = preview.is_balanced
 
     const freqLabel = (f) => t(`recurring.freq_${f}`) || f
 
@@ -504,8 +521,8 @@ export default function RecurringTemplates() {
                                         <tfoot>
                                             <tr className="fw-bold">
                                                 <td className="text-end">{t('recurring.total')}</td>
-                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalDebit.toString())}</td>
-                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalCredit.toString())}</td>
+                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalDebit)}</td>
+                                                <td className={!isBalanced ? 'text-danger' : ''}>{formatNumber(totalCredit)}</td>
                                                 <td colSpan="2">
                                                     <button type="button" className="btn btn-sm btn-outline-primary" onClick={addLine}>
                                                         + {t('recurring.add_line')}
@@ -518,7 +535,7 @@ export default function RecurringTemplates() {
                                 {!isBalanced && (
                                     <div className="alert alert-warning py-1 small">
                                         ⚠️ {t('recurring.not_balanced')} —
-                                        {` ${t('recurring.difference')}: `}{formatNumber(totalDebit.minus(totalCredit).abs().toString())}
+                                        {` ${t('recurring.difference')}: `}{formatNumber(preview.difference || '0.00')}
                                     </div>
                                 )}
                             </div>
@@ -526,7 +543,7 @@ export default function RecurringTemplates() {
                                 <button type="button" className="btn" style={{ background: 'var(--bg-hover)' }} onClick={() => setShowModal(false)}>
                                     {t('recurring.cancel')}
                                 </button>
-                                <button type="submit" className="btn btn-primary" disabled={!isBalanced || totalDebit.eq('0')}>
+                                <button type="submit" className="btn btn-primary" disabled={!isBalanced || !preview.has_amount}>
                                     {editId ? (t('recurring.update')) : (t('recurring.create'))}
                                 </button>
                             </div>
@@ -604,8 +621,8 @@ export default function RecurringTemplates() {
                                     <tfoot>
                                         <tr className="fw-bold">
                                             <td>{t('recurring.total')}</td>
-                                            <td>{formatNumber(detailData.lines.reduce((s, l) => s.plus(new Decimal(l.debit || '0')), new Decimal('0')).toString())}</td>
-                                            <td>{formatNumber(detailData.lines.reduce((s, l) => s.plus(new Decimal(l.credit || '0')), new Decimal('0')).toString())}</td>
+                                            <td>{formatNumber(detailData.total_debit || '0')}</td>
+                                            <td>{formatNumber(detailData.total_credit || '0')}</td>
                                             <td></td>
                                         </tr>
                                     </tfoot>

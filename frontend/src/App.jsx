@@ -364,6 +364,7 @@ const SalesForecasts = React.lazy(() => import('./pages/CRM/SalesForecasts'))
 const ServicesHome = React.lazy(() => import('./pages/Services/ServicesHome'))
 const ServiceRequests = React.lazy(() => import('./pages/Services/ServiceRequests'))
 const DocumentManagement = React.lazy(() => import('./pages/Services/DocumentManagement'))
+const DmsAdmin = React.lazy(() => import('./pages/dms/DmsAdmin'))
 
 // Setup Wizard
 const IndustrySetup = React.lazy(() => import('./pages/Setup/IndustrySetup'))
@@ -385,6 +386,8 @@ const SmartAlerts = React.lazy(() => import('./pages/Settings/SmartAlerts'))
 
 // Email Templates (T4.11)
 const EmailTemplates = React.lazy(() => import('./pages/Settings/EmailTemplates'))
+const NotificationQueueMonitor = React.lazy(() => import('./pages/notifications/NotificationQueueMonitor'))
+const NotificationEmailTemplates = React.lazy(() => import('./pages/notifications/EmailTemplateEditor'))
 
 // Integration Retry Queues & DLQ (T5.4)
 const IntegrationDLQ = React.lazy(() => import('./pages/Settings/IntegrationDLQ'))
@@ -633,12 +636,12 @@ function App() {
                 <Route path="/sales/reports/analytics" element={<PrivateRoute permission="sales.reports"><SalesReports /></PrivateRoute>} />
                 <Route path="/sales/reports/customer-statement" element={<PrivateRoute permission="sales.reports"><CustomerStatement /></PrivateRoute>} />
                 <Route path="/sales/reports/aging" element={<PrivateRoute permission="sales.reports"><AgingReport /></PrivateRoute>} />
-                <Route path="/sales/contracts" element={<PrivateRoute permission="sales.view"><ContractList /></PrivateRoute>} />
+                <Route path="/sales/contracts" element={<PrivateRoute permission="contracts.view"><ContractList /></PrivateRoute>} />
                 <Route path="/sales/contracts/new" element={<PrivateRoute permission="contracts.create"><ContractForm /></PrivateRoute>} />
-                <Route path="/sales/contracts/:id" element={<PrivateRoute permission="sales.view"><ContractDetails /></PrivateRoute>} />
+                <Route path="/sales/contracts/:id" element={<PrivateRoute permission="contracts.view"><ContractDetails /></PrivateRoute>} />
                 <Route path="/sales/contracts/:id/edit" element={<PrivateRoute permission="contracts.edit"><ContractForm /></PrivateRoute>} />
-                <Route path="/sales/contracts/:id/amendments" element={<PrivateRoute permission="sales.view"><ContractAmendments /></PrivateRoute>} />
-                <Route path="/sales/contract-amendments" element={<PrivateRoute permission="sales.view"><ContractAmendments /></PrivateRoute>} />
+                <Route path="/sales/contracts/:id/amendments" element={<PrivateRoute permission="contracts.view"><ContractAmendments /></PrivateRoute>} />
+                <Route path="/sales/contract-amendments" element={<PrivateRoute permission="contracts.view"><ContractAmendments /></PrivateRoute>} />
                 <Route path="/sales/credit-notes" element={<PrivateRoute permission="sales.view"><SalesCreditNotes /></PrivateRoute>} />
                 <Route path="/sales/debit-notes" element={<PrivateRoute permission="sales.view"><SalesDebitNotes /></PrivateRoute>} />
                 <Route path="/sales/commissions" element={<PrivateRoute permission="sales.view"><SalesCommissions /></PrivateRoute>} />
@@ -814,7 +817,7 @@ function App() {
                 <Route path="/reports/shared" element={<PrivateRoute permission="reports.view"><SharedReports /></PrivateRoute>} />
                 <Route path="/reports/consolidation" element={<PrivateRoute permission="reports.view"><ConsolidationReports /></PrivateRoute>} />
                 <Route path="/reports/kpi" element={<PrivateRoute permission="reports.view"><KPIDashboard /></PrivateRoute>} />
-                <Route path="/reports/kpi-admin" element={<PrivateRoute permission="admin.roles"><KpiAdmin /></PrivateRoute>} />
+                <Route path="/reports/kpi-admin" element={<PrivateRoute permission="dashboard.analytics_manage"><KpiAdmin /></PrivateRoute>} />
                 <Route path="/reports/fx-gain-loss" element={<PrivateRoute permission="reports.view"><FXGainLossReport /></PrivateRoute>} />
                 <Route path="/reports/cashflow-ias7" element={<PrivateRoute permission="accounting.view"><CashFlowIAS7 /></PrivateRoute>} />
                 <Route path="/reports/industry/:reportType" element={<PrivateRoute permission="reports.view"><IndustryReport /></PrivateRoute>} />
@@ -937,9 +940,12 @@ function App() {
                 <Route path="/settings/costing-policy" element={<PrivateRoute permission="settings.view"><CostingPolicy /></PrivateRoute>} />
                 <Route path="/settings/api-keys" element={<PrivateRoute permission="admin"><ApiKeys /></PrivateRoute>} />
                 <Route path="/settings/webhooks" element={<PrivateRoute permission="settings.view"><WebhooksPage /></PrivateRoute>} />
+                <Route path="/settings/dms" element={<PrivateRoute permission="dms.audit_admin"><DmsAdmin /></PrivateRoute>} />
                 <Route path="/settings/print-templates" element={<PrivateRoute permission="settings.view"><PrintTemplates /></PrivateRoute>} />
                 <Route path="/settings/smart-alerts" element={<PrivateRoute permission="settings.view"><SmartAlerts /></PrivateRoute>} />
                 <Route path="/settings/email-templates" element={<PrivateRoute permission="settings.view"><EmailTemplates /></PrivateRoute>} />
+                <Route path="/settings/notifications/queue" element={<PrivateRoute permission="notifications.admin"><NotificationQueueMonitor /></PrivateRoute>} />
+                <Route path="/settings/notifications/templates" element={<PrivateRoute permission="email_templates.admin"><NotificationEmailTemplates /></PrivateRoute>} />
                 <Route path="/settings/integration-dlq" element={<PrivateRoute permission="admin"><IntegrationDLQ /></PrivateRoute>} />
 
                 {/* SSO Configuration */}

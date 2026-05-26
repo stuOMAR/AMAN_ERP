@@ -13,15 +13,15 @@ from utils.i18n import http_error, i18n_message
 logger = logging.getLogger(__name__)
 _D2 = Decimal("0.01")
 
-# F-NEW-004: monetary/rate inputs may arrive as Decimal, str, int, or float
+# F-NEW-004: monetary/rate inputs may arrive as Decimal, str, or int
 # (Pydantic-coerced JSON payloads, legacy callers, etc.). All numeric work
 # below funnels them through ``_dec(...)`` immediately, so the annotation
 # describes the acceptable input domain rather than internal precision
 # (which is always Decimal).
-Numeric = Union[Decimal, float, int, str]
+Numeric = Union[Decimal, int, str]
 
 
-def round_amount(value: Decimal | float | str, precision: int = 4) -> Decimal:
+def round_amount(value: Decimal | int | str, precision: int = 4) -> Decimal:
     """Round a monetary amount to the given decimal precision using ROUND_HALF_UP.
 
     Policy:
@@ -34,12 +34,12 @@ def round_amount(value: Decimal | float | str, precision: int = 4) -> Decimal:
     return d.quantize(quantizer, rounding=ROUND_HALF_UP)
 
 
-def round_fx_rate(value: Decimal | float | str) -> Decimal:
+def round_fx_rate(value: Decimal | int | str) -> Decimal:
     """Round an FX rate to 6 decimal places (NUMERIC(18,6))."""
     return round_amount(value, precision=6)
 
 
-def round_je_amount(value: Decimal | float | str) -> Decimal:
+def round_je_amount(value: Decimal | int | str) -> Decimal:
     """Round a JE line amount to 4 decimal places (NUMERIC(18,4))."""
     return round_amount(value, precision=4)
 
@@ -129,7 +129,7 @@ def create_journal_entry(
     reference: Optional[str] = None,
     status: str = "posted",
     currency: Optional[str] = None,
-    exchange_rate: Numeric = 1.0,
+    exchange_rate: Numeric = Decimal("1"),
     source: str = "manual",
     source_id: Optional[int] = None,
     username: Optional[str] = None,
@@ -143,7 +143,7 @@ def create_journal_entry(
     and update account balances if posted.
 
     F-NEW-004: ``exchange_rate``, line ``debit``/``credit``/``amount_currency``
-    accept Decimal/float/int/str — they are normalised through ``_dec(...)``
+    accept Decimal/int/str — they are normalised through ``_dec(...)``
     before any arithmetic, so the annotation describes the acceptable input
     domain rather than internal precision (which is always Decimal).
 
@@ -601,9 +601,7 @@ def reverse_journal_entry(
         status="posted",
         currency=head.currency,
         # F-NEW-004: pass the Decimal exchange rate straight through; the
-        # callee normalises via ``_dec(...)``. The legacy ``float(...)``
-        # cast was a precision-leak (inherited from the float-typed param)
-        # and is no longer needed.
+        # callee normalises via ``_dec(...)`` without a lossy cast.
         exchange_rate=head.exchange_rate or Decimal("1"),
         source="reversal",
         source_id=je_id,

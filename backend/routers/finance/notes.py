@@ -7,7 +7,6 @@ from typing import Any, Dict, List, Optional
 from datetime import date, timedelta
 from pydantic import BaseModel
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, validate_treasury_account_access, require_module

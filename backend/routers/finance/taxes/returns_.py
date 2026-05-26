@@ -3,23 +3,21 @@
 Mounted under the parent router via taxes/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 import json
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
-from utils.tax_precision import CALCULATION_VERSION, get_idempotency_key, money_str, q_money, serialize_tax_row
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from utils.tax_precision import CALCULATION_VERSION, money_str, q_money, require_idempotency_key, serialize_tax_row
+from schemas.taxes import TaxReturnCreate
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +29,120 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
+
+
+def _tax_period_bounds(period: str, request: Request | None = None) -> tuple[str, str]:
+    try:
+        if "-Q" in period:
+            year_text, quarter_text = period.split("-Q")
+            year = int(year_text)
+            quarter = int(quarter_text)
+            if quarter < 1 or quarter > 4:
+                raise ValueError
+            month_start = (quarter - 1) * 3 + 1
+            month_end = quarter * 3
+            start_date = f"{year}-{month_start:02d}-01"
+            end_date = f"{year + 1}-01-01" if month_end == 12 else f"{year}-{month_end + 1:02d}-01"
+            return start_date, end_date
+
+        year_text, month_text = period.split("-")
+        year = int(year_text)
+        month = int(month_text)
+        if month < 1 or month > 12:
+            raise ValueError
+        start_date = f"{year}-{month:02d}-01"
+        end_date = f"{year + 1}-01-01" if month == 12 else f"{year}-{month + 1:02d}-01"
+        return start_date, end_date
+    except (TypeError, ValueError):
+        raise HTTPException(**http_error(422, "invalid_tax_period", request))
+
+
+def _calculate_tax_return_preview(db, *, period: str, branch_id: int | None, request: Request | None = None) -> dict[str, Any]:
+    start_date, end_date = _tax_period_bounds(period, request)
+    params: dict[str, Any] = {"start": start_date, "end": end_date}
+    branch_filter = ""
+    if branch_id:
+        branch_filter = "AND je.branch_id = :branch_id"
+        params["branch_id"] = branch_id
+
+    vat_out_id = get_mapped_account_id(db, "acc_map_vat_out")
+    vat_in_id = get_mapped_account_id(db, "acc_map_vat_in")
+    if not vat_out_id or not vat_in_id:
+        raise HTTPException(**http_error(400, "input_output_tax_accounts_not_configured", request))
+
+    tax_rows = db.execute(text(  # noqa
+        f"""
+        SELECT
+            jl.account_id,
+            COALESCE(SUM(jl.debit), 0) AS debit,
+            COALESCE(SUM(jl.credit), 0) AS credit
+        FROM journal_lines jl
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        WHERE jl.account_id IN (:vat_out_id, :vat_in_id)
+          AND je.status = 'posted'
+          AND je.entry_date >= :start AND je.entry_date < :end
+          {branch_filter}
+        GROUP BY jl.account_id
+    """), {**params, "vat_out_id": vat_out_id, "vat_in_id": vat_in_id}).fetchall()
+
+    tax_by_account = {row.account_id: row for row in tax_rows}
+    out_row = tax_by_account.get(vat_out_id)
+    in_row = tax_by_account.get(vat_in_id)
+    net_output_vat = (_dec(out_row.credit) - _dec(out_row.debit)) if out_row else Decimal("0")
+    net_input_vat = (_dec(in_row.debit) - _dec(in_row.credit)) if in_row else Decimal("0")
+
+    taxable_amount = db.execute(text(  # noqa
+        f"""
+        SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
+        FROM journal_lines jl
+        JOIN journal_entries je ON je.id = jl.journal_entry_id
+        JOIN accounts a ON a.id = jl.account_id
+        WHERE a.account_type = 'revenue'
+          AND je.status = 'posted'
+          AND je.entry_date >= :start AND je.entry_date < :end
+          AND EXISTS (
+              SELECT 1
+              FROM journal_lines tax_jl
+              WHERE tax_jl.journal_entry_id = je.id
+                AND tax_jl.account_id = :vat_out_id
+          )
+          {branch_filter}
+    """), {**params, "vat_out_id": vat_out_id}).scalar() or Decimal("0")
+
+    taxable_amount = q_money(taxable_amount)
+    net_output_vat = q_money(net_output_vat)
+    net_input_vat = q_money(net_input_vat)
+    tax_amount = q_money(net_output_vat - net_input_vat)
+    base_currency = get_base_currency(db)
+
+    details = {
+        "version": CALCULATION_VERSION,
+        "period_start": start_date,
+        "period_end": end_date,
+        "branch_id": branch_id,
+        "source": "journal_lines",
+        "method": "posted_vat_account_lines_net_output_minus_net_input",
+        "amount_currency": base_currency,
+        "currency_method": "invoice amounts converted to company base currency using locked invoice exchange_rate",
+        "inputs": {
+            "output_vat": money_str(net_output_vat),
+            "input_vat": money_str(net_input_vat),
+            "taxable_amount": money_str(taxable_amount),
+        },
+    }
+    return {
+        "period_start": start_date,
+        "period_end": end_date,
+        "taxable_amount": taxable_amount,
+        "tax_amount": tax_amount,
+        "total_amount": tax_amount,
+        "output_vat": net_output_vat,
+        "input_vat": net_input_vat,
+        "base_currency": base_currency,
+        "details": details,
+    }
+
 
 @router.get("/returns", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_returns(
@@ -65,7 +176,7 @@ def list_tax_returns(
             where += " AND tr.tax_period LIKE :year_prefix"
             params["year_prefix"] = f"{year}%"
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT tr.*,
                    cu.username as created_by_name,
@@ -79,6 +190,38 @@ def list_tax_returns(
         """), params).fetchall()
 
         return [serialize_tax_row(r, money_fields=["taxable_amount", "tax_amount", "total_amount", "paid_amount"]) for r in rows]
+
+
+@router.post("/returns/preview", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=Dict[str, Any])
+def preview_tax_return(
+    data: TaxReturnCreate,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
+    """Preview authoritative VAT return totals before creating the return."""
+    branch_id = validate_branch_access(current_user, data.branch_id)
+    with transactional(current_user.company_id) as db:
+        preview = _calculate_tax_return_preview(db, period=data.tax_period, branch_id=branch_id, request=request)
+        return {
+            "success": True,
+            "tax_period": data.tax_period,
+            "tax_type": data.tax_type,
+            "branch_id": branch_id,
+            "period_start": preview["period_start"],
+            "period_end": preview["period_end"],
+            "taxable_amount": money_str(preview["taxable_amount"]),
+            "tax_amount": money_str(preview["tax_amount"]),
+            "submitted_tax_due": money_str(preview["total_amount"]),
+            "total_amount": money_str(preview["total_amount"]),
+            "currency": preview["base_currency"],
+            "summary": {
+                "output_vat": money_str(preview["output_vat"]),
+                "input_vat": money_str(preview["input_vat"]),
+                "net_payable": money_str(preview["tax_amount"]),
+                "taxable_amount": money_str(preview["taxable_amount"]),
+            },
+            "calculation_details": preview["details"],
+        }
 
 
 @router.get("/returns/{return_id}", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=Dict[str, Any])
@@ -126,9 +269,9 @@ def create_tax_return(
     branch_id = validate_branch_access(current_user, data.branch_id)
     with transactional(current_user.company_id) as db:
         try:
-            idempotency_key = get_idempotency_key(
+            idempotency_key = require_idempotency_key(
                 request,
-                fallback=f"tax-return:{data.tax_type}:{data.tax_period}:branch:{branch_id or 'all'}",
+                operation="tax return create",
             )
             existing_by_key = db.execute(text(
                 "SELECT id, return_number FROM tax_returns WHERE idempotency_key = :key LIMIT 1"
@@ -143,32 +286,27 @@ def create_tax_return(
                 }
 
             period = data.tax_period
-            if "-Q" in period:
-                year, q = period.split("-Q")
-                quarter = int(q)
-                month_start = (quarter - 1) * 3 + 1
-                month_end = quarter * 3
-                start_date = f"{year}-{month_start:02d}-01"
-                if month_end == 12:
-                    end_date = f"{int(year) + 1}-01-01"
-                else:
-                    end_date = f"{year}-{month_end + 1:02d}-01"
-            else:
-                parts = period.split("-")
-                year, month = int(parts[0]), int(parts[1])
-                start_date = f"{year}-{month:02d}-01"
-                if month == 12:
-                    end_date = f"{year + 1}-01-01"
-                else:
-                    end_date = f"{year}-{month + 1:02d}-01"
+            preview = _calculate_tax_return_preview(db, period=period, branch_id=branch_id, request=request)
+            preview["period_start"]
+            end_date = preview["period_end"]
 
             check_fiscal_period_open(db, end_date)
-    
-            params = {"start": start_date, "end": end_date}
-            branch_filter = ""
-            if branch_id:
-                branch_filter = "AND je.branch_id = :branch_id"
-                params["branch_id"] = branch_id
+
+            submitted_tax_due = data.submitted_tax_due
+            if submitted_tax_due is None:
+                submitted_tax_due = data.submitted_grand_total
+            if submitted_tax_due is None:
+                raise HTTPException(**http_error(422, "submitted_tax_due_required", request))
+            if q_money(submitted_tax_due) != q_money(preview["total_amount"]):
+                raise HTTPException(
+                    **http_error(
+                        422,
+                        "submitted_tax_due_mismatch",
+                        request,
+                        submitted=money_str(submitted_tax_due),
+                        expected=money_str(preview["total_amount"]),
+                    )
+                )
     
             # Check for duplicate
             dup = db.execute(text(
@@ -183,52 +321,10 @@ def create_tax_return(
             ), {"period": period, "type": data.tax_type, "branch_id": branch_id}).fetchone()
             if dup:
                 raise HTTPException(status_code=409, detail=i18n_message("tax_return_already_exists_period", request))
-    
-            vat_out_id = get_mapped_account_id(db, "acc_map_vat_out")
-            vat_in_id = get_mapped_account_id(db, "acc_map_vat_in")
-            if not vat_out_id or not vat_in_id:
-                raise HTTPException(**http_error(400, "input_output_tax_accounts_not_configured", request))
-
-            tax_rows = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT
-                    jl.account_id,
-                    COALESCE(SUM(jl.debit), 0) AS debit,
-                    COALESCE(SUM(jl.credit), 0) AS credit
-                FROM journal_lines jl
-                JOIN journal_entries je ON je.id = jl.journal_entry_id
-                WHERE jl.account_id IN (:vat_out_id, :vat_in_id)
-                  AND je.status = 'posted'
-                  AND je.entry_date >= :start AND je.entry_date < :end
-                  {branch_filter}
-                GROUP BY jl.account_id
-            """), {**params, "vat_out_id": vat_out_id, "vat_in_id": vat_in_id}).fetchall()
-
-            tax_by_account = {row.account_id: row for row in tax_rows}
-            out_row = tax_by_account.get(vat_out_id)
-            in_row = tax_by_account.get(vat_in_id)
-            net_output_vat = (_dec(out_row.credit) - _dec(out_row.debit)) if out_row else Decimal("0")
-            net_input_vat = (_dec(in_row.debit) - _dec(in_row.credit)) if in_row else Decimal("0")
-
-            taxable_amount = db.execute(text(  # noqa: sql-lint
-                f"""
-                SELECT COALESCE(SUM(jl.credit - jl.debit), 0)
-                FROM journal_lines jl
-                JOIN journal_entries je ON je.id = jl.journal_entry_id
-                JOIN accounts a ON a.id = jl.account_id
-                WHERE a.account_type = 'revenue'
-                  AND je.status = 'posted'
-                  AND je.entry_date >= :start AND je.entry_date < :end
-                  AND EXISTS (
-                      SELECT 1
-                      FROM journal_lines tax_jl
-                      WHERE tax_jl.journal_entry_id = je.id
-                        AND tax_jl.account_id = :vat_out_id
-                  )
-                  {branch_filter}
-            """), {**params, "vat_out_id": vat_out_id}).scalar() or Decimal("0")
-            taxable_amount = _dec(taxable_amount)
-            tax_amount = net_output_vat - net_input_vat
+            net_output_vat = preview["output_vat"]
+            net_input_vat = preview["input_vat"]
+            taxable_amount = preview["taxable_amount"]
+            tax_amount = preview["tax_amount"]
     
             return_number = generate_sequential_number(db, "TR", "tax_returns", "return_number")
     
@@ -243,22 +339,8 @@ def create_tax_return(
                 if cs_row:
                     jurisdiction_code = cs_row.setting_value
 
-            base_currency = get_base_currency(db)
-            details = {
-                "version": CALCULATION_VERSION,
-                "period_start": start_date,
-                "period_end": end_date,
-                "branch_id": branch_id,
-                "source": "journal_lines",
-                "method": "posted_vat_account_lines_net_output_minus_net_input",
-                "amount_currency": base_currency,
-                "currency_method": "invoice amounts converted to company base currency using locked invoice exchange_rate",
-                "inputs": {
-                    "output_vat": money_str(net_output_vat),
-                    "input_vat": money_str(net_input_vat),
-                    "taxable_amount": money_str(taxable_amount),
-                },
-            }
+            base_currency = preview["base_currency"]
+            details = preview["details"]
     
             result = db.execute(text("""
                 INSERT INTO tax_returns (return_number, tax_period, tax_type, taxable_amount, tax_amount,
@@ -321,15 +403,54 @@ def file_tax_return(
     """تقديم الإقرار الضريبي (تغيير الحالة من draft إلى filed)"""
     with transactional(current_user.company_id) as db:
         try:
+            require_idempotency_key(request, operation="tax return file")
             row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id FOR UPDATE"), {"id": return_id}).fetchone()
             if not row:
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
+            if row.status == "filed":
+                return {
+                    "success": True,
+                    "message": i18n_message("tax_return_submitted_success", request),
+                    "status": "filed",
+                    "filed_date": str(row.filed_date) if row.filed_date else None,
+                    "total_amount": money_str(row.total_amount),
+                    "idempotent": True,
+                }
             if row.status != "draft":
                 raise HTTPException(**http_error(400, "tax_return_only_draft_submittable", request))
 
             check_fiscal_period_open(db, date.today())
+            preview = _calculate_tax_return_preview(
+                db,
+                period=row.tax_period,
+                branch_id=row.branch_id,
+                request=request,
+            )
+            if q_money(row.tax_amount) != q_money(preview["total_amount"]):
+                raise HTTPException(
+                    **http_error(
+                        422,
+                        "tax_return_stale_recalculate_required",
+                        request,
+                        submitted=money_str(row.tax_amount),
+                        expected=money_str(preview["total_amount"]),
+                    )
+                )
+            submitted_tax_due = (body or {}).get("submitted_tax_due") or (body or {}).get("submitted_grand_total")
+            if submitted_tax_due is None:
+                raise HTTPException(**http_error(422, "submitted_tax_due_required", request))
+            if q_money(submitted_tax_due) != q_money(preview["total_amount"]):
+                raise HTTPException(
+                    **http_error(
+                        422,
+                        "submitted_tax_due_mismatch",
+                        request,
+                        submitted=money_str(submitted_tax_due),
+                        expected=money_str(preview["total_amount"]),
+                    )
+                )
     
             penalty = _dec((body or {}).get("penalty_amount", 0)).quantize(_D2, ROUND_HALF_UP)
             interest = _dec((body or {}).get("interest_amount", 0)).quantize(_D2, ROUND_HALF_UP)
@@ -368,11 +489,18 @@ def cancel_tax_return(return_id: int, request: Request, current_user: dict = Dep
     """إلغاء إقرار ضريبي"""
     with transactional(current_user.company_id) as db:
         try:
+            require_idempotency_key(request, operation="tax return cancel")
             row = db.execute(text("SELECT * FROM tax_returns WHERE id = :id FOR UPDATE"), {"id": return_id}).fetchone()
             if not row:
                 raise HTTPException(**http_error(404, "tax_return_not_found"))
             if row.branch_id:
                 validate_branch_access(current_user, row.branch_id)
+            if row.status == "cancelled":
+                return {
+                    "success": True,
+                    "message": i18n_message("tax_return_cancelled", request),
+                    "idempotent": True,
+                }
             if row.status == "paid":
                 raise HTTPException(**http_error(400, "tax_return_paid_cannot_cancel", request))
     

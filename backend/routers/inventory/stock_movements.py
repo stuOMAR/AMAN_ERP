@@ -9,18 +9,16 @@ and runs the fiscal-lock check, gated by ``stock.adjust`` permission.
 
 from datetime import datetime
 from decimal import Decimal
-import uuid
 import logging
 from typing import List as _List, Optional as _Optional
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import text
 from utils.i18n import http_error, i18n_message
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.audit import log_activity
 from utils.permissions import require_permission
 
 stock_movements_router = APIRouter()
@@ -62,8 +60,6 @@ def create_stock_adjustment(
     current_user: dict = Depends(get_current_user),
 ):
     """تسوية مخزون مع ترحيل محاسبي إلزامي (INV-F1) — T050: calls shared helper."""
-    from utils.accounting import get_mapped_account_id
-    from utils.fiscal_lock import check_fiscal_period_open
     from routers.inventory.adjustments import post_inventory_adjustment
 
     if not adjustment.items:

@@ -55,7 +55,7 @@ class TestTaxReturnsAdvanced:
                           headers=admin_headers)
         if fy_r.status_code != 200:
             pytest.skip("لا توجد سنة مالية حالية")
-        fy = fy_r.json()
+        fy_r.json()
         
         return_data = {
             "period": "Q1",
@@ -74,7 +74,7 @@ class TestTaxReturnsAdvanced:
             pytest.skip("لا يوجد معرف الإقرار")
 
         # حساب الضريبة
-        calc_r = client.post(f"/api/taxes/returns/{return_id}/calculate",
+        client.post(f"/api/taxes/returns/{return_id}/calculate",
                              headers=admin_headers)
         
         # تقديم الإقرار

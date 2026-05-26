@@ -3,24 +3,21 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import Request, APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access
 from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    AssetRevaluationCreate,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +30,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import AssetRevaluation, _D2, _D4, _dec
+from .core import AssetRevaluation, _D2, _dec  # noqa: E402
 
 @router.get("/revaluations", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
 def list_revaluations(asset_id: Optional[int] = None, branch_id: Optional[int] = None, current_user: dict = Depends(get_current_user)):
@@ -59,8 +56,24 @@ def list_revaluations(asset_id: Optional[int] = None, branch_id: Optional[int] =
 @router.post("/revaluations", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_revaluation(request: Request, data: AssetRevaluationCreate, current_user: dict = Depends(get_current_user)):
     """Create Revaluation."""
+    require_idempotency_key(request, operation="asset revaluation request")
     with transactional(current_user.company_id) as conn:
         try:
+            existing = conn.execute(text("""
+                SELECT *
+                FROM asset_revaluations
+                WHERE asset_id = :aid
+                  AND revaluation_date = :date
+                  AND new_value = :new
+                LIMIT 1
+            """), {
+                "aid": data.asset_id,
+                "date": (data.revaluation_date or date.today()).isoformat(),
+                "new": _dec(data.new_value).quantize(_D2, ROUND_HALF_UP),
+            }).fetchone()
+            if existing:
+                return {**dict(existing._mapping), "replayed": True}
+
             asset = conn.execute(text("SELECT * FROM assets WHERE id = :id"), {"id": data.asset_id}).fetchone()
             if not asset:
                 raise HTTPException(**http_error(404, "asset_not_found", request))
@@ -95,6 +108,7 @@ def create_revaluation(request: Request, data: AssetRevaluationCreate, current_u
 @router.post("/{asset_id}/revalue", dependencies=[Depends(require_permission("assets.manage"))], response_model=Dict[str, Any])
 def revalue_asset(request: Request, asset_id: int, reval: AssetRevaluation, current_user: dict = Depends(get_current_user)):
     """إعادة تقييم أصل ثابت — IAS 16.35-40: الزيادة تسجل في احتياطي إعادة التقييم"""
+    idempotency_key = require_idempotency_key(request, operation="asset revaluation")
     conn = get_db_connection(current_user.company_id)
     trans = conn.begin()
     try:
@@ -178,7 +192,8 @@ def revalue_asset(request: Request, asset_id: int, reval: AssetRevaluation, curr
             currency=base_currency,
             exchange_rate=Decimal("1"),
             source="asset_revaluation",
-            source_id=asset_id
+            source_id=asset_id,
+            idempotency_key=f"{idempotency_key}:asset-revaluation:{asset_id}",
         )
 
         # T037: Update current_value (not cost) + revaluation_surplus
@@ -191,8 +206,8 @@ def revalue_asset(request: Request, asset_id: int, reval: AssetRevaluation, curr
         trans.commit()
         return {
             "success": True, "asset_id": asset_id,
-            "old_book_value": float(old_book.quantize(_D2, ROUND_HALF_UP)), "new_value": float(_dec(reval.new_value).quantize(_D2, ROUND_HALF_UP)),
-            "difference": float(diff.quantize(_D2, ROUND_HALF_UP)), "journal_entry": je_num,
+            "old_book_value": str(old_book.quantize(_D2, ROUND_HALF_UP)), "new_value": str(_dec(reval.new_value).quantize(_D2, ROUND_HALF_UP)),
+            "difference": str(diff.quantize(_D2, ROUND_HALF_UP)), "journal_entry": je_num,
         }
     except HTTPException:
         trans.rollback()

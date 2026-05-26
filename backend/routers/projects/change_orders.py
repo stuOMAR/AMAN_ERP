@@ -2,25 +2,20 @@
 
 Mounted under the parent router via projects/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
-import os
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, List
+from datetime import datetime
+from decimal import Decimal
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access
 from utils.accounting import (
-    generate_sequential_number, get_mapped_account_id,
-    get_base_currency, compute_line_amounts, compute_invoice_totals
+    generate_sequential_number
 )
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import money_str, require_idempotency_key
 from sqlalchemy import text
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,28 +25,31 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.projects import (
-    ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
-    ProjectExpenseCreate, ProjectRevenueCreate,
-    TimesheetCreate, TimesheetUpdate, TimesheetApprove,
-    ProjectInvoiceCreate, ChangeOrderCreate, ChangeOrderUpdate, ProjectCloseRequest,
-    ProjectRiskCreate, ProjectRiskUpdate, TaskDependencyCreate
+from schemas.projects import (  # noqa: E402
+    ChangeOrderCreate, ChangeOrderUpdate
 )
-from schemas.timetracking import (
-    TimesheetEntryCreate, TimesheetEntryUpdate,
-    WeeklySubmitRequest, RejectRequest
-)
-from schemas.resource import AllocationCreate, AllocationUpdate
 
 router = APIRouter()
 
-from .core import _D2, _D4
+
+
+def _validate_project_access(db, project_id: int, current_user):
+    project = db.execute(
+        text("SELECT id, branch_id FROM projects WHERE id = :id"),
+        {"id": project_id},
+    ).fetchone()
+    if not project:
+        raise HTTPException(**http_error(404, "project_not_found"))
+    validate_branch_access(current_user, project.branch_id)
+    return project
+
 
 @router.get("/{project_id}/change-orders", dependencies=[Depends(require_permission("projects.view"))], response_model=List[Dict[str, Any]])
 async def get_change_orders(project_id: int, current_user: dict = Depends(get_current_user)):
     """جلب أوامر التغيير للمشروع"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         result = db.execute(text("""
             SELECT co.*,
                    COALESCE(req.full_name, '') as requested_by_name,
@@ -78,24 +76,41 @@ async def create_change_order(
     """إنشاء أمر تغيير جديد"""
     db = get_db_connection(current_user.company_id)
     try:
+        idempotency_key = require_idempotency_key(request, operation="change order create")
+        replay = db.execute(text("""
+            SELECT id, change_order_number FROM project_change_orders WHERE idempotency_key = :key LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if replay:
+            return {"success": True, "id": replay.id, "change_order_number": replay.change_order_number, "idempotency_replayed": True}
         project = db.execute(text("SELECT * FROM projects WHERE id = :id"), {"id": project_id}).fetchone()
         if not project:
             raise HTTPException(**http_error(404, "project_not_found"))
+        validate_branch_access(current_user, project.branch_id)
 
         co_num = generate_sequential_number(db, f"CO-{datetime.now().year}", "project_change_orders", "change_order_number")
 
         co_id = db.execute(text("""
             INSERT INTO project_change_orders (
                 project_id, change_order_number, title, description,
-                change_type, cost_impact, time_impact_days, status, requested_by
-            ) VALUES (:pid, :num, :title, :desc, :type, :cost, :days, 'pending', :uid)
+                change_type, cost_impact, time_impact_days, status, requested_by, idempotency_key
+            ) VALUES (:pid, :num, :title, :desc, :type, :cost, :days, 'pending', :uid, :idempotency_key)
+            ON CONFLICT (idempotency_key) WHERE idempotency_key IS NOT NULL
+            DO NOTHING
             RETURNING id
         """), {
             "pid": project_id, "num": co_num, "title": co.title,
             "desc": co.description, "type": co.change_type,
             "cost": co.cost_impact, "days": co.time_impact_days,
-            "uid": current_user.id
+            "uid": current_user.id,
+            "idempotency_key": idempotency_key,
         }).scalar()
+        if co_id is None:
+            replay = db.execute(text("""
+                SELECT id, change_order_number FROM project_change_orders WHERE idempotency_key = :key LIMIT 1
+            """), {"key": idempotency_key}).fetchone()
+            if replay:
+                return {"success": True, "id": replay.id, "change_order_number": replay.change_order_number, "idempotency_replayed": True}
+            raise HTTPException(**http_error(409, "duplicate_idempotency_key", request))
 
         db.commit()
 
@@ -130,6 +145,9 @@ async def update_change_order(
         existing = db.execute(text("SELECT * FROM project_change_orders WHERE id = :id"), {"id": co_id}).fetchone()
         if not existing:
             raise HTTPException(**http_error(404, "change_order_not_found"))
+        project = db.execute(text("SELECT branch_id FROM projects WHERE id = :id"), {"id": existing.project_id}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         if existing.status == 'approved':
             raise HTTPException(status_code=400, detail=i18n_message("change_order_cannot_edit_after_approval"))
 
@@ -165,11 +183,15 @@ async def approve_change_order(
     current_user: dict = Depends(get_current_user)
 ):
     """الموافقة على أمر التغيير وتعديل ميزانية المشروع تلقائياً"""
+    require_idempotency_key(request, operation="change order approval")
     db = get_db_connection(current_user.company_id)
     try:
         co = db.execute(text("SELECT * FROM project_change_orders WHERE id = :id"), {"id": co_id}).fetchone()
         if not co:
             raise HTTPException(**http_error(404, "change_order_not_found"))
+        project = db.execute(text("SELECT branch_id FROM projects WHERE id = :id"), {"id": co.project_id}).fetchone()
+        if project:
+            validate_branch_access(current_user, project.branch_id)
         if co.status != 'pending':
             raise HTTPException(status_code=400, detail=i18n_message("change_order_approve_invalid_status", status=co.status))
 
@@ -199,7 +221,7 @@ async def approve_change_order(
             db, user_id=current_user.id, username=current_user.username,
             action="project.change_order.approve", resource_type="project_change_order",
             resource_id=str(co_id),
-            details={"project_id": co.project_id, "cost_impact": float(co.cost_impact or 0)},
+            details={"project_id": co.project_id, "cost_impact": money_str(co.cost_impact or 0)},
             request=request
         )
 
@@ -217,4 +239,3 @@ async def approve_change_order(
 # ═══════════════════════════════════════════════════════════
 # Project Closure with P&L Journal Entry
 # ═══════════════════════════════════════════════════════════
-

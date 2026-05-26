@@ -1,5 +1,6 @@
 import { useState, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
+import Decimal from 'decimal.js';
 import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
@@ -53,10 +54,10 @@ function AssetReports() {
         return () => clearTimeout(timer)
     }, [currentBranch, activeTab]);
 
-    // Calculate totals
-    const totalCost = data.reduce((s, r) => s + (r.cost || r.original_cost || 0), 0);
-    const totalDepreciation = data.reduce((s, r) => s + (r.accumulated_depreciation || r.total_depreciation || 0), 0);
-    const totalNBV = data.reduce((s, r) => s + (r.net_book_value || r.nbv || 0), 0);
+    // Calculate totals using absolute Decimal precision
+    const totalCost = data.reduce((s, r) => s.plus(new Decimal(r.cost || r.original_cost || '0')), new Decimal('0')).toString();
+    const totalDepreciation = data.reduce((s, r) => s.plus(new Decimal(r.accumulated_depreciation || r.total_depreciation || '0')), new Decimal('0')).toString();
+    const totalNBV = data.reduce((s, r) => s.plus(new Decimal(r.net_book_value || r.nbv || '0')), new Decimal('0')).toString();
 
     const renderRegisterTable = () => (
         <table className="data-table">
@@ -154,8 +155,10 @@ function AssetReports() {
                 {data.length === 0 ? (
                     <tr><td colSpan={8} className="text-center text-muted p-4">{t('asset_reports.no_data')}</td></tr>
                 ) : data.map((row, i) => {
-                    const nbvPct = (row.cost || row.original_cost) > 0
-                        ? ((row.net_book_value || row.nbv || 0) / (row.cost || row.original_cost) * 100)
+                    const costDec = new Decimal(row.cost || row.original_cost || '0');
+                    const nbvDec = new Decimal(row.net_book_value || row.nbv || '0');
+                    const nbvPct = costDec.gt(0)
+                        ? nbvDec.dividedBy(costDec).times(100).toNumber()
                         : 0;
                     return (
                         <tr key={i}>
@@ -216,7 +219,7 @@ function AssetReports() {
                     <div className="metric-label">{t('asset_reports.asset_count')}</div>
                     <div className="metric-value">
                         {activeTab === 'depreciation'
-                            ? data.reduce((sum, row) => sum + (row.asset_count || row.count || 0), 0)
+                            ? data.reduce((sum, row) => sum.plus(new Decimal(row.asset_count || row.count || 0)), new Decimal(0)).toNumber()
                             : data.length}
                     </div>
                     <div className="metric-change">{t('asset_reports.assets')}</div>

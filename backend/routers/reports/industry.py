@@ -2,22 +2,17 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime, date, timedelta, timezone
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
-from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -278,7 +273,7 @@ async def progress_billing_report(
             cost = Decimal(str(row.get("total_expenses") or 0)) or Decimal(str(row.get("actual_cost") or 0))
             # Use actual_cost as billed amount (represents invoiced work in progress billing)
             invoiced = Decimal(str(row.get("actual_cost") or 0))
-            progress = Decimal(str(row.get("progress_percentage") or 0))
+            Decimal(str(row.get("progress_percentage") or 0))
 
             row["profit"] = invoiced - cost
             row["profit_margin_pct"] = _pct(row["profit"], invoiced) if invoiced > 0 else Decimal("0")

@@ -6,8 +6,6 @@ Aggregates adapter health checks and returns per-adapter + aggregate status.
 from __future__ import annotations
 
 import logging
-import time
-from typing import Any
 
 from fastapi import APIRouter
 

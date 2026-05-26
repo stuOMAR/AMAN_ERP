@@ -21,6 +21,7 @@ const LeaseContracts = () => {
     const [leases, setLeases] = useState([]);
     const [assets, setAssets] = useState([]);
     const [schedule, setSchedule] = useState(null);
+    const [summary, setSummary] = useState({ total_rou: '0', total_liability: '0' });
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
     const [showForm, setShowForm] = useState(false);
@@ -48,7 +49,8 @@ const LeaseContracts = () => {
                 assetsAPI.listLeaseContracts(),
                 assetsAPI.list(assetParams)
             ]);
-            setLeases(lRes.data || []);
+            setLeases(lRes.data?.data || lRes.data || []);
+            setSummary(lRes.data?.summary || { total_rou: '0', total_liability: '0' });
             setAssets(aRes.data?.assets || aRes.data || []);
         } catch (err) {
             console.error(err);
@@ -81,8 +83,8 @@ const LeaseContracts = () => {
         }
     };
 
-    const totalROU = leases.reduce((s, l) => s.plus(new Decimal(l.right_of_use_value || '0')), new Decimal('0')).toString();
-    const totalLiability = leases.reduce((s, l) => s.plus(new Decimal(l.lease_liability || '0')), new Decimal('0')).toString();
+    const totalROU = summary.total_rou;
+    const totalLiability = summary.total_liability;
     const activeLeases = leases.filter(l => l.status === 'active');
 
     const formatDate = (d) => d ? new Date(d).toLocaleDateString(i18n.language === 'ar' ? 'ar-SA' : 'en-US') : '—';

@@ -14,15 +14,17 @@ from __future__ import annotations
 
 import logging
 from datetime import datetime
+from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from database import get_db_connection
 from routers.auth import get_current_user
+from services.audit_sanitizer import sanitize_for_audit
 from services import integration_keys_service as ks
+from utils.tax_precision import require_idempotency_key
 from utils.i18n import http_error
 from utils.permissions import require_permission
 from utils.tx import transactional
@@ -30,6 +32,10 @@ from integrations.circuit_breaker import CircuitBreaker
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/integrations", tags=["integrations-admin"])
+
+
+def _sanitize_external_payload(value):
+    return sanitize_for_audit(value, context="integration_admin")
 
 
 class IntegrationKeyCreate(BaseModel):
@@ -91,7 +97,7 @@ def create_or_rotate_key(
         return {"id": new_id, "status": "active" if body.activate else "pending"}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         logger.exception("integration key create failed")
         raise HTTPException(**http_error(500, "integration_key_store_failed", request))
 
@@ -109,7 +115,7 @@ def revoke_integration_key(key_id: int, request: Request, current_user=Depends(g
         return {"id": key_id, "status": "revoked"}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(**http_error(500, "integration_key_revoke_failed", request))
 
 
@@ -177,7 +183,7 @@ def reset_circuit_breaker(breaker_id: int, request: Request, current_user=Depend
         return {"id": breaker_id, "state": "closed"}
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         raise HTTPException(**http_error(500, "circuit_breaker_reset_failed", request))
 
 
@@ -189,12 +195,11 @@ def reset_circuit_breaker(breaker_id: int, request: Request, current_user=Depend
 )
 def list_payment_retry_queue(
     status: Optional[str] = None,
-    limit: int = 100,
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(get_current_user),
 ):
     """List rows from the payment retry queue (most recent first)."""
     company_id = current_user.company_id
-    limit = min(max(int(limit or 100), 1), 500)
     with transactional(company_id) as db:
         q = """
             SELECT id, payment_id, provider, amount, currency, idempotency_key,
@@ -212,12 +217,12 @@ def list_payment_retry_queue(
         return [
             {
                 "id": r[0], "payment_id": r[1], "provider": r[2],
-                "amount": Decimal(str(r[3])) if r[3] is not None else None,
+                "amount": str(Decimal(str(r[3]))) if r[3] is not None else None,
                 "currency": r[4], "idempotency_key": r[5],
                 "retry_count": r[6], "max_retries": r[7], "status": r[8],
                 "last_attempt_at": r[9].isoformat() if r[9] else None,
                 "next_retry_at": r[10].isoformat() if r[10] else None,
-                "last_error": r[11],
+                "last_error": _sanitize_external_payload(r[11]),
                 "created_at": r[12].isoformat() if r[12] else None,
                 "updated_at": r[13].isoformat() if r[13] else None,
             }
@@ -231,12 +236,11 @@ def list_payment_retry_queue(
 )
 def list_sms_retry_queue(
     status: Optional[str] = None,
-    limit: int = 100,
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(get_current_user),
 ):
     """List SMS Retry Queue."""
     company_id = current_user.company_id
-    limit = min(max(int(limit or 100), 1), 500)
     with transactional(company_id) as db:
         q = """
             SELECT id, notification_id, provider, recipient_phone, sender_id,
@@ -258,7 +262,7 @@ def list_sms_retry_queue(
                 "retry_count": r[5], "max_retries": r[6], "status": r[7],
                 "last_attempt_at": r[8].isoformat() if r[8] else None,
                 "next_retry_at": r[9].isoformat() if r[9] else None,
-                "last_error": r[10],
+                "last_error": _sanitize_external_payload(r[10]),
                 "created_at": r[11].isoformat() if r[11] else None,
                 "updated_at": r[12].isoformat() if r[12] else None,
             }
@@ -273,12 +277,11 @@ def list_sms_retry_queue(
 def list_dlq(
     queue_type: Optional[str] = None,
     archived: bool = False,
-    limit: int = 100,
+    limit: int = Query(25, ge=1, le=100),
     current_user=Depends(get_current_user),
 ):
     """List Dead-Letter Queue items. By default only unresolved (not archived)."""
     company_id = current_user.company_id
-    limit = min(max(int(limit or 100), 1), 500)
     with transactional(company_id) as db:
         q = """
             SELECT id, queue_type, queue_item_id, provider, final_status,
@@ -327,7 +330,8 @@ def get_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current
     return {
         "id": row[0], "queue_type": row[1], "queue_item_id": row[2],
         "provider": row[3], "final_status": row[4], "reason": row[5],
-        "payload": row[6], "gateway_response": row[7],
+        "payload": _sanitize_external_payload(row[6] or {}),
+        "gateway_response": _sanitize_external_payload(row[7] or {}),
         "archived_at": row[8].isoformat() if row[8] else None,
         "created_at": row[9].isoformat() if row[9] else None,
     }
@@ -340,6 +344,7 @@ def get_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current
 def replay_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_current_user)):
     """Re-enqueue a DLQ item back into its source queue (resets retry_count=0)
     and archives the DLQ row."""
+    idempotency_key = require_idempotency_key(request, operation="integration DLQ replay")
     company_id = current_user.company_id
     with transactional(company_id) as db:
         row = db.execute(
@@ -350,7 +355,13 @@ def replay_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_curr
         if not row:
             raise HTTPException(**http_error(404, "dlq_item_not_found", request))
         if row[3] is not None:
-            raise HTTPException(**http_error(400, "dlq_item_already_archived", request))
+            return {
+                "id": dlq_id,
+                "replayed": True,
+                "queue_type": row[1],
+                "idempotency_key": idempotency_key,
+                "idempotent": True,
+            }
 
         queue_type, queue_item_id = row[1], row[2]
         if queue_type == "payment":
@@ -385,7 +396,12 @@ def replay_dlq_item(dlq_id: int, request: Request, current_user=Depends(get_curr
                      WHERE id = :id"""),
             {"id": dlq_id},
         )
-    return {"id": dlq_id, "replayed": True, "queue_type": queue_type}
+    return {
+        "id": dlq_id,
+        "replayed": True,
+        "queue_type": queue_type,
+        "idempotency_key": idempotency_key,
+    }
 
 
 @router.post(

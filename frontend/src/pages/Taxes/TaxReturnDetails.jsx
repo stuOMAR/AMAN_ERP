@@ -12,10 +12,19 @@ import { useToast } from '../../context/ToastContext'
 import { PageLoading } from '../../components/common/LoadingStates'
 import { useBranch } from '../../context/BranchContext'
 import DataTable from '../../components/common/DataTable'
+import { Decimal } from '../../utils/decimal'
 
 function makeIdempotencyKey(prefix) {
     if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
     return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+function addMoney(...values) {
+    return values.reduce((total, value) => total.add(value || '0.00'), new Decimal(0)).toString()
+}
+
+function isPositiveMoney(value) {
+    return new Decimal(value || '0.00').bi > 0n
 }
 
 function TaxReturnDetails() {
@@ -63,10 +72,20 @@ function TaxReturnDetails() {
     const handleFile = async () => {
         setActionLoading(true)
         try {
+            const preview = await taxesAPI.previewReturn({
+                tax_period: data.tax_period,
+                tax_type: data.tax_type,
+                branch_id: data.branch_id || null
+            })
+            const submittedTaxDue = preview.data?.submitted_tax_due || preview.data?.summary?.net_payable
+            if (submittedTaxDue == null) {
+                throw new Error('submitted_tax_due_missing')
+            }
             await taxesAPI.fileReturn(id, {
                 penalty_amount: fileForm.penalty_amount || '0.00',
                 interest_amount: fileForm.interest_amount || '0.00',
-            })
+                submitted_tax_due: String(submittedTaxDue),
+            }, makeIdempotencyKey(`tax-return-file:${id}`))
             setShowFileModal(false)
             fetchData()
         } catch (err) {
@@ -80,7 +99,7 @@ function TaxReturnDetails() {
         if (!confirm(t('taxes.confirm_cancel'))) return
         setActionLoading(true)
         try {
-            await taxesAPI.cancelReturn(id)
+            await taxesAPI.cancelReturn(id, makeIdempotencyKey(`tax-return-cancel:${id}`))
             fetchData()
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error', 'error'))
@@ -135,8 +154,8 @@ function TaxReturnDetails() {
     if (!data) return null
 
     const currency = data.display_currency || data.currency || fallbackCurrency
-    const penaltyTotal = Number(data.penalty_amount || 0) + Number(data.interest_amount || 0)
-    const fileTotal = Number(data.tax_amount || 0) + Number(fileForm.penalty_amount || 0) + Number(fileForm.interest_amount || 0)
+    const penaltyTotal = addMoney(data.penalty_amount, data.interest_amount)
+    const fileTotal = addMoney(data.tax_amount, fileForm.penalty_amount, fileForm.interest_amount)
     const paymentColumns = [
         { key: 'payment_number', label: t('taxes.payment_number'), render: (v) => <span className="fw-bold" style={{ color: 'var(--primary)', fontFamily: 'monospace' }}>{v}</span> },
         { key: 'payment_date', label: t('common.date'), render: (v) => formatShortDate(v) },
@@ -170,7 +189,7 @@ function TaxReturnDetails() {
                                 </button>
                             </>
                         )}
-                        {data.status === 'filed' && Number(data.remaining_amount || 0) > 0 && (
+                        {data.status === 'filed' && isPositiveMoney(data.remaining_amount) && (
                             <>
                                 <button className="btn btn-success" onClick={() => setShowPayModal(true)} disabled={actionLoading}>
                                     💰 {t('taxes.record_payment')}
@@ -197,7 +216,7 @@ function TaxReturnDetails() {
                     <div className="metric-label">{t('taxes.tax_amount')}</div>
                     <div className="metric-value text-secondary">{formatNumber(data.tax_amount)} <small>{currency}</small></div>
                 </div>
-                {(Number(data.penalty_amount || 0) > 0 || Number(data.interest_amount || 0) > 0) && (
+                {(isPositiveMoney(data.penalty_amount) || isPositiveMoney(data.interest_amount)) && (
                     <div className="metric-card">
                         <div className="metric-label">{t('taxes.penalties')}</div>
                         <div className="metric-value text-error">{formatNumber(penaltyTotal)} <small>{currency}</small></div>
@@ -213,7 +232,7 @@ function TaxReturnDetails() {
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('taxes.remaining')}</div>
-                    <div className={`metric-value ${Number(data.remaining_amount || 0) > 0 ? 'text-error' : 'text-success'}`}>
+                    <div className={`metric-value ${isPositiveMoney(data.remaining_amount) ? 'text-error' : 'text-success'}`}>
                         {formatNumber(data.remaining_amount)} <small>{currency}</small>
                     </div>
                 </div>
@@ -342,7 +361,7 @@ function TaxReturnDetails() {
                         </div>
                         <div className="modal-footer">
                             <button className="btn btn-secondary" onClick={() => setShowPayModal(false)}>{t('common.cancel')}</button>
-                            <button className="btn btn-success" onClick={handlePay} disabled={actionLoading || Number(payForm.amount || 0) <= 0}>
+                            <button className="btn btn-success" onClick={handlePay} disabled={actionLoading || !isPositiveMoney(payForm.amount)}>
                                 {actionLoading ? '...' : (t('taxes.confirm_payment'))}
                             </button>
                         </div>

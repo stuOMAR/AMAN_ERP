@@ -4,16 +4,21 @@ import { useTranslation } from 'react-i18next'
 import { formatShortDate } from '../../utils/dateUtils'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
-import { getCurrency } from '../../utils/auth'
 import BackButton from '../../components/common/BackButton'
 import { PageLoading } from '../../components/common/LoadingStates'
-import { formatNumber } from '../../utils/format'
+
+const amountText = (value) => String(value ?? '').trim()
+const isDebitAmount = (value) => amountText(value).startsWith('-')
+const isCreditAmount = (value) => {
+    const text = amountText(value)
+    return text !== '' && text !== '0' && text !== '0.00' && !text.startsWith('-')
+}
+const unsignedAmount = (value) => amountText(value).replace(/^-/, '')
 
 function BankImport() {
     const { t } = useTranslation()
     const { showToast } = useToast()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
     const [batches, setBatches] = useState([])
     const [loading, setLoading] = useState(true)
     const [initialLoad, setInitialLoad] = useState(true)
@@ -25,10 +30,16 @@ function BankImport() {
         const timer = setTimeout(() => {
             const params = {};
             if (currentBranch?.id) params.branch_id = currentBranch.id;
-            treasuryAPI.listBankImports(params).then(r => setBatches(r.data)).catch(console.error).finally(() => { setLoading(false); setInitialLoad(false); })
+            treasuryAPI.listBankImports(params).then(r => setBatches(r.data)).catch(() => setBatches([])).finally(() => { setLoading(false); setInitialLoad(false); })
         }, 300)
         return () => clearTimeout(timer)
     }, [currentBranch])
+
+    const refreshImports = () => {
+        const params = {};
+        if (currentBranch?.id) params.branch_id = currentBranch.id;
+        return treasuryAPI.listBankImports(params).then(r => setBatches(r.data));
+    }
 
     const handleUpload = async (e) => {
         const file = e.target.files[0]
@@ -36,8 +47,8 @@ function BankImport() {
         setUploading(true)
         try {
             const res = await treasuryAPI.importBankStatement(file)
-            showToast(t('bank_import.uploaded', { count: res.data.lines_imported }), 'success')
-            setBatches(prev => [res.data, ...prev])
+            showToast(t('bank_import.uploaded', { count: res.data.count || 0 }), 'success')
+            await refreshImports()
         } catch (err) {
             showToast(err.response?.data?.detail || t('common.error'), 'error')
         } finally {
@@ -56,16 +67,6 @@ function BankImport() {
         }
     }
 
-    const handleAutoMatch = async (batchId) => {
-        try {
-            const res = await treasuryAPI.autoMatchBankImport(batchId)
-            showToast(t('bank_import.matched', { count: res.data.matched_count }), 'success')
-            viewBatch(batchId)
-        } catch (err) {
-            showToast(err.response?.data?.detail || t('common.error'), 'error')
-        }
-    }
-
     if (initialLoad) return <PageLoading />
 
     return (
@@ -80,7 +81,7 @@ function BankImport() {
                 <div className="header-actions">
                     <label className="btn btn-primary" style={{ cursor: 'pointer' }}>
                         {uploading ? t('common.uploading') : `📤 ${t('bank_import.upload_csv')}`}
-                        <input type="file" accept=".csv" onChange={handleUpload} style={{ display: 'none' }} disabled={uploading} />
+                        <input type="file" accept=".csv,.txt,.sta,.mt940,.xml,.camt,.camt053" onChange={handleUpload} style={{ display: 'none' }} disabled={uploading} />
                     </label>
                 </div>
             </div>
@@ -103,12 +104,11 @@ function BankImport() {
                         ) : batches.map(b => (
                             <tr key={b.id} className={selectedBatch === b.id ? 'bg-light' : ''}>
                                 <td className="font-medium">#{b.id}</td>
-                                <td>{b.filename}</td>
-                                <td>{b.lines_imported || b.line_count || '-'}</td>
+                                <td>{b.source_filename || b.filename}</td>
+                                <td>{b.statement_number || b.source_format || '-'}</td>
                                 <td>{formatShortDate(b.created_at)}</td>
                                 <td className="flex gap-1">
                                     <button className="btn-icon" onClick={() => viewBatch(b.id)} title={t('common.view')}>👁️</button>
-                                    <button className="btn btn-secondary btn-sm" onClick={() => handleAutoMatch(b.id)}>🔗 {t('bank_import.auto_match')}</button>
                                 </td>
                             </tr>
                         ))}
@@ -136,14 +136,14 @@ function BankImport() {
                         <tbody>
                             {lines.map((l, i) => (
                                 <tr key={i}>
-                                    <td>{l.transaction_date ? formatShortDate(l.transaction_date) : '-'}</td>
+                                    <td>{(l.transaction_date || l.posting_date || l.value_date) ? formatShortDate(l.transaction_date || l.posting_date || l.value_date) : '-'}</td>
                                     <td>{l.description}</td>
                                     <td>{l.reference || '-'}</td>
-                                    <td className="text-danger">{l.debit ? formatNumber(l.debit) : '-'}</td>
-                                    <td className="text-success">{l.credit ? formatNumber(l.credit) : '-'}</td>
+                                    <td className="text-danger">{isDebitAmount(l.amount) ? unsignedAmount(l.amount) : '-'}</td>
+                                    <td className="text-success">{isCreditAmount(l.amount) ? amountText(l.amount) : '-'}</td>
                                     <td>
-                                        <span className={`status-badge ${l.matched ? 'success' : 'draft'}`}>
-                                            {l.matched ? t('bank_import.matched_label') : t('bank_import.unmatched')}
+                                        <span className={`status-badge ${(l.match_status === 'matched' || l.matched_entry_id) ? 'success' : 'draft'}`}>
+                                            {(l.match_status === 'matched' || l.matched_entry_id) ? t('bank_import.matched_label') : t('bank_import.unmatched')}
                                         </span>
                                     </td>
                                 </tr>

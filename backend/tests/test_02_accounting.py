@@ -134,8 +134,8 @@ class TestJournalEntries:
             data = response.json()
             # التحقق من التوازن
             if "lines" in data:
-                total_debit = sum(l.get("debit", 0) for l in data["lines"])
-                total_credit = sum(l.get("credit", 0) for l in data["lines"])
+                total_debit = sum(line.get("debit", 0) for line in data["lines"])
+                total_credit = sum(line.get("credit", 0) for line in data["lines"])
                 assert_journal_balanced(total_debit, total_credit)
         else:
             # مقبول إذا كان خطأ معروف (مثلاً تكرار المرجع)

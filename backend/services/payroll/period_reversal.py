@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import logging
 from typing import Any, Optional
+from decimal import Decimal
 
 from sqlalchemy import text
 
@@ -106,7 +107,7 @@ def reverse_payroll_period(
                     "pid": period_id,
                     "rid": run_id,
                     "treasury_id": mov[1],
-                    "amount": -float(mov[2]),  # Negative = reversal
+                    "amount": -Decimal(str(mov[2])),  # Negative = reversal
                     "currency": mov[3],
                     "desc": f"Reversal of bank movement {mov[0]} for period {period_id}",
                 },

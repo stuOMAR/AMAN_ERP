@@ -42,9 +42,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from typing import Optional
 
-from sqlalchemy.orm import Session
 
 from database import get_db_connection
 

@@ -92,10 +92,7 @@ function CustomerDisplay() {
         return () => { if (channelRef.current) channelRef.current.close(); };
     }, []);
 
-    useEffect(() => {
-        const sum = cartItems.reduce((s, i) => s + (i.total || (i.price * (i.qty || i.quantity || 1))), 0);
-        if (!total && sum > 0) setTotal(sum);
-    }, [cartItems]);
+
 
     const openCustomerDisplay = () => {
         if (displayWindowRef.current && !displayWindowRef.current.closed) {
@@ -131,11 +128,11 @@ function CustomerDisplay() {
         } else if (displayState === 'scanning') {
             const itemsHtml = cartItems.map(i => {
                 const qty = i.qty || i.quantity || 1;
-                const lineTotal = i.total || (i.price * qty);
+                const lineTotal = i.total;
                 return `
                 <div style="display:flex;justify-content:space-between;padding:8px 0;border-bottom:1px solid ${isDark ? '#333' : '#eee'}">
                     <span>${escapeHtml(i.name)} × ${escapeHtml(qty)}</span>
-                    <span>${escapeHtml(formatNumber(lineTotal))} ${escapeHtml(currency)}</span>
+                    <span>${lineTotal ? escapeHtml(formatNumber(lineTotal)) + ' ' + escapeHtml(currency) : '—'}</span>
                 </div>
             `;
             }).join('');

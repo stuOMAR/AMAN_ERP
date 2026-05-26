@@ -33,8 +33,9 @@ function MarketingCampaigns() {
     const [editId, setEditId] = useState(null);
     const [filterStatus, setFilterStatus] = useState('');
     const [filterType, setFilterType] = useState('');
+    const [summary, setSummary] = useState({ total_campaigns: 0, active_campaigns: 0, total_budget: '0.00', total_conversions: 0 });
 
-    const emptyForm = { name: '', campaign_type: 'email', status: 'draft', start_date: '', end_date: '', budget: 0, target_audience: '', description: '' };
+    const emptyForm = { name: '', campaign_type: 'email', status: 'draft', start_date: '', end_date: '', budget: '0.00', target_audience: '', description: '' };
     const [form, setForm] = useState({ ...emptyForm });
 
     useEffect(() => { fetchData(); }, [filterStatus, filterType]);
@@ -45,22 +46,26 @@ function MarketingCampaigns() {
             const params = {};
             if (filterStatus) params.status = filterStatus;
             if (filterType) params.campaign_type = filterType;
-            const res = await crmAPI.listCampaigns(params);
-            setCampaigns(res.data || []);
+            const [listRes, summaryRes] = await Promise.all([
+                crmAPI.listCampaigns(params),
+                crmAPI.getCampaignSummary(params)
+            ]);
+            setCampaigns(listRes.data || []);
+            setSummary(summaryRes.data || { total_campaigns: 0, active_campaigns: 0, total_budget: '0.00', total_conversions: 0 });
         } catch (e) { console.error(e); }
         finally { setLoading(false); }
     };
 
     const openCreate = () => { setForm({ ...emptyForm }); setIsEdit(false); setEditId(null); setShowModal(true); };
     const openEdit = (c) => {
-        setForm({ name: c.name, campaign_type: c.campaign_type, status: c.status, start_date: c.start_date || '', end_date: c.end_date || '', budget: c.budget || 0, target_audience: c.target_audience || '', description: c.description || '' });
+        setForm({ name: c.name, campaign_type: c.campaign_type, status: c.status, start_date: c.start_date || '', end_date: c.end_date || '', budget: c.budget || '0.00', target_audience: c.target_audience || '', description: c.description || '' });
         setIsEdit(true); setEditId(c.id); setShowModal(true);
     };
 
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const payload = { ...form, budget: Number(form.budget) };
+            const payload = { ...form, budget: form.budget || '0.00' };
             if (isEdit) await crmAPI.updateCampaign(editId, payload);
             else await crmAPI.createCampaign(payload);
             setShowModal(false); fetchData();
@@ -76,9 +81,10 @@ function MarketingCampaigns() {
     const statusLabel = (v) => t(`crm.campaign_status_${v}`, v);
 
     // Summary stats
-    const totalBudget = campaigns.reduce((s, c) => s + (c.budget || 0), 0);
-    const activeCampaigns = campaigns.filter(c => c.status === 'active').length;
-    const totalConversions = campaigns.reduce((s, c) => s + (c.total_responded || 0), 0);
+    const totalCampaigns = summary.total_campaigns || 0;
+    const totalBudget = summary.total_budget || '0.00';
+    const activeCampaigns = summary.active_campaigns || 0;
+    const totalConversions = summary.total_conversions || 0;
 
     return (
         <div className="workspace fade-in">
@@ -95,7 +101,7 @@ function MarketingCampaigns() {
 
             {/* Summary */}
             <div className="metrics-grid" style={{ marginBottom: 16 }}>
-                <div className="metric-card"><div className="metric-label">{t('crm.total_campaigns', 'إجمالي الحملات')}</div><div className="metric-value text-primary">{campaigns.length}</div></div>
+                <div className="metric-card"><div className="metric-label">{t('crm.total_campaigns', 'إجمالي الحملات')}</div><div className="metric-value text-primary">{totalCampaigns}</div></div>
                 <div className="metric-card"><div className="metric-label">{t('crm.active_campaigns', 'الحملات النشطة')}</div><div className="metric-value text-success">{activeCampaigns}</div></div>
                 <div className="metric-card"><div className="metric-label">{t('crm.total_budget', 'إجمالي الميزانية')}</div><div className="metric-value text-warning">{formatNumber(totalBudget)}</div></div>
                 <div className="metric-card"><div className="metric-label">{t('crm.total_conversions', 'التحويلات')}</div><div className="metric-value text-info">{totalConversions}</div></div>

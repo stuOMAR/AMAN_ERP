@@ -157,7 +157,7 @@ async def update_email_template(
         if not fields:
             return {"detail": "Nothing to update"}
         db.execute(
-            text(f"UPDATE email_templates SET {', '.join(fields)} WHERE id = :id"), # noqa: sql-lint
+            text(f"UPDATE email_templates SET {', '.join(fields)} WHERE id = :id"), # noqa
             params,
         )
         db.commit()

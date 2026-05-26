@@ -11,7 +11,6 @@ import DataTable from '../../components/common/DataTable'
 import SearchFilter from '../../components/common/SearchFilter'
 import BackButton from '../../components/common/BackButton'
 import { formatNumber } from '../../utils/format'
-import Decimal from 'decimal.js'
 
 export default function TreasuryAccountList() {
     const { t } = useTranslation()
@@ -24,6 +23,7 @@ export default function TreasuryAccountList() {
     const [initialLoad, setInitialLoad] = useState(true)
     const [saving, setSaving] = useState(false)
     const [accountError, setAccountError] = useState('')
+    const [openingBalancePreview, setOpeningBalancePreview] = useState(null)
     const [showAdd, setShowAdd] = useState(false)
     const [showEdit, setShowEdit] = useState(false)
     const [showDelete, setShowDelete] = useState(false)
@@ -33,26 +33,20 @@ export default function TreasuryAccountList() {
     const [accountForm, setAccountForm] = useState({
         name: '', name_en: '', account_type: 'cash', currency: '',
         bank_name: '', account_number: '', iban: '', branch_id: '',
-        opening_balance: '', exchange_rate: '1', allow_overdraft: false
+        opening_balance: '', allow_overdraft: false
     })
     const canCreateTreasuryAccount = hasPermission('treasury.create')
     const canEditTreasuryAccount = hasPermission('treasury.edit')
     const canDeleteTreasuryAccount = hasPermission('treasury.delete')
     const permissionDenied = () => toastEmitter.emit(t('common.permission_denied', 'ليس لديك صلاحية تنفيذ هذا الإجراء'), 'error')
-    const decimal = (value) => {
-        try {
-            return new Decimal(value || 0)
-        } catch {
-            return new Decimal(0)
-        }
-    }
 
     const resetAccountForm = () => {
         const defaultCurrency = (currencies.find(c => c.is_base) || currencies[0])?.code || baseCurrency
+        setOpeningBalancePreview(null)
         setAccountForm({
             name: '', name_en: '', account_type: 'cash', currency: defaultCurrency,
             bank_name: '', account_number: '', iban: '', branch_id: currentBranch?.id || '',
-            opening_balance: '', exchange_rate: '1', allow_overdraft: false
+            opening_balance: '', allow_overdraft: false
         })
     }
 
@@ -78,7 +72,6 @@ export default function TreasuryAccountList() {
             account_number: accountForm.account_number?.trim() || null,
             iban: accountForm.iban?.trim() || null,
             branch_id: accountForm.branch_id ? parseInt(accountForm.branch_id, 10) : null,
-            exchange_rate: accountForm.exchange_rate || '1',
             allow_overdraft: Boolean(accountForm.allow_overdraft),
         }
         if (includeOpeningBalance) {
@@ -125,6 +118,31 @@ export default function TreasuryAccountList() {
         return () => clearTimeout(timer)
     }, [currentBranch])
 
+    useEffect(() => {
+        if (!showAdd || !accountForm.currency || accountForm.currency === baseCurrency) {
+            setOpeningBalancePreview(null)
+            return
+        }
+
+        let cancelled = false
+        const timer = setTimeout(async () => {
+            try {
+                const response = await treasuryAPI.previewOpeningBalance({
+                    opening_balance: accountForm.opening_balance || '0',
+                    currency: accountForm.currency
+                })
+                if (!cancelled) setOpeningBalancePreview(response.data)
+            } catch (error) {
+                if (!cancelled) setOpeningBalancePreview(null)
+            }
+        }, 300)
+
+        return () => {
+            cancelled = true
+            clearTimeout(timer)
+        }
+    }, [showAdd, accountForm.opening_balance, accountForm.currency, baseCurrency])
+
     const fetchCurrencies = async () => {
         try {
             const response = await currenciesAPI.list()
@@ -134,7 +152,6 @@ export default function TreasuryAccountList() {
                 setAccountForm(prev => ({
                     ...prev,
                     currency: defaultCurr.code,
-                    exchange_rate: defaultCurr.current_rate || 1
                 }))
             }
         } catch (error) {
@@ -188,7 +205,6 @@ export default function TreasuryAccountList() {
             iban: account.iban || '',
             branch_id: account.branch_id || '',
             opening_balance: 0,
-            exchange_rate: 1,
             allow_overdraft: account.allow_overdraft || false
         })
         setShowEdit(true)
@@ -430,11 +446,9 @@ export default function TreasuryAccountList() {
                             value={accountForm.currency}
                             onChange={e => {
                                 const code = e.target.value;
-                                const curr = currencies.find(c => c.code === code);
                                 setAccountForm({
                                     ...accountForm,
                                     currency: code,
-                                    exchange_rate: curr?.current_rate || 1
                                 });
                             }}
                         >
@@ -443,22 +457,6 @@ export default function TreasuryAccountList() {
                             ))}
                         </select>
                     </div>
-
-                    {accountForm.currency && accountForm.currency !== baseCurrency && (
-                        <div className="form-group">
-                            <label className="form-label">{t('common.exchange_rate')}</label>
-                            <input
-                                type="number"
-                                className="form-input"
-                                value={accountForm.exchange_rate}
-                                onChange={e => setAccountForm({ ...accountForm, exchange_rate: e.target.value || '1' })}
-                                step="0.000001"
-                            />
-                            <div className="form-text text-sm text-gray-500">
-                                1 {accountForm.currency} = {accountForm.exchange_rate} {baseCurrency}
-                            </div>
-                        </div>
-                    )}
 
                     <div className="form-group">
                         <label className="form-label">{t('common.name')}</label>
@@ -474,7 +472,7 @@ export default function TreasuryAccountList() {
                         />
                         {accountForm.currency && accountForm.currency !== baseCurrency && (
                             <div className="form-text text-sm text-gray-500 mt-1">
-                                {t('common.equivalent')}: {formatNumber(decimal(accountForm.opening_balance).mul(decimal(accountForm.exchange_rate || 1)).toString())} {baseCurrency}
+                                {t('common.equivalent')}: {formatNumber(openingBalancePreview?.opening_balance_base ?? '0')} {openingBalancePreview?.base_currency || baseCurrency}
                             </div>
                         )}
                     </div>
@@ -549,11 +547,9 @@ export default function TreasuryAccountList() {
                             value={accountForm.currency}
                             onChange={e => {
                                 const code = e.target.value;
-                                const curr = currencies.find(c => c.code === code);
                                 setAccountForm({
                                     ...accountForm,
                                     currency: code,
-                                    exchange_rate: curr?.current_rate || 1
                                 });
                             }}
                         >

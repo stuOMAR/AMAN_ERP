@@ -11,6 +11,9 @@ import logging
 from decimal import Decimal
 
 from sqlalchemy import text
+from utils.fiscal_lock import check_fiscal_period_open
+from utils.treasury_balance import recalc_treasury_from_gl
+from services.gl_service import post_draft_journal_entry
 
 logger = logging.getLogger(__name__)
 
@@ -41,24 +44,42 @@ def _auto_approve_for_tenant(conn, tenant_id: str) -> int:
 
     # Find pending expenses below threshold
     pending = conn.execute(text("""
-        SELECT id, employee_id, amount, description
+        SELECT id, employee_id, amount, description, expense_date, journal_entry_id,
+               treasury_id, project_id
           FROM expenses
          WHERE approval_status = 'pending'
            AND amount < :threshold
          ORDER BY id
          LIMIT 200
+         FOR UPDATE SKIP LOCKED
     """), {"threshold": str(threshold)}).fetchall()
 
     count = 0
     for exp in pending:
+        if not exp.journal_entry_id:
+            logger.warning("[auto-approve][%s] expense %s skipped: missing draft JE", tenant_id, exp.id)
+            continue
+        check_fiscal_period_open(conn, exp.expense_date, raise_error=True)
+        post_draft_journal_entry(conn, exp.journal_entry_id, user_id=0)
+
         conn.execute(text("""
             UPDATE expenses
                SET approval_status = 'approved',
-                   approved_by = 0,
+                   approved_by = NULL,
                    approved_at = now(),
                    updated_at = now()
              WHERE id = :eid AND approval_status = 'pending'
         """), {"eid": exp.id})
+
+        if exp.treasury_id:
+            recalc_treasury_from_gl(conn, exp.treasury_id)
+        if exp.project_id:
+            conn.execute(text("""
+                UPDATE projects
+                SET actual_cost = COALESCE(actual_cost, 0) + :amount,
+                    updated_at = NOW()
+                WHERE id = :project_id
+            """), {"amount": exp.amount, "project_id": exp.project_id})
 
         # Audit
         try:

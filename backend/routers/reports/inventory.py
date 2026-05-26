@@ -2,22 +2,16 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
+from typing import Any, Dict, Optional
+from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
 from utils.permissions import require_permission, validate_branch_access
-from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -36,6 +30,15 @@ def _q(value, places: Decimal = _D2) -> Decimal:
 
 def _pct(numerator, denominator) -> Decimal:
     return _q(_dec(numerator) / _dec(denominator) * 100)
+
+
+def _direction(value) -> str:
+    amount = _dec(value)
+    if amount > 0:
+        return "positive"
+    if amount < 0:
+        return "negative"
+    return "neutral"
 
 @router.get("/inventory/valuation", dependencies=[Depends(require_permission(["stock.view", "reports.view"]))], response_model=Dict[str, Any])
 def inventory_valuation_report(
@@ -79,7 +82,7 @@ def inventory_valuation_report(
         if warehouse_id:
             params["wh"] = warehouse_id
 
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT p.id, p.sku, p.product_name, p.selling_price,
                    COALESCE(SUM(i.quantity), 0) as total_qty,
@@ -268,7 +271,7 @@ def cogs_report(
             branch_filter = "AND inv.branch_id = :branch_id"
             params["branch_id"] = branch_id
 
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT p.id, p.sku, p.product_name, p.cost_price,
                    SUM(ABS(il.quantity)) as sold_qty,
@@ -352,8 +355,8 @@ def product_profitability_report(
                     branch_rate = _dec(rate_val)
 
             params["branch_id"] = branch_id
-            rows = db.execute(text( # noqa: sql-lint
-                        f"""
+            rows = db.execute(text( # noqa
+                        """
                 SELECT 
                     p.id as product_id,
                     p.product_name,
@@ -415,15 +418,18 @@ def product_profitability_report(
                     "revenue": str(_dec(rev)),
                     "cogs": str(_dec(cogs)),
                     "gross_profit": str(_dec(profit)),
-                    "margin_pct": margin,
+                    "margin_pct": str(_dec(margin)),
+                    "gross_profit_direction": _direction(profit),
+                    "margin_direction": _direction(margin),
+                    "_gross_profit_sort": profit,
                 })
 
             display_currency = branch_cur
 
         else:
             # All branches: convert everything to base currency (SAR)
-            rows = db.execute(text( # noqa: sql-lint
-                        f"""
+            rows = db.execute(text( # noqa
+                        """
                 SELECT 
                     p.id as product_id,
                     p.product_name,
@@ -464,7 +470,10 @@ def product_profitability_report(
                     "revenue": str(_dec(rev)),
                     "cogs": str(_dec(cogs)),
                     "gross_profit": str(_dec(profit)),
-                    "margin_pct": margin,
+                    "margin_pct": str(_dec(margin)),
+                    "gross_profit_direction": _direction(profit),
+                    "margin_direction": _direction(margin),
+                    "_gross_profit_sort": profit,
                 })
 
             display_currency = base_cur
@@ -472,8 +481,10 @@ def product_profitability_report(
         overall_margin = _pct(total_profit, total_revenue) if total_revenue > 0 else Decimal("0")
         total_sold_qty = sum((Decimal(str(item.get("sold_qty", 0))) for item in items), Decimal("0"))
 
-        # Sort by gross_profit descending
-        items.sort(key=lambda x: x["gross_profit"], reverse=True)
+        # Sort by backend Decimal value before serializing the response-only marker away.
+        items.sort(key=lambda x: x["_gross_profit_sort"], reverse=True)
+        for item in items:
+            item.pop("_gross_profit_sort", None)
 
         return {
             "report_name": "تقرير ربحية المنتجات",
@@ -487,7 +498,9 @@ def product_profitability_report(
                 "revenue": str(_dec(total_revenue)),
                 "cogs": str(_dec(total_cogs)),
                 "gross_profit": str(_dec(total_profit)),
-                "margin_pct": overall_margin,
+                "margin_pct": str(_dec(overall_margin)),
+                "gross_profit_direction": _direction(total_profit),
+                "margin_direction": _direction(overall_margin),
             }
         }
     finally:
@@ -522,7 +535,7 @@ def profitability_summary(
             branch_cur = base_cur
             branch_rate = Decimal('1')
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 COUNT(DISTINCT i.id) as invoice_count,
@@ -558,7 +571,9 @@ def profitability_summary(
             "total_revenue": str(_dec(revenue)),
             "total_cogs": str(_dec(cogs)),
             "gross_profit": str(_dec(profit)),
-            "margin_pct": margin,
+            "margin_pct": str(_dec(margin)),
+            "gross_profit_direction": _direction(profit),
+            "margin_direction": _direction(margin),
         }
     finally:
         db.close()

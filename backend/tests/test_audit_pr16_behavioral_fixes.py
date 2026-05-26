@@ -311,10 +311,7 @@ def test_eta_adapter_no_float_casts_on_money_axis():
     but the file still contained ``float(...)`` everywhere; PR16-fix
     routes every numeric input through ``utils.tax_precision``."""
     body = _read("integrations/einvoicing/eta_adapter.py")
-    # Negative: no ``float(`` anywhere inside ``build_eta_document``
-    # except deliberate JSON-shape conversions of already-quantized
-    # ``money_str(...)`` / ``rate_str(...)`` outputs (those are exact
-    # at the documented dp granularity).
+    # Negative: no ``float(`` anywhere inside ``build_eta_document``.
     fn_match = re.search(
         r"def build_eta_document\([^)]*\)\s*->\s*dict:.*?(?=\nclass |\Z)",
         body,
@@ -322,13 +319,7 @@ def test_eta_adapter_no_float_casts_on_money_axis():
     )
     assert fn_match, "build_eta_document not found"
     fn_body = fn_match.group(0)
-    # Allow only deliberate JSON-shape conversions of already-quantized
-    # ``money_str(...)`` / ``rate_str(...)`` outputs and the explicit
-    # ``float(qty)`` for the JSON quantity field. Strip those forms
-    # before the negative scan.
-    sanitised = re.sub(r"float\(money_str\([^)]*\)\)", "", fn_body)
-    sanitised = re.sub(r"float\(rate_str\([^)]*\)\)", "", sanitised)
-    sanitised = re.sub(r"float\(qty\)", "", sanitised)
+    sanitised = fn_body
     # Strip comments — the post-mortem narrative quotes ``float(...)`` as
     # an explanation of what was removed.
     sanitised_lines = []

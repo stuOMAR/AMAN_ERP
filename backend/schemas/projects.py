@@ -66,6 +66,7 @@ class ProjectExpenseCreate(BaseModel):
     description: Optional[str] = None
     treasury_id: Optional[int] = None
     expense_account_id: Optional[int] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class ProjectRevenueCreate(BaseModel):
@@ -74,6 +75,7 @@ class ProjectRevenueCreate(BaseModel):
     amount: Decimal
     description: Optional[str] = None
     invoice_id: Optional[int] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class TimesheetCreate(BaseModel):
@@ -121,6 +123,7 @@ class ProjectInvoiceCreate(BaseModel):
     payment_method: Optional[str] = "credit"
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = Decimal(1)
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class ChangeOrderCreate(BaseModel):

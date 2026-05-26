@@ -136,6 +136,7 @@ class InvoiceCreate(BaseModel):
     exchange_rate: Optional[Decimal] = None
     cost_center_id: Optional[int] = None
     sales_order_id: Optional[int] = None
+    submitted_grand_total: Optional[Decimal] = None
 
     # Group effects
     effect_type: str = "discount"
@@ -192,6 +193,7 @@ class SOCreate(BaseModel):
     quotation_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 # --- Quotation ---
@@ -252,6 +254,7 @@ class QuotationCreate(BaseModel):
     branch_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
     @field_validator('items')
     @classmethod
@@ -311,6 +314,7 @@ class SalesReturnCreate(BaseModel):
     warehouse_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
     @validator("refund_amount")
     def refund_amount_must_be_non_negative(cls, v):
@@ -353,6 +357,7 @@ class CustomerReceiptCreate(BaseModel):
     treasury_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 class CustomerPaymentCreate(BaseModel):
@@ -370,6 +375,7 @@ class CustomerPaymentCreate(BaseModel):
     branch_id: Optional[int] = None
     currency: Optional[str] = None
     exchange_rate: Optional[Decimal] = None
+    submitted_grand_total: Optional[Decimal] = None
 
 
 # --- Sales Previews ---

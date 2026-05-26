@@ -27,7 +27,8 @@ def test_zatca_tlv_qr_includes_mandatory_tags_1_to_5():
     tags = []
     i = 0
     while i < len(raw):
-        tag = raw[i]; length = raw[i + 1]
+        tag = raw[i]
+        length = raw[i + 1]
         tags.append(tag)
         i += 2 + length
     assert tags == [1, 2, 3, 4, 5]
@@ -50,7 +51,8 @@ def test_zatca_tlv_qr_phase2_adds_tags_6_7_8():
     tags = []
     i = 0
     while i < len(raw):
-        tag = raw[i]; length = raw[i + 1]
+        tag = raw[i]
+        length = raw[i + 1]
         tags.append(tag)
         i += 2 + length
     # Tags 6, 7, 8 must appear. 9 is absent.

@@ -2,13 +2,13 @@
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Header
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from services.tax_engine import resolve_line_tax, resolve_line_tax_group
+from services.tax_engine import resolve_line_tax_group
 from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from pydantic import BaseModel
-from utils.cache import invalidate_company_cache, invalidate_aggregates
+from utils.cache import invalidate_aggregates
 from utils.party_balance import update_party_site_balance
 
 _D2 = Decimal('0.01')
@@ -123,15 +123,15 @@ def _prefetch_product_costs(db, product_ids: List[int], warehouse_id: int, polic
 
     return {int(row.product_id): _dec(row.unit_cost or 0) for row in rows}
 
-from database import get_db_connection
-from routers.auth import get_current_user
-from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, check_permission, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
-from utils.accounting import get_mapped_account_id
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.tax_precision import money_str, rate_str
-from utils.tx import transactional
-from .schemas import InvoiceCreate, InvoiceResponse
+from database import get_db_connection  # noqa: E402
+from routers.auth import get_current_user  # noqa: E402
+from utils.audit import log_activity  # noqa: E402
+from utils.permissions import branch_scope_filter_from_scope, check_permission, require_permission, require_sensitive_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access  # noqa: E402
+from utils.accounting import get_mapped_account_id  # noqa: E402
+from utils.fiscal_lock import check_fiscal_period_open  # noqa: E402
+from utils.tax_precision import money_str, rate_str  # noqa: E402
+from utils.tx import transactional  # noqa: E402
+from .schemas import InvoiceCreate, InvoiceResponse  # noqa: E402
 
 invoices_router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -179,6 +179,7 @@ def preview_invoice_totals(request: Request, invoice: InvoiceCreate, current_use
 
         paid = _dec(invoice.paid_amount or 0)
         grand = totals["grand_total"]
+        currency = invoice.currency or "SAR"
 
         return {
             "lines": line_details,
@@ -188,7 +189,7 @@ def preview_invoice_totals(request: Request, invoice: InvoiceCreate, current_use
             "grand_total": money_str(grand),
             "paid_amount": money_str(paid),
             "remaining_balance": money_str(grand - paid),
-            "currency": invoice.currency or "SAR",
+            "currency": currency,
         }
     finally:
         db.close()
@@ -229,7 +230,7 @@ def list_invoices(
         where_sql = " AND ".join(where_clauses)
 
         # Count total
-        total = db.execute(text( # noqa: sql-lint
+        total = db.execute(text( # noqa
                     f"""
             SELECT COUNT(*) FROM invoices i
             JOIN parties p ON i.party_id = p.id
@@ -240,7 +241,7 @@ def list_invoices(
         params["limit"] = limit
         params["offset"] = (page - 1) * limit
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT i.id, i.invoice_number, i.invoice_date, i.due_date,
                    i.total, i.paid_amount, i.status, p.name as customer_name,
@@ -411,6 +412,11 @@ def create_sales_invoice(
         total_tax = totals["total_tax"]
         total_discount = totals["total_discount"]
         grand_total = totals["grand_total"]
+
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        if invoice.submitted_grand_total is not None:
+            if abs(grand_total - invoice.submitted_grand_total) > Decimal("0.01"):
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
         # --- 3. Handle Payment ---
         paid_amount = _dec(invoice.paid_amount or 0)
@@ -640,7 +646,7 @@ def create_sales_invoice(
                             FOR UPDATE
                         """), {"pid": item["product_id"]}).scalar())
                     item_cogs = (unit_cost * qty).quantize(_D2, ROUND_HALF_UP)
-            except ValueError as e:
+            except ValueError:
                 # FIFO/LIFO layer exhaustion — surface as 400, no silent fallback
                 logger.exception("FIFO/LIFO layer exhaustion on invoice create")
                 raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
@@ -684,7 +690,6 @@ def create_sales_invoice(
             total_cogs += item_cogs
 
             # Insert Invoice Line with frozen unit_cost
-            has_line_unit_cost = "unit_cost" in invoice_line_cols
             import json as _json
             applied_taxes_json = _json.dumps(item.get("applied_taxes")) if item.get("applied_taxes") else None
             if has_line_markup_col:
@@ -978,11 +983,11 @@ def create_sales_invoice(
                 )
         except HTTPException:
             raise
-        except Exception as ze:
+        except Exception:
             # Never let an unexpected clearance error mask the invoice
             # creation result; the local artefacts are already persisted
             # and the operator can replay via the outbox endpoint.
-            logger.warning(f"ZATCA clearance attempt failed for {inv_num}: {ze}")
+            logger.warning("ZATCA clearance attempt failed for invoice %s", inv_num)
 
         # T12 — scoped invalidation: invoice creation affects sales + reports +
         # dashboard + customer balance, but NOT HR/CRM/inventory caches.
@@ -991,7 +996,7 @@ def create_sales_invoice(
                                   "invoices", "sales_kpi", "reports",
                                   "dashboard", "chart_of_accounts")
         except Exception:
-            logger.warning("Failed to invalidate sales invoice caches", exc_info=True)
+            logger.warning("Failed to invalidate sales invoice caches")
 
         # Notify finance team about new invoice
         try:
@@ -1007,8 +1012,31 @@ def create_sales_invoice(
                 "link": f"/sales/invoices/{invoice_id}",
                 "current_uid": user_id
             })
+            from services.notifications.dispatcher import dispatch_user_notification
+
+            admin_rows = db.execute(text("""
+                SELECT DISTINCT u.id
+                FROM company_users u
+                WHERE u.is_active = TRUE AND u.role IN ('admin', 'superuser')
+                  AND u.id != :current_uid
+            """), {"current_uid": user_id}).fetchall()
+            for admin in admin_rows:
+                dispatch_user_notification(
+                    db,
+                    tenant_id=company_id,
+                    recipient_id=admin.id,
+                    event_type="sales.invoice.created",
+                    channel="in_app",
+                    title=i18n_message("notif_new_sales_invoice", request),
+                    body=i18n_message("invoice_notification_details", request),
+                    feature_source="sales",
+                    reference_type="sales_invoice",
+                    reference_id=invoice_id,
+                    link=f"/sales/invoices/{invoice_id}",
+                    commit=False,
+                )
         except Exception:
-            logger.warning("Failed to send invoice notification", exc_info=True)
+            logger.warning("Failed to send invoice notification")
 
         return {
             "id": invoice_id,
@@ -1537,7 +1565,7 @@ def amend_invoice_header(invoice_id: int, payload: InvoiceHeaderAmend,
             return {"id": invoice_id, "updated_fields": []}
 
         sets.append("updated_at = NOW()")
-        db.execute(text(f"UPDATE invoices SET {', '.join(sets)} WHERE id = :id"), params) # noqa: sql-lint
+        db.execute(text(f"UPDATE invoices SET {', '.join(sets)} WHERE id = :id"), params) # noqa
         db.commit()
         try:
             invalidate_aggregates(str(company_id),

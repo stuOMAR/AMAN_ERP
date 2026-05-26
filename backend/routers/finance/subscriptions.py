@@ -7,11 +7,10 @@ import logging
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, status
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, status
 from utils.i18n import http_error
 from sqlalchemy import text
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.fiscal_lock import check_fiscal_period_open
@@ -36,6 +35,7 @@ from services.subscription_service import (
     resume_enrollment,
 )
 from utils.permissions import require_permission
+from utils.tax_precision import require_idempotency_key
 
 logger = logging.getLogger(__name__)
 
@@ -165,8 +165,9 @@ def update_plan(plan_id: int, body: PlanUpdate, current_user=Depends(get_current
     status_code=status.HTTP_201_CREATED,
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
-def enroll(body: EnrollmentCreate, current_user=Depends(get_current_user)):
+def enroll(body: EnrollmentCreate, request: Request, current_user=Depends(get_current_user)):
     """Enroll."""
+    require_idempotency_key(request, operation="subscription enrollment")
     with transactional(current_user.company_id) as db:
         try:
             # Check fiscal period is open for the enrollment start date
@@ -298,8 +299,9 @@ def get_enrollment(enrollment_id: int, current_user=Depends(get_current_user)):
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
-def pause(enrollment_id: int, current_user=Depends(get_current_user)):
+def pause(enrollment_id: int, request: Request, current_user=Depends(get_current_user)):
     """Pause."""
+    require_idempotency_key(request, operation="subscription pause")
     with transactional(current_user.company_id) as db:
         try:
             pause_enrollment(db, enrollment_id=enrollment_id, user=str(current_user.id))
@@ -318,8 +320,9 @@ def pause(enrollment_id: int, current_user=Depends(get_current_user)):
     status_code=status.HTTP_204_NO_CONTENT,
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
-def resume(enrollment_id: int, current_user=Depends(get_current_user)):
+def resume(enrollment_id: int, request: Request, current_user=Depends(get_current_user)):
     """Resume."""
+    require_idempotency_key(request, operation="subscription resume")
     with transactional(current_user.company_id) as db:
         try:
             resume_enrollment(db, enrollment_id=enrollment_id, user=str(current_user.id))
@@ -338,8 +341,9 @@ def resume(enrollment_id: int, current_user=Depends(get_current_user)):
     response_model=EnrollmentRead,
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
-def cancel(enrollment_id: int, body: CancelRequest, current_user=Depends(get_current_user)):
+def cancel(enrollment_id: int, body: CancelRequest, request: Request, current_user=Depends(get_current_user)):
     """Cancel."""
+    require_idempotency_key(request, operation="subscription cancellation")
     with transactional(current_user.company_id) as db:
         try:
             cancel_enrollment(
@@ -367,8 +371,9 @@ def cancel(enrollment_id: int, body: CancelRequest, current_user=Depends(get_cur
     "/enrollments/{enrollment_id}/change-plan",
     dependencies=[Depends(require_permission("finance.subscription_manage"))],
 )
-def change_plan(enrollment_id: int, body: PlanChangeRequest, current_user=Depends(get_current_user)):
+def change_plan(enrollment_id: int, body: PlanChangeRequest, request: Request, current_user=Depends(get_current_user)):
     """Change Plan."""
+    require_idempotency_key(request, operation="subscription plan change")
     with transactional(current_user.company_id) as db:
         try:
             # Check fiscal period is open for today (plan change date)

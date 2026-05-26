@@ -2,22 +2,17 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from pydantic import BaseModel
 from typing import List, Optional, Dict, Any
-from datetime import datetime, date, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
-import json
+from datetime import date, timedelta
+from decimal import Decimal
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
 from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
-from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
+from utils.tax_precision import money_str
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -44,7 +39,7 @@ def get_purchases_summary(
         
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
-        summary = db.execute(text( # noqa: sql-lint
+        summary = db.execute(text( # noqa
                     f"""
             SELECT 
                 COUNT(*) as count,
@@ -85,7 +80,7 @@ def get_purchases_trend(
         
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 invoice_date as date,
@@ -117,7 +112,7 @@ def get_purchases_by_supplier(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT 
                 p.name as name,
@@ -157,9 +152,9 @@ def get_purchases_aging_report(
         # via the standard `paid_amount` column on invoices.
         params = {}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params)
-        return_branch_filter = branch_scope_filter_from_scope(branch_scope, "ri.branch_id", params)
+        branch_scope_filter_from_scope(branch_scope, "ri.branch_id", params)
 
-        results = db.execute(text( # noqa: sql-lint
+        results = db.execute(text( # noqa
                     f"""
             -- Open purchase invoices: AP increases by remaining unpaid.
             SELECT
@@ -250,6 +245,43 @@ def get_purchases_aging_report(
         db.close()
 
 
+@router.get("/purchases/aging/summary", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["buying.reports", "reports.view"]))])
+def get_purchases_aging_summary(
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Purchases aging report with backend-owned bucket totals."""
+    rows = get_purchases_aging_report(branch_id=branch_id, current_user=current_user)
+    bucket_totals = {
+        "0-30": Decimal("0"),
+        "31-60": Decimal("0"),
+        "61-90": Decimal("0"),
+        "90+": Decimal("0"),
+    }
+
+    serialized_rows = []
+    for row in rows:
+        bucket = row.get("bucket")
+        amount = Decimal(str(row.get("amount") or 0))
+        if bucket in bucket_totals:
+            bucket_totals[bucket] += amount
+        serialized = dict(row)
+        serialized["amount"] = money_str(amount)
+        serialized["amount_fc"] = money_str(row.get("amount_fc"))
+        serialized_rows.append(serialized)
+
+    buckets = [
+        {"name": name, "amount": money_str(amount)}
+        for name, amount in bucket_totals.items()
+    ]
+
+    return {
+        "items": serialized_rows,
+        "buckets": buckets,
+        "total_due": money_str(sum(bucket_totals.values(), Decimal("0"))),
+    }
+
+
 @router.get("/purchases/supplier-statement/{supplier_id}", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["buying.reports", "reports.view"]))])
 def get_supplier_statement(
     supplier_id: int,
@@ -274,7 +306,7 @@ def get_supplier_statement(
         # purchases routers actually post against. supplier_subledger
         # is currently never written, so the legacy implementation
         # always returned an empty statement.
-        movements_cte = f"""
+        movements_cte = """
             WITH all_movements AS (
                 -- Purchase invoices and debit notes increase AP.
                 SELECT
@@ -331,7 +363,7 @@ def get_supplier_statement(
             )
         """
 
-        opening_balance = db.execute(text( # noqa: sql-lint
+        opening_balance = db.execute(text( # noqa
                     f"""
             {movements_cte}
             SELECT (COALESCE(SUM(credit), 0) - COALESCE(SUM(debit), 0)) as balance
@@ -341,7 +373,7 @@ def get_supplier_statement(
         """), params).scalar() or 0
 
         params["end"] = end_date
-        transactions = db.execute(text( # noqa: sql-lint
+        transactions = db.execute(text( # noqa
                     f"""
             {movements_cte}
             SELECT id, date, ref, type, credit, debit, party_id, branch_id

@@ -22,6 +22,11 @@ function BudgetReport() {
     const [fromDate, setFromDate] = useState('')
     const [toDate, setToDate] = useState('')
     const currency = getCurrency()
+    const signedPercent = (value) => {
+        const raw = String(value || '0').trim()
+        if (raw.startsWith('-') || /^0+(\.0+)?$/.test(raw)) return raw
+        return `+${raw}`
+    }
 
     useEffect(() => {
         const fetchBudgets = async () => {
@@ -146,7 +151,7 @@ function BudgetReport() {
                                         <td className="text-center">{formatNumber(item.actual)}</td>
                                         <td className="text-center" style={{ fontWeight: '600' }}>
                                             <span style={{ color: item.is_over_budget ? '#dc2626' : '#059669' }}>
-                                                {item.variance_percentage > 0 ? '+' : ''}{Math.round(item.variance_percentage)}%
+                                                {signedPercent(item.variance_percentage)}%
                                             </span>
                                         </td>
                                         <td className="text-center">
@@ -165,13 +170,13 @@ function BudgetReport() {
                                                 <div style={{ flex: 1, height: '6px', background: '#f3f4f6', borderRadius: '3px', overflow: 'hidden' }}>
                                                     <div style={{
                                                         height: '100%',
-                                                        width: `${Math.min(item.usage_percentage, 100)}%`,
+                                                        width: `${item.usage_percentage_capped || item.usage_percentage}%`,
                                                         background: item.is_over_budget ? '#dc2626' : '#10b981',
                                                         borderRadius: '3px'
                                                     }} />
                                                 </div>
                                                 <span style={{ fontSize: '12px', opacity: 0.7, minWidth: '40px', textAlign: 'right' }}>
-                                                    {Math.round(item.usage_percentage)}%
+                                                    {item.usage_percentage}%
                                                 </span>
                                             </div>
                                         </td>

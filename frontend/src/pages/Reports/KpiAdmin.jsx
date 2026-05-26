@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { useTranslation } from 'react-i18next';
 import useApi from '../../hooks/useApi';
 import BackButton from '../../components/common/BackButton';
+import api from '../../services/apiClient';
 
 const KPI_COMPARISON_OPS = [
     { value: 'lt', label: '<' },
@@ -38,15 +39,11 @@ export default function KpiAdmin() {
     const handleSubmit = async (e) => {
         e.preventDefault();
         try {
-            const response = await fetch('/api/kpi/definitions', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    ...form,
-                    threshold_value: form.threshold_value,
-                }),
+            const response = await api.post('/kpi/definitions', {
+                ...form,
+                threshold_value: form.threshold_value,
             });
-            if (response.ok) {
+            if (response.status >= 200 && response.status < 300) {
                 setShowForm(false);
                 refetch();
                 setForm({

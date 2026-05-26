@@ -5,16 +5,14 @@ Service Management Router — SVC-001 + SVC-002
 """
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Form, Query, Request
 from fastapi.responses import FileResponse
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 import math
 import os
-import uuid
 
-from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
 from utils.tx import transactional
 from utils.permissions import require_permission, require_module, validate_branch_access
@@ -35,8 +33,8 @@ def _dec(v) -> Decimal:
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "uploads", "documents")
 try:
     os.makedirs(UPLOAD_DIR, exist_ok=True)
-except PermissionError as e:
-    logger.warning(f"⚠️  Cannot create upload dir {UPLOAD_DIR}: {e} — continuing without it")
+except PermissionError:
+    logger.warning("Cannot create legacy document upload directory; continuing without it")
 
 # Status transition state machine
 VALID_TRANSITIONS = {
@@ -517,8 +515,8 @@ def add_service_cost(request_id: int, data: ServiceCostCreate, request: Request,
                             costing_method=costing_method,
                         )
                         unit_cost_for_gl = (Decimal(str(item_cogs)) / qty).quantize(_D2, ROUND_HALF_UP) if qty else Decimal("0")
-                    except ValueError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc))
+                    except ValueError:
+                        raise HTTPException(**http_error(400, "invalid_request", request))
                 else:
                     unit_cost_for_gl = CostingService.get_cogs_cost(db, product_id, warehouse_id)
                     item_cogs = (qty * unit_cost_for_gl).quantize(_D2, ROUND_HALF_UP)
@@ -678,7 +676,8 @@ def list_documents(
         query = f"""
             SELECT d.id, d.title, d.description, d.category, d.file_name,
                    d.file_size, d.mime_type, d.tags, d.access_level, d.related_module,
-                   d.related_id, d.current_version, d.created_by, d.created_at,
+                   d.related_id, d.current_version, COALESCE(d.state, 'clean') AS state,
+                   d.scanned_at, d.scan_engine, d.created_by, d.created_at,
                    d.updated_at, u.full_name as created_by_name
             FROM documents d
             LEFT JOIN company_users u ON d.created_by = u.id
@@ -706,7 +705,8 @@ def get_document(doc_id: int, current_user: UserResponse = Depends(get_current_u
         doc = db.execute(text("""
             SELECT d.id, d.title, d.description, d.category, d.file_name,
                    d.file_size, d.mime_type, d.tags, d.access_level, d.related_module,
-                   d.related_id, d.current_version, d.created_by, d.created_at,
+                   d.related_id, d.current_version, COALESCE(d.state, 'clean') AS state,
+                   d.scanned_at, d.scan_engine, d.created_by, d.created_at,
                    d.updated_at, u.full_name as created_by_name
             FROM documents d
             LEFT JOIN company_users u ON d.created_by = u.id
@@ -731,6 +731,7 @@ def get_document(doc_id: int, current_user: UserResponse = Depends(get_current_u
 
 @router.post("/documents", dependencies=[Depends(require_permission("services.create"))], response_model=Dict[str, Any])
 async def upload_document(
+    request: Request,
     file: UploadFile = File(...),
     title: str = Form(""),
     description: str = Form(""),
@@ -751,53 +752,34 @@ async def upload_document(
                 MAX_DOCUMENT_SIZE, ALLOWED_DOCUMENT_EXTENSIONS
             )
             validate_file_extension(file.filename, ALLOWED_DOCUMENT_EXTENSIONS, "المستند")
-            
-            # Save file
-            ext = os.path.splitext(file.filename)[1] if file.filename else ""
-            unique_name = f"{uuid.uuid4().hex}{ext}"
-            company_dir = os.path.join(UPLOAD_DIR, current_user.company_id)
-            os.makedirs(company_dir, exist_ok=True)
-            file_path = os.path.join(company_dir, unique_name)
-    
+
             content = await file.read()
             validate_file_size(content, MAX_DOCUMENT_SIZE, "المستند")
             validate_file_mime_and_signature(file.filename, file.content_type, content, "المستند")
-            
-            with open(file_path, "wb") as f:
-                f.write(content)
-            file_size = len(content)
-    
-            used_title = title if title else file.filename
-    
-            doc_id = db.execute(text("""
-                INSERT INTO documents (title, description, category, file_name, file_path, file_size,
-                                       mime_type, tags, access_level, related_module, related_id, created_by)
-                VALUES (:title, :desc, :cat, :fname, :fpath, :fsize,
-                        :mime, :tags, :access, :rmod, :rid, :uid)
-                RETURNING id
-            """), {
-                "title": used_title,
-                "desc": description,
-                "cat": category,
-                "fname": file.filename,
-                "fpath": file_path,
-                "fsize": file_size,
-                "mime": file.content_type,
-                "tags": tags,
-                "access": access_level,
-                "rmod": related_module or None,
-                "rid": related_id if related_id else None,
-                "uid": current_user.id
-            }).scalar()
-    
-            # First version
-            db.execute(text("""
-                INSERT INTO document_versions (document_id, version_number, file_name, file_path, file_size, change_notes, uploaded_by)
-                VALUES (:did, 1, :fname, :fpath, :fsize, 'الإصدار الأول', :uid)
-            """), {
-                "did": doc_id, "fname": file.filename,
-                "fpath": file_path, "fsize": file_size, "uid": current_user.id
-            })
+
+            from services.dms.documents import DMSQuotaExceeded, create_document_from_upload
+
+            try:
+                created = create_document_from_upload(
+                    db,
+                    tenant_id=current_user.company_id,
+                    user_id=current_user.id,
+                    filename=file.filename,
+                    content=content,
+                    content_type=file.content_type,
+                    title=title if title else file.filename,
+                    description=description,
+                    category=category,
+                    tags=tags,
+                    access_level=access_level,
+                    related_module=related_module or None,
+                    related_id=related_id if related_id else None,
+                )
+            except DMSQuotaExceeded as exc:
+                raise HTTPException(**http_error(413, exc.args[0], request))
+
+            db.commit()
+            doc_id = created["id"]
     
             return get_document(doc_id, current_user)
         except HTTPException:
@@ -851,12 +833,6 @@ async def upload_new_version(
     
             new_version = doc.current_version + 1
     
-            ext = os.path.splitext(file.filename)[1] if file.filename else ""
-            unique_name = f"{uuid.uuid4().hex}{ext}"
-            company_dir = os.path.join(UPLOAD_DIR, current_user.company_id)
-            os.makedirs(company_dir, exist_ok=True)
-            file_path = os.path.join(company_dir, unique_name)
-    
             from utils.sql_safety import (
                 validate_file_size,
                 validate_file_extension,
@@ -868,30 +844,25 @@ async def upload_new_version(
             validate_file_extension(file.filename, ALLOWED_DOCUMENT_EXTENSIONS, "المستند")
             validate_file_size(content, MAX_DOCUMENT_SIZE, "المستند")
             validate_file_mime_and_signature(file.filename, file.content_type, content, "المستند")
-    
-            with open(file_path, "wb") as f:
-                f.write(content)
-            file_size = len(content)
-    
-            db.execute(text("""
-                INSERT INTO document_versions (document_id, version_number, file_name, file_path, file_size, change_notes, uploaded_by)
-                VALUES (:did, :ver, :fname, :fpath, :fsize, :notes, :uid)
-            """), {
-                "did": doc_id, "ver": new_version,
-                "fname": file.filename, "fpath": file_path,
-                "fsize": file_size, "notes": change_notes or f"الإصدار {new_version}",
-                "uid": current_user.id
-            })
-    
-            db.execute(text("""
-                UPDATE documents SET current_version = :ver, file_name = :fname, file_path = :fpath,
-                                     file_size = :fsize, mime_type = :mime, updated_at = CURRENT_TIMESTAMP
-                WHERE id = :id
-            """), {
-                "ver": new_version, "fname": file.filename,
-                "fpath": file_path, "fsize": file_size,
-                "mime": file.content_type, "id": doc_id
-            })
+
+            from services.dms.documents import DMSQuotaExceeded, save_document_version_from_upload
+
+            try:
+                save_document_version_from_upload(
+                    db,
+                    tenant_id=current_user.company_id,
+                    document_id=doc_id,
+                    version_number=new_version,
+                    user_id=current_user.id,
+                    filename=file.filename,
+                    content=content,
+                    content_type=file.content_type,
+                    change_notes=change_notes or f"الإصدار {new_version}",
+                )
+            except DMSQuotaExceeded as exc:
+                raise HTTPException(**http_error(413, exc.args[0]))
+
+            db.commit()
     
             return get_document(doc_id, current_user)
         except HTTPException:
@@ -916,21 +887,31 @@ def download_document(doc_id: int, request: Request, current_user: UserResponse 
 
     with transactional(current_user.company_id) as db:
         doc = db.execute(text("""
-            SELECT d.id, d.file_path, d.file_name, d.mime_type, d.access_level
+            SELECT d.id, d.file_path, d.file_name, d.mime_type, d.access_level,
+                   COALESCE(d.state, 'clean') AS state
             FROM documents d
             WHERE d.id = :id AND d.is_deleted = false
         """), {"id": doc_id}).fetchone()
         if not doc:
             raise HTTPException(**http_error(404, "document_not_found"))
 
+        if doc.state == "quarantined":
+            raise HTTPException(**http_error(423, "dms.quarantined", request))
+
         if not doc.file_path or not os.path.isfile(doc.file_path):
             raise HTTPException(**http_error(404, "file_not_found"))
 
-        # P1 #55a — path traversal guard: refuse anything outside UPLOAD_DIR.
-        if not validate_file_path_safety(doc.file_path, UPLOAD_DIR):
+        # P1 #55a — path traversal guard: refuse anything outside legacy
+        # uploads or the canonical DMS storage roots.
+        from services.dms.documents import is_document_storage_path
+
+        if not (
+            validate_file_path_safety(doc.file_path, UPLOAD_DIR)
+            or is_document_storage_path(db, tenant_id=current_user.company_id, file_path=doc.file_path)
+        ):
             logger.warning(
-                "DMS path-traversal attempt: doc_id=%s path=%s user=%s",
-                doc_id, doc.file_path, getattr(current_user, "id", None),
+                "DMS path validation failed: doc_id=%s user=%s",
+                doc_id, getattr(current_user, "id", None),
             )
             raise HTTPException(**http_error(403, "forbidden"))
 

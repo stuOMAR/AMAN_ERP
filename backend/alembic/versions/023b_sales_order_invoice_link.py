@@ -7,6 +7,7 @@ Create Date: 2026-05-02
 Adds sales_orders.converted_to_invoice_id and responsible_user_id.
 """
 from alembic import op
+import sqlalchemy as sa
 
 
 revision = "023b_sales_order_invoice_link"
@@ -16,17 +17,39 @@ depends_on = None
 
 
 def upgrade() -> None:
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("sales_orders")]
+
     op.execute(
         """
         ALTER TABLE sales_orders
             ADD COLUMN IF NOT EXISTS converted_to_invoice_id BIGINT,
             ADD COLUMN IF NOT EXISTS responsible_user_id BIGINT;
+        """
+    )
 
-        -- Partial unique: each invoice can only be linked from one order
-        CREATE UNIQUE INDEX IF NOT EXISTS uix_so_converted_invoice
-            ON sales_orders (tenant_id, converted_to_invoice_id)
-            WHERE converted_to_invoice_id IS NOT NULL;
+    if "tenant_id" in columns:
+        op.execute(
+            """
+            -- Partial unique: each invoice can only be linked from one order
+            CREATE UNIQUE INDEX IF NOT EXISTS uix_so_converted_invoice
+                ON sales_orders (tenant_id, converted_to_invoice_id)
+                WHERE converted_to_invoice_id IS NOT NULL;
+            """
+        )
+    else:
+        op.execute(
+            """
+            -- Partial unique: each invoice can only be linked from one order
+            CREATE UNIQUE INDEX IF NOT EXISTS uix_so_converted_invoice
+                ON sales_orders (converted_to_invoice_id)
+                WHERE converted_to_invoice_id IS NOT NULL;
+            """
+        )
 
+    op.execute(
+        """
         -- FK to invoices
         DO $$ BEGIN
             ALTER TABLE sales_orders

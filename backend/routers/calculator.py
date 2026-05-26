@@ -7,14 +7,14 @@ Endpoint واحد يُحسب إجماليات أي نوع فاتورة/عقد/إ
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from typing import List, Optional, Dict, Any
-from decimal import Decimal, ROUND_HALF_UP
+from typing import List, Optional
+from decimal import Decimal
 from datetime import date
 from sqlalchemy import text
 
 from routers.auth import get_current_user
 from utils.i18n import http_error
-from utils.permissions import require_permission, validate_branch_access
+from utils.permissions import validate_branch_access
 from utils.tx import transactional
 from utils.accounting import compute_line_amounts, compute_invoice_totals
 from utils.tax_precision import money_str, rate_str
@@ -177,44 +177,87 @@ def calculate_invoice_totals(
 
 
 class ContractLineInput(BaseModel):
+    product_id: Optional[int] = None
     quantity: Decimal = Decimal("0")
     unit_price: Decimal = Decimal("0")
-    tax_rate: Decimal = Decimal("0")
 
 
 class ContractPreviewRequest(BaseModel):
     lines: List[ContractLineInput]
+    branch_id: Optional[int] = None
+    party_id: Optional[int] = None
+    document_date: Optional[date] = None
     currency: str = "SAR"
 
 
 @router.post("/contract-totals")
 def calculate_contract_totals(
     req: ContractPreviewRequest,
+    request: Request,
     current_user: dict = Depends(get_current_user)
 ):
     """
     حساب إجماليات العقد.
     الخصم في العقود يكون 0 (بدون خصم).
     """
-    lines_data = [
-        {"quantity": ln.quantity, "unit_price": ln.unit_price, "tax_rate": ln.tax_rate, "discount": 0}
-        for ln in req.lines
-    ]
+    branch_id = validate_branch_access(current_user, req.branch_id) if req.branch_id else None
+    company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
 
-    totals = compute_invoice_totals(lines_data, discount_is_percent=False)
-
+    lines_data = []
     line_details = []
-    for i, ln in enumerate(req.lines):
-        la = compute_line_amounts(ln.quantity, ln.unit_price, ln.tax_rate, 0, discount_is_percent=False)
-        line_details.append({
-            "index": i,
-            "quantity": money_str(ln.quantity),
-            "unit_price": money_str(ln.unit_price),
-            "tax_rate": rate_str(ln.tax_rate),
-            "subtotal": money_str(la["subtotal"]),
-            "tax_amount": money_str(la["tax_amount"]),
-            "line_total": money_str(la["line_total"]),
-        })
+    with transactional(company_id) as db:
+        if branch_id is None and any(ln.product_id for ln in req.lines):
+            default_branch_id = db.execute(text("""
+                SELECT id
+                FROM branches
+                WHERE is_default = TRUE
+                  AND is_active = TRUE
+                LIMIT 1
+            """)).scalar()
+            if default_branch_id:
+                branch_id = validate_branch_access(current_user, default_branch_id)
+
+        if any(ln.product_id for ln in req.lines) and branch_id is None:
+            raise HTTPException(**http_error(400, "branch_required", request))
+
+        for i, ln in enumerate(req.lines):
+            if not ln.product_id and Decimal(str(ln.unit_price or 0)) == 0:
+                continue
+            if not ln.product_id:
+                raise HTTPException(**http_error(400, "product_required", request))
+            taxes = resolve_line_tax_group(branch_id, ln.product_id, db, req.document_date, customer_id=req.party_id)
+            tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+            tax_rate_id = taxes[0]["tax_rate_id"] if len(taxes) == 1 else None
+            applied_taxes = [
+                {
+                    "tax_rate_id": t.get("tax_rate_id"),
+                    "tax_name": t.get("tax_name"),
+                    "tax_rate": rate_str(t.get("tax_rate", 0)),
+                }
+                for t in taxes
+            ] if len(taxes) > 1 else None
+
+            lines_data.append({
+                "quantity": ln.quantity,
+                "unit_price": ln.unit_price,
+                "tax_rate": tax_rate,
+                "discount": 0,
+            })
+            la = compute_line_amounts(ln.quantity, ln.unit_price, tax_rate, 0, discount_is_percent=False)
+            line_details.append({
+                "index": i,
+                "product_id": ln.product_id,
+                "quantity": money_str(ln.quantity),
+                "unit_price": money_str(ln.unit_price),
+                "tax_rate": rate_str(tax_rate),
+                "tax_rate_id": tax_rate_id,
+                "applied_taxes": applied_taxes,
+                "subtotal": money_str(la["subtotal"]),
+                "tax_amount": money_str(la["tax_amount"]),
+                "line_total": money_str(la["line_total"]),
+            })
+
+        totals = compute_invoice_totals(lines_data, discount_is_percent=False)
 
     return {
         "subtotal": money_str(totals["subtotal"]),

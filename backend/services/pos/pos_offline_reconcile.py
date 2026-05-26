@@ -39,7 +39,7 @@ def reconcile_batch(db: Any, batch_id: int, tenant_id: int) -> dict:
 
     try:
         import json
-        payload = json.loads(batch["payload"]) if isinstance(batch["payload"], str) else batch["payload"]
+        json.loads(batch["payload"]) if isinstance(batch["payload"], str) else batch["payload"]
 
         # Replay through online commit path
         # This would call pos_commit.commit_pos_sale with the batch payload

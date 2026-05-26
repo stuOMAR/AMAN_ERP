@@ -7,7 +7,7 @@ Contract: see specs/024-workforce-service-comms-integrity/contracts/hr-pii-gate.
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from utils.field_encryption import decrypt, encrypt
 

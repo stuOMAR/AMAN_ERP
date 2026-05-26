@@ -11,7 +11,7 @@ Debit Note (إشعار مدين): Increases customer balance (e.g., undercharge 
 from fastapi import APIRouter, Depends, Header, HTTPException, status, Body, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
@@ -25,7 +25,7 @@ from utils.accounting import (
     prepare_je_lines,
 )
 from services.gl_service import create_journal_entry  # TASK-015: centralized GL posting
-from services.tax_engine import resolve_line_tax
+from services.tax_engine import resolve_line_tax_group
 from services.sales.preview import preview_sales_totals, resolve_document_exchange_rate
 from utils.party_balance import update_party_site_balance
 from utils.tax_precision import money_str, rate_str
@@ -70,8 +70,8 @@ def _resolve_rate_or_400(db, request: Request, *, currency: str, base_currency: 
             document_date=document_date,
             provided_rate=provided_rate,
         )
-    except ValueError as exc:
-        raise HTTPException(**http_error(400, str(exc) or "exchange_rate_must_be_positive", request))
+    except ValueError:
+        raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
 
 
 def _insert_note_header(
@@ -297,13 +297,13 @@ def list_sales_credit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa: sql-lint
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa
 
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT i.*,
                    p.name AS party_name,
@@ -338,6 +338,8 @@ def preview_sales_credit_note(data: SalesDocumentPreviewRequest, current_user: d
 
         if not data.related_invoice_id:
             branch_id = validate_branch_access(current_user, requested_branch_id) if requested_branch_id else None
+            if branch_id is None and any(line.product_id for line in data.lines):
+                raise HTTPException(**http_error(400, "branch_required"))
             return preview_sales_totals(
                 db,
                 lines=data.lines,
@@ -447,7 +449,7 @@ def get_sales_credit_note(note_id: int, current_user: dict = Depends(get_current
         """), {"id": note_id}).fetchall()
 
         result = dict(note._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
     finally:
         db.close()
@@ -568,16 +570,17 @@ def create_sales_credit_note(
                 disc = _reversal_discount_amount(original_line, qty)
                 line_net = _reversal_taxable_amount(original_line, qty)
                 already_reversed_qty[reverse_key] = already_qty + qty
-            elif product_id and branch_id:
-                tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
-                tax_rate = tax_info["tax_rate"]
-                tax_rate_id = tax_info.get("tax_rate_id")
+            elif product_id:
+                if branch_id is None:
+                    raise HTTPException(**http_error(400, "branch_required", request))
+                taxes = resolve_line_tax_group(branch_id, product_id, db, inv_date, customer_id=party_id)
+                tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+                tax_rate_id = taxes[0]["tax_rate_id"] if len(taxes) == 1 else None
+                applied_taxes = taxes if len(taxes) > 1 else None
                 line_gross = qty * price
                 line_net = line_gross - disc
             else:
-                tax_rate = _dec(line.get("tax_rate", 0))
-                line_gross = qty * price
-                line_net = line_gross - disc
+                raise HTTPException(**http_error(400, "product_required", request))
             tax_factor = original_tax_factor if original_invoice else Decimal("1")
             line_tax = (line_net * tax_rate / Decimal("100") * tax_factor).quantize(_D2, ROUND_HALF_UP)
             line_total = (line_net + line_tax).quantize(_D2, ROUND_HALF_UP)
@@ -598,6 +601,13 @@ def create_sales_credit_note(
             })
 
         total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
+
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        submitted_grand_total = data.get("submitted_grand_total")
+        if submitted_grand_total is not None:
+            submitted_total = _dec(submitted_grand_total)
+            if abs(total - submitted_total) > _D2:
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
         # Generate number & insert
         inv_num = generate_sequential_number(db, "SCN", "invoices", "invoice_number", branch_id=branch_id)
@@ -807,13 +817,13 @@ def list_sales_debit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa: sql-lint
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar() # noqa
 
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT i.*,
                    p.name AS party_name,
@@ -844,6 +854,8 @@ def preview_sales_debit_note(data: SalesDocumentPreviewRequest, current_user: di
     db = get_db_connection(current_user.company_id)
     try:
         branch_id = validate_branch_access(current_user, data.branch_id) if data.branch_id else None
+        if branch_id is None and any(line.product_id for line in data.lines):
+            raise HTTPException(**http_error(400, "branch_required"))
         return preview_sales_totals(
             db,
             lines=data.lines,
@@ -892,7 +904,7 @@ def get_sales_debit_note(note_id: int, current_user: dict = Depends(get_current_
         """), {"id": note_id}).fetchall()
 
         result = dict(note._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
     finally:
         db.close()
@@ -981,11 +993,13 @@ def create_sales_debit_note(
             price = _dec(line.get("unit_price", 0))
             disc = _dec(line.get("discount", 0))
             product_id = line.get("product_id")
-            if product_id and branch_id:
-                tax_info = resolve_line_tax(branch_id, product_id, db, inv_date, customer_id=party_id)
-                tax_rate = tax_info["tax_rate"]
+            if product_id:
+                if branch_id is None:
+                    raise HTTPException(**http_error(400, "branch_required", request))
+                taxes = resolve_line_tax_group(branch_id, product_id, db, inv_date, customer_id=party_id)
+                tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
             else:
-                tax_rate = _dec(line.get("tax_rate", 0))
+                raise HTTPException(**http_error(400, "product_required", request))
             line_gross = qty * price
             line_net = line_gross - disc
             line_tax = (line_net * tax_rate / Decimal("100")).quantize(_D2, ROUND_HALF_UP)
@@ -1003,6 +1017,13 @@ def create_sales_debit_note(
             })
 
         total = (subtotal + tax_total).quantize(_D2, ROUND_HALF_UP)
+
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        submitted_grand_total = data.get("submitted_grand_total")
+        if submitted_grand_total is not None:
+            submitted_total = _dec(submitted_grand_total)
+            if abs(total - submitted_total) > _D2:
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
 
         inv_num = generate_sequential_number(db, "SDN", "invoices", "invoice_number", branch_id=branch_id)
         result = _insert_note_header(

@@ -103,7 +103,7 @@ def get_balance_sheet(db: Any, tenant_id: str, company_id: str,
             equity.append(entry)
 
     total_assets = sum((to_decimal(a["balance"]) for a in assets), Decimal("0"))
-    total_liabilities = sum((to_decimal(l["balance"]) for l in liabilities), Decimal("0"))
+    total_liabilities = sum((to_decimal(line["balance"]) for line in liabilities), Decimal("0"))
     total_equity = sum((to_decimal(e["balance"]) for e in equity), Decimal("0"))
 
     return {

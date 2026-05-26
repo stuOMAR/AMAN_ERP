@@ -10,6 +10,7 @@
  */
 import { useEffect, useState } from 'react'
 import { currenciesAPI } from '../services/accounting'
+import { Decimal } from '../utils/decimal'
 
 // Module-level cache: { code → Promise<rate> } — survives across mounts.
 const _rateCache = new Map()
@@ -17,21 +18,26 @@ const _rateCache = new Map()
 /** Fetch (or read from cache) the current rate for a currency code. */
 export async function fetchCurrentRate(code) {
     const key = (code || '').toUpperCase().trim()
-    if (!key) return '1'
+    if (!key) return null
     if (_rateCache.has(key)) return _rateCache.get(key)
     const promise = currenciesAPI
         .getCurrentRate(key)
         .then((res) => {
             const r = res?.data?.rate
-            return r !== null && r !== undefined && r !== '' ? String(r) : '1'
+            if (r === null || r === undefined || r === '') return null
+            const rate = new Decimal(r)
+            return rate.bi > 0n ? String(r) : null
         })
-        .catch(() => '1')
+        .catch(() => null)
     _rateCache.set(key, promise)
     return promise
 }
 
 export function calculateCrossExchangeRate(sourceRate, targetRate) {
-    return null
+    const src = new Decimal(sourceRate || '0')
+    const tgt = new Decimal(targetRate || '0')
+    if (src.bi <= 0n || tgt.bi <= 0n) return null
+    return src.div(tgt).toFixed(8)
 }
 
 export async function fetchFxPreview(sourceCode, targetCode, amount = '1', branchId = null) {
@@ -63,11 +69,10 @@ export function clearExchangeRateCache(code) {
 }
 
 /**
- * React hook. While loading, `rate` defaults to 1.0 so existing forms keep
- * working (degrades gracefully when the backend endpoint isn't available).
+ * React hook. `rate` remains null until the backend resolves it.
  */
 export default function useExchangeRate(code) {
-    const [rate, setRate] = useState('1')
+    const [rate, setRate] = useState(null)
     const [loading, setLoading] = useState(false)
 
     useEffect(() => {

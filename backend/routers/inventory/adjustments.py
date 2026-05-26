@@ -152,8 +152,8 @@ def post_inventory_adjustment(
                     sale_document_id=reference_id or 0,
                     costing_method=costing_method,
                 )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+            except ValueError:
+                raise HTTPException(**http_error(400, "invalid_request", request))
             wh_cost = (Decimal(str(consumed_value)) / abs(qty_delta)).quantize(_D4, ROUND_HALF_UP)
 
         # Upsert inventory quantity
@@ -429,7 +429,7 @@ def create_adjustment(
         adj_id = adj_id_result[0]
 
         # T049: Call shared helper for stock/GL/audit
-        result = post_inventory_adjustment(
+        post_inventory_adjustment(
             db,
             items=[{
                 "product_id": data.product_id,
@@ -450,7 +450,7 @@ def create_adjustment(
 
         # Notify about inventory adjustment
         try:
-            prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :id"), {"id": data.product_id}).scalar()
+            db.execute(text("SELECT product_name FROM products WHERE id = :id"), {"id": data.product_id}).scalar()
             db.execute(text("""
                 INSERT INTO notifications (user_id, type, title, message, link, is_read, created_at)
                 SELECT DISTINCT u.id, 'inventory', :title, :message, :link, FALSE, NOW()

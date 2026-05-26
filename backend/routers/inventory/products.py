@@ -3,7 +3,7 @@ Inventory Module - Products CRUD + Cost Breakdown
 """
 
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -47,6 +47,12 @@ def get_product_cost_breakdown(request: Request,
                 w.id as warehouse_id,
                 w.warehouse_name,
                 i.quantity,
+                COALESCE(i.reserved_quantity, 0) AS reserved_quantity,
+                COALESCE(i.damaged_quantity, 0) AS damaged_quantity,
+                COALESCE(
+                    i.available_quantity,
+                    GREATEST(i.quantity - COALESCE(i.reserved_quantity, 0) - COALESCE(i.damaged_quantity, 0), 0)
+                ) AS available_quantity,
                 i.average_cost,
                 i.last_costing_update
             FROM inventory i
@@ -57,11 +63,15 @@ def get_product_cost_breakdown(request: Request,
         for row in rows:
             avg_cost = row.average_cost or 0
             qty = row.quantity or 0
+            available_qty = row.available_quantity or 0
 
             breakdown.append({
                 "warehouse_id": row.warehouse_id,
                 "warehouse_name": row.warehouse_name,
                 "quantity": str(qty),
+                "reserved_quantity": str(row.reserved_quantity or 0),
+                "damaged_quantity": str(row.damaged_quantity or 0),
+                "available_quantity": str(available_qty),
                 "average_cost": str(avg_cost),
                 "total_value": str(qty * avg_cost),
                 "last_update": row.last_costing_update.isoformat() if row.last_costing_update else None
@@ -144,7 +154,9 @@ def list_products(
                 "description": r.get("description"),
                 "is_active": r.get("is_active", True),
                 "current_stock": str(r.get("current_stock") or 0),
-                "reserved_quantity": "0",
+                "reserved_quantity": str(r.get("reserved_quantity") or 0),
+                "damaged_quantity": str(r.get("damaged_quantity") or 0),
+                "available_stock": str(r.get("available_stock") or 0),
                 "category_id": r.get("category_id"),
                 "category_name": r.get("category_name"),
                 "has_batch_tracking": r.get("has_batch_tracking") or False,

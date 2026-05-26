@@ -53,7 +53,7 @@ def main() -> int:
     for ext in ("*.js", "*.jsx", "*.ts", "*.tsx"):
         for js_file in frontend_src.rglob(ext):
             rel = js_file.relative_to(repo_root)
-            rel_str = str(rel)
+            str(rel)
 
             if any(d in rel.parts for d in SKIP_DIRS):
                 continue

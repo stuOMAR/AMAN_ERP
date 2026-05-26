@@ -5,8 +5,6 @@ Revises: 023e_zatca_outbox, 023f_opportunity_stage_history, 023g_pos_offline_bat
 Create Date: 2026-05-02 23:12:08.457963
 """
 from typing import Sequence, Union
-from alembic import op
-import sqlalchemy as sa
 
 # revision identifiers
 revision: str = 'afa5d0a73bb9'

@@ -5,23 +5,19 @@ Mounted under the parent router via taxes/__init__.py.
 from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from utils.hr_pii import has_pii_access
 from utils.masking import mask_pii
-from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
+from utils.accounting import get_mapped_account_id
 from utils.currency_display import base_to_display_decimal, display_currency_fields, document_amount_base_sql, resolve_display_currency
-from utils.tax_precision import display_money_str, money_str, rate_str
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from utils.tax_precision import display_money_str, rate_str
 
 logger = logging.getLogger(__name__)
 
@@ -37,7 +33,7 @@ def _display_dec(value: Any, display_meta: dict) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/vat-report", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["accounting.view", "taxes.view", "reports.view"]))])
 def get_vat_report(
@@ -137,13 +133,16 @@ def get_vat_report(
                 """), {**gl_params, "account_id": vat_in_account_id}).scalar()
                 net_input_vat = _dec(gl_input).quantize(_D2, ROUND_HALF_UP)
         net_vat_payable = (net_output_vat - net_input_vat).quantize(_D2, ROUND_HALF_UP)
+        display_net_vat = _display_dec(net_vat_payable, display_meta)
 
         return {
             **display_currency_fields(display_meta),
             "period": {"start": start_date, "end": end_date},
             "output_vat": {"taxable": str(_display_dec(net_output_taxable, display_meta)), "vat": str(_display_dec(net_output_vat, display_meta))},
             "input_vat": {"taxable": str(_display_dec(net_input_taxable, display_meta)), "vat": str(_display_dec(net_input_vat, display_meta))},
-            "net_vat_payable": str(_display_dec(net_vat_payable, display_meta))
+            "net_vat_payable": str(display_net_vat),
+            "net_vat_abs": str(abs(display_net_vat)),
+            "net_vat_status": "payable" if display_net_vat >= Decimal("0") else "refundable",
         }
 
 
@@ -170,7 +169,7 @@ def get_tax_audit(
         taxable_base_sql = document_amount_base_sql("(COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0))", "i")
         vat_base_sql = document_amount_base_sql("COALESCE(i.tax_amount, 0)", "i")
 
-        results = db.execute(text(  # noqa: sql-lint
+        results = db.execute(text(  # noqa
             f"""
             SELECT i.id, i.invoice_number, i.invoice_date, i.invoice_type,
                 p.name as party_name, p.tax_number,
@@ -223,7 +222,7 @@ def get_tax_summary(
             if br and br.country_code:
                 rate_where += " AND (country_code = :cc OR country_code IS NULL)"
                 rate_params["cc"] = br.country_code
-        rates_count = db.execute(text(f"SELECT COUNT(*) FROM tax_rates {rate_where}"), rate_params).scalar() or 0  # noqa: sql-lint
+        rates_count = db.execute(text(f"SELECT COUNT(*) FROM tax_rates {rate_where}"), rate_params).scalar() or 0  # noqa
 
         # ── Returns stats with branch filter ──
         ret_where = "WHERE status != 'cancelled'"
@@ -233,7 +232,7 @@ def get_tax_summary(
             ret_where += " AND tax_period LIKE :yp"
             ret_params["yp"] = f"{year}%"
 
-        returns_stats = db.execute(text(  # noqa: sql-lint
+        returns_stats = db.execute(text(  # noqa
             f"""
             SELECT COUNT(*) as total,
                 COUNT(*) FILTER (WHERE status = 'draft') as draft,
@@ -250,7 +249,7 @@ def get_tax_summary(
         vat_branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", vat_params)
 
         # Aggregate at invoice level to respect header discounts
-        current_vat = db.execute(text(  # noqa: sql-lint
+        current_vat = db.execute(text(  # noqa
             f"""
             SELECT
                 COALESCE(SUM(CASE
@@ -283,7 +282,7 @@ def get_tax_summary(
         overdue_where = "WHERE status = 'filed' AND due_date < CURRENT_DATE"
         overdue_params = {}
         overdue_where += " " + branch_scope_filter_from_scope(branch_scope, "branch_id", overdue_params)
-        overdue = db.execute(text(f"SELECT COUNT(*) FROM tax_returns {overdue_where}"), overdue_params).scalar() or 0  # noqa: sql-lint
+        overdue = db.execute(text(f"SELECT COUNT(*) FROM tax_returns {overdue_where}"), overdue_params).scalar() or 0  # noqa
 
         # ── Employee tax summary (withholding from payroll) ──
         emp_tax = {"total_employees": 0, "total_salary_tax": "0.00", "total_gosi": "0.00"}
@@ -291,7 +290,7 @@ def get_tax_summary(
             emp_where = ""
             emp_params = {}
             emp_where = branch_scope_filter_from_scope(branch_scope, "e.branch_id", emp_params)
-            emp_row = db.execute(text(  # noqa: sql-lint
+            emp_row = db.execute(text(  # noqa
                 f"""
                 SELECT COUNT(DISTINCT pe.employee_id) as total_employees,
                        COALESCE(SUM(pe.gosi_employee_share), 0) as total_gosi,
@@ -352,7 +351,7 @@ def get_branch_tax_analysis(
         taxable_base_sql = document_amount_base_sql("(COALESCE(i.subtotal, 0) - COALESCE(i.discount, 0))", "i")
         vat_base_sql = document_amount_base_sql("COALESCE(i.tax_amount, 0)", "i")
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
 
             SELECT 
@@ -381,7 +380,7 @@ def get_branch_tax_analysis(
         ret_params = {"year_prefix": str(start_date.year) + "%"}
         ret_branch_filter = branch_scope_filter_from_scope(branch_scope, "tr.branch_id", ret_params)
 
-        returns_by_branch = db.execute(text(  # noqa: sql-lint
+        returns_by_branch = db.execute(text(  # noqa
             f"""
 
             SELECT tr.branch_id,
@@ -481,7 +480,7 @@ def get_employee_tax_obligations(
 
         where = " AND ".join(where_parts)
 
-        employees = db.execute(text(  # noqa: sql-lint
+        employees = db.execute(text(  # noqa
             f"""
 
             SELECT 
@@ -489,17 +488,17 @@ def get_employee_tax_obligations(
                 CONCAT(e.first_name, ' ', e.last_name) as employee_name,
                 e.tax_id, e.social_security,
                 e.branch_id, b.branch_name, b.country_code as jurisdiction,
-                d.name as department_name,
+                d.department_name as department_name,
                 COUNT(pe.id) as payslip_count,
                 COALESCE(SUM(pe.basic_salary), 0) as total_basic,
                 COALESCE(SUM(pe.housing_allowance), 0) as total_housing,
                 COALESCE(SUM(pe.transport_allowance), 0) as total_transport,
                 COALESCE(SUM(pe.other_allowances), 0) as total_other_allowances,
-                COALESCE(SUM(pe.gross_salary), 0) as total_gross,
+                COALESCE(SUM(pe.basic_salary + pe.housing_allowance + pe.transport_allowance + pe.other_allowances + pe.salary_components_earning + pe.overtime_amount), 0) as total_gross,
                 COALESCE(SUM(pe.gosi_employee_share), 0) as total_gosi_employee,
                 COALESCE(SUM(pe.gosi_employer_share), 0) as total_gosi_employer,
                 COALESCE(SUM(pe.net_salary), 0) as total_net,
-                COALESCE(SUM(pe.gross_salary - pe.net_salary), 0) as total_deductions
+                COALESCE(SUM((pe.basic_salary + pe.housing_allowance + pe.transport_allowance + pe.other_allowances + pe.salary_components_earning + pe.overtime_amount) - pe.net_salary), 0) as total_deductions
             FROM employees e
             JOIN payroll_entries pe ON pe.employee_id = e.id
             LEFT JOIN branches b ON e.branch_id = b.id
@@ -509,7 +508,7 @@ def get_employee_tax_obligations(
               AND EXTRACT(YEAR FROM pp.start_date) = :year
             GROUP BY e.id, e.employee_code, e.first_name, e.last_name, e.tax_id,
                      e.social_security, e.branch_id, b.branch_name, b.country_code,
-                     d.name
+                     d.department_name
             ORDER BY total_gross DESC
         """), params).fetchall()
 

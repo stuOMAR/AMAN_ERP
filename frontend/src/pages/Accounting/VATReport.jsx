@@ -7,6 +7,8 @@ import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 
+const isVatPayable = (report) => (report?.net_vat_status || '').toLowerCase() === 'payable'
+
 function VATReport() {
     const { t } = useTranslation()
     const { currentBranch } = useBranch()
@@ -96,10 +98,10 @@ function VATReport() {
                         </div>
                         <div className="metric-card">
                             <div className="metric-label">{t('accounting.vat_report.net_vat')}</div>
-                            <div className={`metric-value ${report.net_vat_payable >= 0 ? 'text-error' : 'text-success'}`}>
-                                {formatNumber(Math.abs(report.net_vat_payable))} <small>{currency}</small>
+                            <div className={`metric-value ${isVatPayable(report) ? 'text-error' : 'text-success'}`}>
+                                {formatNumber(report.net_vat_abs || report.net_vat_payable)} <small>{currency}</small>
                             </div>
-                            <div className="metric-change">{report.net_vat_payable >= 0 ? (t('accounting.vat_report.payable')) : (t('accounting.vat_report.refundable'))}</div>
+                            <div className="metric-change">{isVatPayable(report) ? (t('accounting.vat_report.payable')) : (t('accounting.vat_report.refundable'))}</div>
                         </div>
                     </div>
 
@@ -137,7 +139,7 @@ function VATReport() {
                                 <tr style={{ background: 'var(--bg-secondary)', fontSize: '1.2rem' }}>
                                     <td style={{ fontWeight: 'bold' }}>{t('accounting.vat.net_tax')}</td>
                                     <td></td>
-                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: report.net_vat_payable >= 0 ? 'var(--text-error)' : 'var(--text-success)' }}>
+                                    <td style={{ textAlign: 'left', fontWeight: 'bold', color: isVatPayable(report) ? 'var(--text-error)' : 'var(--text-success)' }}>
                                         {formatNumber(report.net_vat_payable)} {currency}
                                     </td>
                                 </tr>

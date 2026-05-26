@@ -74,12 +74,8 @@ const NotificationSettings = ({ settings, handleSettingChange }) => {
     const testEmailConnection = async () => {
         setTesting(true);
         try {
-            const response = await api.post('/settings/test-email', { settings });
-            if (response.data.success) {
-                showToast(response.data.message || t('settings.notifications.test_success'), 'success');
-            } else {
-                throw new Error(response.data.message || "Failed");
-            }
+            const response = await notificationsAPI.testEmail();
+            showToast(response.data.message || t('settings.notifications.test_success'), 'success');
         } catch (err) {
             console.error("Email test failed", err);
             showToast(err.response?.data?.detail || t('settings.notifications.test_failed'), 'error');
@@ -122,8 +118,8 @@ const NotificationSettings = ({ settings, handleSettingChange }) => {
                         <input
                             type="email"
                             className="form-input ltr"
-                            value={settings.smtp_user || ''}
-                            onChange={(e) => handleSettingChange('smtp_user', e.target.value)}
+                            value={settings.smtp_username || ''}
+                            onChange={(e) => handleSettingChange('smtp_username', e.target.value)}
                         />
                     </div>
                     <div className="form-group">
@@ -131,8 +127,8 @@ const NotificationSettings = ({ settings, handleSettingChange }) => {
                         <input
                             type="password"
                             className="form-input ltr"
-                            value={settings.smtp_pass || ''}
-                            onChange={(e) => handleSettingChange('smtp_pass', e.target.value)}
+                            value={settings.smtp_password || ''}
+                            onChange={(e) => handleSettingChange('smtp_password', e.target.value)}
                         />
                     </div>
                 </div>
@@ -192,8 +188,8 @@ const NotificationSettings = ({ settings, handleSettingChange }) => {
                         <input
                             type="text"
                             className="form-input ltr"
-                            value={settings.sms_from_number || ''}
-                            onChange={(e) => handleSettingChange('sms_from_number', e.target.value)}
+                            value={settings.sms_sender_name || ''}
+                            onChange={(e) => handleSettingChange('sms_sender_name', e.target.value)}
                             placeholder="AMAN_ERP"
                         />
                     </div>

@@ -11,7 +11,6 @@ from typing import Optional
 import logging
 import uuid
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.audit import log_activity
 from utils.permissions import require_permission
@@ -144,7 +143,7 @@ def create_stock_transfer(
 
         # 4. Check available stock in source — lock row to prevent phantom stock
         source_inv = db.execute(text("""
-            SELECT quantity, reserved_quantity, average_cost FROM inventory
+            SELECT quantity, reserved_quantity, damaged_quantity, available_quantity, average_cost FROM inventory
             WHERE product_id = :pid AND warehouse_id = :wh
             FOR UPDATE
         """), {"pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
@@ -152,8 +151,13 @@ def create_stock_transfer(
         transfer_qty = Decimal(str(transfer.quantity))
         source_qty = Decimal(str(source_inv.quantity)) if source_inv else Decimal("0")
         source_reserved = Decimal(str(source_inv.reserved_quantity or 0)) if source_inv else Decimal("0")
+        source_damaged = Decimal(str(source_inv.damaged_quantity or 0)) if source_inv else Decimal("0")
         source_cost = Decimal(str(source_inv.average_cost or 0)) if source_inv else Decimal("0")
-        available_qty = source_qty - source_reserved
+        available_qty = (
+            Decimal(str(source_inv.available_quantity))
+            if source_inv and source_inv.available_quantity is not None
+            else source_qty - source_reserved - source_damaged
+        )
 
         if available_qty < transfer_qty:
             raise HTTPException(
@@ -176,8 +180,8 @@ def create_stock_transfer(
                     costing_method=method,
                     return_consumptions=True,
                 )
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc))
+            except ValueError:
+                raise HTTPException(**http_error(400, "invalid_request", request))
             transfer_value = Decimal(str(consumption_result["total_cogs"]))
             consumption_details = consumption_result["consumptions"]
             source_cost = (transfer_value / transfer_qty).quantize(Decimal("0.0001"), ROUND_HALF_UP) if transfer_qty else Decimal("0")
@@ -198,7 +202,10 @@ def create_stock_transfer(
         source_update = db.execute(text("""
             UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW()
             WHERE product_id = :pid AND warehouse_id = :wh
-              AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+              AND COALESCE(
+                    available_quantity,
+                    GREATEST(quantity - COALESCE(reserved_quantity, 0) - COALESCE(damaged_quantity, 0), 0)
+                  ) >= :qty
             RETURNING id
         """), {"qty": transfer.quantity, "pid": transfer.product_id, "wh": transfer.source_warehouse_id}).fetchone()
         if not source_update:
@@ -485,27 +492,31 @@ def transfer_stock(
         # Validate each aggregated product has sufficient stock
         for pid, total_qty in aggregated.items():
             src_inv = db.execute(text("""
-                SELECT quantity, reserved_quantity FROM inventory
+                SELECT quantity, reserved_quantity, damaged_quantity, available_quantity FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": pid, "wh": transfer.source_warehouse_id}).fetchone()
             current_qty = Decimal(str(src_inv.quantity)) if src_inv else Decimal("0")
             reserved_qty = Decimal(str(src_inv.reserved_quantity or 0)) if src_inv else Decimal("0")
-            available_qty = current_qty - reserved_qty
+            damaged_qty = Decimal(str(src_inv.damaged_quantity or 0)) if src_inv else Decimal("0")
+            available_qty = (
+                Decimal(str(src_inv.available_quantity))
+                if src_inv and src_inv.available_quantity is not None
+                else current_qty - reserved_qty - damaged_qty
+            )
             if available_qty < total_qty:
-                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": pid}).scalar()
+                db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": pid}).scalar()
                 raise HTTPException(status_code=400, detail=i18n_message("qty_not_available", request))
 
         # Aggregate total transfer value for GL posting after the loop.
         total_transfer_value = Decimal("0")
-        item_descriptions: list[str] = []
 
         from services.costing_service import CostingService
 
         for item in transfer.items:
             # T051: Stock already validated via aggregation above; re-lock for update
             src_inv = db.execute(text("""
-                SELECT quantity, reserved_quantity, average_cost FROM inventory
+                SELECT quantity, reserved_quantity, damaged_quantity, available_quantity, average_cost FROM inventory
                 WHERE product_id = :pid AND warehouse_id = :wh
                 FOR UPDATE
             """), {"pid": item.product_id, "wh": transfer.source_warehouse_id}).fetchone()
@@ -525,8 +536,8 @@ def transfer_stock(
                         costing_method=method,
                         return_consumptions=True,
                     )
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc))
+                except ValueError:
+                    raise HTTPException(**http_error(400, "invalid_request", request))
                 item_value = Decimal(str(consumption_result["total_cogs"]))
                 consumption_details = consumption_result["consumptions"]
                 source_cost = (item_value / item_qty).quantize(Decimal("0.0001"), ROUND_HALF_UP) if item_qty else Decimal("0")
@@ -541,11 +552,14 @@ def transfer_stock(
             deducted = db.execute(text("""
                 UPDATE inventory SET quantity = quantity - :qty, updated_at = NOW()
                 WHERE product_id = :pid AND warehouse_id = :wh
-                  AND quantity - COALESCE(reserved_quantity, 0) >= :qty
+                  AND COALESCE(
+                        available_quantity,
+                        GREATEST(quantity - COALESCE(reserved_quantity, 0) - COALESCE(damaged_quantity, 0), 0)
+                      ) >= :qty
                 RETURNING id
             """), {"qty": item.quantity, "pid": item.product_id, "wh": transfer.source_warehouse_id}).fetchone()
             if not deducted:
-                prod_name = db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
+                db.execute(text("SELECT product_name FROM products WHERE id = :pid"), {"pid": item.product_id}).scalar()
                 raise HTTPException(status_code=400, detail=i18n_message("qty_changed_during_transfer", request))
 
             # 3. Add to Destination with WAC recalculation

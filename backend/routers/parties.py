@@ -1,9 +1,9 @@
+from decimal import Decimal
 from fastapi import APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
 from typing import Optional
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import require_permission
@@ -21,6 +21,7 @@ async def get_customers(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب قائمة العملاء مع أرصدة حسب الفرع"""
+    limit = min(limit, 100)
     with transactional(current_user.company_id) as db:
         try:
             # Get base currency and branch currency
@@ -107,7 +108,7 @@ async def get_customers(
                      rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), 
                                      {"c": d["balance_currency"]}).scalar()
                      if rate:
-                         d["balance_sar"] = float(d["balance"]) * float(rate)
+                         d["balance_sar"] = d["balance"] * Decimal(str(rate))
                      else:
                          d["balance_sar"] = Decimal(str(d["balance"]))
                  else:
@@ -129,6 +130,7 @@ async def get_suppliers(
     current_user: dict = Depends(get_current_user)
 ):
     """جلب قائمة الموردين مع أرصدة حسب الفرع"""
+    limit = min(limit, 100)
     with transactional(current_user.company_id) as db:
         try:
             # Get base currency and branch currency
@@ -215,7 +217,7 @@ async def get_suppliers(
                      rate = db.execute(text("SELECT current_rate FROM currencies WHERE code = :c"), 
                                      {"c": d["balance_currency"]}).scalar()
                      if rate:
-                         d["balance_sar"] = Decimal(str(d["balance"])) * float(rate)
+                         d["balance_sar"] = d["balance"] * Decimal(str(rate))
                      else:
                          d["balance_sar"] = Decimal(str(d["balance"]))
                  else:
@@ -244,6 +246,7 @@ async def find_duplicates_by_phone(
     يستخدم العمود المُولَّد ``phone_clean`` (T7.3) المفهرس ببنية B-tree،
     لذا يبقى الاستعلام أقل من 100ms حتى على 100K طرف.
     """
+    limit = min(limit, 100)
     digits = "".join(ch for ch in (phone or "") if ch.isdigit())
     if not digits:
         return {"items": []}

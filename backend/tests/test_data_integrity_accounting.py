@@ -10,11 +10,11 @@ AMAN ERP - Data Integrity Tests: Accounting
 ═══════════════════════════════════════
 """
 
-import pytest
-from decimal import Decimal
-from fastapi.testclient import TestClient
-from main import app
-from sqlalchemy import text
+import pytest  # noqa: E402
+from decimal import Decimal  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 client = TestClient(app)
 TOLERANCE = Decimal("0.01")
@@ -201,7 +201,7 @@ class TestAccountingDataIntegrity:
             WHERE je.status = 'posted' AND fp.is_closed = TRUE
         """))
         
-        closed_period_entries = result.scalar() or 0
+        result.scalar() or 0
         # Note: قد يكون هناك قيود قديمة قبل إغلاق الفترة
         # هذا اختبار للتحقق من أن النظام يمنع إنشاء قيود جديدة في فترات مغلقة
 

@@ -7,7 +7,8 @@ from decimal import Decimal
 
 class BudgetItemBase(BaseModel):
     account_id: int
-    planned_amount: Decimal
+    planned_amount: Optional[Decimal] = None
+    monthly_amount: Optional[Decimal] = None
     notes: Optional[str] = None
 
 
@@ -44,5 +45,6 @@ class BudgetReportItem(BaseModel):
     actual: Decimal
     variance: Decimal
     usage_percentage: Decimal
+    usage_percentage_capped: Decimal
     variance_percentage: Decimal
     is_over_budget: bool

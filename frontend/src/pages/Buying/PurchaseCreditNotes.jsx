@@ -34,7 +34,7 @@ function PurchaseCreditNotes() {
     const [form, setForm] = useState({
         party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
         notes: '', branch_id: currentBranch?.id, party_site_id: '',
-        lines: [{ description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
+        lines: [{ description: '', quantity: '1', unit_price: '', discount: '' }]
     })
     const [saving, setSaving] = useState(false)
 
@@ -82,13 +82,13 @@ function PurchaseCreditNotes() {
         setForm({
             party_id: '', related_invoice_id: '', invoice_date: new Date().toISOString().split('T')[0],
             notes: '', branch_id: currentBranch?.id, party_site_id: '',
-            lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }]
+            lines: [{ product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }]
         })
         loadCreateData()
         setShowCreate(true)
     }
 
-    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }] }))
+    const addLine = () => setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }] }))
     const removeLine = (i) => setForm(f => {
         if (f.lines.length <= 1) return f;
         return { ...f, lines: f.lines.filter((_, idx) => idx !== i) };
@@ -102,7 +102,6 @@ function PurchaseCreditNotes() {
                 if (prod) {
                     lines[i].description = prod.item_name || prod.name || ''
                     lines[i].unit_price = String(prod.last_buying_price || prod.buying_price || '')
-                    lines[i].tax_rate = null // Resolved by backend engine
                 }
             }
             return { ...f, lines }
@@ -148,7 +147,6 @@ function PurchaseCreditNotes() {
                     quantity: String(l.quantity || '0'),
                     unit_price: String(l.unit_price || '0'),
                     discount: String(l.discount || '0'),
-                    tax_rate: null,
                 })),
             })
             setShowCreate(false)
@@ -293,7 +291,7 @@ function PurchaseCreditNotes() {
                                                 <td><input className="form-input" value={line.description} onChange={e => updateLine(i, 'description', e.target.value)} /></td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} /></td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} /></td>
-                                                <td style={{ textAlign: 'center' }}>—</td>
+                                                <td style={{ textAlign: 'center' }}>{backendLines?.[i]?.tax_rate ?? '—'}</td>
                                                 <td><input className="form-input" type="text" inputMode="decimal" value={line.discount} onChange={e => updateLine(i, 'discount', e.target.value)} /></td>
                                                 <td style={{ fontWeight: 'bold', textAlign: 'center' }}>{backendLineTotal(i) != null ? formatNumber(backendLineTotal(i)) : '—'}</td>
                                                 <td><button className="btn btn-sm" style={{ color: 'red', background: 'none', border: 'none' }} onClick={() => removeLine(i)}>✕</button></td>

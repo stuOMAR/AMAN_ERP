@@ -1,7 +1,6 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { deliveryOrdersAPI, salesAPI } from '../../utils/api'
-import { getCurrency } from '../../utils/auth'
 import { useTranslation } from 'react-i18next'
 import { useToast } from '../../context/ToastContext'
 import { useBranch } from '../../context/BranchContext'
@@ -15,14 +14,13 @@ function DeliveryOrderForm() {
     const navigate = useNavigate()
     const { showToast } = useToast()
     const { currentBranch } = useBranch()
-    const currency = getCurrency()
     const [loading, setLoading] = useState(false)
     const [initialLoad, setInitialLoad] = useState(true)
     const [salesOrders, setSalesOrders] = useState([])
     const [form, setForm] = useState({
-        party_id: '', so_id: '', do_date: new Date().toISOString().split('T')[0],
+        party_id: '', sales_order_id: '', delivery_date: new Date().toISOString().split('T')[0],
         shipping_date: '', shipping_address: '', shipping_method: '',
-        notes: '', lines: []
+        warehouse_id: '', notes: '', lines: []
     })
 
     useEffect(() => {
@@ -36,22 +34,28 @@ function DeliveryOrderForm() {
     }, [currentBranch])
 
     const handleSOChange = async (soId) => {
-        if (!soId) { setForm(f => ({ ...f, so_id: '', party_id: '', lines: [] })); return }
+        if (!soId) { setForm(f => ({ ...f, sales_order_id: '', party_id: '', warehouse_id: '', lines: [] })); return }
         try {
             const res = await salesAPI.getOrder(soId)
             const so = res.data
             setForm(f => ({
-                ...f, so_id: soId, party_id: so.customer_id || so.party_id,
+                ...f,
+                sales_order_id: soId,
+                party_id: so.customer_id || so.party_id,
+                warehouse_id: so.warehouse_id || f.warehouse_id,
                 lines: (so.items || so.lines || []).map(l => {
-                    const remaining = new Decimal(l.quantity || '0').minus(l.delivered_quantity || '0');
+                    const remainingStr = l.remaining_quantity || '0';
                     return {
+                        so_line_id: l.id,
                         product_id: l.product_id,
-                        quantity: remaining.toString(),
-                        unit_price: String(l.unit_price || '0'),
-                        tax_rate: String(l.tax_rate || '0'),
+                        ordered_qty: String(l.quantity || remainingStr),
+                        delivered_qty: remainingStr,
+                        unit: l.unit || '',
                         product_name: l.product_name
                     };
-                }).filter(l => { try { return new Decimal(l.quantity).gt(0) } catch { return false } })
+                }).filter(l => {
+                    try { return new Decimal(l.delivered_qty || '0').gt(0) } catch { return false }
+                })
             }))
         } catch (err) { showToast(t('common.error'), 'error') }
     }
@@ -60,7 +64,24 @@ function DeliveryOrderForm() {
         e.preventDefault()
         setLoading(true)
         try {
-            const payload = { ...form, branch_id: currentBranch?.id }
+            const payload = {
+                delivery_date: form.delivery_date,
+                sales_order_id: form.sales_order_id ? parseInt(form.sales_order_id, 10) : null,
+                party_id: form.party_id ? parseInt(form.party_id, 10) : null,
+                warehouse_id: form.warehouse_id ? parseInt(form.warehouse_id, 10) : null,
+                branch_id: currentBranch?.id || null,
+                shipping_method: form.shipping_method,
+                delivery_address: form.shipping_address,
+                notes: form.notes,
+                lines: form.lines.map(line => ({
+                    product_id: line.product_id ? parseInt(line.product_id, 10) : null,
+                    so_line_id: line.so_line_id ? parseInt(line.so_line_id, 10) : null,
+                    description: line.description || line.product_name || '',
+                    ordered_qty: String(line.ordered_qty || '0'),
+                    delivered_qty: String(line.delivered_qty || '0'),
+                    unit: line.unit || null,
+                })),
+            }
             const res = await deliveryOrdersAPI.create(payload)
             showToast(t('delivery_orders.created_success'), 'success')
             navigate(`/sales/delivery-orders/${res.data.id}`)
@@ -78,7 +99,7 @@ function DeliveryOrderForm() {
     }
 
     const addLine = () => {
-        setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', quantity: 1, unit_price: 0, tax_rate: 0 }] }))
+        setForm(f => ({ ...f, lines: [...f.lines, { product_id: '', ordered_qty: '0', delivered_qty: '1', unit: '' }] }))
     }
 
     const removeLine = (idx) => {
@@ -97,7 +118,7 @@ function DeliveryOrderForm() {
                 <div className="card p-4">
                     <div className="form-grid-3">
                         <FormField label={t('delivery_orders.from_sales_order')}>
-                            <select className="form-select" value={form.so_id} onChange={e => handleSOChange(e.target.value)}>
+                            <select className="form-select" value={form.sales_order_id} onChange={e => handleSOChange(e.target.value)}>
                                 <option value="">{t('delivery_orders.manual_entry')}</option>
                                 {salesOrders.map(so => (
                                     <option key={so.id} value={so.id}>{so.so_number} - {so.customer_name}</option>
@@ -105,7 +126,7 @@ function DeliveryOrderForm() {
                             </select>
                         </FormField>
                         <FormField label={t('common.date')} required>
-                            <DateInput className="form-input" value={form.do_date} onChange={e => setForm(f => ({ ...f, do_date: e.target.value }))} required />
+                            <DateInput className="form-input" value={form.delivery_date} onChange={e => setForm(f => ({ ...f, delivery_date: e.target.value }))} required />
                         </FormField>
                         <FormField label={t('delivery_orders.shipping_date')}>
                             <DateInput className="form-input" value={form.shipping_date} onChange={e => setForm(f => ({ ...f, shipping_date: e.target.value }))} />
@@ -124,26 +145,24 @@ function DeliveryOrderForm() {
                 <div className="card mt-4 p-4">
                     <div className="flex justify-between items-center mb-3">
                         <h3 className="card-title">{t('common.items')}</h3>
-                        {!form.so_id && <button type="button" className="btn btn-secondary btn-sm" onClick={addLine}>+ {t('common.add_line')}</button>}
+                        {!form.sales_order_id && <button type="button" className="btn btn-secondary btn-sm" onClick={addLine}>+ {t('common.add_line')}</button>}
                     </div>
                     <table className="data-table">
                         <thead>
                             <tr>
                                 <th>{t('common.product')}</th>
+                                <th>{t('delivery_orders.ordered_qty')}</th>
                                 <th>{t('common.quantity')}</th>
-                                 <th>{t('common.unit_price')} ({currency})</th>
-                                <th>{t('common.tax_rate')}</th>
-                                {!form.so_id && <th></th>}
+                                {!form.sales_order_id && <th></th>}
                             </tr>
                         </thead>
                         <tbody>
                             {form.lines.map((line, i) => (
                                 <tr key={i}>
                                     <td>{line.product_name || <input type="number" className="form-input" value={line.product_id} onChange={e => updateLine(i, 'product_id', e.target.value)} placeholder={t('common.product_id')} />}</td>
-                                    <td><input type="text" inputMode="decimal" className="form-input" min="1" value={line.quantity} onChange={e => updateLine(i, 'quantity', e.target.value)} style={{ width: 80 }} /></td>
-                                     <td><input type="text" inputMode="decimal" className="form-input" value={line.unit_price} onChange={e => updateLine(i, 'unit_price', e.target.value)} style={{ width: 120 }} /> <small>{currency}</small></td>
-                                    <td><input type="text" inputMode="decimal" className="form-input" value={line.tax_rate} onChange={e => updateLine(i, 'tax_rate', e.target.value)} style={{ width: 80 }} /></td>
-                                    {!form.so_id && <td><button type="button" className="btn-icon text-danger" onClick={() => removeLine(i)}>🗑️</button></td>}
+                                    <td><input type="text" inputMode="decimal" className="form-input" value={line.ordered_qty} onChange={e => updateLine(i, 'ordered_qty', e.target.value)} style={{ width: 100 }} /></td>
+                                    <td><input type="text" inputMode="decimal" className="form-input" min="1" value={line.delivered_qty} onChange={e => updateLine(i, 'delivered_qty', e.target.value)} style={{ width: 100 }} /></td>
+                                    {!form.sales_order_id && <td><button type="button" className="btn-icon text-danger" onClick={() => removeLine(i)}>🗑️</button></td>}
                                 </tr>
                             ))}
                         </tbody>

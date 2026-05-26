@@ -2,28 +2,17 @@
 
 Mounted under the parent router via system_completion/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, Request, UploadFile, File, Response
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import datetime, date
-from pydantic import BaseModel
-from decimal import Decimal, ROUND_HALF_UP
-import io
-import csv
-import json
+from typing import Any, Dict, Optional
+from datetime import date
+from decimal import Decimal
 import logging
-import subprocess
-import os
-from database import get_db_connection, engine as system_engine
+from database import engine as system_engine
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
-from utils.audit import log_activity
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import create_fiscal_lock_table, check_fiscal_period_open
-from utils.duplicate_detection import find_duplicate_parties, find_duplicate_products
-from services.gl_service import create_journal_entry
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -255,20 +244,20 @@ def consolidated_balance_sheet(
                 """)).scalar() or 0
 
                 a = Decimal(str(assets))
-                l = Decimal(str(liabilities))
+                liability_total = Decimal(str(liabilities))
                 e = Decimal(str(equity))
 
                 company_results.append({
                     "company_id": cid,
                     "company_name": comp_name,
                     "total_assets": round(a, 2),
-                    "total_liabilities": round(l, 2),
+                    "total_liabilities": round(liability_total, 2),
                     "total_equity": round(e, 2),
-                    "balance_check": round(a - l - e, 2),
+                    "balance_check": round(a - liability_total - e, 2),
                 })
 
                 total_assets += a
-                total_liabilities += l
+                total_liabilities += liability_total
                 total_equity += e
 
         except Exception as e:
@@ -440,4 +429,3 @@ def fx_gain_loss_report(
 #  4. FISCAL PERIOD LOCK MANAGEMENT
 #     إدارة قفل الفترة المحاسبية
 # ═══════════════════════════════════════════════════════════════════════════════
-

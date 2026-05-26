@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from routers.auth import get_current_user
+from database import get_db_connection
 from utils.permissions import require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
 from utils.limiter import limiter
@@ -12,7 +13,7 @@ from utils.tx import transactional
 from schemas import CurrencyCreate, CurrencyResponse, ExchangeRateCreate, ExchangeRateResponse
 
 logger = logging.getLogger(__name__)
-from schemas.currencies import FXPreviewRequest, RevaluationRequest
+from schemas.currencies import FXPreviewRequest, RevaluationRequest  # noqa: E402
 
 router = APIRouter(
     prefix="/accounting/currencies",
@@ -696,15 +697,11 @@ def create_revaluation(
             if reval["side"] is None:
                 continue
 
-            if reval["side"] == "gain" and not (
-                (acc_type or "asset").lower() in {"liability", "equity", "revenue", "income"}
-            ):
+            if reval["side"] == "gain" and (acc_type or "asset").lower() not in {"liability", "equity", "revenue", "income"}:
                 # Asset / expense gained value in BC.
                 journal_entry_lines.append({"account_id": acc.id, "debit": diff, "credit": 0, "desc": f"Revaluation {code} @ {req.new_rate}"})
                 journal_entry_lines.append({"account_id": gain_id, "debit": 0, "credit": diff, "desc": f"Unrealized Gain - {acc.name}"})
-            elif reval["side"] == "loss" and not (
-                (acc_type or "asset").lower() in {"liability", "equity", "revenue", "income"}
-            ):
+            elif reval["side"] == "loss" and (acc_type or "asset").lower() not in {"liability", "equity", "revenue", "income"}:
                 # Asset / expense lost value in BC.
                 abs_diff = abs(diff)
                 journal_entry_lines.append({"account_id": acc.id, "debit": 0, "credit": abs_diff, "desc": f"Revaluation {code} @ {req.new_rate}"})
@@ -769,7 +766,7 @@ def create_revaluation(
                 "journal_entry_id": je_id,
                 "entry_number": entry_num,
                 "lines_count": len(journal_entry_lines),
-                "total_impact": sum(l['debit'] for l in journal_entry_lines) / 2
+                "total_impact": sum(line['debit'] for line in journal_entry_lines) / 2
             }
         except HTTPException:
             raise

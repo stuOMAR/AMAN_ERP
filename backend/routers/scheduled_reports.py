@@ -4,7 +4,7 @@ RPT-106: مشاركة التقارير بين المستخدمين
 RPT-106b: جدولة التقارير التلقائية (Scheduled Reports)
 """
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime, timedelta

@@ -6,7 +6,6 @@ import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
 import '../../components/ModuleStyles.css'
 import { formatNumber } from '../../utils/format'
-import Decimal from 'decimal.js'
 
 function TreasuryHome() {
     const { t, i18n } = useTranslation()
@@ -22,18 +21,15 @@ function TreasuryHome() {
             try {
                 setLoading(true)
                 const branchId = currentBranch?.id || null
-                const response = await treasuryAPI.listAccounts(branchId)
-
-                const accounts = response.data
-                const total = accounts.reduce((sum, acc) => sum.plus(acc.current_balance || 0), new Decimal(0))
-                const cash = accounts.filter(a => a.account_type === 'cash').length
-                const bank = accounts.filter(a => a.account_type === 'bank').length
+                const response = await treasuryAPI.getBalancesReport({ branch_id: branchId || undefined })
+                const accounts = response.data?.accounts || []
+                const summary = response.data?.summary || {}
 
                 setStats({
                     account_count: accounts.length,
-                    cash_count: cash,
-                    bank_count: bank,
-                    total_balance: total.toString()
+                    cash_count: summary.cash_count ?? 0,
+                    bank_count: summary.bank_count ?? 0,
+                    total_balance: summary.total_all ?? '0'
                 })
             } catch (err) {
                 console.error("Failed to fetch treasury stats", err)

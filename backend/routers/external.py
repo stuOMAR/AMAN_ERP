@@ -7,7 +7,7 @@ TAX-001: Withholding Tax (WHT)
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import datetime
@@ -18,7 +18,6 @@ import secrets
 import json
 import logging
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter, require_permission, validate_branch_access
@@ -225,12 +224,18 @@ def update_webhook(request: Request, webhook_id: int, data: WebhookUpdate, curre
             raise HTTPException(**http_error(400, "url_not_allowed"))
     with transactional(current_user.company_id) as db:
         updates = {}
-        if data.name is not None: updates["name"] = data.name
-        if data.url is not None: updates["url"] = data.url
-        if data.events is not None: updates["events"] = json.dumps(data.events)
-        if data.is_active is not None: updates["is_active"] = data.is_active
-        if data.retry_count is not None: updates["retry_count"] = data.retry_count
-        if data.timeout_seconds is not None: updates["timeout_seconds"] = data.timeout_seconds
+        if data.name is not None:
+            updates["name"] = data.name
+        if data.url is not None:
+            updates["url"] = data.url
+        if data.events is not None:
+            updates["events"] = json.dumps(data.events)
+        if data.is_active is not None:
+            updates["is_active"] = data.is_active
+        if data.retry_count is not None:
+            updates["retry_count"] = data.retry_count
+        if data.timeout_seconds is not None:
+            updates["timeout_seconds"] = data.timeout_seconds
 
         if not updates:
             raise HTTPException(**http_error(400, "no_data_to_update"))
@@ -238,7 +243,7 @@ def update_webhook(request: Request, webhook_id: int, data: WebhookUpdate, curre
         validate_update_keys(updates.keys())  # T2.2 defense-in-depth
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
         updates["id"] = webhook_id
-        db.execute(text(f"UPDATE webhooks SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates) # noqa: sql-lint
+        db.execute(text(f"UPDATE webhooks SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates) # noqa
         log_activity(
             db=db, user_id=current_user.id, username=current_user.username,
             action="update", resource_type="webhook",
@@ -427,7 +432,7 @@ def list_wht_rates(
         if country_code:
             country_filter = "AND (country_code = :cc OR country_code IS NULL)"
             params["cc"] = country_code.upper()
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             SELECT * FROM wht_rates
             WHERE is_active = TRUE {country_filter}
@@ -831,7 +836,7 @@ def download_wht_certificate(request: Request, tid: int, current_user=Depends(ge
         if row.branch_id:
             validate_branch_access(current_user, row.branch_id)
 
-        company = db.execute(text("""
+        db.execute(text("""
             SELECT setting_value FROM company_settings WHERE setting_key IN
               ('company_name_ar','company_name','tax_number','address')
         """)).fetchall()

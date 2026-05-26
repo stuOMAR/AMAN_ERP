@@ -3,6 +3,7 @@ import os
 from decimal import Decimal, ROUND_HALF_UP
 
 from sqlalchemy import text
+from utils.i18n import i18n_message
 
 
 def validate_configuration(conn, configuration_id: int, selected_option_ids: list[int]) -> dict:
@@ -187,7 +188,7 @@ def generate_quote_pdf(conn, quote_id: int, upload_dir: str) -> str:
         WHERE ql.quote_id = :qid
         ORDER BY ql.id
     """), {"qid": quote_id}).fetchall()
-    lines_data = [dict(l._mapping) for l in lines]
+    lines_data = [dict(line._mapping) for line in lines]
 
     # Build PDF
     try:

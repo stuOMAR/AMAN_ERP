@@ -256,7 +256,7 @@ class TestCompaniesManagement:
             "currency": "SYP"
         }
         # إنشاء الأولى
-        r1 = client.post("/api/companies/register", json=company_data,
+        client.post("/api/companies/register", json=company_data,
                          headers=admin_headers)
         # محاولة إنشاء مكررة
         r2 = client.post("/api/companies/register", json=company_data,

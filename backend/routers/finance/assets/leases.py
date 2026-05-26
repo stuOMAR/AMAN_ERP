@@ -3,24 +3,20 @@
 Mounted under the parent router via assets/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from typing import Any, Dict, Optional
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import get_mapped_account_id
+from utils.permissions import require_permission
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
+    LeasePaymentCreate,
+    LeaseContractCreate,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,9 +29,9 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _D4, _dec  # noqa: E402
 
-@router.get("/leases", dependencies=[Depends(require_permission("assets.view"))], response_model=List[Dict[str, Any]])
+@router.get("/leases", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
 def list_lease_contracts(
     status: Optional[str] = None,
     branch_id: Optional[int] = None,
@@ -58,14 +54,57 @@ def list_lease_contracts(
             params["branch_id"] = branch_id
         q += " ORDER BY lc.end_date ASC"
         rows = conn.execute(text(q), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+
+        total_rou = Decimal('0')
+        total_liability = Decimal('0')
+        res_rows = []
+        for r in rows:
+            d = dict(r._mapping)
+            total_rou += _dec(d.get("right_of_use_value"))
+            total_liability += _dec(d.get("lease_liability"))
+            # Serialize Decimal fields strictly as string to prevent drift
+            d["right_of_use_value"] = str(d["right_of_use_value"]) if d.get("right_of_use_value") is not None else "0"
+            d["lease_liability"] = str(d["lease_liability"]) if d.get("lease_liability") is not None else "0"
+            res_rows.append(d)
+
+        return {
+            "data": res_rows,
+            "summary": {
+                "total_rou": str(total_rou.quantize(_D2, ROUND_HALF_UP)),
+                "total_liability": str(total_liability.quantize(_D2, ROUND_HALF_UP))
+            }
+        }
 
 
 @router.post("/leases", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
 def create_lease_contract(request: Request, lease: LeaseContractCreate, current_user: dict = Depends(get_current_user)):
     """إنشاء عقد إيجار IFRS 16 مع قيد محاسبي الاعتراف الأولي"""
+    idempotency_key = require_idempotency_key(request, operation="asset lease contract")
     with transactional(current_user.company_id) as conn:
         try:
+            existing = conn.execute(text("""
+                SELECT id, right_of_use_value
+                FROM lease_contracts
+                WHERE asset_id IS NOT DISTINCT FROM :aid
+                  AND start_date = :sd
+                  AND end_date = :ed
+                  AND lessor_name IS NOT DISTINCT FROM :ln
+                  AND monthly_payment = :mp
+                LIMIT 1
+            """), {
+                "aid": lease.asset_id,
+                "sd": lease.start_date,
+                "ed": lease.end_date,
+                "ln": lease.lessor_name,
+                "mp": _dec(lease.monthly_payment).quantize(_D2, ROUND_HALF_UP),
+            }).fetchone()
+            if existing:
+                return {
+                    "id": existing.id,
+                    "right_of_use_value": str(_dec(existing.right_of_use_value).quantize(_D2, ROUND_HALF_UP)),
+                    "replayed": True,
+                }
+
             # Calculate right-of-use value using present value of payments
             monthly = _dec(lease.monthly_payment).quantize(_D2, ROUND_HALF_UP)
             total = int(lease.total_payments)
@@ -130,7 +169,8 @@ def create_lease_contract(request: Request, lease: LeaseContractCreate, current_
                         currency=base_currency,
                         exchange_rate=Decimal("1"),
                         source="lease_contract",
-                        source_id=lid
+                        source_id=lid,
+                        idempotency_key=f"{idempotency_key}:lease-contract:{lid}",
                     )
     
     
@@ -166,7 +206,7 @@ def create_lease_contract(request: Request, lease: LeaseContractCreate, current_
                     logger.warning("Failed to generate ROU depreciation schedule for lease %s", lid)
     
             return {
-                "id": lid, "right_of_use_value": float(rou_value),
+                "id": lid, "right_of_use_value": str(rou_value),
                 "journal_entry_id": journal_entry_id,
                 "message": i18n_message("asset_lease_created_success", request) + (" مع قيد محاسبي" if journal_entry_id else "")
             }
@@ -208,8 +248,9 @@ def get_lease_schedule(lease_id: int, request: Request, current_user: dict = Dep
 
 
 @router.post("/leases/{lease_id}/post-payment", dependencies=[Depends(require_permission("assets.create"))], response_model=Dict[str, Any])
-def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user: dict = Depends(get_current_user)):
+def post_lease_payment(request: Request, lease_id: int, payment: LeasePaymentCreate, current_user: dict = Depends(get_current_user)):
     """Post IFRS 16 lease payment — splits into interest expense + principal reduction."""
+    idempotency_key = require_idempotency_key(request, operation="asset lease payment")
     with transactional(current_user.company_id) as conn:
         try:
             row = conn.execute(text("SELECT * FROM lease_contracts WHERE id = :id FOR UPDATE"), {"id": lease_id}).fetchone()
@@ -285,7 +326,8 @@ def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user:
                         currency=base_currency,
                         exchange_rate=Decimal("1"),
                         source="lease_payment",
-                        source_id=lease_id
+                        source_id=lease_id,
+                        idempotency_key=f"{idempotency_key}:lease-payment:{lease_id}",
                     )
             except Exception:
                 logger.warning("Failed to create GL entry for lease payment %s", lease_id)
@@ -307,4 +349,3 @@ def post_lease_payment(lease_id: int, payment: LeasePaymentCreate, current_user:
             pass
             logger.exception("Error posting lease payment")
             raise HTTPException(**http_error(500, "internal_error"))
-

@@ -2,26 +2,20 @@
 
 Mounted under the parent router via accounting/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
+from fastapi import APIRouter, Depends, HTTPException, Request
+from utils.i18n import http_error, i18n_message
+from typing import Any, Dict
 from sqlalchemy import text
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import require_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -33,13 +27,12 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import FXRevaluationRequest, _D2, _D4, _dec
+from .core import FXRevaluationRequest, _D2, _dec  # noqa: E402
 
 @router.post("/fx-revaluation", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def fx_revaluation(request: Request, req: FXRevaluationRequest, current_user: dict = Depends(get_current_user)):
     """إعادة تقييم أرصدة العملات الأجنبية — الفروقات تسجل كربح/خسارة غير محققة"""
-    from utils.accounting import get_base_currency
     branch_id = validate_branch_access(current_user, req.branch_id)
     db = get_db_connection(current_user.company_id)
     trans = db.begin()

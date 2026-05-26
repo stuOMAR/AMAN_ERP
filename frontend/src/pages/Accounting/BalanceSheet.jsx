@@ -7,7 +7,6 @@ import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
-import Decimal from 'decimal.js'
 
 function BalanceSheet() {
     const { t, i18n } = useTranslation()
@@ -21,12 +20,13 @@ function BalanceSheet() {
     const [error, setError] = useState(null)
     const [showExport, setShowExport] = useState(false)
     const currency = getCurrency()
-    const money = (value) => {
-        try {
-            return new Decimal(value || 0)
-        } catch {
-            return new Decimal(0)
-        }
+    const amountAbs = (value) => {
+        const raw = String(value || '0').trim()
+        return raw.startsWith('-') ? raw.slice(1) : raw
+    }
+    const changeTone = (row) => {
+        if (row.change_direction === 'flat') return 'var(--text-muted)'
+        return row.change_direction === 'increase' ? 'var(--success)' : 'var(--danger)'
     }
 
     const fetchData = async () => {
@@ -84,29 +84,18 @@ function BalanceSheet() {
     const assetAccounts = data ? data.data.filter(a => a.account_type === 'asset') : []
     const liabilityAccounts = data ? data.data.filter(a => a.account_type === 'liability') : []
     const equityAccounts = data ? data.data.filter(a => a.account_type === 'equity') : []
-    const revenueAccounts = data ? data.data.filter(a => a.account_type === 'revenue') : []
-    const expenseAccounts = data ? data.data.filter(a => a.account_type === 'expense') : []
-
-    // Only sum leaf accounts (is_header = false) to avoid double counting
-    const leafAssets = assetAccounts.filter(a => !a.is_header)
-    const leafLiabilities = liabilityAccounts.filter(a => !a.is_header)
-    const leafEquity = equityAccounts.filter(a => !a.is_header)
-    const leafRevenue = revenueAccounts.filter(a => !a.is_header)
-    const leafExpenses = expenseAccounts.filter(a => !a.is_header)
-
-    const totalAssets = leafAssets.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
-    const totalLiabilities = leafLiabilities.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
-    const totalEquity = leafEquity.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
-    const totalRevenue = leafRevenue.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
-    const totalExpenses = leafExpenses.reduce((sum, a) => sum.plus(money(a.balance)), new Decimal(0))
-    const netRevenue = totalRevenue.plus(totalExpenses)
-    const totalLiabAndEquity = totalLiabilities.plus(totalEquity)
 
     const flatAssets = flattenTree(assetAccounts)
     const flatLiabilities = flattenTree(liabilityAccounts)
     const flatEquity = flattenTree(equityAccounts)
 
-    const isBalanced = totalAssets.minus(totalLiabAndEquity).abs().lt('0.01')
+    const summary = data?.summary || {}
+    const totalAssets = summary.total_assets || '0'
+    const totalLiabilities = summary.total_liabilities || '0'
+    const totalEquity = summary.total_equity || '0'
+    const totalLiabAndEquity = summary.total_liabilities_and_equity || '0'
+    const difference = summary.difference || '0'
+    const isBalanced = summary.is_balanced === true
 
     const getName = (item) => {
         if (i18n.language === 'en' && item.name_en) return item.name_en
@@ -144,7 +133,7 @@ function BalanceSheet() {
                                         <span className="font-mono" style={{ marginLeft: '8px' }}>{acc.account_number}</span>
                                         {' '}{getName(acc)}
                                     </td>
-                                    <td style={{ textAlign: 'left' }}>{formatNumber(money(acc.balance).abs().toString())}</td>
+                                    <td style={{ textAlign: 'left' }}>{formatNumber(amountAbs(acc.balance))}</td>
                                 </tr>
                             ))
                         )}
@@ -285,10 +274,10 @@ function BalanceSheet() {
                                         {row.periods.map((val, pIdx) => (
                                             <td key={pIdx} style={{ textAlign: 'left' }}>{formatNumber(val)}</td>
                                         ))}
-                                        <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                        <td style={{ textAlign: 'left', color: changeTone(row) }}>
                                             {formatNumber(row.change)}
                                         </td>
-                                        <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                        <td style={{ textAlign: 'left', color: changeTone(row) }}>
                                             {row.change_pct}%
                                         </td>
                                     </tr>
@@ -345,10 +334,10 @@ function BalanceSheet() {
                                         {row.periods.map((val, pIdx) => (
                                             <td key={pIdx} style={{ textAlign: 'left' }}>{formatNumber(val)}</td>
                                         ))}
-                                        <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                        <td style={{ textAlign: 'left', color: changeTone(row) }}>
                                             {formatNumber(row.change)}
                                         </td>
-                                        <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                        <td style={{ textAlign: 'left', color: changeTone(row) }}>
                                             {row.change_pct}%
                                         </td>
                                     </tr>
@@ -366,7 +355,7 @@ function BalanceSheet() {
                                 <tr style={{ background: 'var(--primary)', color: 'white', fontWeight: 'bold' }}>
                                     <td>{t('accounting.balance_sheet.total_liabilities_and_equity')}</td>
                                     {data.summary && data.summary.map((s, idx) => (
-                                        <td key={idx} style={{ textAlign: 'left' }}>{formatNumber(s.total_liabilities + s.total_equity)}</td>
+                                        <td key={idx} style={{ textAlign: 'left' }}>{formatNumber(s.total_liabilities_and_equity)}</td>
                                     ))}
                                     <td colSpan={2}></td>
                                 </tr>
@@ -466,7 +455,7 @@ function BalanceSheet() {
                                             {t('accounting.balance_sheet.difference')}
                                         </td>
                                         <td style={{ padding: '12px', textAlign: 'left' }}>
-                                            {formatNumber(totalAssets.minus(totalLiabAndEquity).abs().toString())} {currency}
+                                            {formatNumber(difference)} {currency}
                                             {isBalanced && ' ✅'}
                                         </td>
                                     </tr>

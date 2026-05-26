@@ -52,7 +52,7 @@ def require_sensitive_permission(
         )
         def post_je(...): ...
     """
-    from utils.permissions import require_permission  # noqa: delay
+    from utils.permissions import require_permission  # noqa
 
     _dep = require_permission(scope)
 
@@ -68,7 +68,7 @@ def require_sensitive_permission(
         # Step-up auth placeholder — honour company policy if enabled.
         if require_step_up is True:
             try:
-                from services.step_up_auth import enforce_step_up  # noqa: optional
+                from services.step_up_auth import enforce_step_up  # noqa
                 await enforce_step_up(current_user, request)
             except ImportError:
                 logger.debug("step_up_auth module not available; skipping")

@@ -29,8 +29,7 @@ function ExpenseForm() {
         target_account_id: '',
         notes: '',
         reference_number: '',
-        branch_id: '',
-        exchange_rate: 1
+        branch_id: ''
     })
 
     useEffect(() => {
@@ -87,8 +86,7 @@ function ExpenseForm() {
                 target_account_id: parseInt(form.target_account_id, 10),
                 branch_id: form.branch_id ? parseInt(form.branch_id, 10) : null,
                 description: form.notes || form.reference_number || t('treasury.menu.expense'),
-                reference_number: form.reference_number || null,
-                exchange_rate: form.exchange_rate || '1'
+                reference_number: form.reference_number || null
             })
             toastEmitter.emit(t('treasury.success_create_expense'), 'success')
             navigate('/treasury')
@@ -105,6 +103,11 @@ function ExpenseForm() {
             setLoading(false)
         }
     }
+
+    const selectedTreasuryAccount = accounts.find(a => a.id.toString() === form.treasury_id.toString())
+    const selectedTreasuryBalanceClass = selectedTreasuryAccount?.current_balance_direction === 'negative'
+        ? 'text-danger'
+        : 'text-success'
 
     return (
         <div className="workspace fade-in">
@@ -144,19 +147,6 @@ function ExpenseForm() {
                                 />
                             </div>
                         </FormField>
-                        <FormField label={t('common.exchange_rate', 'سعر الصرف')} style={{ flex: 1 }}>
-                            <input
-                                type="number"
-                                className="form-input"
-                                step="0.000001"
-                                min="0"
-                                value={form.exchange_rate}
-                                onChange={e => {
-                                    const val = e.target.value;
-                                    setForm({ ...form, exchange_rate: val || '1' })
-                                }}
-                            />
-                        </FormField>
                     </div>
 
                     <div className="form-row">
@@ -192,8 +182,8 @@ function ExpenseForm() {
                             {form.treasury_id && (
                                 <div className="mt-2 text-sm">
                                     <span className="text-secondary">{t('treasury.available_balance')}: </span>
-                                    <span className={`fw-bold ${accounts.find(a => a.id.toString() === form.treasury_id.toString())?.current_balance < 0 ? 'text-danger' : 'text-success'}`}>
-                                        {formatNumber(accounts.find(a => a.id.toString() === form.treasury_id.toString())?.current_balance)} {currency}
+                                    <span className={`fw-bold ${selectedTreasuryBalanceClass}`}>
+                                        {formatNumber(selectedTreasuryAccount?.current_balance)} {currency}
                                     </span>
                                 </div>
                             )}

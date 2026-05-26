@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { salesAPI, inventoryAPI, contractsAPI } from '../../utils/api'
 import { getCurrency } from '../../utils/auth'
@@ -10,8 +10,15 @@ import { useToast } from '../../context/ToastContext'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
 import { PageLoading } from '../../components/common/LoadingStates'
-import useInvoiceCalc from '../../hooks/useInvoiceCalc'
 import Decimal from 'decimal.js'
+
+const isPositiveDecimal = (v) => {
+    try {
+        return new Decimal(v || '0').gt(0)
+    } catch {
+        return false
+    }
+}
 
 function ContractForm() {
     const { t } = useTranslation()
@@ -25,6 +32,9 @@ function ContractForm() {
     const [products, setProducts] = useState([])
     const { currentBranch } = useBranch()
     const [error, setError] = useState(null)
+    const [backendTotals, setBackendTotals] = useState(null)
+    const [backendLines, setBackendLines] = useState([])
+    const [calcLoading, setCalcLoading] = useState(false)
 
     const [formData, setFormData] = useState({
         contract_number: `CON-${Date.now().toString().slice(-6)}`,
@@ -33,13 +43,12 @@ function ContractForm() {
         start_date: new Date().toISOString().split('T')[0],
         end_date: '',
         billing_interval: 'monthly',
-        total_amount: 0,
         currency: currency || '',
         notes: ''
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0 }
+        { product_id: '', description: '', quantity: '1', unit_price: '' }
     ])
 
     useEffect(() => {
@@ -86,8 +95,7 @@ function ContractForm() {
                     const product = products.find(p => p.id === parseInt(value))
                     if (product) {
                         updatedItem.description = product.item_name
-                        updatedItem.unit_price = product.selling_price
-                        updatedItem.tax_rate = null // Resolved by backend engine
+                        updatedItem.unit_price = String(product.selling_price || '')
                     }
                 }
                 return updatedItem
@@ -97,14 +105,35 @@ function ContractForm() {
         setItems(newItems)
     }
 
-    const addItem = () => setItems([...items, { product_id: '', description: '', quantity: 1, unit_price: 0, tax_rate: 0 }])
+    const addItem = () => setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '' }])
     const removeItem = (index) => {
         if (items.length <= 1) return
         setItems(items.filter((_, i) => i !== index))
     }
 
-    // Backend-powered calculations
-    const { totals: backendTotals, previewDebounced, loading: calcLoading } = useInvoiceCalc()
+    const buildItemsPayload = useCallback(() => (
+        items
+            .filter(item => item.product_id && isPositiveDecimal(item.quantity) && isPositiveDecimal(item.unit_price))
+            .map(item => ({
+                product_id: parseInt(item.product_id, 10),
+                description: item.description || '',
+                quantity: String(item.quantity || '0'),
+                unit_price: String(item.unit_price || '0')
+            }))
+    ), [items])
+
+    const buildContractPayload = useCallback(() => ({
+        contract_number: formData.contract_number,
+        contract_type: formData.contract_type,
+        start_date: formData.start_date,
+        end_date: formData.end_date || null,
+        billing_interval: formData.billing_interval,
+        currency: formData.currency || currency,
+        notes: formData.notes,
+        branch_id: currentBranch?.id || null,
+        party_id: formData.party_id ? parseInt(formData.party_id, 10) : null,
+        items: buildItemsPayload()
+    }), [buildItemsPayload, currentBranch?.id, currency, formData])
 
     const getTotals = () => {
         // Use backend totals only
@@ -114,22 +143,41 @@ function ContractForm() {
         return { subtotal: null, tax: null, total: null }
     }
 
-    // Call backend for accurate calculations
-    const isPositiveDecimal = (v) => { try { return new Decimal(v || '0').gt(0) } catch { return false } }
-
     useEffect(() => {
-        if (items.length > 0 && items.some(i => isPositiveDecimal(i.quantity) && isPositiveDecimal(i.unit_price))) {
-            previewDebounced({
-                lines: items.map(i => ({
-                    quantity: String(i.quantity || '0'),
-                    unit_price: String(i.unit_price || '0'),
-                    tax_rate: String(i.tax_rate || '0'),
-                    discount: '0',
-                })),
-                currency,
-            }, '/calculate/contract-totals')
+        const previewItems = buildItemsPayload()
+        if (!formData.party_id || previewItems.length === 0) {
+            setBackendTotals(null)
+            setBackendLines([])
+            setCalcLoading(false)
+            return
         }
-    }, [items, currency, previewDebounced])
+
+        setCalcLoading(true)
+        setBackendTotals(null)
+        setBackendLines([])
+        const timer = setTimeout(async () => {
+            try {
+                const res = await contractsAPI.previewContract({
+                    ...buildContractPayload(),
+                    items: previewItems
+                })
+                const preview = res.data || {}
+                setBackendTotals({
+                    subtotal: preview.subtotal ?? null,
+                    totalTax: preview.tax_amount ?? null,
+                    grandTotal: preview.grand_total ?? null
+                })
+                setBackendLines(preview.lines || [])
+            } catch (err) {
+                setBackendTotals(null)
+                setBackendLines([])
+            } finally {
+                setCalcLoading(false)
+            }
+        }, 600)
+
+        return () => clearTimeout(timer)
+    }, [buildContractPayload, buildItemsPayload, formData.party_id])
 
     const handleSubmit = async (e) => {
         e.preventDefault()
@@ -147,18 +195,11 @@ function ContractForm() {
                 setLoading(false)
                 return
             }
-            const payload = {
-                ...formData,
-                branch_id: currentBranch?.id || null,
-                party_id: parseInt(formData.party_id, 10),
-                total_amount: String(totals.total),
-                items: items.map(item => ({
-                    ...item,
-                    product_id: parseInt(item.product_id, 10),
-                    quantity: String(item.quantity || '0'),
-                    unit_price: String(item.unit_price || '0'),
-                    tax_rate: String(item.tax_rate || '0')
-                }))
+            const payload = buildContractPayload()
+            if (payload.items.length === 0) {
+                setError(t("sales.contracts.form.wait_for_calculation"))
+                setLoading(false)
+                return
             }
             if (id) {
                 await contractsAPI.updateContract(id, payload)
@@ -258,7 +299,7 @@ function ContractForm() {
                         </thead>
                         <tbody>
                             {items.map((item, index) => {
-                                const backendLine = backendTotals?.lines?.[index]
+                                const backendLine = backendLines?.find(line => line.index === index) || backendLines?.[index]
                                 const lineTotalStr = backendLine ? backendLine.line_total : '—'
                                 return (
                                     <tr key={index}>
@@ -279,7 +320,7 @@ function ContractForm() {
                                             <input type="text" inputMode="decimal" className="form-input" value={item.unit_price} onChange={e => handleItemChange(index, 'unit_price', e.target.value)} />
                                         </td>
                                         <td>
-                                            <input type="text" inputMode="decimal" className="form-input" value={item.tax_rate} onChange={e => handleItemChange(index, 'tax_rate', e.target.value)} />
+                                            {backendLine?.tax_rate != null ? `${backendLine.tax_rate}%` : '—'}
                                         </td>
                                         <td style={{ fontWeight: 'bold' }}>{lineTotalStr !== '—' ? formatNumber(lineTotalStr) : '—'}</td>
                                         <td>

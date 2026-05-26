@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import logging
 from decimal import Decimal, ROUND_HALF_UP
-from typing import Any
 
 logger = logging.getLogger(__name__)
 _D4 = Decimal("0.0001")

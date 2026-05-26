@@ -3,38 +3,69 @@
 Mounted under the parent router via core/__init__.py.
 """
 import logging
-from decimal import Decimal
+from decimal import Decimal, ROUND_HALF_UP
 from datetime import datetime, date
 from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from database import get_db_connection
-from utils.tx import transactional
 from utils.accounting import get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
 from utils.audit import log_activity
 from services.gl_service import create_journal_entry
 from schemas import UserResponse
 from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
     ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
+    ProductionOrderOperationResponse
 )
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import ActualCostUpdate, QCCheckCreate, calculate_production_cost, check_inventory_sufficiency
+from .core import ActualCostUpdate, QCCheckCreate, calculate_production_cost, check_inventory_sufficiency  # noqa: E402
+
+_D2 = Decimal("0.01")
+
+
+def _dec(value) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _q2(value) -> Decimal:
+    return _dec(value).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _completion_percent(produced_quantity, order_quantity) -> Decimal:
+    qty = _dec(order_quantity)
+    if qty <= 0:
+        return Decimal("0.00")
+    pct = (_dec(produced_quantity) / qty) * Decimal("100")
+    return min(pct, Decimal("100")).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _order_authority_fields(order_dict: dict) -> dict:
+    pct = _completion_percent(order_dict.get("produced_quantity"), order_dict.get("quantity"))
+    status = order_dict.get("status")
+    due_value = order_dict.get("due_date")
+    due_date = due_value.date() if isinstance(due_value, datetime) else due_value
+    is_overdue = bool(
+        due_date
+        and due_date < date.today()
+        and status not in {"completed", "cancelled"}
+    )
+    order_dict.update({
+        "completion_percent": pct,
+        "completion_status": "complete" if pct >= Decimal("100") else "partial" if pct > 0 else "not_started",
+        "is_overdue": is_overdue,
+        "completion_direction": "complete" if pct >= Decimal("100") else "in_progress" if pct > 0 else "none",
+    })
+    return order_dict
 
 
 def _validate_order_warehouse_access(conn, current_user: UserResponse, *warehouse_ids: Optional[int]) -> None:
@@ -55,7 +86,7 @@ def _validate_order_warehouse_access(conn, current_user: UserResponse, *warehous
 @router.get("/orders/cost-estimate", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def estimate_production_cost(request: Request, 
     bom_id: int = Query(..., description="BOM ID"),
-    quantity: float = Query(..., description="Production quantity"),
+    quantity: Decimal = Query(..., description="Production quantity"),
     current_user: UserResponse = Depends(get_current_user)
 ):
     """Estimate production cost before creating an order."""
@@ -73,7 +104,7 @@ def estimate_production_cost(request: Request,
 @router.get("/orders/check-materials", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def check_materials_availability(
     bom_id: int = Query(..., description="BOM ID"),
-    quantity: float = Query(..., description="Production quantity"),
+    quantity: Decimal = Query(..., description="Production quantity"),
     warehouse_id: Optional[int] = Query(None, description="Source warehouse ID"),
     current_user: UserResponse = Depends(get_current_user)
 ):
@@ -88,25 +119,38 @@ def check_materials_availability(
 @router.get("/orders", response_model=List[ProductionOrderResponse], dependencies=[Depends(require_permission("manufacturing.view"))])
 def list_production_orders(
     branch_id: Optional[int] = None,
+    status: Optional[str] = None,
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
     offset: int = Query(0, ge=0),
     limit: int = Query(25, ge=1, le=100),
+    page_size: Optional[int] = Query(None, ge=1, le=100),
     current_user: UserResponse = Depends(get_current_user)
 ):
     """List Production Orders."""
     branch_scope = resolve_branch_scope(current_user, branch_id)
     conn = get_db_connection(current_user.company_id)
     try:
+        effective_limit = page_size or limit
         query = """
             SELECT po.*, p.product_name as product_name, b.name as bom_name,
                    po.order_number, po.status, po.produced_quantity, po.scrapped_quantity, po.created_at
             FROM production_orders po
             LEFT JOIN products p ON po.product_id = p.id
             LEFT JOIN bill_of_materials b ON po.bom_id = b.id
+            WHERE 1=1
         """
-        params = {"limit": limit, "offset": offset}
-        branch_filter = branch_scope_filter_from_scope(branch_scope, "po.branch_id", params, prefix="WHERE")
-        if branch_filter:
-            query += f" {branch_filter}"
+        params = {"limit": effective_limit, "offset": offset}
+        query += branch_scope_filter_from_scope(branch_scope, "po.branch_id", params)
+        if status:
+            query += " AND po.status = :status"
+            params["status"] = status
+        if start_date:
+            query += " AND po.created_at >= :start_date"
+            params["start_date"] = start_date
+        if end_date:
+            query += " AND po.created_at <= :end_date"
+            params["end_date"] = end_date
         query += " ORDER BY po.id DESC LIMIT :limit OFFSET :offset"
         orders_db = conn.execute(text(query), params).fetchall()
 
@@ -122,6 +166,7 @@ def list_production_orders(
                 ORDER BY mo.sequence
             """), {"poid": o.id}).fetchall()
             order_dict['operations'] = [dict(op._mapping) for op in ops]
+            _order_authority_fields(order_dict)
             result.append(order_dict)
 
         return result
@@ -161,13 +206,13 @@ def get_production_order(request: Request, order_id: int, current_user: UserResp
         order_dict['operations'] = [dict(op._mapping) for op in ops]
         
         # Calculate Labor & Overhead Cost
-        total_labor_cost = 0
+        total_labor_cost = Decimal("0")
         for op in ops:
-            duration_hours = (op.actual_run_time or 0) / 60.0
-            rate = op.cost_per_hour or 0
-            total_labor_cost += (duration_hours * rate)
+            duration_hours = _dec(op.actual_run_time or 0) / Decimal("60")
+            rate = _dec(op.cost_per_hour or 0)
+            total_labor_cost += duration_hours * rate
             
-        order_dict['total_labor_overhead_cost'] = total_labor_cost
+        order_dict['total_labor_overhead_cost'] = _q2(total_labor_cost)
         
         # Calculate Material Cost (from transactions if exists, else estimate from BOM)
         mat_cost_query = conn.execute(text("""
@@ -176,7 +221,7 @@ def get_production_order(request: Request, order_id: int, current_user: UserResp
             WHERE reference_type = 'production_order' AND reference_id = :oid AND transaction_type = 'production_out'
         """), {"oid": order_id}).scalar()
         
-        current_material_cost = mat_cost_query or 0
+        current_material_cost = _dec(mat_cost_query or 0)
         
         # If 0 (maybe draft), estimate from BOM
         if current_material_cost == 0 and o.status == 'draft':
@@ -186,10 +231,11 @@ def get_production_order(request: Request, order_id: int, current_user: UserResp
                 JOIN products p ON bc.component_product_id = p.id
                 WHERE bc.bom_id = :bid AND bc.is_deleted = false
              """), {"bid": o.bom_id}).scalar()
-             current_material_cost = (bom_cost or 0) * o.quantity
+             current_material_cost = _dec(bom_cost or 0) * _dec(o.quantity)
 
-        order_dict['total_material_cost'] = current_material_cost
-        order_dict['unit_production_cost'] = (current_material_cost + total_labor_cost) / (o.quantity or 1)
+        order_dict['total_material_cost'] = _q2(current_material_cost)
+        order_dict['unit_production_cost'] = _q2((current_material_cost + total_labor_cost) / (_dec(o.quantity) or Decimal("1")))
+        _order_authority_fields(order_dict)
         
         return order_dict
     finally:
@@ -341,11 +387,12 @@ def create_production_order(order: ProductionOrderCreate, request: Request, curr
             ORDER BY mo.sequence
         """), {"poid": new_order_id}).fetchall()
         order_dict['operations'] = [dict(op._mapping) for op in ops]
+        _order_authority_fields(order_dict)
         
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="create_production_order", resource_type="production_orders",
                      resource_id=str(new_order_id),
-                     details={"order_number": order.order_number, "product_id": order.product_id, "quantity": float(order.quantity)},
+                     details={"order_number": order.order_number, "product_id": order.product_id, "quantity": str(order.quantity)},
                      request=request)
         return order_dict
 
@@ -399,7 +446,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                 raise HTTPException(**http_error(400, "insufficient_raw_materials_start", request))
 
         # Update status to in_progress
-        updated = conn.execute(text("""
+        conn.execute(text("""
             UPDATE production_orders 
             SET status='in_progress', start_date=CURRENT_DATE
             WHERE id=:id
@@ -444,13 +491,13 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                                 conn,
                                 product_id=comp.product_id,
                                 warehouse_id=order.warehouse_id,
-                                quantity=float(required_qty),
+                                quantity=required_qty,
                                 sale_document_type="production_out",
                                 sale_document_id=order_id,
                                 costing_method=method,
                             )
-                        except ValueError as exc:
-                            raise HTTPException(status_code=400, detail=str(exc))
+                        except ValueError:
+                            raise HTTPException(**http_error(400, "invalid_request", request))
                         actual_unit_cost = (cogs / required_qty).quantize(Decimal("0.0001")) if required_qty > 0 else Decimal("0")
                     else:
                         # WAC: lock inventory and use average_cost as the actual issue cost.
@@ -476,7 +523,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                         WHERE product_id = :pid AND warehouse_id = :wh
                           AND quantity - COALESCE(reserved_quantity, 0) >= :qty
                         RETURNING id
-                    """), {"wh": order.warehouse_id, "pid": comp.product_id, "qty": float(required_qty)}).fetchone()
+                    """), {"wh": order.warehouse_id, "pid": comp.product_id, "qty": required_qty}).fetchone()
                     if not deducted:
                         raise HTTPException(
                             status_code=400,
@@ -496,7 +543,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
                         (product_id, warehouse_id, transaction_type, quantity, reference_id, reference_type, notes, created_by, unit_cost, total_cost)
                         VALUES (:pid, :whid, 'production_out', :qty, :ref, 'production_order', :notes, :uid, :uc, :tc)
                     """), {
-                        "pid": comp.product_id, "whid": order.warehouse_id, "qty": -float(required_qty),
+                        "pid": comp.product_id, "whid": order.warehouse_id, "qty": -required_qty,
                         "ref": order_id, "notes": f"Consumed for Order {order.order_number}", "uid": current_user.id,
                         "uc": str(actual_unit_cost.quantize(Decimal("0.0001"))),
                         "tc": str(cost.quantize(Decimal("0.01"))),
@@ -566,6 +613,7 @@ def start_production_order(order_id: int, request: Request, current_user: UserRe
         
         order_dict = dict(o._mapping)
         order_dict['operations'] = [] 
+        _order_authority_fields(order_dict)
         return order_dict
         
     except HTTPException:
@@ -608,7 +656,7 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             raise HTTPException(**http_error(400, "cannot_complete_order_state", request))
 
         # Update status to completed
-        updated = conn.execute(text("""
+        conn.execute(text("""
             UPDATE production_orders 
             SET status='completed', produced_quantity=quantity, updated_at=NOW()
             WHERE id=:id
@@ -745,8 +793,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                 conn,
                 product_id=order.product_id,
                 warehouse_id=order.destination_warehouse_id,
-                new_qty=float(produced_qty),
-                new_price=float(main_unit_cost),
+                new_qty=produced_qty,
+                new_price=main_unit_cost,
             )
 
             main_method = CostingService._get_product_costing_method(conn, order.product_id, order.destination_warehouse_id)
@@ -755,8 +803,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                     conn,
                     product_id=order.product_id,
                     warehouse_id=order.destination_warehouse_id,
-                    quantity=float(produced_qty),
-                    unit_cost=float(main_unit_cost),
+                    quantity=produced_qty,
+                    unit_cost=main_unit_cost,
                     source_document_type="production_order",
                     source_document_id=order_id,
                     costing_method=main_method,
@@ -771,8 +819,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             """), {
                 "whid": order.destination_warehouse_id,
                 "pid": order.product_id,
-                "qty": float(produced_qty),
-                "cost": float(main_unit_cost),
+                "qty": produced_qty,
+                "cost": main_unit_cost,
             })
 
             conn.execute(text("""
@@ -784,7 +832,7 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
             """), {
                 "pid": order.product_id,
                 "whid": order.destination_warehouse_id,
-                "qty": float(produced_qty),
+                "qty": produced_qty,
                 "ref": order_id,
                 "notes": f"Production Receipt for Order {order.order_number}",
                 "uid": current_user.id,
@@ -803,8 +851,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                     conn,
                     product_id=bp.product_id,
                     warehouse_id=order.destination_warehouse_id,
-                    new_qty=float(bp_qty),
-                    new_price=float(bp_unit_cost),
+                    new_qty=bp_qty,
+                    new_price=bp_unit_cost,
                 )
 
                 bp_method = CostingService._get_product_costing_method(conn, bp.product_id, order.destination_warehouse_id)
@@ -813,8 +861,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                         conn,
                         product_id=bp.product_id,
                         warehouse_id=order.destination_warehouse_id,
-                        quantity=float(bp_qty),
-                        unit_cost=float(bp_unit_cost),
+                        quantity=bp_qty,
+                        unit_cost=bp_unit_cost,
                         source_document_type="production_order",
                         source_document_id=order_id,
                         costing_method=bp_method,
@@ -829,8 +877,8 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                 """), {
                     "whid": order.destination_warehouse_id,
                     "pid": bp.product_id,
-                    "qty": float(bp_qty),
-                    "cost": float(bp_unit_cost),
+                    "qty": bp_qty,
+                    "cost": bp_unit_cost,
                 })
 
                 conn.execute(text("""
@@ -842,7 +890,7 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
                 """), {
                     "pid": bp.product_id,
                     "whid": order.destination_warehouse_id,
-                    "qty": float(bp_qty),
+                    "qty": bp_qty,
                     "ref": order_id,
                     "notes": f"By-product Receipt for Order {order.order_number}",
                     "uid": current_user.id,
@@ -856,7 +904,7 @@ def complete_production_order(order_id: int, request: Request, current_user: Use
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="complete_production", resource_type="production_orders",
                      resource_id=str(order_id),
-                     details={"quantity": float(order.quantity), "total_cost": total_production_cost},
+                     details={"quantity": str(order.quantity), "total_cost": str(total_production_cost)},
                      request=request)
 
         # Re-fetch full object
@@ -927,6 +975,7 @@ def cancel_production_order(order_id: int, request: Request, current_user: UserR
         """), {"id": order_id}).fetchone()
         order_dict = dict(updated._mapping)
         order_dict['operations'] = []
+        _order_authority_fields(order_dict)
         return order_dict
     except HTTPException:
         raise
@@ -1038,10 +1087,11 @@ def update_production_order(order_id: int, order: ProductionOrderCreate, request
             ORDER BY mo.sequence
         """), {"poid": order_id}).fetchall()
         order_dict['operations'] = [dict(op._mapping) for op in ops]
+        _order_authority_fields(order_dict)
         
         log_activity(conn, user_id=current_user.id, username=current_user.username,
                      action="update_production_order", resource_type="production_orders",
-                     resource_id=str(order_id), details={"quantity": float(order.quantity)},
+                     resource_id=str(order_id), details={"quantity": str(order.quantity)},
                      request=request)
         return order_dict
     except HTTPException:
@@ -1125,7 +1175,7 @@ def pause_operation(op_id: int, request: Request, current_user: UserResponse = D
         conn.close()
 
 @router.post("/operations/{op_id}/complete", dependencies=[Depends(require_permission(["manufacturing.manage", "manufacturing.create"]))], response_model=Dict[str, Any])
-def complete_operation(op_id: int, completed_qty: float, request: Request, current_user: UserResponse = Depends(get_current_user)):
+def complete_operation(op_id: int, completed_qty: Decimal, request: Request, current_user: UserResponse = Depends(get_current_user)):
     """Complete Operation."""
     conn = get_db_connection(current_user.company_id)
     try:

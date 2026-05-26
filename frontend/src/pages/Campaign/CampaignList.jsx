@@ -32,6 +32,13 @@ export default function CampaignList() {
     const [filterStatus, setFilterStatus] = useState('');
     const [filterType, setFilterType] = useState('');
     const [executing, setExecuting] = useState(null);
+    const [summary, setSummary] = useState({
+        total_campaigns: 0,
+        active_or_scheduled_campaigns: 0,
+        total_sent: 0,
+        total_opened: 0,
+        total_clicked: 0,
+    });
 
     useEffect(() => { fetchData(); }, [filterStatus, filterType]);
 
@@ -41,8 +48,18 @@ export default function CampaignList() {
             const params = {};
             if (filterStatus) params.status = filterStatus;
             if (filterType) params.campaign_type = filterType;
-            const res = await crmAPI.listCampaigns(params);
-            setCampaigns(res.data || []);
+            const [listRes, summaryRes] = await Promise.all([
+                crmAPI.listCampaigns(params),
+                crmAPI.getCampaignSummary(params),
+            ]);
+            setCampaigns(listRes.data || []);
+            setSummary(summaryRes.data || {
+                total_campaigns: 0,
+                active_or_scheduled_campaigns: 0,
+                total_sent: 0,
+                total_opened: 0,
+                total_clicked: 0,
+            });
         } catch (e) {
             console.error(e);
         } finally {
@@ -76,12 +93,6 @@ export default function CampaignList() {
         }
     };
 
-    // Summary stats
-    const totalSent = campaigns.reduce((s, c) => s + (c.total_sent || 0), 0);
-    const totalOpened = campaigns.reduce((s, c) => s + (c.total_opened || 0), 0);
-    const totalClicked = campaigns.reduce((s, c) => s + (c.total_clicked || 0), 0);
-    const activeCnt = campaigns.filter(c => ['executing', 'scheduled'].includes(c.status)).length;
-
     return (
         <div className="workspace fade-in">
             <div className="workspace-header">
@@ -101,19 +112,19 @@ export default function CampaignList() {
             <div className="metrics-grid" style={{ marginBottom: 16 }}>
                 <div className="metric-card">
                     <div className="metric-label">{t('campaign.total_campaigns', 'Total Campaigns')}</div>
-                    <div className="metric-value text-primary">{campaigns.length}</div>
+                    <div className="metric-value text-primary">{summary.total_campaigns || 0}</div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('campaign.active_campaigns', 'Active / Scheduled')}</div>
-                    <div className="metric-value text-warning">{activeCnt}</div>
+                    <div className="metric-value text-warning">{summary.active_or_scheduled_campaigns || 0}</div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('campaign.total_sent', 'Total Sent')}</div>
-                    <div className="metric-value text-info">{formatNumber(totalSent)}</div>
+                    <div className="metric-value text-info">{formatNumber(summary.total_sent || 0)}</div>
                 </div>
                 <div className="metric-card">
                     <div className="metric-label">{t('campaign.open_rate', 'Opens / Clicks')}</div>
-                    <div className="metric-value text-success">{formatNumber(totalOpened)} / {formatNumber(totalClicked)}</div>
+                    <div className="metric-value text-success">{formatNumber(summary.total_opened || 0)} / {formatNumber(summary.total_clicked || 0)}</div>
                 </div>
             </div>
 

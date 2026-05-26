@@ -9,6 +9,7 @@ from typing import Any
 
 from sqlalchemy import text
 from fastapi import HTTPException
+from utils.i18n import i18n_message
 
 logger = logging.getLogger(__name__)
 

@@ -2,27 +2,19 @@
 
 Mounted under the parent router via auth/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Body
+from fastapi import APIRouter, HTTPException, status, Request
 from utils.i18n import http_error
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy import text, create_engine
-from sqlalchemy.exc import OperationalError, ProgrammingError
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import text
 from jose import jwt, JWTError
-from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, EmailStr
+from datetime import datetime, timezone
+from typing import Any, Dict
 import logging
-import os
-import secrets
-import hashlib
-import ipaddress
-from database import get_system_db, verify_password, get_db_connection, hash_password, engine as system_engine
-from utils.tx import transactional
+from database import get_system_db, get_db_connection
 from config import settings
-from schemas import Token, UserResponse
-from utils.audit import log_activity, log_system_activity
+from schemas import Token
+from utils.audit import log_activity
 from utils.limiter import limiter
-from utils.auth_cookies import set_auth_cookies, clear_auth_cookies
 
 logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='api/auth/login')
@@ -30,7 +22,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import TwoFALoginRequest, _get_client_ip, _hash_token, clear_failed_attempts, create_access_token, create_refresh_token, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
+from .core import TwoFALoginRequest, _get_client_ip, _hash_token, clear_failed_attempts, create_access_token, create_refresh_token, record_failed_attempt  # noqa: E402
 
 @router.post("/2fa/verify-login", response_model=Dict[str, Any])
 @limiter.limit("10/minute")
@@ -132,7 +124,7 @@ async def verify_2fa_login(request: Request, body: TwoFALoginRequest):
                 text("SELECT currency, enabled_modules, company_name FROM system_companies WHERE id = :id"),
                 {"id": company_id}
             ).fetchone()
-            currency = company_info[0] if company_info else "SAR"
+            company_info[0] if company_info else "SAR"
             enabled_modules = company_info[1] if company_info and company_info[1] else []
             if isinstance(enabled_modules, str):
                 import json

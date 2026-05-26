@@ -45,7 +45,7 @@ class MaintenanceLog(ModelBase):
 # MarketingCampaign was moved to projects_crm_advanced.py as Campaign
 # to avoid duplicate __tablename__ = "marketing_campaigns".
 # Import re-exported here for backward compatibility.
-from .projects_crm_advanced import Campaign as MarketingCampaign
+from .projects_crm_advanced import Campaign as MarketingCampaign  # noqa: E402
 
 
 __all__ = [

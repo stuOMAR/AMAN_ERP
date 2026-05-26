@@ -75,7 +75,7 @@ def update_entity(
             str(company_id),
             user_id,
         )
-    except ValueError as e:
+    except ValueError:
         logger.exception("Validation error in update_entity")
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 
@@ -99,10 +99,10 @@ def create_transaction(request: Request, data: IntercompanyTransactionCreate, cu
         )
     except PermissionError:
         raise HTTPException(**http_error(403, "access_denied", request))
-    except ValueError as e:
+    except ValueError:
         logger.exception("Validation error in create_transaction")
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
-    except Exception as e:
+    except Exception:
         logger.exception("Internal error")
         raise HTTPException(**http_error(500, "internal_error"))
 
@@ -160,7 +160,7 @@ def process_transaction(request: Request, txn_id: int, current_user=Depends(get_
         if not intercompany_service.get_transaction_by_id(txn_id, str(company_id), branch_scope=branch_scope):
             raise HTTPException(**http_error(404, "transaction_not_found", request))
         return intercompany_service.process_transaction(txn_id, str(company_id), user_id)
-    except ValueError as e:
+    except ValueError:
         logger.exception("Validation error in process_transaction")
         raise HTTPException(status_code=400, detail=i18n_message("validation_error", request) if request else "Validation error")
 # ---------------------------------------------------------------------------

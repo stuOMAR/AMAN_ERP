@@ -9,7 +9,7 @@ Contract: specs/022-audit-security-finance-integrity/contracts/http-endpoints.md
 from __future__ import annotations
 
 import logging
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from pydantic import BaseModel, Field
@@ -94,7 +94,7 @@ def approve_pending_review(request: Request,
             "pending_review_id": result.pending_review_id,
             "journal_entry_id": result.journal_entry_id,
         }
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in approve_pending_review %s", pending_id)
         raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")
@@ -124,7 +124,7 @@ def reject_pending_review(request: Request,
         reject_pending(conn, tenant_id, pending_id, actor_id=actor_id, reason=body.reason)
         conn.commit()
         return {"status": "rejected", "id": pending_id}
-    except ValueError as e:
+    except ValueError:
         conn.rollback()
         logger.exception("Validation error in reject_pending_review %s", pending_id)
         raise HTTPException(status_code=404, detail=i18n_message("not_found", request) if request else "Not found")

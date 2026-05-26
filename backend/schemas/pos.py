@@ -56,6 +56,7 @@ class SessionResponse(BaseModel):
     total_bank: Optional[Decimal] = Decimal("0")
     total_returns: Optional[Decimal] = Decimal("0")
     total_returns_cash: Optional[Decimal] = Decimal("0")
+    expected_cash: Optional[Decimal] = Decimal("0")
     order_count: Optional[int] = 0
     difference: Optional[Decimal] = Decimal("0")
 
@@ -140,6 +141,8 @@ class OrderCreate(BaseModel):
     # so POS results match a sales invoice for identical inputs.
     coupon_code: Optional[str] = None
     promotion_id: Optional[int] = None
+    # Backend authority verification
+    submitted_grand_total: Optional[Decimal] = None
 
     @field_validator("discount_amount", "paid_amount")
     @classmethod

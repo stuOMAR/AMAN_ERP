@@ -1,7 +1,6 @@
 
 import logging
 import os
-import re
 import subprocess
 import sys
 from sqlalchemy import create_engine, text
@@ -79,7 +78,7 @@ def get_db() -> Generator[Session, None, None]:
         db.close()
 
 
-from collections import OrderedDict
+from collections import OrderedDict  # noqa: E402
 
 # PERF-FIX: Bounded LRU engine cache — prevents connection exhaustion in
 # environments with many companies.
@@ -118,11 +117,12 @@ def _get_engine(company_id: str):
         install_engine_listener(_engines[company_id])
     except Exception:
         pass
+
     return _engines[company_id]
 
 def get_db_connection(company_id: str):
     """Returns a connection to the company specific database with engine caching
-    
+
     Note: Caller is responsible for closing the connection with db.close()
     For safer usage, use db_connection() context manager instead.
     """
@@ -146,7 +146,7 @@ def _get_all_company_db_names() -> list:
 @contextmanager
 def db_connection(company_id: str):
     """Context manager for safe database connection handling
-    
+
     Usage:
         with db_connection(company_id) as db:
             result = db.execute(...)
@@ -228,7 +228,7 @@ def verify_password(plain_password: str, hashed_password: str) -> bool:
 def create_company_database(company_id: str, admin_password: str) -> Tuple[bool, str, str, str]:
     db_name = f"aman_{company_id}"
     db_user = f"company_{company_id}"
-    
+
     # SEC-FIX-025: Validate identifiers to prevent SQL injection in DDL
     from utils.sql_safety import validate_aman_identifier
     validate_aman_identifier(db_name, "database name")
@@ -247,18 +247,18 @@ def create_company_database(company_id: str, admin_password: str) -> Tuple[bool,
                 text("SELECT 1 FROM pg_database WHERE datname = :db_name"),
                 {"db_name": db_name}
             ).fetchone()
-            
+
             if result:
                 return False, "قاعدة البيانات موجودة", "", ""
-            
+
             conn.execute(text(f'CREATE DATABASE "{db_name}"'))
             conn.execute(text(f"CREATE USER {db_user} WITH PASSWORD :password"), {"password": db_role_password})
             conn.execute(text(f'GRANT ALL PRIVILEGES ON DATABASE "{db_name}" TO {db_user}'))
             conn.execute(text(f'ALTER DATABASE "{db_name}" OWNER TO {db_user}'))
-        
+
         logger.info(f"✅ Created database: {db_name}")
         return True, "تم إنشاء قاعدة البيانات", db_name, db_user
-        
+
     except Exception:
         logger.exception("Failed to create company database")
         return False, "حدث خطأ أثناء إنشاء قاعدة البيانات", "", ""
@@ -395,19 +395,19 @@ COUNTRY_CURRENCY_MAP = {
     "QA": "QAR",
 }
 
-def initialize_company_default_data(company_id: str, admin_username: str, 
-                                    admin_email: str, admin_password: str, 
+def initialize_company_default_data(company_id: str, admin_username: str,
+                                    admin_email: str, admin_password: str,
                                     admin_full_name: str, timezone: str = "Asia/Damascus",
                                     currency: str = "SYP", country: str = "SY") -> Tuple[bool, str]:
     """Initialize default data for company"""
     db_name = f"aman_{company_id}"
     connection_url = settings.get_company_database_url(company_id)
     company_engine = None
-    
+
     try:
         company_engine = create_engine(connection_url)
         hashed_password = hash_password(admin_password)
-        
+
         with company_engine.begin() as conn:
             # Create admin user
             conn.execute(text("""
@@ -428,7 +428,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 "full_name": admin_full_name,
                 "permissions": '{"all": true}'
             })
-            
+
             # Default roles come from the canonical registry used by /api/roles/init-defaults.
             import json
             from routers.roles import DEFAULT_ROLES
@@ -447,7 +447,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     "description": role_data.get("description", ""),
                     "permissions": json.dumps(role_data.get("permissions", [])),
                 })
-            
+
             # Default accounts hierarchical structure
             # (account_number, account_code, name, name_en, account_type, parent_index_in_this_list)
             # Level 1
@@ -458,7 +458,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ("4", "REV", "الإيرادات", "Revenue", "revenue", None),
                 ("5", "EXP", "المصروفات", "Expenses", "expense", None),
             ]
-            
+
             inserted_ids = {}
             for acc in root_accounts:
                 result = conn.execute(text("""
@@ -490,7 +490,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ("1112", "INV-TRN", "مخزون في الطريق", "Inventory In Transit", "asset", "11"),
                 ("1104", "ADV", "سلف وقروض الموظفين", "Employee Loans", "asset", "11"),
                 ("1105", "PRE", "مصروفات مدفوعة مقدماً", "Prepaid Expenses", "asset", "11"),
-                
+
                 ("12", "F-ASSET", "أصول ثابتة", "Fixed Assets", "asset", "1"),
                 ("1201", "MAC", "الآلات والمعدات", "Machinery & Equipment", "asset", "12"),
                 ("1202", "VEH", "السيارات ووسائل النقل", "Vehicles", "asset", "12"),
@@ -517,7 +517,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ("2106", "GOSI-PAY", "التأمينات الاجتماعية المستحقة", "GOSI Payable", "liability", "21"),
                 ("2107", "CUST-DEP", "عربون / دفعات مقدمة من العملاء", "Customer Deposits", "liability", "21"),
                 ("2110", "NP", "أوراق دفع", "Notes Payable", "liability", "21"),
-                
+
                 ("22", "L-LIAB", "خصوم غير متداولة", "Non-Current Liabilities", "liability", "2"),
                 ("2201", "L-LOAN", "قروض طويلة الأجل", "Long Term Loans", "liability", "22"),
                 ("2202", "EOS", "مخصص نهاية الخدمة", "End of Service Provision", "liability", "22"),
@@ -634,7 +634,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 SET is_header = TRUE
                 WHERE id IN (SELECT DISTINCT parent_id FROM accounts WHERE parent_id IS NOT NULL)
             """))
-            
+
             # Default settings
             default_currency = currency
 
@@ -753,7 +753,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 "TRY": ("ليرة تركية", "Turkish Lira", "₺"),
             }
             c_name, c_name_en, c_symbol = curr_names.get(currency, (currency, currency, currency))
-            
+
             conn.execute(text("""
                 INSERT INTO currencies (code, name, name_en, symbol, is_base, current_rate)
                 VALUES (:code, :name, :name_en, :symbol, TRUE, 1.0)
@@ -772,13 +772,13 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                 ("timezone", timezone),
                 ("tax.zakat.gregorian_rate", "2.57764"),
             ]
-            
+
             for key, value in settings_data:
                 conn.execute(text("""
                     INSERT INTO company_settings (setting_key, setting_value) VALUES (:key, :value)
                     ON CONFLICT (setting_key) DO UPDATE SET setting_value = EXCLUDED.setting_value
                 """), {"key": key, "value": value})
-            
+
             # Insert Mappings
             for key, val_id in mapping_seeds:
                 if val_id:
@@ -821,49 +821,6 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     ON CONFLICT (user_id, branch_id) DO NOTHING
                 """), {"uid": user_id_result[0], "bid": branch_id})
 
-            # Create default party_sites and party_site_balances tables
-            # (These are created by the schema, but we ensure they exist)
-            # Note: party_sites are created dynamically when parties are created
-            # The default party (admin user) gets a site automatically
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS party_sites (
-                    id SERIAL PRIMARY KEY,
-                    party_id INTEGER NOT NULL REFERENCES parties(id),
-                    site_name VARCHAR(255) NOT NULL,
-                    site_name_en VARCHAR(255),
-                    country VARCHAR(100),
-                    country_code VARCHAR(5),
-                    currency VARCHAR(10) NOT NULL,
-                    contact_name VARCHAR(255),
-                    phone VARCHAR(50),
-                    email VARCHAR(255),
-                    address TEXT,
-                    city VARCHAR(100),
-                    tax_number VARCHAR(50),
-                    bank_account VARCHAR(100),
-                    payment_terms INTEGER DEFAULT 30,
-                    is_default BOOLEAN DEFAULT FALSE,
-                    is_active BOOLEAN DEFAULT TRUE,
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
-                )
-            """))
-
-            conn.execute(text("""
-                CREATE TABLE IF NOT EXISTS party_site_balances (
-                    id SERIAL PRIMARY KEY,
-                    company_branch_id INTEGER NOT NULL REFERENCES branches(id),
-                    party_site_id INTEGER NOT NULL REFERENCES party_sites(id),
-                    account_type VARCHAR(20) NOT NULL CHECK (account_type IN ('payable', 'receivable')),
-                    currency VARCHAR(10) NOT NULL,
-                    balance DECIMAL(18,4) DEFAULT 0,
-                    gl_account_id INTEGER REFERENCES accounts(id),
-                    created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(company_branch_id, party_site_id, account_type, currency)
-                )
-            """))
-
             # Default warehouse
             conn.execute(text("""
                 INSERT INTO warehouses (warehouse_code, warehouse_name, warehouse_name_en, branch_id, is_default, is_active)
@@ -876,7 +833,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                     is_active = TRUE
             """), {"bid": branch_id})
 
-            
+
             # Default product units
             units = [
                 ("PC", "قطعة", "Piece", "pcs"),
@@ -894,7 +851,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
                         unit_name_en = EXCLUDED.unit_name_en,
                         abbreviation = EXCLUDED.abbreviation
                 """), {"code": unit[0], "name": unit[1], "name_en": unit[2], "abbr": unit[3]})
-            
+
             # Tax rates are entered manually by the user — no auto-seed.
 
             # ── Tax Compliance: Seed tax_regimes for the company's country ───
@@ -1033,7 +990,7 @@ def initialize_company_default_data(company_id: str, admin_username: str,
 
         logger.info(f"✅ Initialized default data for {db_name}")
         return True, "تم تهيئة البيانات الافتراضية"
-        
+
     except Exception as e:
         logger.error(f"❌ Error initializing data: {str(e)}")
         return False, str(e)

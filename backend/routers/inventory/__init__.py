@@ -9,21 +9,21 @@ from utils.permissions import require_module
 router = APIRouter(prefix="/inventory", tags=["Inventory"], dependencies=[Depends(require_module("stock"))])
 
 # Import and include all sub-routers
-from .products import products_router
-from .suppliers import suppliers_router
-from .categories import categories_router
-from .warehouses import warehouses_router
-from .transfers import transfers_router
-from .price_lists import price_lists_router
-from .stock_movements import stock_movements_router
-from .shipments import shipments_router
+from .products import products_router  # noqa: E402
+from .suppliers import suppliers_router  # noqa: E402
+from .categories import categories_router  # noqa: E402
+from .warehouses import warehouses_router  # noqa: E402
+from .transfers import transfers_router  # noqa: E402
+from .price_lists import price_lists_router  # noqa: E402
+from .stock_movements import stock_movements_router  # noqa: E402
+from .shipments import shipments_router  # noqa: E402
 # notifications_router removed — unified in routers/notifications.py
-from .adjustments import adjustments_router
-from .reports import reports_router
-from .batches import batches_router
-from .advanced import advanced_router
-from .costing import costing_router
-from .forecast import forecast_router
+from .adjustments import adjustments_router  # noqa: E402
+from .reports import reports_router  # noqa: E402
+from .batches import batches_router  # noqa: E402
+from .advanced import advanced_router  # noqa: E402
+from .costing import costing_router  # noqa: E402
+from .forecast import forecast_router  # noqa: E402
 
 router.include_router(products_router)
 router.include_router(suppliers_router)

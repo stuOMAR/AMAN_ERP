@@ -1,17 +1,17 @@
 """kpi_service.executive — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     get_previous_period, build_branch_filter, kpi_item, calc_trend, calc_trend_inverse, ratio_status, _gl_sum, _gl_balance, _count_table
 )
-from .charts import (
+from .charts import (  # noqa: E402
     _build_revenue_expense_chart, _build_executive_alerts
 )
-from utils.accounting import get_base_currency
+from utils.accounting import get_base_currency  # noqa: E402
 
 
 def get_executive_kpis(db, start_date: date, end_date: date,

@@ -3,29 +3,65 @@
 Mounted under the parent router via crm/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 from typing import Any, Dict, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime
 from pydantic import BaseModel
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import branch_scope_filter, require_permission, require_module, validate_branch_access
+from utils.permissions import branch_scope_filter, require_permission
 from utils.accounting import generate_sequential_number
 from utils.audit import log_activity
 from utils.sql_builder import validate_update_keys
+from utils.tax_precision import money_str, require_idempotency_key
 from services.notification_service import notification_service
 from services.tax_engine import resolve_line_tax
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import ActivityCreate, ActivityUpdate, OPPORTUNITY_ALLOWED_FIELDS, OPPORTUNITY_STAGES, OpportunityCreate, OpportunityUpdate
+from .core import ActivityCreate, ActivityUpdate, OPPORTUNITY_ALLOWED_FIELDS, OPPORTUNITY_STAGES, OpportunityCreate, OpportunityUpdate  # noqa: E402
+
+OPPORTUNITY_MONEY_FIELDS = {"expected_value", "total_value", "weighted_value", "won_value"}
+
+
+def _serialize_opportunity_row(row, *, money_fields=OPPORTUNITY_MONEY_FIELDS, decimal_fields=None) -> Dict[str, Any]:
+    data = dict(row._mapping) if hasattr(row, "_mapping") else dict(row)
+    for field in money_fields:
+        if field in data and data[field] is not None:
+            data[field] = money_str(data[field])
+    for field in decimal_fields or ():
+        if field in data and data[field] is not None:
+            data[field] = str(data[field])
+    return data
+
+
+def _serialize_opportunity_rows(rows, **kwargs) -> List[Dict[str, Any]]:
+    return [_serialize_opportunity_row(row, **kwargs) for row in rows]
+
+
+def _record_opportunity_stage_change(db, *, tenant_id: int, opportunity_id: int, from_stage: str | None, to_stage: str | None, actor_id: int | None):
+    if not to_stage:
+        return
+    db.execute(text("""
+        INSERT INTO opportunity_stage_history (
+            tenant_id, opportunity_id, from_stage, to_stage, actor_id
+        ) VALUES (
+            :tenant_id, :opportunity_id, :from_stage, :to_stage, :actor_id
+        )
+    """), {
+        "tenant_id": tenant_id,
+        "opportunity_id": opportunity_id,
+        "from_stage": from_stage,
+        "to_stage": to_stage,
+        "actor_id": actor_id,
+    })
+
 
 @router.get("/opportunities", dependencies=[Depends(require_permission(["sales.view", "projects.view"]))], response_model=List[Dict[str, Any]])
 def list_opportunities(
@@ -56,7 +92,7 @@ def list_opportunities(
         
         query += " ORDER BY o.updated_at DESC"
         rows = db.execute(text(query), params).fetchall()
-        return [dict(r._mapping) for r in rows]
+        return _serialize_opportunity_rows(rows)
     finally:
         db.close()
 
@@ -69,6 +105,7 @@ def get_pipeline_summary(current_user=Depends(get_current_user)):
         rows = db.execute(text("""
             SELECT stage, COUNT(*) as count, 
                    COALESCE(SUM(expected_value), 0) as total_value,
+                   COALESCE(SUM(expected_value * probability / 100), 0) as weighted_value,
                    COALESCE(AVG(probability), 0) as avg_probability
             FROM sales_opportunities
             WHERE stage NOT IN ('won', 'lost') AND COALESCE(is_deleted, FALSE) = FALSE
@@ -94,8 +131,8 @@ def get_pipeline_summary(current_user=Depends(get_current_user)):
         """)).fetchone()
         
         return {
-            "pipeline": [dict(r._mapping) for r in rows],
-            "stats": dict(stats._mapping) if stats else {},
+            "pipeline": _serialize_opportunity_rows(rows, decimal_fields={"avg_probability"}),
+            "stats": _serialize_opportunity_row(stats) if stats else {},
             "stages": OPPORTUNITY_STAGES
         }
     finally:
@@ -121,7 +158,7 @@ def get_opportunity(opp_id: int, current_user=Depends(get_current_user)):
             SELECT * FROM opportunity_activities WHERE opportunity_id = :id ORDER BY created_at DESC
         """), {"id": opp_id}).fetchall()
         
-        result = dict(opp._mapping)
+        result = _serialize_opportunity_row(opp)
         result["activities"] = [dict(a._mapping) for a in activities]
         return result
     finally:
@@ -131,8 +168,21 @@ def get_opportunity(opp_id: int, current_user=Depends(get_current_user)):
 @router.post("/opportunities", status_code=201, dependencies=[Depends(require_permission(["sales.create", "projects.create"]))], response_model=Dict[str, Any])
 def create_opportunity(data: OpportunityCreate, request: Request, current_user=Depends(get_current_user)):
     """Create Opportunity."""
+    idempotency_key = require_idempotency_key(request, operation="CRM opportunity creation")
     db = get_db_connection(current_user.company_id)
     try:
+        existing = db.execute(text("""
+            SELECT id
+            FROM sales_opportunities
+            WHERE idempotency_key = :idempotency_key
+        """), {"idempotency_key": idempotency_key}).fetchone()
+        if existing:
+            return {
+                "id": existing.id,
+                "message": i18n_message("opportunity_created", request),
+                "idempotent": True,
+            }
+
         if data.customer_id and data.expected_value and data.expected_value > 0:
             credit = db.execute(text("""
                 SELECT credit_limit, current_balance
@@ -156,11 +206,11 @@ def create_opportunity(data: OpportunityCreate, request: Request, current_user=D
             INSERT INTO sales_opportunities (
                 title, customer_id, contact_name, contact_email, contact_phone,
                 stage, probability, expected_value, expected_close_date,
-                currency, source, assigned_to, branch_id, notes, created_by
+                currency, source, assigned_to, branch_id, notes, idempotency_key, created_by
             ) VALUES (
                 :title, :cust, :cname, :cemail, :cphone,
                 :stage, :prob, :val, :close,
-                :curr, :src, :assigned, :branch, :notes, :user
+                :curr, :src, :assigned, :branch, :notes, :idempotency_key, :user
             ) RETURNING id
         """), {
             "title": data.title, "cust": data.customer_id,
@@ -170,11 +220,34 @@ def create_opportunity(data: OpportunityCreate, request: Request, current_user=D
             "close": data.expected_close_date, "curr": data.currency,
             "src": data.source, "assigned": data.assigned_to,
             "branch": data.branch_id, "notes": data.notes,
+            "idempotency_key": idempotency_key,
             "user": current_user.id
         }).scalar()
+        _record_opportunity_stage_change(
+            db,
+            tenant_id=current_user.company_id,
+            opportunity_id=opp_id,
+            from_stage=None,
+            to_stage=data.stage,
+            actor_id=current_user.id,
+        )
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_create_opportunity", resource_type="opportunity", resource_id=str(opp_id), details={"title": data.title, "stage": data.stage}, request=request)
         return {"id": opp_id, "message": i18n_message("opportunity_created", request)}
+    except IntegrityError:
+        db.rollback()
+        existing = db.execute(text("""
+            SELECT id
+            FROM sales_opportunities
+            WHERE idempotency_key = :idempotency_key
+        """), {"idempotency_key": idempotency_key}).fetchone()
+        if existing:
+            return {
+                "id": existing.id,
+                "message": i18n_message("opportunity_created", request),
+                "idempotent": True,
+            }
+        raise
     finally:
         db.close()
 
@@ -193,16 +266,34 @@ async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Requ
         if "stage" in updates and updates["stage"] in OPPORTUNITY_STAGES:
             if "probability" not in updates:
                 updates["probability"] = OPPORTUNITY_STAGES[updates["stage"]]
-        
+
+        existing = db.execute(text("""
+            SELECT stage
+            FROM sales_opportunities
+            WHERE id = :id AND COALESCE(is_deleted, FALSE) = FALSE
+        """), {"id": opp_id}).fetchone()
+        if not existing:
+            raise HTTPException(**http_error(404, "opportunity_not_found", request))
+        previous_stage = existing.stage
+
         validate_update_keys(updates.keys())  # T2.2 defense-in-depth
         set_clause = ", ".join(f"{k} = :{k}" for k in updates)
         updates["id"] = opp_id
         db.execute(text(f"UPDATE sales_opportunities SET {set_clause}, updated_at = NOW() WHERE id = :id"), updates)
+        stage = updates.get("stage")
+        if stage and stage != previous_stage:
+            _record_opportunity_stage_change(
+                db,
+                tenant_id=current_user.company_id,
+                opportunity_id=opp_id,
+                from_stage=previous_stage,
+                to_stage=stage,
+                actor_id=current_user.id,
+            )
         db.commit()
         log_activity(db, user_id=current_user.id, username=getattr(current_user, "username", ""), action="crm_update_opportunity", resource_type="opportunity", resource_id=str(opp_id), details={"fields_updated": list(updates.keys())}, request=request)
 
         # Dispatch notification when opportunity stage changes to won or lost
-        stage = updates.get("stage")
         if stage in ("won", "lost"):
             try:
                 assigned = db.execute(
@@ -220,10 +311,10 @@ async def update_opportunity(opp_id: int, data: OpportunityUpdate, request: Requ
                         feature_source="crm",
                         reference_type="opportunity",
                         reference_id=opp_id,
-                        link=f"/crm/opportunities/{opp_id}",
+                        link="/crm/opportunities",
                     )
-            except Exception as notif_err:
-                logger.warning("Failed to dispatch opportunity stage notification: %s", notif_err)
+            except Exception:
+                logger.warning("Failed to dispatch opportunity stage notification")
 
         return {"message": i18n_message("webhook_updated_success", request)}
     finally:
@@ -422,12 +513,26 @@ def convert_to_quotation(
     current_user=Depends(get_current_user),
 ):
     """تحويل فرصة بيعية إلى عرض سعر"""
+    idempotency_key = require_idempotency_key(request, operation="CRM opportunity quotation conversion")
     db = get_db_connection(current_user.company_id)
     try:
         opp = db.execute(text("SELECT * FROM sales_opportunities WHERE id = :id"), {"id": opp_id}).fetchone()
         if not opp:
             raise HTTPException(**http_error(404, "opportunity_not_found"))
         opp = opp._mapping
+
+        existing_by_key = db.execute(text("""
+            SELECT id, sq_number
+            FROM sales_quotations
+            WHERE idempotency_key = :idempotency_key
+        """), {"idempotency_key": idempotency_key}).fetchone()
+        if existing_by_key:
+            return {
+                "quotation_id": existing_by_key.id,
+                "quotation_number": existing_by_key.sq_number,
+                "message": i18n_message("opportunity_converted_to_quotation", request),
+                "idempotent": True,
+            }
 
         # T003: Block duplicate conversion — check if quotation already exists
         if opp.get("won_quotation_id"):
@@ -476,11 +581,12 @@ def convert_to_quotation(
         quot_id = db.execute(text("""
             INSERT INTO sales_quotations (
                 sq_number, customer_id, quotation_date, expiry_date,
-                subtotal, tax_amount, discount, total, status, notes, created_by, branch_id
+                subtotal, tax_amount, discount, total, status, notes, created_by, branch_id,
+                idempotency_key
             ) VALUES (
                 :num, :cust, CURRENT_DATE, CURRENT_DATE + INTERVAL '30 days',
                 :sub, :tax, 0, :tot, 'draft',
-                :notes, :uid, :branch
+                :notes, :uid, :branch, :idempotency_key
             ) RETURNING id
         """), {
             "num": quot_num,
@@ -490,7 +596,8 @@ def convert_to_quotation(
             "tot": grand_total,
             "notes": notes_val,
             "uid": current_user.id,
-            "branch": opp.get("branch_id")
+            "branch": opp.get("branch_id"),
+            "idempotency_key": idempotency_key,
         }).scalar()
 
         # T006: Fix line INSERT column name: quotation_id → sq_id
@@ -546,15 +653,28 @@ def convert_to_quotation(
         return {"quotation_id": quot_id, "quotation_number": quot_num, "message": i18n_message("opportunity_converted_to_quotation", request)}
     except HTTPException:
         raise
-    except Exception as e:
+    except IntegrityError:
         db.rollback()
-        logger.error(f"Error converting opportunity to quotation: {e}")
+        existing_by_key = db.execute(text("""
+            SELECT id, sq_number
+            FROM sales_quotations
+            WHERE idempotency_key = :idempotency_key
+        """), {"idempotency_key": idempotency_key}).fetchone()
+        if existing_by_key:
+            return {
+                "quotation_id": existing_by_key.id,
+                "quotation_number": existing_by_key.sq_number,
+                "message": i18n_message("opportunity_converted_to_quotation", request),
+                "idempotent": True,
+            }
+        raise
+    except Exception:
+        db.rollback()
+        logger.error("Error converting opportunity to quotation")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
 
 
 # ======================== CRM-003: Marketing Campaigns ========================
-
-from schemas.campaign import CampaignCreate, TrackingWebhookPayload
 

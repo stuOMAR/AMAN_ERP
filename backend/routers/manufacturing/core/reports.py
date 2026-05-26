@@ -3,38 +3,63 @@
 Mounted under the parent router via core/__init__.py.
 """
 import logging
-from decimal import Decimal
-from datetime import datetime, date
-from typing import Any, Dict, List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from decimal import Decimal, ROUND_HALF_UP
+from datetime import date
+from typing import Any, Dict, Optional
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
-from pydantic import BaseModel
 from sqlalchemy import text
 from routers.auth import get_current_user
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
 from utils.exports import generate_excel, generate_pdf, create_export_response
-from utils.audit import log_activity
-from services.gl_service import create_journal_entry
 from schemas import UserResponse
-from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
-)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-from .core import calculate_production_cost
+from .core import calculate_production_cost  # noqa: E402
+
+_D2 = Decimal("0.01")
+_D1 = Decimal("0.1")
+
+
+def _dec(value) -> Decimal:
+    if value is None:
+        return Decimal("0")
+    return Decimal(str(value))
+
+
+def _q2(value) -> Decimal:
+    return _dec(value).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _q1(value) -> Decimal:
+    return _dec(value).quantize(_D1, rounding=ROUND_HALF_UP)
+
+
+def _pct(numerator, denominator, scale=_D2) -> Decimal:
+    base = _dec(denominator)
+    if base == 0:
+        return Decimal("0").quantize(scale, rounding=ROUND_HALF_UP)
+    return ((_dec(numerator) / base) * Decimal("100")).quantize(scale, rounding=ROUND_HALF_UP)
+
+
+def _variance_direction(value: Decimal) -> str:
+    if value > 0:
+        return "unfavorable"
+    if value < 0:
+        return "favorable"
+    return "none"
+
+
+def _threshold_direction(value: Decimal, high: Decimal, medium: Decimal) -> str:
+    if value >= high:
+        return "high"
+    if value >= medium:
+        return "medium"
+    return "low"
 
 @router.get("/reports/production-cost", dependencies=[Depends(require_permission("manufacturing.view"))], response_model=Dict[str, Any])
 def report_production_cost(
@@ -72,10 +97,10 @@ def report_production_cost(
         orders = conn.execute(text(query), params).fetchall()
         
         report_rows = []
-        total_material = 0
-        total_labor = 0
-        total_overhead = 0
-        total_production = 0
+        total_material = Decimal("0")
+        total_labor = Decimal("0")
+        total_overhead = Decimal("0")
+        total_production = Decimal("0")
         
         for o in orders:
             cost = calculate_production_cost(conn, o.product_id if not o.bom_name else None, o.quantity, o.id)
@@ -101,20 +126,20 @@ def report_production_cost(
                 "unit_cost": cost["unit_cost"],
             }
             report_rows.append(row)
-            total_material += cost["material_cost"]
-            total_labor += cost["labor_cost"]
-            total_overhead += cost["overhead_cost"]
-            total_production += cost["total_cost"]
+            total_material += _dec(cost["material_cost"])
+            total_labor += _dec(cost["labor_cost"])
+            total_overhead += _dec(cost["overhead_cost"])
+            total_production += _dec(cost["total_cost"])
         
         return {
             "report_name": "Production Cost Report",
             "period": {"start": str(start_date) if start_date else "All", "end": str(end_date) if end_date else "All"},
             "orders": report_rows,
             "totals": {
-                "total_material_cost": round(total_material, 2),
-                "total_labor_cost": round(total_labor, 2),
-                "total_overhead_cost": round(total_overhead, 2),
-                "total_production_cost": round(total_production, 2),
+                "total_material_cost": _q2(total_material),
+                "total_labor_cost": _q2(total_labor),
+                "total_overhead_cost": _q2(total_overhead),
+                "total_production_cost": _q2(total_production),
                 "order_count": len(report_rows),
             }
         }
@@ -161,22 +186,24 @@ def report_work_center_efficiency(
                 WHERE poo.work_center_id = :wcid {date_filter}
             """), {**params, "wcid": wc.id}).fetchone()
             
-            capacity_hours = (wc.capacity_per_day or 8) * 22  # Approx monthly capacity
-            used_hours = (stats.total_run_time_min or 0) / 60.0
-            utilization = (used_hours / capacity_hours * 100) if capacity_hours > 0 else 0
+            capacity_hours = _dec(wc.capacity_per_day or Decimal("8")) * Decimal("22")
+            used_hours = _dec(stats.total_run_time_min or 0) / Decimal("60")
+            utilization = _pct(used_hours, capacity_hours) if capacity_hours > 0 else Decimal("0.00")
+            cost_per_hour = _dec(wc.cost_per_hour or 0)
             
             report_rows.append({
                 "work_center_id": wc.id,
                 "work_center_name": wc.name,
                 "code": wc.code,
-                "cost_per_hour": Decimal(str(wc.cost_per_hour or 0)),
+                "cost_per_hour": cost_per_hour,
                 "total_operations": stats.total_operations,
                 "completed_operations": stats.completed_operations,
-                "total_run_time_hours": round(used_hours, 2),
-                "total_output": Decimal(str(stats.total_output or 0)),
-                "avg_cycle_time_min": round(Decimal(str(stats.avg_run_time_min or 0)), 2),
-                "utilization_percent": round(utilization, 2),
-                "total_cost": round(used_hours * Decimal(str(wc.cost_per_hour or 0)), 2),
+                "total_run_time_hours": _q2(used_hours),
+                "total_output": _dec(stats.total_output or 0),
+                "avg_cycle_time_min": _q2(stats.avg_run_time_min or 0),
+                "utilization_percent": utilization,
+                "utilization_direction": _threshold_direction(utilization, Decimal("70"), Decimal("40")),
+                "total_cost": _q2(used_hours * cost_per_hour),
             })
         
         return {
@@ -282,7 +309,15 @@ def report_production_summary(
             GROUP BY status
         """), params).fetchall()
         
-        by_status = {row.status: {"count": row.count, "total_qty": Decimal(str(row.total_qty))} for row in status_counts}
+        total_orders = sum(row.count for row in status_counts)
+        by_status = {}
+        for row in status_counts:
+            by_status[row.status] = {
+                "count": row.count,
+                "total_qty": _dec(row.total_qty),
+                "share_pct": _q1(_pct(row.count, total_orders, _D1)),
+            }
+        completed_count = by_status.get("completed", {}).get("count", 0)
         
         # Top produced products
         top_products = conn.execute(text(f"""
@@ -305,7 +340,10 @@ def report_production_summary(
             "report_name": "Production Summary",
             "period": {"start": str(start_date) if start_date else "All", "end": str(end_date) if end_date else "All"},
             "orders_by_status": by_status,
-            "total_orders": sum(s["count"] for s in by_status.values()),
+            "total_orders": total_orders,
+            "completed_orders": completed_count,
+            "in_progress_orders": by_status.get("in_progress", {}).get("count", 0),
+            "completion_rate_pct": _q1(_pct(completed_count, total_orders, _D1)),
             "top_produced_products": [
                 {"product_name": r.product_name, "total_produced": Decimal(str(r.total_produced or 0)), "order_count": r.order_count}
                 for r in top_products
@@ -512,20 +550,46 @@ def cost_variance_report(
         query += " ORDER BY ABS(COALESCE(po.variance_percentage, 0)) DESC"
 
         rows = conn.execute(text(query), params).fetchall()
-        results = [dict(r._mapping) for r in rows]
+        results = []
+        for row in rows:
+            item = dict(row._mapping)
+            standard = _q2(item.get("standard_cost"))
+            actual = _q2(item.get("actual_total_cost"))
+            variance = _q2(item.get("variance_amount") if item.get("variance_amount") is not None else actual - standard)
+            variance_pct = _q2(
+                item.get("variance_percentage")
+                if item.get("variance_percentage") is not None
+                else _pct(variance, standard)
+            )
+            direction = _variance_direction(variance)
+            item.update({
+                "estimated_cost": str(standard),
+                "actual_cost": str(actual),
+                "variance": str(variance),
+                "variance_pct": str(variance_pct),
+                "variance_direction": direction,
+                "variance_prefix": "+" if variance > 0 else "",
+                "is_unfavorable": direction == "unfavorable",
+                "is_favorable": direction == "favorable",
+            })
+            results.append(item)
 
-        total_actual = sum(Decimal(str(r.get('actual_total_cost', 0) or 0)) for r in results)
-        total_standard = sum(Decimal(str(r.get('standard_cost', 0) or 0)) for r in results)
-        total_variance = round(total_actual - total_standard, 2)
+        total_actual = sum((_dec(r.get('actual_total_cost')) for r in results), Decimal("0"))
+        total_standard = sum((_dec(r.get('standard_cost')) for r in results), Decimal("0"))
+        total_variance = _q2(total_actual - total_standard)
+        overall_variance_pct = _pct(total_variance, total_standard)
+        summary_direction = _variance_direction(total_variance)
 
         return {
             "orders": results,
             "summary": {
                 "total_orders": len(results),
-                "total_actual_cost": total_actual,
-                "total_standard_cost": total_standard,
+                "total_actual_cost": _q2(total_actual),
+                "total_standard_cost": _q2(total_standard),
                 "total_variance": total_variance,
-                "overall_variance_pct": round((total_variance / total_standard * 100), 2) if total_standard else 0,
+                "overall_variance_pct": overall_variance_pct,
+                "variance_direction": summary_direction,
+                "variance_prefix": "+" if total_variance > 0 else "",
                 "favorable_count": sum(1 for r in results if Decimal(str(r.get('variance_amount', 0) or 0)) < 0),
                 "unfavorable_count": sum(1 for r in results if Decimal(str(r.get('variance_amount', 0) or 0)) > 0)
             }
@@ -542,6 +606,8 @@ def calculate_oee(
     work_center_id: Optional[int] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
+    period_from: Optional[str] = None,
+    period_to: Optional[str] = None,
     branch_id: Optional[int] = None,
     current_user=Depends(get_current_user)
 ):
@@ -564,29 +630,36 @@ def calculate_oee(
         if work_center_id:
             q += " AND cp.work_center_id = :wc"
             params["wc"] = work_center_id
-        if date_from:
+        effective_from = date_from or period_from
+        effective_to = date_to or period_to
+        if effective_from:
             q += " AND cp.plan_date >= :df"
-            params["df"] = date_from
-        if date_to:
+            params["df"] = effective_from
+        if effective_to:
             q += " AND cp.plan_date <= :dt"
-            params["dt"] = date_to
+            params["dt"] = effective_to
         q += " GROUP BY cp.work_center_id, wc.name ORDER BY wc.name"
 
         rows = conn.execute(text(q), params).fetchall()
         results = []
         for r in rows:
             d = dict(r._mapping)
-            avail = Decimal(str(d.get("total_available") or 1))
-            planned = Decimal(str(d.get("total_planned") or 0))
-            actual = Decimal(str(d.get("total_actual") or 0))
-            availability = min(actual / avail * 100, 100) if avail > 0 else 0
-            performance = min(planned / actual * 100, 100) if actual > 0 else 0
-            quality = 98.5  # placeholder - would come from QC data
-            oee = round(availability * performance * quality / 10000, 2)
-            d["availability"] = round(availability, 2)
-            d["performance"] = round(performance, 2)
-            d["quality"] = round(quality, 2)
+            avail = _dec(d.get("total_available") or 0)
+            planned = _dec(d.get("total_planned") or 0)
+            actual = _dec(d.get("total_actual") or 0)
+            availability = min(_pct(actual, avail), Decimal("100.00")) if avail > 0 else Decimal("0.00")
+            performance = min(_pct(planned, actual), Decimal("100.00")) if actual > 0 else Decimal("0.00")
+            quality = Decimal("98.50")  # Backend-owned default until QC yield is available in capacity_plans.
+            oee = _q2(availability * performance * quality / Decimal("10000"))
+            d["availability"] = availability
+            d["performance"] = performance
+            d["quality"] = quality
+            d["quality_source"] = "backend_default"
             d["oee"] = oee
+            d["availability_direction"] = _threshold_direction(availability, Decimal("90"), Decimal("60"))
+            d["performance_direction"] = _threshold_direction(performance, Decimal("95"), Decimal("60"))
+            d["quality_direction"] = _threshold_direction(quality, Decimal("99.9"), Decimal("95"))
+            d["oee_direction"] = _threshold_direction(oee, Decimal("85"), Decimal("60"))
             results.append(d)
         return results
     except Exception as e:
@@ -594,5 +667,3 @@ def calculate_oee(
         raise HTTPException(**http_error(500, "oee_calc_failed", request))
     finally:
         conn.close()
-
-

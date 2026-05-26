@@ -267,7 +267,7 @@ def generate_cashflow_forecast(
         })
 
     # 3) Sort by date and compute running balance starting from opening_balance
-    lines.sort(key=lambda l: l["date"])
+    lines.sort(key=lambda line: line["date"])
     running_balance = opening_balance
     for line in lines:
         if weights:

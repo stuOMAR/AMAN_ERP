@@ -16,6 +16,10 @@ import { formatDate } from '../../utils/dateUtils';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 
+const money = (value) => new Decimal(value || '0');
+const addMoney = (left, right) => money(left).plus(money(right)).toDecimalPlaces(2).toString();
+const addBaseMoney = (left, amount, rate = '1') => money(left).plus(money(amount).times(money(rate || '1'))).toDecimalPlaces(2).toString();
+
 const PayrollDetails = () => {
     const { t } = useTranslation();
     const { id } = useParams();
@@ -34,21 +38,32 @@ const PayrollDetails = () => {
         const groups = {};
         entries.forEach(e => {
             const cur = e.currency || companyCurrency;
-            if (!groups[cur]) groups[cur] = { net: 0, netBase: 0, basic: 0, housing: 0, transport: 0, other: 0, deductions: 0 };
-            groups[cur].net = new Decimal(groups[cur].net).plus(e.net_salary || 0).toNumber();
-            groups[cur].netBase = new Decimal(groups[cur].netBase).plus(e.net_salary_base || e.net_salary || 0).toNumber();
-            groups[cur].basic = new Decimal(groups[cur].basic).plus(e.basic_salary || 0).toNumber();
-            groups[cur].housing = new Decimal(groups[cur].housing).plus(e.housing_allowance || 0).toNumber();
-            groups[cur].transport = new Decimal(groups[cur].transport).plus(e.transport_allowance || 0).toNumber();
-            groups[cur].other = new Decimal(groups[cur].other).plus(e.other_allowances || 0).toNumber();
-            groups[cur].deductions = new Decimal(groups[cur].deductions).plus(e.deductions || 0).toNumber();
+            if (!groups[cur]) groups[cur] = { net: '0.00', netBase: '0.00', basic: '0.00', housing: '0.00', transport: '0.00', other: '0.00', deductions: '0.00' };
+            groups[cur].net = addMoney(groups[cur].net, e.net_salary);
+            groups[cur].netBase = addMoney(groups[cur].netBase, e.net_salary_base || e.net_salary);
+            groups[cur].basic = addMoney(groups[cur].basic, e.basic_salary);
+            groups[cur].housing = addMoney(groups[cur].housing, e.housing_allowance);
+            groups[cur].transport = addMoney(groups[cur].transport, e.transport_allowance);
+            groups[cur].other = addMoney(groups[cur].other, e.other_allowances);
+            groups[cur].deductions = addMoney(groups[cur].deductions, e.deductions);
         });
         return groups;
     }, [entries, companyCurrency]);
 
     const totalNetBase = useMemo(() => {
-        return entries.reduce((sum, e) => new Decimal(sum).plus(e.net_salary_base || e.net_salary || 0).toNumber(), 0);
+        return entries.reduce((sum, e) => addMoney(sum, e.net_salary_base || e.net_salary), '0.00');
     }, [entries]);
+
+    const baseTotals = useMemo(() => entries.reduce((totals, entry) => {
+        const rate = entry.exchange_rate || '1';
+        return {
+            basic: addBaseMoney(totals.basic, entry.basic_salary, rate),
+            housing: addBaseMoney(totals.housing, entry.housing_allowance, rate),
+            transport: addBaseMoney(totals.transport, entry.transport_allowance, rate),
+            other: addBaseMoney(totals.other, entry.other_allowances, rate),
+            deductions: addBaseMoney(totals.deductions, entry.deductions, rate),
+        };
+    }, { basic: '0.00', housing: '0.00', transport: '0.00', other: '0.00', deductions: '0.00' }), [entries]);
 
     const hasMultiCurrency = useMemo(() => Object.keys(totalsByCurrency).length > 1, [totalsByCurrency]);
 
@@ -268,11 +283,11 @@ const PayrollDetails = () => {
                                     {/* Grand total in base currency */}
                                     <tr style={{ fontWeight: 700, backgroundColor: 'var(--bg-hover)' }}>
                                         <td colSpan="2">{t('common.total', 'Total')} {hasMultiCurrency ? `(${companyCurrency})` : ''}</td>
-                                        <td>{formatNumber(entries.reduce((sum, e) => new Decimal(sum).plus(new Decimal(e.basic_salary || 0).times(e.exchange_rate || 1)).toNumber(), 0))}</td>
-                                        <td>{formatNumber(entries.reduce((sum, e) => new Decimal(sum).plus(new Decimal(e.housing_allowance || 0).times(e.exchange_rate || 1)).toNumber(), 0))}</td>
-                                        <td>{formatNumber(entries.reduce((sum, e) => new Decimal(sum).plus(new Decimal(e.transport_allowance || 0).times(e.exchange_rate || 1)).toNumber(), 0))}</td>
-                                        <td>{formatNumber(entries.reduce((sum, e) => new Decimal(sum).plus(new Decimal(e.other_allowances || 0).times(e.exchange_rate || 1)).toNumber(), 0))}</td>
-                                        <td className="text-danger">{formatNumber(entries.reduce((sum, e) => new Decimal(sum).plus(new Decimal(e.deductions || 0).times(e.exchange_rate || 1)).toNumber(), 0))}</td>
+                                        <td>{formatNumber(baseTotals.basic)}</td>
+                                        <td>{formatNumber(baseTotals.housing)}</td>
+                                        <td>{formatNumber(baseTotals.transport)}</td>
+                                        <td>{formatNumber(baseTotals.other)}</td>
+                                        <td className="text-danger">{formatNumber(baseTotals.deductions)}</td>
                                         <td className="text-primary">{formatNumber(totalNetBase)} {companyCurrency}</td>
                                         <td></td>
                                     </tr>

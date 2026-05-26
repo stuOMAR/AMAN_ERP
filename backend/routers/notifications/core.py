@@ -1,6 +1,6 @@
 
-from fastapi import APIRouter, Depends, HTTPException, Request, WebSocket, WebSocketDisconnect
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, WebSocket, WebSocketDisconnect
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel
@@ -11,6 +11,7 @@ from utils.tx import transactional
 from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.limiter import limiter
+from utils.tax_precision import require_idempotency_key
 from utils.ws_manager import ws_manager
 import html as html_lib
 import logging
@@ -42,7 +43,7 @@ class NotificationCreate(BaseModel):
 
 @router.get("", response_model=List[NotificationResponse])
 async def get_notifications(
-    limit: int = 50,
+    limit: int = Query(25, ge=1, le=100),
     current_user: dict = Depends(get_current_user)
 ):
     """جلب إشعارات المستخدم الحالي"""
@@ -52,11 +53,11 @@ async def get_notifications(
 
     with transactional(company_id) as db:
         result = db.execute(text("""
-            SELECT id, user_id, title, message, link, is_read, 
+            SELECT id, user_id, title, message, link, is_read,
                    type, created_at
-            FROM notifications 
-            WHERE user_id = :uid 
-            ORDER BY created_at DESC 
+            FROM notifications
+            WHERE user_id = :uid
+            ORDER BY created_at DESC
             LIMIT :limit
         """), {"uid": current_user.id, "limit": limit}).fetchall()
         return [dict(r._mapping) for r in result]
@@ -70,7 +71,7 @@ async def get_unread_count(current_user: dict = Depends(get_current_user)):
 
     with transactional(company_id) as db:
         count = db.execute(text("""
-            SELECT COUNT(*) FROM notifications 
+            SELECT COUNT(*) FROM notifications
             WHERE user_id = :uid AND is_read = FALSE
         """), {"uid": current_user.id}).scalar()
         return {"count": count}
@@ -83,11 +84,13 @@ async def mark_read(notification_id: int, current_user: dict = Depends(get_curre
         return {"success": False}
 
     with transactional(company_id) as db:
-        db.execute(text("""
-            UPDATE notifications 
-            SET is_read = TRUE 
+        result = db.execute(text("""
+            UPDATE notifications
+            SET is_read = TRUE
             WHERE id = :id AND user_id = :uid
         """), {"id": notification_id, "uid": current_user.id})
+        if result.rowcount == 0:
+            raise HTTPException(status_code=404, detail="Notification not found")
         return {"success": True}
 
 @router.post("/mark-all-read", response_model=Dict[str, Any])
@@ -99,8 +102,8 @@ async def mark_all_read(current_user: dict = Depends(get_current_user)):
 
     with transactional(company_id) as db:
         db.execute(text("""
-            UPDATE notifications 
-            SET is_read = TRUE 
+            UPDATE notifications
+            SET is_read = TRUE
             WHERE user_id = :uid AND is_read = FALSE
         """), {"uid": current_user.id})
         return {"success": True}
@@ -122,19 +125,43 @@ async def create_and_send_notification(
     if not company_id:
         raise HTTPException(**http_error(400, "notifications_no_company", request))
 
+    idempotency_key = require_idempotency_key(request, operation="notification send")
+    idempotency_source = f"manual_send:{idempotency_key[:80]}"
     db = get_db_connection(company_id)
     try:
+        existing = db.execute(text("""
+            SELECT id, created_at
+            FROM notifications
+            WHERE user_id = :uid AND feature_source = :source
+            ORDER BY id DESC
+            LIMIT 1
+        """), {"uid": data.user_id, "source": idempotency_source}).fetchone()
+        if existing:
+            return {
+                "message": i18n_message("notification_sent", request),
+                "results": {"in_app": True, "email": None, "sms": None},
+                "id": existing.id,
+                "idempotent": True,
+            }
+
         # 1. Create in-app notification
         notif_row = db.execute(text("""
-            INSERT INTO notifications (user_id, title, message, link, is_read, type, created_at)
-            VALUES (:uid, :title, :msg, :link, FALSE, :type, CURRENT_TIMESTAMP)
+            INSERT INTO notifications (
+                user_id, title, message, link, is_read, type,
+                feature_source, created_at
+            )
+            VALUES (
+                :uid, :title, :msg, :link, FALSE, :type,
+                :feature_source, CURRENT_TIMESTAMP
+            )
             RETURNING id, created_at
         """), {
             "uid": data.user_id,
             "title": data.title,
             "msg": data.message,
             "link": data.link,
-            "type": data.type
+            "type": data.type,
+            "feature_source": idempotency_source,
         }).fetchone()
 
         results = {"in_app": True, "email": None, "sms": None}
@@ -168,7 +195,7 @@ async def create_and_send_notification(
                 """)
                 results["email"] = send_notification_email(db, data.user_id, data.title, html_body, tenant_id=company_id)
             except Exception:
-                logger.exception("Email notification failed")
+                logger.warning("Email notification failed")
                 results["email"] = False
 
         # 3. Send SMS if requested
@@ -178,16 +205,21 @@ async def create_and_send_notification(
                 sms_text = f"{data.title}: {data.message or ''}"[:160]
                 results["sms"] = send_notification_sms(db, data.user_id, sms_text, tenant_id=company_id)
             except Exception:
-                logger.exception("SMS notification failed")
+                logger.warning("SMS notification failed")
                 results["sms"] = False
 
         db.commit()
-        return {"message": i18n_message("notification_sent", request), "results": results}
+        return {
+            "message": i18n_message("notification_sent", request),
+            "results": results,
+            "id": notif_row.id if notif_row else None,
+            "idempotent": False,
+        }
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error sending notification: {e}")
+        logger.error("Error sending notification")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -280,9 +312,12 @@ async def update_notification_settings(
             request=request,
         )
         return {"message": i18n_message("notification_settings_updated", request)}
-    except Exception as e:
+    except HTTPException:
         db.rollback()
-        logger.error(f"Error updating notification settings: {e}")
+        raise
+    except Exception:
+        db.rollback()
+        logger.error("Error updating notification settings")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -359,9 +394,9 @@ async def update_preference(body: PreferenceUpdate, request: Request, current_us
             request=request,
         )
         return {"detail": "Preference updated"}
-    except Exception as e:
+    except Exception:
         db.rollback()
-        logger.error(f"Error updating preference: {e}")
+        logger.error("Error updating preference")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -398,8 +433,8 @@ async def test_email_connection(request: Request, current_user: dict = Depends(g
             raise HTTPException(**http_error(500, "test_email_send_failed", request))
     except HTTPException:
         raise
-    except Exception as e:
-        logger.error(f"Error testing email connection: {e}")
+    except Exception:
+        logger.error("Error testing email connection")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -407,20 +442,38 @@ async def test_email_connection(request: Request, current_user: dict = Depends(g
 
 # ===================== WebSocket Endpoint =====================
 
+@router.post("/ws-ticket", response_model=Dict[str, Any])
+async def get_ws_ticket(current_user: dict = Depends(get_current_user)):
+    """إنشاء تذكرة قصيرة الصلاحية للاتصال بـ WebSocket"""
+    from jose import jwt
+    import time
+    from config import settings as app_settings
+
+    ticket_payload = {
+        "user_id": current_user.id,
+        "company_id": current_user.company_id,
+        "sub": current_user.username,
+        "exp": int(time.time()) + 20,  # 20 seconds expiry
+        "token_use": "ws_ticket"
+    }
+    ticket = jwt.encode(ticket_payload, app_settings.SECRET_KEY, algorithm=app_settings.ALGORITHM)
+    return {"ticket": ticket}
+
+
 @router.websocket("/ws")
 async def notifications_ws(ws: WebSocket, token: Optional[str] = None):
     """
     WebSocket endpoint for real-time notifications.
-    Connect: ws://host/api/notifications/ws?token=JWT_TOKEN
-    Support Cookie-based auth if token is missing.
+    Connect: ws://host/api/notifications/ws?ticket=WS_TICKET
+    Support Cookie-based auth if token/ticket is missing.
     """
     from jose import jwt, JWTError
     from config import settings as app_settings
 
-    # Authenticate via token query param OR cookies
-    actual_token = token
+    # Authenticate via ticket query param OR token query param OR cookies
+    actual_token = ws.query_params.get("ticket") or token
     if not actual_token:
-        actual_token = ws.cookies.get("access_token")
+        actual_token = ws.query_params.get("token") or ws.cookies.get("access_token")
 
     if not actual_token:
         await ws.close(code=4001, reason="Missing token")
@@ -459,7 +512,7 @@ async def push_notification(company_id: str, user_id: int, notification: dict):
     """
     Helper to push a notification to a connected user via WebSocket.
     Call this from any router after inserting a notification into the DB.
-    
+
     Usage:
         from routers.notifications import push_notification
         await push_notification(company_id, user_id, {
@@ -473,8 +526,8 @@ async def push_notification(company_id: str, user_id: int, notification: dict):
             "event": "new_notification",
             "data": notification
         })
-    except Exception as e:
-        logger.debug(f"WS push failed for {company_id}:{user_id}: {e}")
+    except Exception:
+        logger.debug("WS push failed for notification delivery")
 
 
 # ===================== Unsubscribe Endpoint =====================
@@ -507,7 +560,6 @@ async def unsubscribe_from_notifications(
     # We need company_id — callers should embed it in the unsubscribe URL.
     if company_id:
         try:
-            from database import get_db_connection
             with transactional(company_id) as db:
                 if event_type:
                     db.execute(
@@ -527,13 +579,13 @@ async def unsubscribe_from_notifications(
                         ),
                         {"uid": user_id},
                     )
-        except Exception as exc:
-            logger.warning("Unsubscribe DB update failed: %s", exc)
+        except Exception:
+            logger.warning("Unsubscribe DB update failed")
 
-    scope = f"إشعارات '{event_type}'" if event_type else "جميع الإشعارات البريدية"
+    safe_event_type = html_lib.escape(str(event_type or ""))
+    scope = f"إشعارات '{safe_event_type}'" if event_type else "جميع الإشعارات البريدية"
     return HTMLResponse(
         f"<h2>✅ تم إلغاء اشتراكك من {scope} بنجاح.</h2>"
         "<p>يمكنك إعادة تفعيل الإشعارات في إعدادات حسابك.</p>",
         status_code=200,
     )
-

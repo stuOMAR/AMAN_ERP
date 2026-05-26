@@ -6,11 +6,11 @@ Gated by require_sensitive_permission('ops.scheduler.admin').
 from __future__ import annotations
 
 import logging
-from typing import Optional
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 
 from utils.i18n import http_error
+from services.permissions.sensitive import require_sensitive_permission
 
 logger = logging.getLogger(__name__)
 
@@ -18,7 +18,9 @@ router = APIRouter(prefix="/ops/scheduler", tags=["ops-scheduler"])
 
 
 @router.get("/jobs")
-async def list_scheduler_jobs():
+async def list_scheduler_jobs(
+    current_user=Depends(require_sensitive_permission("ops.scheduler.admin", audit_view=True)),
+):
     """List all scheduled jobs with status and next run."""
     from services.scheduler import get_scheduler_jobs
 
@@ -27,7 +29,11 @@ async def list_scheduler_jobs():
 
 
 @router.post("/jobs/{job_id}/run-now")
-async def run_job_now(job_id: str, request: Request):
+async def run_job_now(
+    job_id: str,
+    request: Request,
+    current_user=Depends(require_sensitive_permission("ops.scheduler.admin", critical=True, audit_view=False)),
+):
     """Force-run a scheduled job. Gated by ops.scheduler.admin. Audited."""
     from services.scheduler import trigger_job
     from database import get_tenant_db
@@ -40,7 +46,12 @@ async def run_job_now(job_id: str, request: Request):
 
         # Audit
         try:
-            with get_tenant_db() as db:
+            company_id = (
+                current_user.get("company_id")
+                if isinstance(current_user, dict)
+                else getattr(current_user, "company_id", None)
+            )
+            with get_tenant_db(company_id) as db:
                 log_activity(
                     db,
                     action="scheduler.run_now",
@@ -56,5 +67,5 @@ async def run_job_now(job_id: str, request: Request):
         return {"status": "triggered", "job_id": job_id}
     except HTTPException:
         raise
-    except Exception as exc:
+    except Exception:
         raise HTTPException(**http_error(500, "scheduler_job_trigger_failed", request))

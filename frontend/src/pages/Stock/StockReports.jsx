@@ -43,6 +43,21 @@ const StockReports = () => {
         acc[wh].push(item);
         return acc;
     }, {});
+    const filteredWarehouses = Object.keys(groupedStock).filter(wh =>
+        groupedStock[wh].some(item =>
+            (item.item_name || '').includes(filter) || (item.item_code || '').includes(filter)
+        )
+    );
+    const statusBadge = (status) => {
+        const badges = {
+            negative: { cls: 'badge-danger', label: t('stock.reports.balance.stock_status.out_of_stock') },
+            out_of_stock: { cls: 'badge-danger', label: t('stock.reports.balance.stock_status.out_of_stock') },
+            low: { cls: 'badge-warning', label: t('stock.reports.balance.stock_status.low') },
+            good: { cls: 'badge-success', label: t('stock.reports.balance.stock_status.good') }
+        };
+        const badge = badges[status] || badges.good;
+        return <span className={`badge ${badge.cls}`}>{badge.label}</span>;
+    };
 
     if (initialLoad) return <PageLoading />;
 
@@ -80,7 +95,7 @@ const StockReports = () => {
                             </h3>
                             <span className="badge badge-secondary">
                                 {groupedStock[wh].filter(item =>
-                                    item.item_name.includes(filter) || item.item_code.includes(filter)
+                                    (item.item_name || '').includes(filter) || (item.item_code || '').includes(filter)
                                 ).length} {t('stock.reports.balance.items_count')}
                             </span>
                         </div>
@@ -99,29 +114,21 @@ const StockReports = () => {
                                 <tbody>
                                     {groupedStock[wh]
                                         .filter(item =>
-                                            item.item_name.includes(filter) || item.item_code.includes(filter)
+                                            (item.item_name || '').includes(filter) || (item.item_code || '').includes(filter)
                                         )
                                         .map((item, idx) => (
                                             <tr key={idx} style={{
-                                                background: item.quantity <= 0 ? '#FEF2F2' : 'transparent'
+                                                background: item.stock_status === 'out_of_stock' || item.stock_status === 'negative' ? '#FEF2F2' : 'transparent'
                                             }}>
                                                 <td className="font-mono text-sm text-muted">{item.item_code}</td>
                                                 <td className="font-medium">{item.item_name}</td>
                                                 <td className="text-sm">{item.unit}</td>
                                                 <td className="font-bold" style={{
-                                                    color: item.quantity < 0 ? '#DC2626' : 'inherit'
+                                                    color: item.has_negative_available ? '#DC2626' : 'inherit'
                                                 }}>
-                                                    {formatNumber(item.quantity)}
+                                                    {formatNumber(item.available_quantity)}
                                                 </td>
-                                                <td>
-                                                    {item.quantity <= 0 ? (
-                                                        <span className="badge badge-danger">{t('stock.reports.balance.stock_status.out_of_stock')}</span>
-                                                    ) : item.quantity < 10 ? (
-                                                        <span className="badge badge-warning">{t('stock.reports.balance.stock_status.low')}</span>
-                                                    ) : (
-                                                        <span className="badge badge-success">{t('stock.reports.balance.stock_status.good')}</span>
-                                                    )}
-                                                </td>
+                                                <td>{statusBadge(item.stock_status)}</td>
                                             </tr>
                                         ))}
                                 </tbody>

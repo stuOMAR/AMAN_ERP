@@ -158,7 +158,8 @@ function SalesQuotationForm() {
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
                     discount: String(item.discount || 0),
-                }))
+                })),
+                submitted_grand_total: backendTotals?.grandTotal ? String(backendTotals.grandTotal) : null,
             }
             await salesAPI.createQuotation(payload)
             navigate('/sales/quotations')

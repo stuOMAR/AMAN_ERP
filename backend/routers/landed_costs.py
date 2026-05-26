@@ -12,7 +12,6 @@ from pydantic import BaseModel, Field
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access
@@ -22,6 +21,7 @@ from utils.accounting import (
     get_base_currency
 )
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import money_str
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 
 router = APIRouter(prefix="/purchases/landed-costs", tags=["Landed Costs"], dependencies=[Depends(require_module("buying"))])
@@ -215,9 +215,10 @@ def create_landed_cost(body: LandedCostCreate, request: Request, current_user: d
                          resource_type="landed_cost",
                          resource_id=lc_number,
                          details={"id": lc_id, "total": str(total)},
-                         request=request)
+                         request=request,
+                         branch_id=branch_id)
     
-            return {"id": lc_id, "lc_number": lc_number, "total_amount": total}
+            return {"id": lc_id, "lc_number": lc_number, "total_amount": money_str(total)}
         except HTTPException:
             raise
         except Exception:
@@ -293,11 +294,11 @@ def allocate_landed_cost(lc_id: int, request: Request, current_user: dict = Depe
     
             # Calculate allocation basis
             if method == 'by_value':
-                total_basis = sum((_dec(l.line_total or 0) for l in po_lines), Decimal('0'))
+                total_basis = sum((_dec(line.line_total or 0) for line in po_lines), Decimal('0'))
             elif method == 'by_quantity':
-                total_basis = sum((_dec(l.quantity or 0) for l in po_lines), Decimal('0'))
+                total_basis = sum((_dec(line.quantity or 0) for line in po_lines), Decimal('0'))
             elif method == 'by_weight':
-                total_basis = sum((_dec(l.weight_kg or 0) * _dec(l.quantity or 0) for l in po_lines), Decimal('0'))
+                total_basis = sum((_dec(line.weight_kg or 0) * _dec(line.quantity or 0) for line in po_lines), Decimal('0'))
             else:  # equal
                 total_basis = _dec(len(po_lines))
     
@@ -582,7 +583,7 @@ def post_landed_cost(lc_id: int, request: Request, current_user: dict = Depends(
             return {
                 "message": i18n_message("landed_costs_posted_success", request),
                 "journal_entry_id": je_id,
-                "total_allocated": str(total_cost.quantize(_D2, ROUND_HALF_UP))
+                "total_allocated": money_str(total_cost.quantize(_D2, ROUND_HALF_UP))
             }
         except HTTPException:
             raise

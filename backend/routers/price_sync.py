@@ -3,13 +3,14 @@ Price Sync API
 ==============
 Automatically updates branch prices when exchange rates change.
 """
+from decimal import Decimal
 from fastapi import Request, APIRouter, Depends, HTTPException
 from sqlalchemy import text
-from typing import Optional
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
+from utils.i18n import http_error, i18n_message
+from utils.tx import transactional
 
 router = APIRouter(prefix="/price-sync", tags=["Price Sync"])
 
@@ -20,8 +21,7 @@ def sync_prices_from_base(request: Request,
 ):
     """تحديث أسعار جميع الفروع من السعر الأساسي بالريال"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         
         # Get all active branches with their currencies
@@ -85,7 +85,7 @@ def sync_prices_from_base(request: Request,
             
             # Update prices
             for item in base_items:
-                new_price = round(float(item.price) * float(rate), 2)
+                new_price = (Decimal(str(item.price)) * Decimal(str(rate))).quantize(Decimal("0.01"))
                 db.execute(text("""
                     INSERT INTO customer_price_list_items (price_list_id, product_id, price)
                     VALUES (:lid, :pid, :price)
@@ -93,10 +93,7 @@ def sync_prices_from_base(request: Request,
                 """), {"lid": pl_id, "pid": item.product_id, "price": new_price})
                 total_updated += 1
         
-        db.commit()
         return {"message": i18n_message("prices_bulk_updated", request), "updated": total_updated}
-    finally:
-        db.close()
 
 
 @router.post("/sync-single/{list_id}", dependencies=[Depends(require_permission(["products.edit", "sales.edit"]))])
@@ -106,8 +103,7 @@ def sync_single_price_list(request: Request,
 ):
     """تحديث قائمة أسعار واحدة من القائمة الأساسية"""
     company_id = current_user.get("company_id") if isinstance(current_user, dict) else current_user.company_id
-    db = get_db_connection(company_id)
-    try:
+    with transactional(company_id) as db:
         base_cur = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).scalar() or "SAR"
         
         # Get target price list
@@ -148,7 +144,7 @@ def sync_single_price_list(request: Request,
         # Update prices
         updated = 0
         for item in base_items:
-            new_price = round(float(item.price) * float(rate), 2)
+            new_price = (Decimal(str(item.price)) * Decimal(str(rate))).quantize(Decimal("0.01"))
             db.execute(text("""
                 INSERT INTO customer_price_list_items (price_list_id, product_id, price)
                 VALUES (:lid, :pid, :price)
@@ -156,7 +152,4 @@ def sync_single_price_list(request: Request,
             """), {"lid": list_id, "pid": item.product_id, "price": new_price})
             updated += 1
         
-        db.commit()
         return {"message": i18n_message("prices_bulk_updated", request), "updated": updated}
-    finally:
-        db.close()

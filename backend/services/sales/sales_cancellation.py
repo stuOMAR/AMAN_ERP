@@ -10,6 +10,7 @@ from typing import Any
 
 from sqlalchemy import text
 from fastapi import HTTPException
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -80,7 +81,7 @@ def cancel_invoice(
         text("SELECT * FROM invoice_lines WHERE invoice_id = :id AND tenant_id = :tid"),
         {"id": invoice_id, "tid": tenant_id},
     ).fetchall()
-    lines = [dict(l._mapping) for l in lines]
+    lines = [dict(line._mapping) for line in lines]
 
     # Full-line pre-flight
     if restock_warehouse_id:

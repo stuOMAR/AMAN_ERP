@@ -7,18 +7,23 @@ from __future__ import annotations
 import json
 import logging
 import random
-from datetime import datetime, timezone
 from typing import Any, Callable
 
 from sqlalchemy import text
 
+from services.audit_sanitizer import sanitize_for_audit
+
 logger = logging.getLogger(__name__)
+
+
+def _safe_error(exc: Exception) -> str:
+    return str(sanitize_for_audit(f"{exc.__class__.__name__}", context="notification_queue_worker"))
 
 
 def process_queue(
     conn: Any,
     *,
-    tenant_id: int,
+    tenant_id: str | int,
     channel: str,
     handler: Callable,
     batch_size: int = 10,
@@ -27,6 +32,21 @@ def process_queue(
 
     Uses FOR UPDATE SKIP LOCKED to safely claim rows.
     """
+    # 0. Stale lock recovery — reset stuck 'sending' state
+    try:
+        conn.execute(
+            text("""
+                UPDATE notifications_queue
+                SET state = 'pending', next_attempt_at = now()
+                WHERE tenant_id = :tnt AND channel = :ch AND state = 'sending'
+                  AND claimed_at < now() - INTERVAL '5 minutes'
+            """),
+            {"tnt": str(tenant_id), "ch": channel},
+        )
+        conn.commit()
+    except Exception:
+        logger.error("Failed stale lock recovery for notification queue")
+
     # Get max attempts setting
     setting = conn.execute(
         text("""
@@ -47,7 +67,7 @@ def process_queue(
             LIMIT :limit
             FOR UPDATE SKIP LOCKED
         """),
-        {"tnt": tenant_id, "ch": channel, "limit": batch_size},
+        {"tnt": str(tenant_id), "ch": channel, "limit": batch_size},
     ).fetchall()
 
     processed = 0
@@ -70,12 +90,16 @@ def process_queue(
         conn.commit()
 
         try:
-            handler(
+            res = handler(
                 recipient=row[1],
                 template_code=row[2],
                 locale=row[3],
                 payload=payload,
             )
+
+            # Raise exception if handler returned False to trigger failure/retry path
+            if res is False:
+                raise RuntimeError("Notification delivery handler returned False")
 
             # Mark as sent
             conn.execute(
@@ -90,6 +114,7 @@ def process_queue(
 
         except Exception as e:
             attempts = row[5] + 1
+            safe_error = _safe_error(e)
 
             if attempts >= max_attempts:
                 # Move to DLQ
@@ -100,7 +125,7 @@ def process_queue(
                             attempts = :attempts, last_error = :err
                         WHERE id = :nid
                     """),
-                    {"attempts": attempts, "err": str(e)[:1000], "nid": notif_id},
+                    {"attempts": attempts, "err": safe_error[:1000], "nid": notif_id},
                 )
                 dlq += 1
             else:
@@ -114,7 +139,7 @@ def process_queue(
                             last_error = :err
                         WHERE id = :nid
                     """),
-                    {"attempts": attempts, "backoff": backoff, "err": str(e)[:1000], "nid": notif_id},
+                    {"attempts": attempts, "backoff": backoff, "err": safe_error[:1000], "nid": notif_id},
                 )
                 failed += 1
 

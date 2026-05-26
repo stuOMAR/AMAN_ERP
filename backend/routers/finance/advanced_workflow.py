@@ -4,13 +4,14 @@ AMAN ERP - Advanced Workflow Engine
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from pydantic import BaseModel
 import logging
 import json
 from datetime import date
+from decimal import Decimal, ROUND_HALF_UP
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -18,6 +19,7 @@ from utils.permissions import require_permission
 from utils.audit import log_activity
 from utils.limiter import limiter
 from utils.fiscal_lock import check_fiscal_period_open
+from utils.tax_precision import require_idempotency_key
 
 router = APIRouter(prefix="/workflow", tags=["Advanced Workflow"])
 logger = logging.getLogger(__name__)
@@ -26,7 +28,7 @@ logger = logging.getLogger(__name__)
 class WorkflowSLAUpdate(BaseModel):
     sla_hours: int = 48
     escalation_to: Optional[int] = None
-    auto_approve_below: Optional[float] = None
+    auto_approve_below: Optional[Decimal] = None
     allow_parallel: bool = False
 
 
@@ -72,8 +74,23 @@ def update_workflow_conditions(
         db.execute(text("""
             UPDATE approval_workflows SET conditions = :conds WHERE id = :id
         """), {"conds": json.dumps(conditions), "id": workflow_id})
+        log_activity(
+            db, user_id=current_user.id, username=current_user.username,
+            action="workflow.conditions_update", resource_type="approval_workflow",
+            resource_id=str(workflow_id),
+            details={"conditions_count": len(conditions or [])},
+            request=request,
+            critical=True,
+        )
         db.commit()
         return {"message": i18n_message("conditions_updated", request)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.error("Workflow conditions update failed")
+        raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
 
@@ -100,13 +117,33 @@ def update_workflow_sla(
             "auto": data.auto_approve_below, "parallel": data.allow_parallel,
             "id": workflow_id
         })
+        log_activity(
+            db, user_id=current_user.id, username=current_user.username,
+            action="workflow.sla_update", resource_type="approval_workflow",
+            resource_id=str(workflow_id),
+            details={
+                "sla_hours": data.sla_hours,
+                "escalation_to": data.escalation_to,
+                "auto_approve_below": str(data.auto_approve_below) if data.auto_approve_below is not None else None,
+                "allow_parallel": data.allow_parallel,
+            },
+            request=request,
+            critical=True,
+        )
         db.commit()
         return {"message": i18n_message("sla_settings_updated", request)}
+    except HTTPException:
+        db.rollback()
+        raise
+    except Exception:
+        db.rollback()
+        logger.error("Workflow SLA update failed")
+        raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
 
 
-@router.post("/check-escalation", dependencies=[Depends(require_permission("approvals.view"))], response_model=Dict[str, Any])
+@router.post("/check-escalation", dependencies=[Depends(require_permission("approvals.edit"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def check_sla_escalations(request: Request, current_user=Depends(get_current_user)):
     """فحص الطلبات المتأخرة وتصعيدها"""
@@ -139,7 +176,8 @@ def check_sla_escalations(request: Request, current_user=Depends(get_current_use
                              details={"escalated_to": r["escalation_to"],
                                       "hours_waiting": round(r["hours_waiting"], 2),
                                       "sla_hours": r["sla_hours"]},
-                             request=request)
+                             request=request,
+                             critical=True)
 
         db.commit()
         return {
@@ -147,9 +185,12 @@ def check_sla_escalations(request: Request, current_user=Depends(get_current_use
             "escalated": escalated,
             "message": i18n_message("escalated_requests", request)
         }
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
-        logger.exception("Internal error")
+        logger.error("Workflow escalation check failed")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -159,6 +200,7 @@ def check_sla_escalations(request: Request, current_user=Depends(get_current_use
 @limiter.limit("100/minute")
 def auto_approve_below_threshold(request: Request, current_user=Depends(get_current_user)):
     """الموافقة التلقائية على الطلبات تحت الحد الأدنى"""
+    require_idempotency_key(request, operation="workflow auto approval")
     db = get_db_connection(current_user.company_id)
     try:
         # Audit F-NEW-012: bulk approval is a dated mutation; reject if
@@ -177,20 +219,24 @@ def auto_approve_below_threshold(request: Request, current_user=Depends(get_curr
             RETURNING ar.id
         """)).fetchall()
 
-        db.commit()
         for approved in auto_approved:
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="workflow.auto_approve", resource_type="approval_request",
                          resource_id=str(approved[0]),
                          details={"reason": "below_threshold"},
-                         request=request)
+                         request=request,
+                         critical=True)
+        db.commit()
         return {
             "auto_approved": len(auto_approved),
             "message": i18n_message("auto_approved_requests", request)
         }
+    except HTTPException:
+        db.rollback()
+        raise
     except Exception:
         db.rollback()
-        logger.exception("Internal error")
+        logger.error("Workflow auto approval failed")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -226,9 +272,55 @@ def workflow_analytics(request: Request, current_user=Depends(get_current_user))
             ORDER BY total DESC
         """)).fetchall()
 
+        summary = dict(stats._mapping) if stats else {}
+        total_requests = int(summary.get("total_requests") or 0)
+        pending = int(summary.get("pending") or 0)
+        approved = int(summary.get("approved") or 0)
+        rejected = int(summary.get("rejected") or 0)
+        escalated = int(summary.get("escalated") or 0)
+        avg_approval_hours = Decimal(str(summary.get("avg_approval_hours") or "0")).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        approval_rate = (
+            (Decimal(approved) * Decimal("100") / Decimal(total_requests)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            if total_requests
+            else Decimal("0.00")
+        )
+        summary.update({
+            "total_requests": total_requests,
+            "pending": pending,
+            "approved": approved,
+            "rejected": rejected,
+            "escalated": escalated,
+            "avg_approval_hours": str(avg_approval_hours),
+            "approval_rate": str(approval_rate),
+        })
+
+        by_document_type = []
+        for row in by_type:
+            item = dict(row._mapping)
+            item["total"] = int(item.get("total") or 0)
+            item["approved"] = int(item.get("approved") or 0)
+            item["rejected"] = int(item.get("rejected") or 0)
+            item["avg_hours"] = str(
+                Decimal(str(item.get("avg_hours") or "0")).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+            )
+            by_document_type.append(item)
+
         return {
-            "summary": dict(stats._mapping) if stats else {},
-            "by_document_type": [dict(r._mapping) for r in by_type]
+            "total_requests": total_requests,
+            "pending": pending,
+            "approved": approved,
+            "rejected": rejected,
+            "escalated": escalated,
+            "avg_approval_hours": str(avg_approval_hours),
+            "approval_rate": str(approval_rate),
+            "summary": summary,
+            "by_document_type": by_document_type,
         }
     finally:
         db.close()

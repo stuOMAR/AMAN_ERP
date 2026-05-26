@@ -1,12 +1,11 @@
-import { useState, useRef, useEffect, useCallback } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useState, useRef, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import { getUser, getCompanyId, logout, hasPermission } from '../utils/auth'
-import { notificationsAPI } from '../utils/api' // New generic API
 import { useTranslation } from 'react-i18next'
 import { useBranch } from '../context/BranchContext'
 import { useTheme } from '../context/ThemeContext'
-import { useNotificationSocket } from '../hooks/useNotificationSocket'
 import GlobalSearch from './GlobalSearch'
+import NotificationCenter from './Notifications/NotificationCenter'
 import './GlobalSearch.css'
 
 function Topbar({ sidebarOpen = false, onToggleSidebar }) {
@@ -16,12 +15,8 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
     const companyId = getCompanyId()
     const navigate = useNavigate()
     const [showMenu, setShowMenu] = useState(false)
-    const [showNotifications, setShowNotifications] = useState(false)
-    const [notifications, setNotifications] = useState([])
-    const [unreadCount, setUnreadCount] = useState(0)
     const [showSearch, setShowSearch] = useState(false)
     const menuRef = useRef(null)
-    const notifRef = useRef(null)
     const branchRef = useRef(null)
     const [showBranchMenu, setShowBranchMenu] = useState(false)
     const { branches, currentBranch, setBranch, displayCurrency } = useBranch()
@@ -40,50 +35,11 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
         return () => document.removeEventListener('keydown', handleKeyDown)
     }, [])
 
-    // Handle incoming WebSocket notification
-    const handleWsNotification = useCallback((notif) => {
-        setNotifications(prev => [notif, ...prev].slice(0, 50))
-        setUnreadCount(prev => prev + 1)
-    }, [])
-
-    // WebSocket connection for real-time notifications
-    const { connected: wsConnected } = useNotificationSocket(
-        user && user.role !== 'system_admin' ? handleWsNotification : null
-    )
-
-    // Initial fetch + fallback polling (only if WS is not connected)
-    useEffect(() => {
-        if (!user || user.role === 'system_admin') return;
-
-        const fetchNotifications = async () => {
-            try {
-                const [notifRes, countRes] = await Promise.all([
-                    notificationsAPI.getAll(),
-                    notificationsAPI.getUnreadCount()
-                ]);
-                setNotifications(notifRes.data);
-                setUnreadCount(countRes.data.count);
-            } catch (err) {
-                console.error("Failed to fetch notifications", err);
-            }
-        };
-        fetchNotifications();
-
-        // Fallback polling only when WebSocket is disconnected (60s interval)
-        if (!wsConnected) {
-            const interval = setInterval(fetchNotifications, 60000);
-            return () => clearInterval(interval);
-        }
-    }, [user?.username, wsConnected]);
-
     // Close menus when clicking outside
     useEffect(() => {
         function handleClickOutside(event) {
             if (menuRef.current && !menuRef.current.contains(event.target)) {
                 setShowMenu(false)
-            }
-            if (notifRef.current && !notifRef.current.contains(event.target)) {
-                setShowNotifications(false)
             }
             if (branchRef.current && !branchRef.current.contains(event.target)) {
                 setShowBranchMenu(false)
@@ -91,43 +47,11 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
         }
         document.addEventListener("mousedown", handleClickOutside)
         return () => document.removeEventListener("mousedown", handleClickOutside)
-    }, [menuRef, notifRef, branchRef])
+    }, [menuRef, branchRef])
 
     const handleLogout = () => {
         logout()
     }
-
-    const handleNotificationClick = async (notif) => {
-        try {
-            if (!notif.is_read) {
-                await notificationsAPI.markRead(notif.id);
-                setUnreadCount(prev => Math.max(0, prev - 1));
-                setNotifications(prev => prev.map(n =>
-                    n.id === notif.id ? { ...n, is_read: true } : n
-                ));
-            }
-            // Navigate based on type
-            // e.g. project_task -> /projects/:id
-            if (notif.resource_type === 'project' || notif.resource_type === 'task') {
-                navigate(`/projects`); // Ideally to specific project if resource_id is project_id
-            } else if (notif.resource_type === 'invoice') {
-                navigate(`/sales/invoices/${notif.resource_id}`);
-            }
-            setShowNotifications(false);
-        } catch (err) {
-            console.error(err);
-        }
-    };
-
-    const handleMarkAllRead = async () => {
-        try {
-            await notificationsAPI.markAllRead();
-            setUnreadCount(0);
-            setNotifications(prev => prev.map(n => ({ ...n, is_read: true })));
-        } catch (err) {
-            console.error("Failed to mark all as read", err);
-        }
-    };
 
     return (
         <header className="topbar" dir="rtl" role="banner">
@@ -316,129 +240,7 @@ function Topbar({ sidebarOpen = false, onToggleSidebar }) {
                 )}
 
                 {/* Notifications Bell */}
-                <div ref={notifRef} style={{ position: 'relative' }}>
-                    <button
-                        onClick={() => setShowNotifications(!showNotifications)}
-                        style={{
-                            background: 'none',
-                            border: 'none',
-                            cursor: 'pointer',
-                            fontSize: '20px',
-                            position: 'relative',
-                            padding: '8px'
-                        }}
-                    >
-                        🔔
-                        {unreadCount > 0 && (
-                            <span style={{
-                                position: 'absolute',
-                                top: '2px',
-                                right: '2px',
-                                background: '#EF4444',
-                                color: 'white',
-                                fontSize: '10px',
-                                fontWeight: 'bold',
-                                borderRadius: '50%',
-                                width: '18px',
-                                height: '18px',
-                                display: 'flex',
-                                alignItems: 'center',
-                                justifyContent: 'center'
-                            }}>
-                                {unreadCount > 9 ? '9+' : unreadCount}
-                            </span>
-                        )}
-                    </button>
-
-                    {showNotifications && (
-                        <div className="dropdown-menu fade-in topbar-notif-dropdown" style={{
-                            position: 'absolute',
-                            top: '45px',
-                            left: '0',
-                            width: '320px',
-                            maxWidth: 'calc(100vw - 32px)',
-                            maxHeight: '400px',
-                            overflowY: 'auto',
-                            background: 'var(--bg-card)',
-                            borderRadius: '12px',
-                            boxShadow: '0 10px 40px rgba(0,0,0,0.15)',
-                            border: '1px solid var(--border-color)',
-                            zIndex: 200,
-                        }}>
-                            <div style={{
-                                padding: '12px 16px',
-                                borderBottom: '1px solid var(--border-color)',
-                                display: 'flex',
-                                justifyContent: 'space-between',
-                                alignItems: 'center'
-                            }}>
-                                <span style={{ fontWeight: '700', fontSize: '15px' }}>🔔 {t('common.notifications_panel.title')}</span>
-                                {unreadCount > 0 && (
-                                    <button
-                                        onClick={handleMarkAllRead}
-                                        style={{
-                                            background: 'none',
-                                            border: 'none',
-                                            color: 'var(--primary)',
-                                            fontSize: '12px',
-                                            cursor: 'pointer'
-                                        }}
-                                    >
-                                        {t('common.notifications_panel.mark_read')}
-                                    </button>
-                                )}
-                            </div>
-
-                            {notifications.length === 0 ? (
-                                <div style={{ padding: '32px', textAlign: 'center', color: 'var(--text-muted)' }}>
-                                    <div style={{ fontSize: '32px', marginBottom: '8px', opacity: 0.5 }}>📭</div>
-                                    {t('common.notifications_panel.empty')}
-                                </div>
-                            ) : (
-                                notifications.map(notif => (
-                                    <div
-                                        key={notif.id}
-                                        onClick={() => handleNotificationClick(notif)}
-                                        style={{
-                                            padding: '12px 16px',
-                                            borderBottom: '1px solid var(--border-color)',
-                                            cursor: 'pointer',
-                                            background: notif.is_read ? 'var(--bg-card)' : 'var(--bg-hover)',
-                                            transition: 'background 0.2s'
-                                        }}
-                                        onMouseEnter={e => e.currentTarget.style.background = 'var(--bg-hover)'}
-                                        onMouseLeave={e => e.currentTarget.style.background = notif.is_read ? 'var(--bg-card)' : 'var(--bg-hover)'}
-                                    >
-                                        <div style={{ fontWeight: notif.is_read ? '400' : '600', fontSize: '13px', marginBottom: '4px' }}>
-                                            {notif.title}
-                                        </div>
-                                        <div style={{ fontSize: '12px', color: 'var(--text-muted)', marginBottom: '4px' }}>
-                                            {notif.message}
-                                        </div>
-                                        <div style={{ fontSize: '10px', color: 'var(--text-muted)' }}>
-                                            {new Date(notif.created_at).toLocaleDateString(i18n.language === 'ar' ? 'ar-SA' : 'en-US')}
-                                        </div>
-                                    </div>
-                                ))
-                            )}
-
-                            <Link
-                                to="/stock/shipments/incoming"
-                                style={{
-                                    display: 'block',
-                                    padding: '12px 16px',
-                                    textAlign: 'center',
-                                    color: 'var(--primary)',
-                                    fontSize: '13px',
-                                    textDecoration: 'none'
-                                }}
-                                onClick={() => setShowNotifications(false)}
-                            >
-                                {t('common.notifications_panel.view_incoming')}
-                            </Link>
-                        </div>
-                    )}
-                </div>
+                {user && user.role !== 'system_admin' && <NotificationCenter />}
 
                 {/* User Menu */}
                 <div className="topbar-actions" ref={menuRef} style={userMenuDockStyle}>

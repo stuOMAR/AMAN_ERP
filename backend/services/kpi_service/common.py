@@ -1,7 +1,7 @@
 """kpi_service.common — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
 from datetime import date, timedelta
-from typing import Any, Optional, Sequence, Tuple
+from typing import Any, Optional, Tuple
 import logging
 
 logger = logging.getLogger(__name__)

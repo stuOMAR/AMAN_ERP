@@ -7,11 +7,11 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from database import get_db_connection
 from routers.auth import get_current_user, UserResponse
-from utils.permissions import require_permission, require_sensitive_permission
+from utils.permissions import require_sensitive_permission
 from schemas.settings import SettingsUpdateRequest
 from utils.audit import log_activity
 from utils.cache import cache
@@ -303,7 +303,7 @@ def get_company_settings(request: Request,
 
         return settings_dict
     except Exception:
-        logger.exception("Operation failed")
+        logger.error("Settings read failed")
         return {} 
     finally:
         db.close()
@@ -393,6 +393,12 @@ def update_settings_bulk(
                 text("INSERT INTO company_settings (setting_key, setting_value) VALUES (:key, :value) ON CONFLICT (setting_key) DO UPDATE SET setting_value = :value, updated_at = CURRENT_TIMESTAMP"),
                 {"key": key, "value": value_str}
             )
+
+        log_activity(db, current_user.id, current_user.username, "configure",
+                     resource_type="settings",
+                     details={"keys_updated": list(request.settings.keys())},
+                     request=req,
+                     critical=True)
         
         db.commit()
         
@@ -404,21 +410,13 @@ def update_settings_bulk(
                 # normalize_industry_key is called inside seed_industry_coa
                 coa_result = seed_industry_coa(db, industry_key, replace_existing=False)
                 logger.info(f"📊 COA seeded for industry '{industry_key}': {coa_result}")
-            except Exception as coa_err:
-                logger.warning(f"⚠️ COA seeding skipped: {coa_err}")
+                db.commit()
+            except Exception:
+                db.rollback()
+                logger.warning("COA seeding skipped after settings update")
         
         # Invalidate cache
         cache.delete(f"company_settings:{company_id}")
-        
-        # Audit log
-        try:
-            log_activity(db, current_user.id, current_user.username, "configure",
-                         resource_type="settings",
-                         details={"keys_updated": list(request.settings.keys())},
-                         request=req)
-            db.commit()
-        except Exception:
-            logger.warning("Failed to write settings update audit log")
         
         return {"success": True, "message": i18n_message("settings_updated_success", request)}
 
@@ -427,7 +425,7 @@ def update_settings_bulk(
         raise
     except Exception:
         db.rollback()
-        logger.exception("Internal error")
+        logger.error("Settings bulk update failed")
         raise HTTPException(**http_error(500, "internal_error"))
     finally:
         db.close()
@@ -486,4 +484,3 @@ def generate_csid(
         "message": i18n_message("csid_generated", request), 
         "csid": f"CSID-{random.randint(1000,9999)}-{common_name}"
     }
-

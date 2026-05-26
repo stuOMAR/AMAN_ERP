@@ -11,34 +11,38 @@ from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache, cached
-from database import get_db_connection
+from utils.cache import cached
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
 from utils.permissions import (
     branch_scope_filter_from_scope,
     require_permission,
-    require_module,
     resolve_branch_scope,
     validate_branch_access,
-    validate_treasury_account_access,
 )
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
+from utils.accounting import get_mapped_account_id
 from utils.fiscal_lock import check_fiscal_period_open
-from utils.party_balance import update_party_site_balance
 from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
-from utils.tax_precision import require_idempotency_key
+from utils.tax_precision import money_str, require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
-from services.tax_engine import resolve_line_tax
+from services.tax_engine import resolve_line_tax_group
 from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
-    SupplierPaymentCreate,
+    POCreate, POReceiveRequest,
 )
 
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
+
+
+def _resolve_purchase_line_tax(db, branch_id: int, product_id: int, document_date, party_id: int) -> dict:
+    taxes = resolve_line_tax_group(branch_id, product_id, db, document_date, customer_id=party_id)
+    tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+    return {
+        "tax_rate_id": taxes[0]["tax_rate_id"] if len(taxes) == 1 else None,
+        "tax_rate": tax_rate,
+    }
 
 
 @router.get("/orders", dependencies=[Depends(require_permission("buying.view"))], response_model=List[dict])
@@ -121,6 +125,45 @@ def get_purchase_order(
             ORDER BY je.entry_date DESC
         """), {"ref": po.po_number, "desc_ref": f"%{po.po_number}%"}).fetchall()
         
+        items = []
+        has_remaining_to_receive = False
+        has_remaining_to_invoice = False
+        received_value = Decimal("0")
+        for line in lines:
+            qty = _dec(line.quantity or 0)
+            received_qty = _dec(line.received_quantity or 0)
+            invoiced_qty = _dec(getattr(line, "invoiced_quantity", 0) or 0)
+            remaining_to_receive = max(Decimal("0"), qty - received_qty)
+            remaining_to_invoice = max(Decimal("0"), received_qty - invoiced_qty)
+            line_has_received = received_qty > Decimal("0")
+            line_has_remaining_to_receive = remaining_to_receive > Decimal("0")
+            line_has_remaining_to_invoice = remaining_to_invoice > Decimal("0")
+            has_remaining_to_receive = has_remaining_to_receive or line_has_remaining_to_receive
+            has_remaining_to_invoice = has_remaining_to_invoice or line_has_remaining_to_invoice
+            received_value += (received_qty * _dec(line.unit_price or 0)).quantize(_D2, ROUND_HALF_UP)
+            items.append({
+                "id": line.id,
+                "product_id": line.product_id,
+                "product_name": line.product_name or line.description,
+                "product_code": line.product_code,
+                "description": line.description,
+                "quantity": line.quantity,
+                "unit_price": line.unit_price,
+                "tax_rate": line.tax_rate,
+                "discount": line.discount,
+                "total": line.total,
+                "received_quantity": line.received_quantity,
+                "invoiced_quantity": getattr(line, 'invoiced_quantity', 0) or 0,
+                "remaining_to_receive": str(remaining_to_receive),
+                "remaining_to_invoice": str(remaining_to_invoice),
+                "has_received": line_has_received,
+                "has_remaining_to_receive": line_has_remaining_to_receive,
+                "has_remaining_to_invoice": line_has_remaining_to_invoice,
+                "can_receive": line_has_remaining_to_receive,
+                "can_invoice": line_has_remaining_to_invoice,
+                "default_receive_quantity": str(remaining_to_receive) if line_has_remaining_to_receive else "0",
+            })
+
         po_data = {
             "id": po.id,
             "po_number": po.po_number,
@@ -138,21 +181,11 @@ def get_purchase_order(
             "notes": po.notes,
             "currency": po.currency,
             "exchange_rate": po.exchange_rate,
-            "items": [{
-                "id": l.id,
-                "product_id": l.product_id,
-                "product_name": l.product_name or l.description,
-                "product_code": l.product_code,
-                "description": l.description,
-                "quantity": l.quantity,
-                "unit_price": l.unit_price,
-                "tax_rate": l.tax_rate,
-                "discount": l.discount,
-                "total": l.total,
-                "received_quantity": l.received_quantity,
-                "invoiced_quantity": getattr(l, 'invoiced_quantity', 0) or 0,
-                "remaining_to_invoice": str(max(Decimal('0'), _dec(l.received_quantity or 0) - _dec(getattr(l, 'invoiced_quantity', 0) or 0)))
-            } for l in lines],
+            "received_value": money_str(received_value),
+            "has_received_value": received_value > _D2,
+            "has_remaining_to_receive": has_remaining_to_receive,
+            "has_remaining_to_invoice": has_remaining_to_invoice,
+            "items": items,
             "related_documents": {
                 "journal_entries": [{
                     "id": j.id,
@@ -216,7 +249,9 @@ def create_purchase_order(
                 if line_discount > line_total_gross:
                     raise HTTPException(status_code=400, detail=i18n_message("discount_exceeds_line", request))
     
-                tax_info = resolve_line_tax(validated_branch_id, item.product_id, db, po.order_date, customer_id=po.supplier_id)
+                if not item.product_id:
+                    raise HTTPException(**http_error(400, "product_required", request))
+                tax_info = _resolve_purchase_line_tax(db, validated_branch_id, item.product_id, po.order_date, po.supplier_id)
                 la = compute_line_amounts(
                     item.quantity,
                     item.unit_price,
@@ -259,6 +294,11 @@ def create_purchase_order(
             total_tax = totals["total_tax"]
             total_discount = totals["total_discount"]
             grand_total = totals["grand_total"]
+
+            # Strict validation: compare client-submitted grand total with authoritative backend grand total
+            if po.submitted_grand_total is not None:
+                if abs(grand_total - po.submitted_grand_total) > _D2:
+                    raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
             
             # Insert PO Header
             result = db.execute(text("""
@@ -571,8 +611,6 @@ def receive_purchase_order(
             lines_map = {line.id: line for line in lines}
             
             # Process received items
-            total_received = 0
-            total_expected = 0
             receipt_details = []
             receipt_value_base = Decimal('0')
             user_id = int(current_user.get("id") if isinstance(current_user, dict) else current_user.id)
@@ -1201,7 +1239,7 @@ def create_agreement(data: dict, request: Request, current_user=Depends(get_curr
         try:
             import uuid
             agr_num = f"PA-{uuid.uuid4().hex[:8].upper()}"
-            total = sum((_dec(l.get("unit_price", 0)) * _dec(l.get("quantity", 0))) for l in data.get("lines", []))
+            total = sum((_dec(line.get("unit_price", 0)) * _dec(line.get("quantity", 0))) for line in data.get("lines", []))
             total = total.quantize(_D2, ROUND_HALF_UP)
             agr = db.execute(text("""
                 INSERT INTO purchase_agreements (agreement_number, supplier_id, agreement_type, title,
@@ -1274,6 +1312,5 @@ def create_call_off(agr_id: int, data: dict, request: Request, current_user=Depe
 # Blanket Purchase Orders (US10)
 # =====================================================================
 
-from schemas.blanket_po import BlanketPOCreate, ReleaseOrderCreate, PriceAmendRequest
 
 BLANKET_PO_STATUSES = {"draft", "active", "expired", "completed", "cancelled"}

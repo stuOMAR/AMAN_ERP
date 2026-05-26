@@ -21,6 +21,7 @@ const ProfitabilityReport = () => {
         return d.toISOString().split('T')[0];
     });
     const [endDate, setEndDate] = useState(() => new Date().toISOString().split('T')[0]);
+    const directionColor = (direction) => direction === 'negative' ? 'var(--danger)' : 'var(--success)';
 
     useEffect(() => {
         const timer = setTimeout(() => {
@@ -123,7 +124,7 @@ const ProfitabilityReport = () => {
                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                             {t('stock.profitability.gross_profit', 'الربح الإجمالي')}
                         </div>
-                        <div style={{ fontSize: '24px', fontWeight: '700', color: summary.gross_profit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        <div style={{ fontSize: '24px', fontWeight: '700', color: directionColor(summary.gross_profit_direction) }}>
                             {formatNumber(summary.gross_profit)} {displayCurrency}
                         </div>
                     </div>
@@ -131,7 +132,7 @@ const ProfitabilityReport = () => {
                         <div style={{ fontSize: '12px', color: 'var(--text-secondary)', marginBottom: '8px' }}>
                             {t('stock.profitability.margin', 'هامش الربح')}
                         </div>
-                        <div style={{ fontSize: '24px', fontWeight: '700', color: summary.margin_pct >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                        <div style={{ fontSize: '24px', fontWeight: '700', color: directionColor(summary.margin_direction) }}>
                             {summary.margin_pct}%
                         </div>
                     </div>
@@ -177,14 +178,14 @@ const ProfitabilityReport = () => {
                                         <td style={{
                                             textAlign: 'right',
                                             fontWeight: '700',
-                                            color: item.gross_profit >= 0 ? 'var(--success)' : 'var(--danger)'
+                                            color: directionColor(item.gross_profit_direction)
                                         }}>
                                             {formatNumber(item.gross_profit)} {displayCurrency}
                                         </td>
                                         <td style={{
                                             textAlign: 'right',
                                             fontWeight: '600',
-                                            color: item.margin_pct >= 0 ? 'var(--success)' : 'var(--danger)'
+                                            color: directionColor(item.margin_direction)
                                         }}>
                                             {item.margin_pct}%
                                         </td>
@@ -197,10 +198,10 @@ const ProfitabilityReport = () => {
                                     <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.sold_qty || 0)}</td>
                                     <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.revenue)} {displayCurrency}</td>
                                     <td style={{ textAlign: 'right' }}>{formatNumber(data.totals?.cogs)} {displayCurrency}</td>
-                                    <td style={{ textAlign: 'right', color: data.totals?.gross_profit >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                    <td style={{ textAlign: 'right', color: directionColor(data.totals?.gross_profit_direction) }}>
                                         {formatNumber(data.totals?.gross_profit)} {displayCurrency}
                                     </td>
-                                    <td style={{ textAlign: 'right', color: data.totals?.margin_pct >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                    <td style={{ textAlign: 'right', color: directionColor(data.totals?.margin_direction) }}>
                                         {data.totals?.margin_pct}%
                                     </td>
                                 </tr>

@@ -7,7 +7,6 @@ import '../../components/ModuleStyles.css';
 import { useToast } from '../../context/ToastContext';
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
-import Decimal from 'decimal.js';
 
 function PurchaseOrderReceive() {
     const { t } = useTranslation();
@@ -22,6 +21,11 @@ function PurchaseOrderReceive() {
     const [submitting, setSubmitting] = useState(false);
     const [selectedWarehouse, setSelectedWarehouse] = useState('');
     const [receiveQtys, setReceiveQtys] = useState({});
+
+    const isBlankOrZeroQuantity = (value) => {
+        const normalized = String(value || '').trim();
+        return !normalized || /^0*(?:\.0*)?$/.test(normalized);
+    };
 
 
     useEffect(() => {
@@ -43,11 +47,9 @@ function PurchaseOrderReceive() {
             const warehousesRes = await inventoryAPI.listWarehouses({ branch_id: branchId });
             setWarehouses(warehousesRes.data || []);
 
-            // Initialize receive quantities
             const initialQtys = {};
             orderRes.data.items?.forEach(item => {
-                const remaining = new Decimal(item.quantity || 0).minus(item.received_quantity || 0);
-                initialQtys[item.id] = remaining.gt(0) ? remaining.toString() : '0';
+                initialQtys[item.id] = item.default_receive_quantity || '0';
             });
             setReceiveQtys(initialQtys);
         } catch (err) {
@@ -65,15 +67,13 @@ function PurchaseOrderReceive() {
             return;
         }
 
-        try {
-            const val = new Decimal(value);
-            setReceiveQtys(prev => ({
-                ...prev,
-                [itemId]: val.toString()
-            }));
-        } catch {
+        if (!/^\d*(?:\.\d*)?$/.test(value)) {
             return;
         }
+        setReceiveQtys(prev => ({
+            ...prev,
+            [itemId]: value
+        }));
     };
 
     const handleSubmit = async (e) => {
@@ -86,19 +86,11 @@ function PurchaseOrderReceive() {
 
         const itemsToReceive = [];
         for (const [lineId, qty] of Object.entries(receiveQtys)) {
-            const numericQty = new Decimal(qty || 0);
-            if (numericQty.gt(0)) {
-                const item = order.items?.find(i => i.id === parseInt(lineId));
-                const remaining = item ? new Decimal(item.quantity || 0).minus(item.received_quantity || 0) : new Decimal(0);
-
-                if (numericQty.gt(remaining)) {
-                    showToast(`${t('common.error')}: ${t('buying.receive.qty_to_receive')} (${numericQty.toString()}) > ${t('buying.orders.item.qty_remaining')} (${remaining.toString()}) - ${item?.product_name}`, 'error');
-                    return;
-                }
-
+            const item = order.items?.find(i => i.id === parseInt(lineId));
+            if (item?.can_receive && !isBlankOrZeroQuantity(qty)) {
                 itemsToReceive.push({
                     line_id: parseInt(lineId),
-                    received_quantity: numericQty.toString()
+                    received_quantity: String(qty)
                 });
             }
         }
@@ -125,8 +117,7 @@ function PurchaseOrderReceive() {
     const handleReceiveAll = () => {
         const allQtys = {};
         order.items?.forEach(item => {
-            const remaining = item.quantity - (item.received_quantity || 0);
-            allQtys[item.id] = remaining > 0 ? remaining : 0;
+            allQtys[item.id] = item.default_receive_quantity || '0';
         });
         setReceiveQtys(allQtys);
     };
@@ -195,7 +186,9 @@ function PurchaseOrderReceive() {
                         <tbody>
                             {order.items?.map((item) => {
                                 const received = item.received_quantity || 0;
-                                const remaining = item.quantity - received;
+                                const remaining = item.remaining_to_receive || '0';
+                                const hasReceived = Boolean(item.has_received);
+                                const hasRemaining = Boolean(item.has_remaining_to_receive);
                                 const receiveQty = receiveQtys[item.id] || 0;
 
                                 return (
@@ -204,21 +197,21 @@ function PurchaseOrderReceive() {
                                             <div style={{ fontWeight: '500' }}>{item.product_name || item.description}</div>
                                         </td>
                                         <td style={{ textAlign: 'center' }}>{item.quantity}</td>
-                                        <td style={{ textAlign: 'center', color: received > 0 ? 'var(--success)' : 'var(--text-muted)' }}>
+                                        <td style={{ textAlign: 'center', color: hasReceived ? 'var(--success)' : 'var(--text-muted)' }}>
                                             {received}
                                         </td>
-                                        <td style={{ textAlign: 'center', color: remaining > 0 ? 'var(--warning)' : 'var(--success)' }}>
+                                        <td style={{ textAlign: 'center', color: hasRemaining ? 'var(--warning)' : 'var(--success)' }}>
                                             {remaining}
                                         </td>
                                         <td>
                                             <input
                                                 type="number"
                                                 className="form-input"
-                                                style={{ textAlign: 'center', width: '100%', backgroundColor: remaining <= 0 ? '#f3f4f6' : '#fff' }}
+                                                style={{ textAlign: 'center', width: '100%', backgroundColor: !hasRemaining ? '#f3f4f6' : '#fff' }}
                                                 min="0"
                                                 value={receiveQty}
                                                 onChange={(e) => handleQtyChange(item.id, e.target.value)}
-                                                disabled={remaining <= 0}
+                                                disabled={!hasRemaining}
                                                 placeholder="0"
                                             />
                                         </td>

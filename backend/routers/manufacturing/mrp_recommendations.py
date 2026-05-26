@@ -9,24 +9,48 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy.orm import Session
 from typing import Optional
 
-from database import get_db
+from database import get_company_db
+from routers.auth import get_current_user
+from schemas import UserResponse
+from utils.i18n import http_error
+from utils.permissions import require_module, require_permission
 
-router = APIRouter(prefix="/manufacturing/mrp", tags=["manufacturing"])
+router = APIRouter(
+    prefix="/manufacturing/mrp",
+    tags=["manufacturing"],
+    dependencies=[Depends(require_module("manufacturing"))],
+)
 
 
-@router.get("/recommendations")
+def get_db(current_user: UserResponse = Depends(get_current_user)):
+    yield from get_company_db(current_user.company_id)
+
+
+def _actor(current_user: UserResponse) -> dict:
+    return {
+        "id": current_user.id,
+        "user_id": current_user.id,
+        "username": current_user.username,
+        "role": current_user.role,
+        "company_id": current_user.company_id,
+        "tenant_id": current_user.company_id,
+        "permissions": current_user.permissions or [],
+    }
+
+
+@router.get("/recommendations", dependencies=[Depends(require_permission("manufacturing.view"))])
 async def list_recommendations(
     request: Request,
     run_id: Optional[str] = Query(None),
     state: Optional[str] = Query(None),
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=100),
     offset: int = Query(0),
+    current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from utils.permissions import get_current_user
     from sqlalchemy import text
 
-    user = get_current_user(request)
+    user = _actor(current_user)
     tid = user.get("tenant_id", 0)
 
     conditions = ["tenant_id = :tid"]
@@ -47,16 +71,16 @@ async def list_recommendations(
     return [dict(r._mapping) for r in rows]
 
 
-@router.post("/recommendations/{rec_id}/accept")
+@router.post("/recommendations/{rec_id}/accept", dependencies=[Depends(require_permission("manufacturing.manage"))])
 async def accept_recommendation(
     rec_id: int,
     request: Request,
+    current_user: UserResponse = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    from utils.permissions import get_current_user
     from sqlalchemy import text
 
-    user = get_current_user(request)
+    user = _actor(current_user)
     tid = user.get("tenant_id", 0)
 
     result = db.execute(

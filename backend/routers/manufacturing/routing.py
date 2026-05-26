@@ -11,7 +11,7 @@ Endpoints:
 import logging
 from decimal import Decimal
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from sqlalchemy import text
 
 from database import get_db_connection
@@ -19,6 +19,7 @@ from routers.auth import get_current_user
 from schemas.routing import RoutingCreate
 from utils.audit import log_activity
 from utils.permissions import require_permission
+from utils.i18n import http_error
 
 logger = logging.getLogger(__name__)
 routing_router = APIRouter(prefix="/manufacturing/routing", tags=["Manufacturing Routing"])
@@ -300,7 +301,7 @@ def update_routing(
 )
 def get_routing_estimate(request: Request, 
     routing_id: int,
-    quantity: float = 1.0,
+    quantity: Decimal = Query(Decimal("1"), description="Production quantity"),
     current_user: dict = Depends(get_current_user),
 ):
     """Calculate total estimated time and labor cost for a routing at a given qty.

@@ -10,6 +10,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from services.audit_sanitizer import sanitize_for_audit
+
 logger = logging.getLogger(__name__)
 
 
@@ -27,15 +29,17 @@ def dispatch(
 
     Returns the outbox row id, or None if no subscribers.
     """
-    # Find active subscriptions for this event
+    # Find active subscriptions for this event. The public admin UI stores
+    # webhook subscriptions in the legacy `webhooks` table; the dispatcher
+    # queues deliveries into the canonical outbox.
     subs = db.execute(
         text("""
-            SELECT id, url, secret FROM webhook_subscriptions
-            WHERE tenant_id = :tid
-              AND :event = ANY(events)
-              AND is_active = true
+            SELECT id, url, secret
+              FROM webhooks
+             WHERE is_active = true
+               AND events @> CAST(:event_json AS JSONB)
         """),
-        {"tid": tenant_id, "event": event},
+        {"event_json": json.dumps([event])},
     ).fetchall()
 
     if not subs:
@@ -44,14 +48,25 @@ def dispatch(
     outbox_id = None
     for sub in subs:
         try:
+            safe_payload = sanitize_for_audit(payload or {}, context="webhook_dispatch")
+            payload_json = json.dumps(safe_payload, default=str, sort_keys=True)
             result = db.execute(
                 text("""
                     INSERT INTO webhook_outbox (
-                        tenant_id, subscription_id, event, payload,
-                        state, attempts, created_at, updated_at
-                    ) VALUES (
-                        :tid, :sub_id, :event, :payload,
-                        'pending', 0, clock_timestamp(), clock_timestamp()
+                        tenant_id, webhook_id, event, payload,
+                        state, attempts, next_attempt_at, created_at, updated_at
+                    )
+                    SELECT
+                        :tid, :sub_id, :event, CAST(:payload AS JSONB),
+                        'pending', 0, clock_timestamp(), clock_timestamp(), clock_timestamp()
+                    WHERE NOT EXISTS (
+                        SELECT 1
+                          FROM webhook_outbox
+                         WHERE tenant_id = :tid
+                           AND webhook_id = :sub_id
+                           AND event = :event
+                           AND payload = CAST(:payload AS JSONB)
+                           AND state IN ('pending', 'processing', 'sent')
                     )
                     RETURNING id
                 """),
@@ -59,13 +74,13 @@ def dispatch(
                     "tid": tenant_id,
                     "sub_id": sub.id,
                     "event": event,
-                    "payload": json.dumps(payload),
+                    "payload": payload_json,
                 },
             )
             row = result.fetchone()
             if row:
                 outbox_id = row.id
-        except Exception as e:
-            logger.warning(f"webhook dispatch: failed for sub={sub.id}: {e}")
+        except Exception:
+            logger.warning("webhook dispatch failed for subscription %s", sub.id)
 
     return outbox_id

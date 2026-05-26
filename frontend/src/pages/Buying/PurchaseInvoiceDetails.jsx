@@ -9,7 +9,6 @@ import { formatNumber } from '../../utils/format'
 import { Printer, ArrowLeft, CreditCard, Clock, CheckCircle, AlertCircle, FileText, User } from 'lucide-react'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
-import Decimal from 'decimal.js'
 
 function PurchaseInvoiceDetails() {
     const { t } = useTranslation()
@@ -141,9 +140,9 @@ function PurchaseInvoiceDetails() {
                                     <td style={{ textAlign: 'center' }} className="font-mono">{formatNumber(item.quantity, 0)}</td>
                                     <td style={{ textAlign: 'left' }} className="font-mono">
                                         {formatNumber(item.unit_price)} <small>{invoice.currency || currency}</small>
-                                        {invoice.currency && invoice.currency !== currency && (
+                                        {invoice.currency && invoice.currency !== currency && item.unit_price_base != null && (
                                             <div className="text-muted" style={{ fontSize: '11px' }}>
-                                                ≈ {formatNumber(new Decimal(item.unit_price || 0).times(invoice.exchange_rate || 1).toString())} {currency}
+                                                ≈ {formatNumber(item.unit_price_base)} {invoice.base_currency || currency}
                                             </div>
                                         )}
                                     </td>
@@ -197,10 +196,10 @@ function PurchaseInvoiceDetails() {
                             <span>{formatNumber(invoice.total)} <small>{invoice.currency || currency}</small></span>
                         </div>
 
-                        {invoice.currency && invoice.currency !== currency && (
+                        {invoice.currency && invoice.currency !== currency && invoice.total_base != null && (
                             <div className="mt-2 text-end">
                                 <small className="text-muted">
-                                    ≈ {formatNumber(new Decimal(invoice.total || 0).times(invoice.exchange_rate || 1).toString())} {currency}
+                                    ≈ {formatNumber(invoice.total_base)} {invoice.base_currency || currency}
                                 </small>
                             </div>
                         )}
@@ -211,16 +210,16 @@ function PurchaseInvoiceDetails() {
                                     <span style={{ fontSize: '14px' }}>{t('buying.purchase_invoices.details.paid_amount')}</span>
                                     <span className="font-medium">-{formatNumber(invoice.paid_amount)} <small>{invoice.currency || currency}</small></span>
                                 </div>
-                                {invoice.currency && invoice.currency !== currency && (
+                                {invoice.currency && invoice.currency !== currency && invoice.paid_amount_base != null && (
                                     <div className="text-end">
                                         <small className="text-success" style={{ opacity: 0.8 }}>
-                                            ≈ {formatNumber(new Decimal(invoice.paid_amount || 0).times(invoice.exchange_rate || 1).toString(), 2)} {currency}
+                                            ≈ {formatNumber(invoice.paid_amount_base)} {invoice.base_currency || currency}
                                         </small>
                                     </div>
                                 )}
                                 <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '8px', fontWeight: 'bold' }}>
                                     <span style={{ fontSize: '14px' }}>{t('buying.purchase_invoices.details.remaining_debt')}</span>
-                                    <span>{formatNumber(new Decimal(invoice.total || 0).minus(invoice.paid_amount || 0).toString())} <small>{invoice.currency || currency}</small></span>
+                                    <span>{formatNumber(invoice.remaining_balance)} <small>{invoice.currency || currency}</small></span>
                                 </div>
                             </>
                         )}

@@ -157,8 +157,8 @@ from .domain_models.finance_currency_transactions import CurrencyTransaction
 from .domain_models.security_admin_reporting import DocumentTemplate, DocumentType, FinancialReport
 from .domain_models.manufacturing_bom_capacity import BomComponent, CapacityPlan
 from .domain_models.shared_dashboard_fiscal_intercompany import (
-    AnalyticsDashboard,
-    AnalyticsDashboardWidget,
+    AnalyticsDashboard,  # noqa: F401
+    AnalyticsDashboardWidget,  # noqa: F401
     DashboardLayout,
     FiscalPeriod,
     GosiSetting,
@@ -267,7 +267,7 @@ from .domain_models.inventory_costing import CostLayer, CostLayerConsumption
 from .domain_models.matching import MatchTolerance, ThreeWayMatch, ThreeWayMatchLine
 from .domain_models.self_service import SelfServiceRequest
 from .domain_models.sso import SsoConfiguration, SsoGroupRoleMapping, SsoFallbackAdmin
-from .domain_models.mobile_sync import SyncQueue
+from .domain_models.mobile_sync import SyncQueue  # noqa: F401
 from .domain_models.finance_subscriptions import SubscriptionPlan, SubscriptionEnrollment, SubscriptionInvoice
 from .domain_models.demand_forecast import DemandForecast, DemandForecastPeriod
 

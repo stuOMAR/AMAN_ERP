@@ -4,25 +4,18 @@ This file is auto-generated when purchases.py was split. Endpoints here
 are mounted under the parent /buying prefix via purchases/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope
-from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope
 from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
-    SupplierPaymentCreate,
+    SupplierGroupCreate,
 )
 
 _D2 = Decimal("0.01")
@@ -301,7 +294,6 @@ def get_supplier_transactions(id: int, branch_id: Optional[int] = None, current_
         # 4. Get basic info for header - using party_site_balances
         supplier = db.execute(text("SELECT name as supplier_name, currency FROM parties WHERE id = :id"), {"id": id}).fetchone()
         
-        supplier_currency = supplier.currency if supplier and supplier.currency else base_currency
         
         # Compute balance from party_site_balances
         if branch_id:

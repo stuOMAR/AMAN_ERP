@@ -11,18 +11,15 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import text
-from typing import Optional
 
 from database import get_db_connection
-from schemas.hr import EmployeePiiOut
 from services.hr.pii import (
     PII_FIELDS,
-    decrypt_pii,
     encrypt_pii,
     mask_employee_dict,
-    unmask_field,
 )
 from services.permissions.sensitive import require_sensitive_permission
+from utils.i18n import http_error, i18n_message
 
 router = APIRouter(prefix="/api/hr/employees", tags=["HR PII"])
 

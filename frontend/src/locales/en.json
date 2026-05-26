@@ -676,6 +676,7 @@
     "updated_successfully": "Updated successfully",
     "upload": "Upload",
     "upload_error": "Upload failed",
+    "download_error": "Download failed",
     "account_code": "Account Code",
     "account_name": "Account Name",
     "all_branches": "All Branches",
@@ -813,6 +814,7 @@
     "taxes": "Taxes",
     "approvals": "Approvals",
     "dataImport": "Data Import",
+    "dms": "Document Management",
     "sales_orders": "Sales Orders",
     "quotations": "Quotations",
     "customer_groups": "Customer Groups",
@@ -6056,6 +6058,7 @@
       "webhooks": "Manage external webhook endpoints",
       "branches": "Manage company branches and locations",
       "data_import": "Import customers, products, and accounts from Excel",
+      "dms": "Monitor storage quotas, scan state, and quarantined documents",
       "modules": "Enable or disable modules based on business type",
       "audit_logs": "Review and track all system operations",
       "roles": "Manage roles and permissions"
@@ -8563,6 +8566,8 @@
     "preview": "Preview & Validation",
     "accounts": "Chart of Accounts",
     "parties": "Parties (Customers/Suppliers)",
+    "customers": "Customers",
+    "suppliers": "Suppliers",
     "products": "Products",
     "employees": "Employees",
     "import_new": "New Import",
@@ -8587,6 +8592,8 @@
     "targets": {
       "chart_of_accounts": "Chart of Accounts",
       "parties": "Parties (Customers/Suppliers)",
+      "customers": "Customers",
+      "suppliers": "Suppliers",
       "products": "Products",
       "employees": "Employees"
     },
@@ -9686,6 +9693,8 @@
     "gross_amount": "Gross Amount",
     "net_amount": "Net Amount",
     "wht_amount": "WHT Amount",
+    "supplier_id": "Supplier ID",
+    "payment_id": "Payment ID",
     "select_rate": "Select WHT Rate",
     "calculate_btn": "Calculate",
     "calculating": "Calculating...",
@@ -9808,6 +9817,7 @@
     "col_filename": "File Name",
     "col_size": "Size",
     "col_version": "Version",
+    "col_status": "Status",
     "col_access": "Access Level",
     "col_uploaded_by": "Uploaded By",
     "col_date": "Date"
@@ -9830,6 +9840,7 @@
     "create_invoice": "Create Invoice",
     "from_sales_order": "From Sales Order",
     "manual_entry": "Manual Entry",
+    "ordered_qty": "Ordered Qty",
     "created_success": "Delivery order created successfully",
     "status_draft": "Draft",
     "status_confirmed": "Confirmed",
@@ -11966,6 +11977,29 @@
     }
   },
   "dms": {
+    "admin": {
+      "title": "Document Management",
+      "subtitle": "Storage, scan state, and quarantine",
+      "recalculate": "Recalculate",
+      "recalculated": "Storage usage recalculated"
+    },
+    "stats": {
+      "total": "Total",
+      "clean": "Clean",
+      "pending_scan": "Pending Scan",
+      "quarantined": "Quarantined"
+    },
+    "status": {
+      "clean": "Clean",
+      "pending_scan": "Pending scan",
+      "quarantined": "Quarantined",
+      "unknown": "Unknown"
+    },
+    "errors": {
+      "load_failed": "Failed to load DMS data",
+      "release_failed": "Failed to release document",
+      "recalculate_failed": "Failed to recalculate storage"
+    },
     "quota_meter": {
       "loading": "Loading quota...",
       "title": "Storage Quota",
@@ -11977,6 +12011,8 @@
       "loading": "Loading...",
       "title": "Quarantined Documents",
       "no_documents": "No quarantined documents",
+      "release": "Release",
+      "released": "Document released",
       "table": {
         "id": "ID",
         "filename": "Filename",

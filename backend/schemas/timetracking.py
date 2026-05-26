@@ -7,7 +7,7 @@ from pydantic import BaseModel, field_validator
 
 
 class TimesheetEntryCreate(BaseModel):
-    employee_id: int
+    employee_id: Optional[int] = None
     project_id: int
     task_id: Optional[int] = None
     date: date
@@ -64,7 +64,7 @@ class TimesheetEntryUpdate(BaseModel):
 
 class WeeklySubmitRequest(BaseModel):
     week_start: date   # Monday of the week
-    employee_id: int
+    employee_id: Optional[int] = None
 
 
 class RejectRequest(BaseModel):

@@ -8,6 +8,7 @@ import { useToast } from '../../context/ToastContext'
 import '../../components/ModuleStyles.css'
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
+import { formatNumber } from '../../utils/format'
 
 export default function JobCards() {
     const { t } = useTranslation()
@@ -102,7 +103,7 @@ export default function JobCards() {
                                         </div>
                                         <div style={{ display: 'flex', justifyContent: 'space-between' }}>
                                             <span style={{ color: 'var(--text-muted)', fontSize: '13px' }}>{t('manufacturing.job_cards.actual_time')}:</span>
-                                            <span style={{ fontWeight: 700, fontSize: '13px', color: 'var(--primary)' }}>{Math.round(op.actual_run_time || 0)} {t('common.minutes')}</span>
+                                            <span style={{ fontWeight: 700, fontSize: '13px', color: 'var(--primary)' }}>{formatNumber(op.actual_run_time || 0, 0)} {t('common.minutes')}</span>
                                         </div>
                                     </div>
 

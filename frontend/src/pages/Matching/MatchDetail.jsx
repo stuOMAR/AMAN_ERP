@@ -130,8 +130,8 @@ export default function MatchDetail() {
             { key: 'invoiced_quantity', label: t('matching.inv_qty'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val) => formatNumber(val) },
             { key: 'po_unit_price', label: t('matching.po_price'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val) => formatNumber(val) },
             { key: 'invoiced_unit_price', label: t('matching.inv_price'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val) => formatNumber(val) },
-            { key: 'quantity_variance_pct', label: t('matching.qty_var'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val) => <span style={{ color: val > 0 ? '#d97706' : 'inherit' }}>{formatNumber(val)}%</span> },
-            { key: 'price_variance_pct', label: t('matching.price_var'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val) => <span style={{ color: val > 0 ? '#d97706' : 'inherit' }}>{formatNumber(val)}%</span> },
+            { key: 'quantity_variance_pct', label: t('matching.qty_var'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val, row) => <span style={{ color: row.line_status !== 'matched' ? '#d97706' : 'inherit' }}>{formatNumber(val)}%</span> },
+            { key: 'price_variance_pct', label: t('matching.price_var'), headerStyle: { textAlign: 'center' }, style: { textAlign: 'center' }, render: (val, row) => <span style={{ color: row.line_status !== 'matched' ? '#d97706' : 'inherit' }}>{formatNumber(val)}%</span> },
             { key: 'line_status', label: t('matching.line_status'), render: (val) => <span style={{ color: LINE_STATUS_COLORS[val] || '#6b7280', fontWeight: '600', fontSize: '12px' }}>{t(`matching.line_${val}`)}</span> },
           ]}
           data={match.lines || []}

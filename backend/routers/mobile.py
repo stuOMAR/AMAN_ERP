@@ -3,6 +3,7 @@ AMAN ERP — Mobile API Router
 Endpoints for mobile sync, dashboard, and device registration.
 """
 
+from decimal import Decimal
 import logging
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -11,7 +12,6 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.permissions import require_permission
@@ -82,10 +82,10 @@ class DashboardResponse(BaseModel):
     recent_quotations: list
     currency_code: str
     currency_symbol: str
-    sales: float = 0
-    expenses: float = 0
-    profit: float = 0
-    cash: float = 0
+    sales: Decimal = Decimal("0")
+    expenses: Decimal = Decimal("0")
+    profit: Decimal = Decimal("0")
+    cash: Decimal = Decimal("0")
     total_customers: int = 0
     total_suppliers: int = 0
     total_invoices: int = 0
@@ -344,7 +344,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
         """)).mappings().first()
         inventory_summary = {
             "total_products": inv_row["total_products"] if inv_row else 0,
-            "total_stock": float(inv_row["total_stock"]) if inv_row else 0,
+            "total_stock": Decimal(str(inv_row["total_stock"])) if inv_row else Decimal("0"),
         }
 
         # Pending orders
@@ -371,9 +371,9 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
         recent_quotations = [dict(r) for r in quot_rows]
 
         # Financial stats: sales = revenue, expenses, profit, cash
-        sales = 0.0
-        expenses = 0.0
-        cash = 0.0
+        sales = Decimal("0")
+        expenses = Decimal("0")
+        cash = Decimal("0")
         try:
             rev_row = conn.execute(text("""
                 SELECT COALESCE(SUM(jl.credit - jl.debit), 0) AS total
@@ -382,7 +382,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
                 JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
                 WHERE a.account_type = 'revenue'
             """)).mappings().first()
-            sales = float(rev_row["total"]) if rev_row else 0.0
+            sales = Decimal(str(rev_row["total"])) if rev_row else Decimal("0")
 
             exp_row = conn.execute(text("""
                 SELECT COALESCE(SUM(jl.debit - jl.credit), 0) AS total
@@ -391,7 +391,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
                 JOIN journal_entries je ON jl.journal_entry_id = je.id AND je.status = 'posted'
                 WHERE a.account_type = 'expense'
             """)).mappings().first()
-            expenses = float(exp_row["total"]) if exp_row else 0.0
+            expenses = Decimal(str(exp_row["total"])) if exp_row else Decimal("0")
 
             # Cash from treasury accounts or BOX/BNK accounts
             cash_row = conn.execute(text("""
@@ -403,7 +403,7 @@ async def mobile_dashboard(current_user=Depends(get_current_user)):
                     SELECT id FROM accounts WHERE account_code LIKE 'BOX%%' OR account_code LIKE 'BNK%%'
                 )
             """)).mappings().first()
-            cash = float(cash_row["total"]) if cash_row else 0.0
+            cash = Decimal(str(cash_row["total"])) if cash_row else Decimal("0")
         except Exception:
             conn.rollback()  # reset transaction state after error
 
@@ -492,7 +492,7 @@ async def register_device(
 # Internal helpers
 # ---------------------------------------------------------------------------
 
-import json as _json
+import json as _json  # noqa: E402
 
 
 def _json_dumps(obj) -> str:
@@ -525,7 +525,7 @@ _ENTITY_TABLE_MAP = {
 }
 
 # Regex pattern for valid SQL column names (alphanumeric + underscore only)
-import re
+import re  # noqa: E402
 _VALID_COL_RE = re.compile(r"^[a-zA-Z_][a-zA-Z0-9_]*$")
 
 
@@ -538,7 +538,7 @@ def _check_conflict(conn, entity_type: str, entity_id: int, device_timestamp: da
     table = mapping["table"]
     id_col = mapping["id_col"]
 
-    row = conn.execute(text( # noqa: sql-lint
+    row = conn.execute(text( # noqa
                 f"""
         SELECT updated_at FROM {table} WHERE {id_col} = :eid
     """), {"eid": entity_id}).mappings().first()
@@ -549,7 +549,7 @@ def _check_conflict(conn, entity_type: str, entity_id: int, device_timestamp: da
     server_updated = row["updated_at"]
     if server_updated and server_updated > device_timestamp:
         # Fetch server version
-        server_row = conn.execute(text( # noqa: sql-lint
+        server_row = conn.execute(text( # noqa
                     f"""
             SELECT * FROM {table} WHERE {id_col} = :eid
         """), {"eid": entity_id}).mappings().first()
@@ -588,7 +588,7 @@ def _apply_sync_item_raw(conn, entity_type: str, entity_id: int | None, payload:
             set_clause = ", ".join(f"{k} = :{k}" for k in safe_cols)
             safe_cols[id_col] = entity_id
             safe_cols["_user_id"] = user_id
-            conn.execute(text( # noqa: sql-lint
+            conn.execute(text( # noqa
                         f"""
                 UPDATE {table}
                 SET {set_clause}, updated_at = now(), updated_by = :_user_id
@@ -608,7 +608,7 @@ def _apply_sync_item_raw(conn, entity_type: str, entity_id: int | None, payload:
         if safe_cols:
             col_names = ", ".join(safe_cols.keys())
             col_params = ", ".join(f":{k}" for k in safe_cols.keys())
-            result = conn.execute(text( # noqa: sql-lint
+            result = conn.execute(text( # noqa
                         f"""
                 INSERT INTO {table} ({col_names}, created_at, updated_at)
                 VALUES ({col_params}, now(), now())

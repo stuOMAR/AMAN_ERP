@@ -60,15 +60,22 @@ class CacheRefreshResponse(BaseModel):
         ),
     ],
 )
-async def refresh_report_cache(body: CacheRefreshRequest, request: Request):
+async def refresh_report_cache(
+    body: CacheRefreshRequest,
+    request: Request,
+    current_user: dict = Depends(get_current_user),
+):
     """On-demand cache refresh for report materialized views and warm-up."""
     from services.reports.mv_refresh import refresh_report_mvs
 
     results = {}
     refreshed = 0
+    tenant_id = str(getattr(current_user, "company_id", None) or current_user.get("company_id") or "")
+    if not tenant_id:
+        raise HTTPException(**http_error(400, "company_id_missing", request))
 
     if body.scope in ("all", "mv_only"):
-        mv_results = await refresh_report_mvs()
+        mv_results = await refresh_report_mvs(tenant_id=tenant_id)
         results.update(mv_results)
         refreshed += sum(1 for value in mv_results.values() if value)
 

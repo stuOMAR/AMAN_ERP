@@ -5,7 +5,7 @@ Contract: see specs/024-workforce-service-comms-integrity/contracts/email-templa
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 
@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 def render_template(
     conn: Any,
     *,
-    tenant_id: int,
+    tenant_id: str | int,
     code: str,
     locale: str = "en",
     context: dict = None,
@@ -31,7 +31,7 @@ def render_template(
             FROM email_templates
             WHERE tenant_id = :tnt AND code = :code AND locale = :loc
         """),
-        {"tnt": tenant_id, "code": code, "loc": locale},
+        {"tnt": str(tenant_id), "code": code, "loc": locale},
     ).fetchone()
 
     # Fallback to 'en'
@@ -42,23 +42,27 @@ def render_template(
                 FROM email_templates
                 WHERE tenant_id = :tnt AND code = :code AND locale = 'en'
             """),
-            {"tnt": tenant_id, "code": code},
+            {"tnt": str(tenant_id), "code": code},
         ).fetchone()
 
     if row is None:
         raise LookupError("notifications.template_missing")
 
-    from jinja2 import Environment, BaseLoader, TemplateSyntaxError
+    from jinja2.sandbox import SandboxedEnvironment
+    from jinja2 import BaseLoader, select_autoescape, TemplateSyntaxError
 
-    env = Environment(loader=BaseLoader(), autoescape=False)
+    env = SandboxedEnvironment(
+        loader=BaseLoader(),
+        autoescape=select_autoescape(['html', 'xml']),
+    )
     context = context or {}
 
     try:
         subject = env.from_string(row[1] or "").render(**context) if row[1] else ""
         body_html = env.from_string(row[2] or "").render(**context) if row[2] else ""
         body_text = env.from_string(row[3] or "").render(**context) if row[3] else ""
-    except TemplateSyntaxError as e:
-        raise ValueError(f"template.invalid_jinja: {e}")
+    except TemplateSyntaxError:
+        raise ValueError("template.invalid_jinja")
 
     return {
         "template_id": row[0],

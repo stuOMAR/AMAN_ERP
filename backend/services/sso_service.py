@@ -11,6 +11,7 @@ from sqlalchemy import text
 
 from config import settings
 from database import db_connection, hash_password
+from utils.i18n import i18n_message
 
 logger = logging.getLogger(__name__)
 

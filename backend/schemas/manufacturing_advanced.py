@@ -155,6 +155,10 @@ class ProductionOrderResponse(ProductionOrderBase):
     total_labor_overhead_cost: Optional[Decimal] = Decimal("0")
     unit_production_cost: Optional[Decimal] = Decimal("0")
     total_output: Optional[Decimal] = Decimal("0")
+    completion_percent: Optional[Decimal] = Decimal("0")
+    completion_status: Optional[str] = "not_started"
+    completion_direction: Optional[str] = "none"
+    is_overdue: Optional[bool] = False
     materials: List[dict] = []
     transactions: List[dict] = []
     

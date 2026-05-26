@@ -24,14 +24,20 @@ depends_on = None
 
 
 def upgrade():
-    op.add_column(
-        "assets",
-        sa.Column("current_value", sa.Numeric(18, 4), nullable=True),
-    )
-    op.add_column(
-        "assets",
-        sa.Column("revaluation_surplus", sa.Numeric(18, 4), server_default="0", nullable=True),
-    )
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    columns = [c["name"] for c in inspector.get_columns("assets")]
+    
+    if "current_value" not in columns:
+        op.add_column(
+            "assets",
+            sa.Column("current_value", sa.Numeric(18, 4), nullable=True),
+        )
+    if "revaluation_surplus" not in columns:
+        op.add_column(
+            "assets",
+            sa.Column("revaluation_surplus", sa.Numeric(18, 4), server_default="0", nullable=True),
+        )
     # Backfill: set current_value = cost for existing rows
     op.execute("UPDATE assets SET current_value = cost WHERE current_value IS NULL")
 

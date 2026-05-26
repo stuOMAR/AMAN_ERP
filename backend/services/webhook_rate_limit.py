@@ -7,7 +7,6 @@ Contract: see specs/022-audit-security-finance-integrity/contracts/webhook-ratel
 from __future__ import annotations
 
 import logging
-import time
 from dataclasses import dataclass
 from typing import Optional
 
@@ -56,8 +55,8 @@ def _get_redis():
         url = __import__("os").environ.get("REDIS_URL", "redis://localhost:6379/0")
         _redis_client = redis.from_url(url, socket_timeout=1, socket_connect_timeout=1)
         _lua_sha = _redis_client.script_load(_LUA_TOKEN_BUCKET)
-    except Exception as exc:
-        logger.warning("webhook_rate_limit: Redis unavailable (%s)", exc)
+    except Exception:
+        logger.warning("webhook_rate_limit: Redis unavailable")
         _redis_client = None
     return _redis_client
 
@@ -103,7 +102,7 @@ def check_and_consume(
             if integ_max:
                 max_req_str = integ_max
     except Exception:
-        logger.exception("webhook_rate_limit: failed to read settings, using defaults")
+        logger.warning("webhook_rate_limit: failed to read settings, using defaults")
         window_str, max_req_str = "60", "120"
 
     window = int(window_str)
@@ -117,8 +116,8 @@ def check_and_consume(
             result = rds.eval(_LUA_TOKEN_BUCKET, 1, key, max_requests, window)
         current_count = int(result[0])
         ttl = int(result[1])
-    except Exception as exc:
-        logger.warning("webhook_rate_limit: Redis eval failed (%s) — fail-open", exc)
+    except Exception:
+        logger.warning("webhook_rate_limit: Redis eval failed; fail-open")
         _redis_available = False
         return RateLimitDecision(
             allowed=True, remaining=-1, retry_after_seconds=None,

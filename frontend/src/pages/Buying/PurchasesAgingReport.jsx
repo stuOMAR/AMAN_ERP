@@ -22,8 +22,8 @@ function PurchasesAgingReport() {
         try {
             setLoading(true);
             setError(null);
-            const res = await reportsAPI.getPurchasesAging(currentBranch?.id);
-            setData(res.data || []);
+            const res = await reportsAPI.getPurchasesAgingSummary(currentBranch?.id);
+            setData(res.data || { items: [], buckets: [], total_due: '0' });
         } catch (err) {
             showToast(t('common.error'), 'error');
             setError(t('errors.fetch_failed'));
@@ -38,11 +38,8 @@ function PurchasesAgingReport() {
         return () => clearTimeout(timer)
     }, [currentBranch]);
 
-    const buckets = ['0-30', '31-60', '61-90', '90+'];
-    const bucketTotals = {};
-    buckets.forEach(b => { bucketTotals[b] = 0; });
-    data.forEach(item => { if (bucketTotals[item.bucket] !== undefined) bucketTotals[item.bucket] += item.amount; });
-    const grandTotal = Object.values(bucketTotals).reduce((s, v) => s + v, 0);
+    const buckets = data.buckets || [];
+    const items = data.items || [];
 
     return (
         <div className="workspace fade-in">
@@ -59,7 +56,7 @@ function PurchasesAgingReport() {
                 </div>
             </div>
 
-            {initialLoad && !data.length ? (
+            {initialLoad && !items.length ? (
                 <PageLoading />
             ) : error ? (
                 <div className="alert alert-danger">{error}</div>
@@ -68,18 +65,18 @@ function PurchasesAgingReport() {
                     {/* Bucket Summary Cards */}
                     <div className="metrics-grid" style={{ marginBottom: '24px' }}>
                         {buckets.map(bucket => (
-                            <div key={bucket} className="metric-card">
-                                <div className="metric-label">{bucket} {t('purchases_aging.days')}</div>
-                                <div className={`metric-value ${bucket === '90+' ? 'text-danger' : bucket === '61-90' ? 'text-warning' : 'text-success'}`}>
-                                    {formatNumber(bucketTotals[bucket])}
+                            <div key={bucket.name} className="metric-card">
+                                <div className="metric-label">{bucket.name} {t('purchases_aging.days')}</div>
+                                <div className={`metric-value ${bucket.name === '90+' ? 'text-danger' : bucket.name === '61-90' ? 'text-warning' : 'text-success'}`}>
+                                    {formatNumber(bucket.amount)}
                                 </div>
                                 <div className="metric-change">{currency}</div>
                             </div>
                         ))}
                         <div className="metric-card">
                             <div className="metric-label">{t('common.total')}</div>
-                            <div className="metric-value text-primary">{formatNumber(grandTotal)}</div>
-                            <div className="metric-change">{data.length} {t('purchases_aging.invoices')}</div>
+                            <div className="metric-value text-primary">{formatNumber(data.total_due)}</div>
+                            <div className="metric-change">{items.length} {t('purchases_aging.invoices')}</div>
                         </div>
                     </div>
 
@@ -102,9 +99,9 @@ function PurchasesAgingReport() {
                                     </tr>
                                 </thead>
                                 <tbody>
-                                    {data.length === 0 ? (
+                                    {items.length === 0 ? (
                                         <tr><td colSpan={7} className="text-center text-muted p-4">{t('purchases_aging.no_data')}</td></tr>
-                                    ) : data.map((row, i) => (
+                                    ) : items.map((row, i) => (
                                         <tr key={i}>
                                             <td className="font-medium">{row.supplier}</td>
                                             <td>{row.invoice}</td>

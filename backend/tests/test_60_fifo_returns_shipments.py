@@ -287,7 +287,7 @@ def test_handle_return_falls_back_to_consume_when_original_layer_drained(
     )
 
     layers = _layers(db, pid, wid)
-    l2 = next(l for l in layers if Decimal(l.unit_cost) == Decimal("120"))
+    l2 = next(line for line in layers if Decimal(line.unit_cost) == Decimal("120"))
     assert Decimal(l2.remaining_quantity) == Decimal("3"), (
         f"L2 should be reduced by the overflow (5-2=3), got {l2.remaining_quantity}"
     )

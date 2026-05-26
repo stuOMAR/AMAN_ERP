@@ -7,16 +7,15 @@ from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 import logging
 
-from utils.cache import invalidate_company_cache, invalidate_aggregates
-from database import get_db_connection
+from utils.cache import invalidate_aggregates
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.audit import log_activity
-from utils.permissions import branch_scope_filter_from_scope, require_permission, require_module, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.accounting import get_mapped_account_id, generate_sequential_number, get_base_currency
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.party_balance import update_party_site_balance
@@ -24,9 +23,8 @@ from utils.decimal_helper import dec as _dec, D2 as _D2, D4 as _D4
 from utils.tax_precision import money_str, rate_str, require_idempotency_key
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.treasury_balance import recalc_treasury_from_gl
-from services.tax_engine import get_active_tax_for_branch, resolve_line_tax
+from services.tax_engine import get_active_tax_for_branch, resolve_line_tax_group
 from schemas.purchases import (
-    PurchaseCreate, SupplierGroupCreate, POCreate, POReceiveRequest,
     SupplierPaymentCreate, SupplierPaymentPreviewRequest,
 )
 
@@ -54,8 +52,10 @@ def _idempotent_invoice_replay(db, idempotency_key: str, invoice_type: str):
 
 def _resolve_note_line_tax(db, branch_id: int, product_id, document_date, party_id: int):
     if product_id:
-        info = resolve_line_tax(branch_id, product_id, db, document_date, customer_id=party_id)
-        return info.get("tax_rate_id"), _dec(info.get("tax_rate", 0))
+        taxes = resolve_line_tax_group(branch_id, product_id, db, document_date, customer_id=party_id)
+        tax_rate = sum((t["tax_rate"] for t in taxes), Decimal("0"))
+        tax_rate_id = taxes[0]["tax_rate_id"] if len(taxes) == 1 else None
+        return tax_rate_id, tax_rate
     info = get_active_tax_for_branch(branch_id, db, document_date)
     return info.get("id"), _dec(info.get("rate", 0))
 
@@ -139,15 +139,21 @@ def preview_supplier_payment(request: Request, data: SupplierPaymentPreviewReque
             raise HTTPException(**http_error(400, "branch_required", request))
 
         if not data.supplier_id:
+            amount = _dec(data.amount or 0).quantize(_D4, ROUND_HALF_UP)
             return {
-                "amount": money_str(data.amount or 0),
+                "amount": money_str(amount),
                 "currency": data.currency or base_currency,
                 "exchange_rate": rate_str(voucher_rate),
                 "allocations": [],
                 "lines": [],
                 "total_allocated": money_str(0),
-                "unallocated_amount": money_str(data.amount or 0),
+                "unallocated_amount": money_str(amount),
                 "over_allocated": False,
+                "amount_is_positive": amount > Decimal("0"),
+                "has_unallocated_amount": amount > _D2,
+                "has_allocations": False,
+                "has_open_invoices": False,
+                "can_auto_allocate": False,
                 "treasury_amount": None,
                 "treasury_currency": None,
                 "transaction_rate": None,
@@ -240,6 +246,11 @@ def preview_supplier_payment(request: Request, data: SupplierPaymentPreviewReque
             "total_allocated": money_str(total_allocated),
             "unallocated_amount": money_str(unallocated),
             "over_allocated": total_allocated > (amount + _D2) or any(row["exceeds_remaining"] for row in rows),
+            "amount_is_positive": amount > Decimal("0"),
+            "has_unallocated_amount": unallocated > _D2,
+            "has_allocations": bool(rows),
+            "has_open_invoices": bool(invoice_rows),
+            "can_auto_allocate": amount > Decimal("0") and bool(invoice_rows),
             "treasury_amount": money_str(treasury_amount) if treasury_amount is not None else None,
             "treasury_currency": treasury_currency,
             "transaction_rate": rate_str(transaction_rate) if transaction_rate is not None else None,
@@ -592,7 +603,7 @@ def create_supplier_payment(request: Request, data: SupplierPaymentCreate, curre
     
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating payment")
             raise HTTPException(**http_error(500, "error_creating_payment_voucher", request))
         
@@ -647,8 +658,14 @@ def get_payment_details(request: Request, voucher_id: int, current_user: dict = 
                 WHERE pa.voucher_id = :id
             """), {"id": voucher_id}).fetchall()
             
+            total_allocated = sum(
+                (_dec(a._mapping.get("allocated_amount") or 0) for a in allocations),
+                Decimal("0"),
+            )
+
             return {
                 **dict(header._mapping),
+                "total_allocated": money_str(total_allocated),
                 "allocations": [dict(a._mapping) for a in allocations]
             }
         except HTTPException:
@@ -764,13 +781,13 @@ def list_purchase_credit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa: sql-lint
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa
 
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT i.*, p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,
@@ -816,7 +833,7 @@ def get_purchase_credit_note(note_id: int, current_user: dict = Depends(get_curr
         """), {"id": note_id}).fetchall()
 
         result = dict(note._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
 @router.post("/credit-notes", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -1001,7 +1018,7 @@ def create_purchase_credit_note(
                 """), {"amt": total, "id": related_invoice_id})
     
             # Update supplier balance via party_site_balances (credit note REDUCES what we owe supplier)
-            gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
+            (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
             update_party_site_balance(
                 db,
                 party_id=party_id,
@@ -1020,7 +1037,7 @@ def create_purchase_credit_note(
                     "journal_entry_id": je_id, "message": i18n_message("credit_note_created_number", request)}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating purchase credit note")
             raise HTTPException(**http_error(500, "internal_error"))
 # ==================== INV-004: Purchase Debit Notes (إشعار مدين مشتريات) ====================
@@ -1065,12 +1082,12 @@ def list_purchase_debit_notes(
             conditions.append(branch_condition)
 
         where = " AND ".join(conditions)
-        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa: sql-lint
+        total = db.execute(text(f"SELECT COUNT(*) FROM invoices i WHERE {where}"), params).scalar()  # noqa
         offset = (page - 1) * limit
         params["limit"] = limit
         params["offset"] = offset
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT i.*, p.name AS party_name,
                    ri.invoice_number AS related_invoice_number,
@@ -1116,7 +1133,7 @@ def get_purchase_debit_note(note_id: int, current_user: dict = Depends(get_curre
         """), {"id": note_id}).fetchall()
 
         result = dict(note._mapping)
-        result["lines"] = [dict(l._mapping) for l in lines]
+        result["lines"] = [dict(line._mapping) for line in lines]
         return result
 @router.post("/debit-notes", status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permission("buying.create"))], response_model=Dict[str, Any])
@@ -1283,7 +1300,7 @@ def create_purchase_debit_note(
             )
     
             # Update supplier balance via party_site_balances (debit note INCREASES what we owe supplier)
-            gl_total_base = (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
+            (_dec(total) * _dec(exchange_rate)).quantize(_D4, ROUND_HALF_UP)
             update_party_site_balance(
                 db,
                 party_id=party_id,
@@ -1302,7 +1319,7 @@ def create_purchase_debit_note(
                     "journal_entry_id": je_id, "message": i18n_message("debit_note_created_number", request)}
         except HTTPException:
             raise
-        except Exception as e:
+        except Exception:
             logger.exception("Error creating purchase debit note")
             raise HTTPException(**http_error(500, "internal_error"))
 # =====================================================

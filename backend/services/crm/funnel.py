@@ -9,6 +9,8 @@ from typing import Any
 
 from sqlalchemy import text
 
+from utils.tax_precision import rate_str
+
 _D4 = Decimal("0.0001")
 
 
@@ -24,17 +26,16 @@ def compute_funnel(
     conversion(stage_i → stage_j) = count(transitions i→j) / count(opps that entered i)
     """
     params = {"tid": tenant_id, "days": window_days}
-    pipeline_filter = "AND o.pipeline_id = :pid" if pipeline_id else ""
-    if pipeline_id:
-        params["pid"] = pipeline_id
+    pipeline_filter = ""
 
     # Get stage transitions in window
     rows = db.execute(text(f"""
         SELECT sh.from_stage, sh.to_stage, COUNT(*) as transition_count
         FROM opportunity_stage_history sh
-        JOIN opportunities o ON o.id = sh.opportunity_id
-        WHERE o.tenant_id = :tid {pipeline_filter}
-          AND sh.entered_at >= NOW() - INTERVAL ':days days'
+        JOIN sales_opportunities o ON o.id = sh.opportunity_id
+        WHERE sh.tenant_id = :tid {pipeline_filter}
+          AND COALESCE(o.is_deleted, FALSE) = FALSE
+          AND sh.entered_at >= NOW() - (CAST(:days AS INTEGER) * INTERVAL '1 day')
           AND sh.from_stage IS NOT NULL
         GROUP BY sh.from_stage, sh.to_stage
         ORDER BY sh.from_stage, sh.to_stage
@@ -44,9 +45,10 @@ def compute_funnel(
     entries = db.execute(text(f"""
         SELECT sh.to_stage, COUNT(DISTINCT sh.opportunity_id) as entry_count
         FROM opportunity_stage_history sh
-        JOIN opportunities o ON o.id = sh.opportunity_id
-        WHERE o.tenant_id = :tid {pipeline_filter}
-          AND sh.entered_at >= NOW() - INTERVAL ':days days'
+        JOIN sales_opportunities o ON o.id = sh.opportunity_id
+        WHERE sh.tenant_id = :tid {pipeline_filter}
+          AND COALESCE(o.is_deleted, FALSE) = FALSE
+          AND sh.entered_at >= NOW() - (CAST(:days AS INTEGER) * INTERVAL '1 day')
         GROUP BY sh.to_stage
     """), params).fetchall()
 
@@ -69,7 +71,7 @@ def compute_funnel(
             "to_stage": to_stage,
             "transition_count": count,
             "entry_count": denominator,
-            "conversion_rate": conversion_rate,
+            "conversion_rate": rate_str(conversion_rate),
         })
 
     return result

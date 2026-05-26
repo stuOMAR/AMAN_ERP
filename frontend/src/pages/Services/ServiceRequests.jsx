@@ -3,6 +3,7 @@ import { useTranslation } from 'react-i18next'
 import { servicesAPI, salesAPI } from '../../utils/api'
 import '../../components/ModuleStyles.css'
 import { formatShortDate } from '../../utils/dateUtils'
+import { formatNumber } from '../../utils/format'
 import BackButton from '../../components/common/BackButton'
 import DateInput from '../../components/common/DateInput';
 import { useToast } from '../../context/ToastContext'
@@ -75,7 +76,7 @@ function ServiceRequests() {
 
     // Cost form
     const [showCostModal, setShowCostModal] = useState(false)
-    const [costForm, setCostForm] = useState({ cost_type: 'labor', description: '', quantity: 1, unit_cost: 0 })
+    const [costForm, setCostForm] = useState({ cost_type: 'labor', description: '', quantity: '1', unit_cost: '' })
 
     const emptyForm = {
         title: '', description: '', category: 'maintenance', priority: 'medium',
@@ -218,7 +219,7 @@ function ServiceRequests() {
 
     // Cost management
     const openCostModal = () => {
-        setCostForm({ cost_type: 'labor', description: '', quantity: 1, unit_cost: 0 })
+        setCostForm({ cost_type: 'labor', description: '', quantity: '1', unit_cost: '' })
         setShowCostModal(true)
     }
 
@@ -333,7 +334,7 @@ function ServiceRequests() {
                                     <td><span className="badge" style={statusBadgeStyles[req.status] || {}}>{getLabelByValue(statusOptions, req.status)}</span></td>
                                     <td>{req.customer_name || '—'}</td>
                                     <td>{req.assigned_to_name || '—'}</td>
-                                    <td>{Number(req.actual_cost || 0).toLocaleString()}</td>
+                                    <td>{formatNumber(req.actual_cost || '0')}</td>
                                     <td>{formatShortDate(req.created_at)}</td>
                                     <td onClick={e => e.stopPropagation()}>
                                         <div style={{ display: 'flex', gap: '4px' }}>
@@ -371,8 +372,8 @@ function ServiceRequests() {
                                                             <strong>{t('services.scheduled')}:</strong> {detail.scheduled_date ? formatShortDate(detail.scheduled_date) : '—'}<br/>
                                                             <strong>{t('services.est_hours')}:</strong> {detail.estimated_hours || '—'} |
                                                             <strong> {t('services.act_hours')}:</strong> {detail.actual_hours || '—'}<br/>
-                                                            <strong>{t('services.est_cost')}:</strong> {Number(detail.estimated_cost || 0).toLocaleString()} |
-                                                            <strong> {t('services.act_cost')}:</strong> {Number(detail.actual_cost || 0).toLocaleString()}
+                                                            <strong>{t('services.est_cost')}:</strong> {formatNumber(detail.estimated_cost || '0')} |
+                                                            <strong> {t('services.act_cost')}:</strong> {formatNumber(detail.actual_cost || '0')}
                                                         </div>
                                                     </div>
                                                     {detail.notes && <p><strong>{t('services.notes')}:</strong> {detail.notes}</p>}
@@ -401,8 +402,8 @@ function ServiceRequests() {
                                                                             <td>{getLabelByValue(costTypeOptions, c.cost_type)}</td>
                                                                             <td>{c.description}</td>
                                                                             <td>{c.quantity}</td>
-                                                                            <td>{Number(c.unit_cost).toLocaleString()}</td>
-                                                                            <td>{Number(c.total_cost).toLocaleString()}</td>
+                                                                            <td>{formatNumber(c.unit_cost || '0')}</td>
+                                                                            <td>{formatNumber(c.total_cost || '0')}</td>
                                                                             <td><button className="btn btn-sm btn-danger" onClick={() => handleDeleteCost(c.id)}>🗑️</button></td>
                                                                         </tr>
                                                                     ))}

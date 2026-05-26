@@ -109,7 +109,7 @@ def sanitize_for_audit(
     # company_settings.audit.sanitizer.allow_paths — loaded lazily to
     # avoid circular import at module level.
     try:
-        from database import get_db_connection  # noqa: delay
+        pass  # noqa
 
         # Best-effort: if there is a running request context with a tenant,
         # read the allow-list.  Otherwise skip.

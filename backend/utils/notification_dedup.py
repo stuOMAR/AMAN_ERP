@@ -9,10 +9,9 @@ Constitution §17: Notification channels must be idempotent.
 from __future__ import annotations
 
 import hashlib
-import json
 import logging
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
 

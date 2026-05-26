@@ -1,14 +1,13 @@
 # AMAN ERP System Constitution
 
-Version: 1.1.1
-Last amended: 2026-05-19
+Version: 1.1.2
+Last amended: 2026-05-21
 
 This constitution defines the engineering contract for AMAN ERP. Rules marked
 `[CRITICAL]` are non-negotiable. Violating one is a critical defect.
 
-Amendment rationale for v1.1.1: aligned schema-sync language with the current
-repository paths: `backend/alembic/versions/` and
-`backend/db_ddl/tenant_schema.py`.
+Amendment rationale for v1.1.2: made backend-authoritative calculation and
+decimal display rules explicit across frontend/backend boundaries.
 
 ## 1. Financial Precision [CRITICAL]
 
@@ -18,12 +17,13 @@ repository paths: `backend/alembic/versions/` and
 | --- | --- |
 | SQL type | `NUMERIC(18,4)` or narrower for money columns. |
 | Python | `decimal.Decimal` with `ROUND_HALF_UP`. |
-| JavaScript | String-based amounts or a fixed-point library. |
+| JavaScript | String-based amounts or a fixed-point library. `Number`, `parseFloat`, `toFixed`, and `toLocaleString` are forbidden for money, tax, FX, allocation, and cost values. |
 | Comparison tolerance | `Decimal("0.01")`. |
 | Exchange rate | Locked at transaction date; revaluation must not alter the original rate. |
 | Budget | Enforced at journal-entry posting; overrun blocks or requires approval. |
 | Payment allocation | One payment can allocate to many invoices, with remainder tracking. |
 | Deferred revenue | Follows configured method: over-time or at-point-in-time. |
+| API decimal display | Monetary and rate responses must not expose scientific notation such as `0E+6`; serialize display values as normal decimal strings. |
 
 ## 2. Multi-Tenant Isolation [CRITICAL]
 
@@ -280,6 +280,11 @@ defect.
 | Account balance | Use one canonical method; derived stores are reconciled caches. |
 | Invoice totals | Use the canonical invoice-total function for sales, purchase, POS, credit notes, and debit notes. |
 | Frontend | No monetary calculations. Backend returns calculated values; frontend formats only. |
+| Raw input contract | Frontend sends raw user inputs only. It must not send frontend-computed subtotal, total, tax, discount, remaining, allocation, FX, valuation, COGS, or cost amounts. |
+| Backend authority | Backend preview, detail, and create/post services are the only authority for money, tax, discount, FX, remaining balance, allocation, inventory cost, valuation, and COGS calculations. |
+| No local fallback | Frontend must not fallback to local formulas or default FX values such as `exchange_rate = 1` for non-base currency when the backend has not resolved the rate. |
+| Preview/detail contract | If a UI needs a calculated field, add it to the appropriate backend preview/detail response instead of recomputing it in React. |
+| Display only | Frontend formatting helpers may pad, group, or normalize decimal strings; they must not change monetary meaning or perform business calculations. |
 | Bug fixes | Fix the centralized logic so all callers inherit the correction. |
 
 ## 20. Report Consistency And Reconciliation [CRITICAL]
@@ -301,6 +306,7 @@ defect.
 | Product catalog | Name, UOM, tax category, and costing come from `products`. |
 | GL account refs | Store `account_id` FK; resolve code/name/type by join. |
 | Exchange rates | All modules read from the same `exchange_rates` source with the same date lookup. |
+| Calculated responses | Preview/detail endpoints expose all UI-needed calculated values so clients do not duplicate financial logic. |
 | Config cascade | Company default, then branch override, consistently across modules. |
 
 ## 22. Transaction Validation Pipeline
@@ -331,6 +337,7 @@ defects.
 | Rule | Detail |
 | --- | --- |
 | Idempotency keys | Payment, invoice, and order endpoints accept optional `Idempotency-Key`; same key returns original response; TTL at least 24h. |
+| Financial documents | Any endpoint that creates vouchers, invoices, credit/debit notes, payments, receipts, inventory value movements, or GL-affecting documents must provide idempotency or an equivalent replay guard. |
 | Duplicate detection | Check `(party_id, amount, date, reference)` within a configurable window; prompt instead of silently creating. |
 | Sequence numbers | Generate atomically with row lock. Gaps are acceptable; duplicates are not. |
 | Frontend guard | Mutation buttons disable after first click until server response, preferably through shared client/form behavior. |

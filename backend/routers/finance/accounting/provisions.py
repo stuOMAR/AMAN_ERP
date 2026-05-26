@@ -2,26 +2,19 @@
 
 Mounted under the parent router via accounting/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from sqlalchemy import text
+from typing import Any, Dict
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import require_permission, validate_branch_access
 from utils.audit import log_activity
 from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -33,13 +26,13 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import ProvisionRequest, _D2, _D4, _dec
+from .core import ProvisionRequest, _D2, _dec  # noqa: E402
 
 @router.post("/provisions/bad-debt", dependencies=[Depends(require_permission("accounting.manage"))], response_model=Dict[str, Any])
 @limiter.limit("100/minute")
 def create_bad_debt_provision(request: Request, req: ProvisionRequest, current_user: dict = Depends(get_current_user)):
     """إنشاء قيد مخصص ديون معدومة — Dr مصروف ديون معدومة / Cr مخصص الديون المعدومة"""
-    from utils.accounting import get_mapped_account_id, get_base_currency
+    from utils.accounting import get_mapped_account_id
     branch_id = validate_branch_access(current_user, req.branch_id)
     db = get_db_connection(current_user.company_id)
     trans = db.begin()
@@ -108,7 +101,7 @@ def create_bad_debt_provision(request: Request, req: ProvisionRequest, current_u
 @limiter.limit("100/minute")
 def create_leave_provision(request: Request, req: ProvisionRequest, current_user: dict = Depends(get_current_user)):
     """إنشاء قيد مخصص إجازات — Dr مصروف إجازات / Cr مخصص الإجازات"""
-    from utils.accounting import get_mapped_account_id, get_base_currency
+    from utils.accounting import get_mapped_account_id
     branch_id = validate_branch_access(current_user, req.branch_id)
     db = get_db_connection(current_user.company_id)
     trans = db.begin()

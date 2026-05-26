@@ -17,8 +17,7 @@ const KpiCard = ({ label, value, sub, color }) => (
 );
 
 // Simple horizontal bar chart component
-const BarChart = ({ data }) => {
-    const max = Math.max(...data.map(d => Math.max(d.revenue, d.cost)), 1);
+const BarChart = ({ data, t }) => {
     return (
         <div style={{ marginTop: 16 }}>
             {data.map((d, i) => (
@@ -28,7 +27,7 @@ const BarChart = ({ data }) => {
                         <span style={{ width: 80, fontSize: 12, color: '#6c757d' }}>{t('common.revenue')}</span>
                         <div style={{ flex: 1, background: '#e9ecef', borderRadius: 4, height: 18, position: 'relative' }}>
                             <div style={{
-                                width: `${(d.revenue / max) * 100}%`,
+                                width: `${d.revenue_bar_pct || '0'}%`,
                                 background: '#28a745',
                                 height: '100%',
                                 borderRadius: 4,
@@ -43,8 +42,8 @@ const BarChart = ({ data }) => {
                         <span style={{ width: 80, fontSize: 12, color: '#6c757d' }}>{t('common.cost')}</span>
                         <div style={{ flex: 1, background: '#e9ecef', borderRadius: 4, height: 18, position: 'relative' }}>
                             <div style={{
-                                width: `${(d.cost / max) * 100}%`,
-                                background: d.revenue >= d.cost ? '#ffc107' : '#dc3545',
+                                width: `${d.cost_bar_pct || '0'}%`,
+                                background: d.profit_status === 'profitable' ? '#ffc107' : '#dc3545',
                                 height: '100%',
                                 borderRadius: 4,
                                 minWidth: 2,
@@ -94,6 +93,7 @@ const ProjectProfitability = () => {
     }, [selectedProjectId]);
 
     const fmt = (n) => formatNumber(n || 0);
+    const isProfitable = report?.profit_status === 'profitable';
 
     return (
         <div className="module-container" dir={isRTL ? 'rtl' : 'ltr'}>
@@ -145,12 +145,12 @@ const ProjectProfitability = () => {
                             label={t('timetracking.profit')}
                             value={fmt(report.profit)}
                             sub={`${t('timetracking.margin')}: ${fmt(report.margin_pct)}%`}
-                            color={report.profit >= 0 ? '#28a745' : '#dc3545'}
+                            color={isProfitable ? '#28a745' : '#dc3545'}
                         />
                         <KpiCard
                             label={t('timetracking.planned_budget')}
                             value={fmt(report.planned_budget)}
-                            sub={report.billable_revenue > report.planned_budget
+                            sub={report.budget_status === 'over_budget'
                                 ? t('timetracking.over_budget')
                                 : t('timetracking.within_budget')}
                             color="#6f42c1"
@@ -163,7 +163,10 @@ const ProjectProfitability = () => {
                             label: report.project_name,
                             revenue: report.billable_revenue,
                             cost: report.total_cost,
-                        }]} />
+                            revenue_bar_pct: report.revenue_bar_pct,
+                            cost_bar_pct: report.cost_bar_pct,
+                            profit_status: report.profit_status,
+                        }]} t={t} />
 
                         <div style={{ marginTop: 24 }}>
                             <table className="data-table">
@@ -190,19 +193,19 @@ const ProjectProfitability = () => {
                                     </tr>
                                     <tr>
                                         <td>
-                                            {report.profit >= 0
+                                            {isProfitable
                                                 ? <TrendingUp size={14} color="#28a745" />
                                                 : <TrendingDown size={14} color="#dc3545" />
                                             }
                                             {' '}{t('timetracking.profit')}
                                         </td>
-                                        <td style={{ fontWeight: 700, color: report.profit >= 0 ? '#28a745' : '#dc3545' }}>
+                                        <td style={{ fontWeight: 700, color: isProfitable ? '#28a745' : '#dc3545' }}>
                                             {fmt(report.profit)}
                                         </td>
                                     </tr>
                                     <tr>
                                         <td>{t('timetracking.margin_pct')}</td>
-                                        <td style={{ fontWeight: 700, color: report.margin_pct >= 0 ? '#28a745' : '#dc3545' }}>
+                                        <td style={{ fontWeight: 700, color: isProfitable ? '#28a745' : '#dc3545' }}>
                                             {fmt(report.margin_pct)}%
                                         </td>
                                     </tr>

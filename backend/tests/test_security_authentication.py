@@ -10,10 +10,10 @@ AMAN ERP - Security Tests: Authentication
 ═══════════════════════════════════════
 """
 
-import pytest
-import time
-from fastapi.testclient import TestClient
-from main import app
+import pytest  # noqa: E402
+import time  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
 
 client = TestClient(app)
 
@@ -300,7 +300,7 @@ class TestAuthenticationSecurity:
         
         def attempt_login(thread_id):
             # استخدام username فريد لكل thread
-            username = f"{base_username}_concurrent_{thread_id}_{int(time.time() * 1000)}"
+            f"{base_username}_concurrent_{thread_id}_{int(time.time() * 1000)}"
             response = client.post(
                 "/api/auth/login",
                 data={

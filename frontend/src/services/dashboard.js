@@ -25,9 +25,9 @@ export const dashboardAPI = {
 
     // BI Analytics Dashboards (US9)
     listAnalyticsDashboards: () => api.get('/dashboard/analytics'),
-    getAnalyticsDashboard: (id) => api.get(`/dashboard/analytics/${id}`),
+    getAnalyticsDashboard: (id, config = {}) => api.get(`/dashboard/analytics/${id}`, config),
     createAnalyticsDashboard: (data) => api.post('/dashboard/analytics', data),
     updateAnalyticsDashboard: (id, data) => api.put(`/dashboard/analytics/${id}`, data),
     deleteAnalyticsDashboard: (id) => api.delete(`/dashboard/analytics/${id}`),
-    getWidgetData: (widgetId) => api.get(`/dashboard/analytics/widget-data/${widgetId}`),
+    getWidgetData: (widgetId, params) => api.get(`/dashboard/analytics/widget-data/${widgetId}`, { params }),
 }

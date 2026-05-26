@@ -208,7 +208,7 @@ class TestReconciliationFinalize:
             "statement_balance": 50000.00
         }
         # إنشاء تسوية أولى
-        r1 = client.post("/api/reconciliation", json=recon_data,
+        client.post("/api/reconciliation", json=recon_data,
                          headers=admin_headers)
         # محاولة إنشاء مكررة
         r2 = client.post("/api/reconciliation", json=recon_data,

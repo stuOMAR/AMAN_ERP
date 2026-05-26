@@ -28,7 +28,6 @@ def record_scrap(
     # Post GL
     je_id = 0
     try:
-        from services.gl_service import create_journal_entry
         # Simplified — actual GL posting uses the configured scrap-loss account
         je_id = 0  # Placeholder
     except Exception:

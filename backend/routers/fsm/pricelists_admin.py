@@ -9,7 +9,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from decimal import Decimal
-from fastapi import Request, APIRouter, HTTPException
+from fastapi import Request, APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
 from typing import Optional
@@ -17,8 +17,13 @@ from typing import Optional
 from database import get_db_connection
 from services.fsm.pricelists import resolve_price, upsert_pricelist_entry
 from utils.i18n import http_error, i18n_message
+from utils.permissions import require_module, require_permission
 
-router = APIRouter(prefix="/api/fsm/pricelists", tags=["FSM Pricelists"])
+router = APIRouter(
+    prefix="/fsm/pricelists",
+    tags=["FSM Pricelists"],
+    dependencies=[Depends(require_module("services"))],
+)
 logger = logging.getLogger(__name__)
 
 
@@ -44,7 +49,7 @@ def _get_tenant_id(current_user) -> str:
 def list_pricelists(
     scope: Optional[str] = None,
     item_id: Optional[int] = None,
-    current_user=None,
+    current_user=Depends(require_permission("services.view")),
 ):
     """List pricelist entries."""
     tenant_id = _get_tenant_id(current_user)
@@ -69,7 +74,7 @@ def list_pricelists(
                 ORDER BY scope, item_id
             """
         rows = conn.execute(
-            text(query),  # noqa: sql-lint
+            text(query),  # noqa
             params,
         ).fetchall()
 
@@ -90,7 +95,7 @@ def list_pricelists(
 def create_pricelist_entry(
     request: Request,
     body: PricelistEntryCreate,
-    current_user=None,
+    current_user=Depends(require_permission("services.edit")),
 ):
     """Create or update a pricelist entry."""
     tenant_id = _get_tenant_id(current_user)
@@ -108,7 +113,7 @@ def create_pricelist_entry(
             valid_to=body.valid_to,
         )
         return result
-    except Exception as e:
+    except Exception:
         logger.exception("Error creating pricelist entry")
         raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:
@@ -121,7 +126,7 @@ def resolve_item_price(request: Request,
     currency: str,
     customer_id: Optional[int] = None,
     customer_group_id: Optional[int] = None,
-    current_user=None,
+    current_user=Depends(require_permission("services.view")),
 ):
     """Resolve price for an item from the pricelist hierarchy."""
     tenant_id = _get_tenant_id(current_user)

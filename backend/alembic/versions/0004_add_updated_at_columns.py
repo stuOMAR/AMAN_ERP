@@ -45,16 +45,22 @@ _TABLES = [
 
 
 def upgrade():
+    conn = op.get_bind()
+    inspector = sa.inspect(conn)
+    existing_tables = inspector.get_table_names()
     for table in _TABLES:
-        op.add_column(
-            table,
-            sa.Column(
-                "updated_at",
-                sa.DateTime(timezone=True),
-                server_default=sa.text("CURRENT_TIMESTAMP"),
-                nullable=True,
-            ),
-        )
+        if table in existing_tables:
+            columns = [c["name"] for c in inspector.get_columns(table)]
+            if "updated_at" not in columns:
+                op.add_column(
+                    table,
+                    sa.Column(
+                        "updated_at",
+                        sa.DateTime(timezone=True),
+                        server_default=sa.text("CURRENT_TIMESTAMP"),
+                        nullable=True,
+                    ),
+                )
 
 
 def downgrade():

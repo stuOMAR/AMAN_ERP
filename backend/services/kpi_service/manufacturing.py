@@ -1,11 +1,12 @@
 """kpi_service.manufacturing — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from utils.i18n import i18n_message  # noqa: E402
+from .common import (  # noqa: E402
     kpi_item, ratio_status, _count_table
 )
 
@@ -114,4 +115,3 @@ def get_manufacturing_kpis(db, start_date: date, end_date: date,
 # ═══════════════════════════════════════════════════════════════════════════════
 # Projects Dashboard KPIs
 # ═══════════════════════════════════════════════════════════════════════════════
-

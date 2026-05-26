@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import contextmanager
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Generator
 
 logger = logging.getLogger(__name__)

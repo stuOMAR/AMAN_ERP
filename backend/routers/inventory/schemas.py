@@ -41,6 +41,8 @@ class ProductResponse(ProductCreate):
     category_name: Optional[str] = None
     current_stock: Decimal
     reserved_quantity: Decimal = Decimal('0')
+    damaged_quantity: Decimal = Decimal('0')
+    available_stock: Decimal = Decimal('0')
     branch_avg_cost: Decimal = Decimal('0')
     display_cost: Decimal = Decimal('0')
     display_cost_currency: Optional[str] = None

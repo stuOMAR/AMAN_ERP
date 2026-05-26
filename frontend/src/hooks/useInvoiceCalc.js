@@ -1,8 +1,10 @@
 /**
  * useInvoiceCalc — Hook for backend-powered calculations.
  * 
- * All calculations happen in the backend. Frontend only sends raw data.
- * Tax is resolved by the backend engine — do NOT send tax_rate from frontend.
+ * Architecture: backend-authoritative calculation.
+ * preview() sends raw data to the backend endpoint.
+ * Backend computes with Decimal, resolves tax engine, and returns final values.
+ * On submit, client sends submitted_grand_total for server-side verification.
  * 
  * Usage:
  *   const { totals, lines, preview, loading } = useInvoiceCalc();
@@ -24,6 +26,9 @@ export default function useInvoiceCalc() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
   const debounceRef = useRef(null);
+
+  const linesRef = useRef([]);
+  linesRef.current = lines;
 
   /**
    * Calculate invoice totals via backend.
@@ -58,29 +63,31 @@ export default function useInvoiceCalc() {
   }, []);
 
   /**
-   * Debounced preview — waits 300ms after last call.
-   * Use this for live calculations while user types.
+   * Debounced preview — waits 500ms after last call.
+   * Debounces the backend preview request.
    */
   const previewDebounced = useCallback((data, endpoint = '/calculate/invoice-totals') => {
     if (debounceRef.current) clearTimeout(debounceRef.current);
-    debounceRef.current = setTimeout(() => preview(data, endpoint), 300);
+    debounceRef.current = setTimeout(() => {
+      preview(data, endpoint);
+    }, 600); // 600ms debounce for high-volume keystrokes
   }, [preview]);
 
   /**
-   * Calculate contract totals via backend.
-   * @param {Object} data - { lines: [...], currency }
+   * Calculate contract totals via the contracts backend preview endpoint.
+   * @param {Object} data - { items: [...], currency, party_id, branch_id }
    */
   const previewContract = useCallback(async (data) => {
     setLoading(true);
     setError(null);
 
     try {
-      const res = await api.post('/calculate/contract-totals', data);
+      const res = await api.post('/contracts/preview', data);
       const result = res.data;
 
       setTotals({
         subtotal: result.subtotal ?? null,
-        totalTax: result.total_tax ?? null,
+        totalTax: result.tax_amount ?? result.total_tax ?? null,
         grandTotal: result.grand_total ?? null,
         currency: result.currency || 'SAR',
       });

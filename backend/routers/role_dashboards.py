@@ -531,10 +531,15 @@ def _require_roles(user, allowed_roles: list, request: Request = None):
     if isinstance(user, dict):
         permissions = user.get("permissions", [])
     else:
-        permissions = getattr(user, "permissions", [])
+        permissions = getattr(user, "permissions", []) or []
 
     # Wildcard permission holders bypass role check
     if "*" in permissions:
+        return
+
+    # Custom roles that have been explicitly granted dashboard permissions bypass role check
+    has_dashboard_perm = any(p == "dashboard.*" or p.startswith("dashboard.") for p in permissions)
+    if has_dashboard_perm:
         return
 
     if role not in allowed_roles:

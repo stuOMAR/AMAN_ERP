@@ -6,7 +6,7 @@ from typing import Any, Dict, List, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from utils.cache import invalidate_company_cache, invalidate_aggregates
+from utils.cache import invalidate_aggregates
 
 from database import get_db_connection
 from routers.auth import get_current_user
@@ -54,8 +54,8 @@ def _resolve_rate_or_400(db, request: Request, *, currency: str, base_currency: 
             document_date=document_date,
             provided_rate=provided_rate,
         )
-    except ValueError as exc:
-        raise HTTPException(**http_error(400, str(exc) or "exchange_rate_must_be_positive", request))
+    except ValueError:
+        raise HTTPException(**http_error(400, "exchange_rate_must_be_positive", request))
 
 
 # --- Customer Receipts (Payment Vouchers) ---

@@ -257,8 +257,8 @@ const ReportCenter = () => {
             permission: 'reports.view',
             module: 'reports',
             reports: [
-                { name: t('kpi_admin.title', 'إدارة مؤشرات الأداء'), path: '/reports/kpi-admin', desc: t('kpi_admin.subtitle', 'إنشاء ومراقبة مؤشرات الأداء الرئيسية') },
-                { name: t('scheduler.title', 'جدولة العمليات'), path: '/admin/ops/scheduler', desc: t('scheduler.subtitle', 'مراقبة وإدارة المهام المجدولة') },
+                { name: t('kpi_admin.title', 'إدارة مؤشرات الأداء'), path: '/reports/kpi-admin', permission: 'dashboard.analytics_manage', desc: t('kpi_admin.subtitle', 'إنشاء ومراقبة مؤشرات الأداء الرئيسية') },
+                { name: t('scheduler.title', 'جدولة العمليات'), path: '/admin/ops/scheduler', permission: 'ops.scheduler.admin', desc: t('scheduler.subtitle', 'مراقبة وإدارة المهام المجدولة') },
                 { name: t('health.title', 'صحة النظام'), path: '/health/detailed', desc: t('health.subtitle', 'حالة جميع مكونات النظام') },
             ]
         },
@@ -274,7 +274,10 @@ const ReportCenter = () => {
             return enabledModules.includes(g.module)
         }
         return true
-    });
+    }).map(g => ({
+        ...g,
+        reports: g.reports.filter(report => !report.permission || hasPermission(report.permission)),
+    })).filter(g => g.reports.length > 0);
 
     const totalReports = reportGroups.reduce((sum, g) => sum + g.reports.length, 0);
 

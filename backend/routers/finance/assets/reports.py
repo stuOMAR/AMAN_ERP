@@ -2,26 +2,14 @@
 
 Mounted under the parent router via assets/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime
+from typing import Any, Dict, Optional
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import get_mapped_account_id
-from utils.fiscal_lock import check_fiscal_period_open
-from schemas.assets import (
-    AssetCreate, AssetUpdate, AssetDisposal, LeasePaymentCreate,
-    AssetTransferCreate, AssetRevaluationCreate, MaintenanceComplete,
-    LeaseContractCreate, DecliningBalanceInput, UnitsOfProductionInput,
-    InsuranceCreate, MaintenanceCreate, AssetQRUpdate, ImpairmentTestInput,
-)
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 
@@ -33,7 +21,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/reports/register", dependencies=[Depends(require_permission("assets.view"))], response_model=Dict[str, Any])
 def asset_register_report(

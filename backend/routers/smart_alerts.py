@@ -12,7 +12,6 @@ from __future__ import annotations
 
 import json
 import logging
-from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy import text
@@ -21,6 +20,7 @@ from database import get_db_connection
 from routers.auth import get_current_user
 from utils.permissions import require_permission
 from typing import Any, Dict, List
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 router = APIRouter(prefix="/alerts", tags=["Smart Alerts"])

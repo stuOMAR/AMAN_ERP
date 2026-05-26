@@ -14,6 +14,7 @@ from sqlalchemy import text
 from database import db_connection
 from services.gl_service import create_journal_entry as gl_create_je
 from utils.accounting import get_mapped_account_id
+from utils.i18n import i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -324,7 +325,6 @@ def create_transaction(
 
         # Final source/target amounts persisted on the IC txn record =
         # functional amounts each branch actually booked.
-        target_amount = target_func_amount
         # Override legacy ``source_amount`` from request: it now represents
         # the source-functional booking value to keep one consistent meaning.
         source_amount = source_func_amount

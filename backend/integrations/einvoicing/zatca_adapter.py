@@ -45,7 +45,7 @@ from typing import Any, Callable, Dict, Optional
 import requests
 
 from .base import EInvoiceAdapter, SubmissionResult
-from utils.tax_precision import money_str, qty_str, q_money, dec
+from utils.tax_precision import money_str, qty_str, dec
 
 logger = logging.getLogger(__name__)
 
@@ -70,8 +70,8 @@ def build_qr_payload(
     seller_name: str,
     seller_vat: str,
     timestamp,
-    total_with_vat: float,
-    vat_amount: float,
+    total_with_vat: Any,
+    vat_amount: Any,
     invoice_hash: Optional[str] = None,
     ecdsa_signature: Optional[bytes] = None,
     public_key: Optional[bytes] = None,
@@ -347,7 +347,7 @@ class ZATCAAdapter(EInvoiceAdapter):
         # EINV-F1: bounded exponential-backoff retry on transient failures
         # (network errors and 5xx). Terminal 4xx responses are not retried.
         max_attempts = int(getattr(self.config, "max_retries", 3) or 3)
-        backoff_base = float(getattr(self.config, "retry_backoff_seconds", 1.5) or 1.5)
+        backoff_base = dec(getattr(self.config, "retry_backoff_seconds", "1.5") or "1.5")
         last_exc: Optional[Exception] = None
         for attempt in range(1, max_attempts + 1):
             try:
@@ -369,10 +369,10 @@ class ZATCAAdapter(EInvoiceAdapter):
                 if retriable and attempt < max_attempts:
                     sleep_for = backoff_base * (2 ** (attempt - 1))
                     logger.warning(
-                        "ZATCA transient HTTP %s (attempt %s/%s); retrying in %.1fs",
+                        "ZATCA transient HTTP %s (attempt %s/%s); retrying in %ss",
                         r.status_code, attempt, max_attempts, sleep_for,
                     )
-                    time.sleep(sleep_for)
+                    time.sleep(int(sleep_for * dec(1000)) / 1000)
                     continue
 
                 return SubmissionResult(
@@ -387,10 +387,10 @@ class ZATCAAdapter(EInvoiceAdapter):
                 if attempt < max_attempts:
                     sleep_for = backoff_base * (2 ** (attempt - 1))
                     logger.warning(
-                        "ZATCA network error (attempt %s/%s): %s — retrying in %.1fs",
+                        "ZATCA network error (attempt %s/%s): %s — retrying in %ss",
                         attempt, max_attempts, e, sleep_for,
                     )
-                    time.sleep(sleep_for)
+                    time.sleep(int(sleep_for * dec(1000)) / 1000)
                     continue
                 logger.exception("ZATCA submit failed after %s attempts", attempt)
                 return SubmissionResult(

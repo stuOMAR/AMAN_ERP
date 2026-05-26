@@ -3,7 +3,6 @@
 Feature 024 — T068. Adds state, quarantine_path, scan fields to documents.
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "024n_documents_scan_state"
 down_revision = "024m_dms_attachment_links"
@@ -12,13 +11,15 @@ depends_on = None
 
 
 def upgrade() -> None:
-    op.add_column("documents", sa.Column("state", sa.String(16), server_default="clean"))
-    op.add_column("documents", sa.Column("quarantine_path", sa.String(1024), nullable=True))
-    op.add_column("documents", sa.Column("scanned_at", sa.DateTime(timezone=True), nullable=True))
-    op.add_column("documents", sa.Column("scan_engine", sa.String(64), nullable=True))
-    op.add_column("documents", sa.Column("scan_engine_version", sa.String(64), nullable=True))
-    op.add_column("documents", sa.Column("checksum_sha256", sa.CHAR(64), nullable=True))
-    op.create_index("ix_docs_state", "documents", ["state"])
+    op.execute("""
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS state VARCHAR(16) DEFAULT 'clean';
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS quarantine_path VARCHAR(1024);
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS scanned_at TIMESTAMPTZ;
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS scan_engine VARCHAR(64);
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS scan_engine_version VARCHAR(64);
+        ALTER TABLE documents ADD COLUMN IF NOT EXISTS checksum_sha256 CHAR(64);
+        CREATE INDEX IF NOT EXISTS ix_docs_state ON documents (state);
+    """)
 
 
 def downgrade() -> None:

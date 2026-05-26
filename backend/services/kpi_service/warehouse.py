@@ -1,14 +1,15 @@
 """kpi_service.warehouse — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from typing import Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     build_branch_filter, kpi_item, ratio_status, _count_table
 )
-from utils.accounting import get_base_currency
+from utils.accounting import get_base_currency  # noqa: E402
+from utils.i18n import i18n_message  # noqa: E402
 
 
 def get_warehouse_kpis(db, start_date: date, end_date: date,
@@ -23,7 +24,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     inv_valuation_cost = 0
     try:
         wh_branch_sql, wh_bp = build_branch_filter(branch_id, table_alias="w")
-        iv = db.execute(text( # noqa: sql-lint
+        iv = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(i.quantity * COALESCE(p.cost_price, 0)), 0)
             FROM inventory i JOIN products p ON i.product_id = p.id
@@ -37,7 +38,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     # Inventory Valuation at Selling Price (always in base currency)
     inv_valuation_sell = 0
     try:
-        iv_sell = db.execute(text( # noqa: sql-lint
+        iv_sell = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(i.quantity * COALESCE(p.selling_price, 0)), 0)
             FROM inventory i JOIN products p ON i.product_id = p.id
@@ -55,7 +56,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     cogs = 0
     try:
         cogs_branch_sql, cogs_bp = build_branch_filter(branch_id)
-        cogs_r = db.execute(text( # noqa: sql-lint
+        cogs_r = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(jl.debit - jl.credit), 0)
             FROM journal_lines jl JOIN journal_entries je ON jl.journal_entry_id = je.id
@@ -72,7 +73,7 @@ def get_warehouse_kpis(db, start_date: date, end_date: date,
     dio = 365 / stock_turnover if stock_turnover > 0 else 0
 
     # Total SKUs & Active
-    total_products = _count_table(db, "products")
+    _count_table(db, "products")
     active_products = _count_table(db, "products", extra_where="is_active = true")
 
     # Low Stock Count — P1 #99: available = quantity - reserved_quantity

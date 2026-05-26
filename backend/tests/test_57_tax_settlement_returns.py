@@ -10,10 +10,8 @@ the four SQL queries (sales, sales_return, purchase, purchase_return)
 are issued in order and that the resulting JE settles the **netted**
 amount.
 """
-from decimal import Decimal
 from unittest.mock import MagicMock, patch
 
-from fastapi import HTTPException
 import pytest
 
 

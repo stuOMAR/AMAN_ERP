@@ -20,8 +20,9 @@ in :func:`generate_payroll` — see the ``advance_deduction`` column on
 """
 from __future__ import annotations
 
-from datetime import date, datetime
+from datetime import date
 from decimal import Decimal
+import hashlib
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request, status
@@ -55,6 +56,11 @@ class AdvanceApprove(BaseModel):
     treasury_account_id: int
 
 
+def _approval_idempotency_key(advance_id: int, raw_key: str) -> str:
+    digest = hashlib.sha256(f"{advance_id}:{raw_key}".encode("utf-8")).hexdigest()
+    return f"hr_adv_pay:{advance_id}:{digest[:32]}"
+
+
 @router.get("", response_model=List[Dict[str, Any]],
             dependencies=[Depends(require_permission(["hr.view", "hr.loans.view"]))])
 def list_advances(employee_id: Optional[int] = None,
@@ -77,12 +83,25 @@ def list_advances(employee_id: Optional[int] = None,
         db.close()
 
 
+from utils.tax_precision import require_idempotency_key  # noqa: E402
+
+
 @router.post("", response_model=Dict[str, Any], status_code=status.HTTP_201_CREATED,
              dependencies=[Depends(require_permission("hr.loans.manage"))])
 def create_advance(payload: AdvanceCreate, request: Request,
                    current_user=Depends(get_current_user)):
+    idempotency_key = require_idempotency_key(request, operation="salary advance")
     db = get_db_connection(current_user.company_id)
     try:
+        # Check idempotency replay
+        existing_adv = db.execute(text("""
+            SELECT * FROM salary_advances
+            WHERE idempotency_key = :key
+            LIMIT 1
+        """), {"key": idempotency_key}).fetchone()
+        if existing_adv:
+            return dict(existing_adv._mapping)
+
         emp = db.execute(text(
             "SELECT id, salary, branch_id FROM employees WHERE id = :id AND status = 'active'"
         ), {"id": payload.employee_id}).fetchone()
@@ -108,14 +127,15 @@ def create_advance(payload: AdvanceCreate, request: Request,
         row = db.execute(text("""
             INSERT INTO salary_advances
                 (employee_id, amount, installments, request_date, reason,
-                 treasury_account_id, branch_id, status)
-            VALUES (:eid, :amt, :inst, CURRENT_DATE, :reason, :tid, :bid, 'pending')
+                 treasury_account_id, branch_id, status, idempotency_key)
+            VALUES (:eid, :amt, :inst, CURRENT_DATE, :reason, :tid, :bid, 'pending', :idempotency_key)
             RETURNING *
         """), {
             "eid": payload.employee_id, "amt": payload.amount,
             "inst": payload.installments, "reason": payload.reason,
             "tid": payload.treasury_account_id,
             "bid": branch_id,
+            "idempotency_key": idempotency_key
         }).fetchone()
         db.commit()
         log_activity(db, user_id=current_user.id, username=current_user.username,
@@ -149,6 +169,8 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
     absent — emit a warning rather than failing so older tenants can still
     use the feature.
     """
+    idempotency_key = require_idempotency_key(request, operation="salary advance approval")
+    approval_idempotency_key = _approval_idempotency_key(advance_id, idempotency_key)
     db = get_db_connection(current_user.company_id)
     try:
         adv = db.execute(text(
@@ -157,6 +179,14 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
         if not adv:
             raise HTTPException(**http_error(404, "advance_not_found", request))
         if adv.status != "pending":
+            if adv.status == "paid":
+                replay = db.execute(text("""
+                    SELECT id FROM journal_entries
+                    WHERE idempotency_key = :key
+                    LIMIT 1
+                """), {"key": approval_idempotency_key}).fetchone()
+                if replay:
+                    return {"id": advance_id, "status": "paid", "je_id": replay.id, "replayed": True}
             raise HTTPException(status_code=400,
                                 detail=f"Advance is not pending (status={adv.status})")
         branch_id = validate_branch_access(current_user, adv.branch_id)
@@ -182,7 +212,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
             raise HTTPException(**http_error(400, "employee_advances_account_not_configured", request))
 
         from services.gl_service import create_journal_entry
-        je_id = create_journal_entry(
+        je_id, _entry_number = create_journal_entry(
             db=db, company_id=current_user.company_id,
             date=date.today().isoformat(),
             description=f"Salary advance — emp {adv.employee_id}",
@@ -194,6 +224,7 @@ def approve_and_pay(advance_id: int, payload: AdvanceApprove, request: Request,
             ],
             user_id=current_user.id, branch_id=branch_id,
             source="salary_advance", source_id=advance_id,
+            idempotency_key=approval_idempotency_key,
         )
 
         db.execute(text("""

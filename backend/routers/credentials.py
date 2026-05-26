@@ -21,7 +21,6 @@ from routers.auth import get_current_user
 from services.permissions.sensitive import require_sensitive_permission
 from utils.audit import log_activity
 from utils.i18n import http_error
-from utils.tx import transactional
 
 logger = logging.getLogger(__name__)
 
@@ -228,7 +227,7 @@ def rotate_credential(request: Request,
         try:
             from services.credentials_vault import rotate_credential as vault_rotate
 
-            result = vault_rotate(
+            vault_rotate(
                 tenant_id=int(current_user.get("tenant_id") or current_user.get("company_id", 0)),
                 credential_id=credential_id,
                 new_secret=payload.new_secret,

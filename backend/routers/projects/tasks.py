@@ -2,25 +2,15 @@
 
 Mounted under the parent router via projects/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
+from fastapi import APIRouter, Depends, HTTPException, status, Request
 from utils.i18n import http_error, i18n_message
-import os
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime, timedelta
-from decimal import Decimal, ROUND_HALF_UP
+from typing import Any, Dict, List
+from decimal import Decimal
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import (
-    generate_sequential_number, get_mapped_account_id,
-    get_base_currency, compute_line_amounts, compute_invoice_totals
-)
+from utils.permissions import require_permission, validate_branch_access
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
 from sqlalchemy import text
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,28 +20,32 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.projects import (
-    ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
-    ProjectExpenseCreate, ProjectRevenueCreate,
-    TimesheetCreate, TimesheetUpdate, TimesheetApprove,
-    ProjectInvoiceCreate, ChangeOrderCreate, ChangeOrderUpdate, ProjectCloseRequest,
-    ProjectRiskCreate, ProjectRiskUpdate, TaskDependencyCreate
+from schemas.projects import (  # noqa: E402
+    TaskCreate, TaskUpdate,
+    TaskDependencyCreate
 )
-from schemas.timetracking import (
-    TimesheetEntryCreate, TimesheetEntryUpdate,
-    WeeklySubmitRequest, RejectRequest
-)
-from schemas.resource import AllocationCreate, AllocationUpdate
 
 router = APIRouter()
 
-from .core import _D2, _D4
+
+
+def _validate_project_access(db, project_id: int, current_user):
+    project = db.execute(
+        text("SELECT id, branch_id FROM projects WHERE id = :id"),
+        {"id": project_id},
+    ).fetchone()
+    if not project:
+        raise HTTPException(**http_error(404, "project_not_found"))
+    validate_branch_access(current_user, project.branch_id)
+    return project
+
 
 @router.get("/{project_id}/tasks", dependencies=[Depends(require_permission("projects.view"))], response_model=List[Dict[str, Any]])
 async def get_project_tasks(project_id: int, current_user: dict = Depends(get_current_user)):
     """جلب مهام المشروع"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         tasks = db.execute(text("""
             SELECT pt.*,
                 CONCAT(e.first_name, ' ', e.last_name) as assigned_to_name
@@ -71,9 +65,7 @@ async def create_task(project_id: int, task: TaskCreate, request: Request, curre
     """إضافة مهمة للمشروع"""
     db = get_db_connection(current_user.company_id)
     try:
-        project = db.execute(text("SELECT id FROM projects WHERE id = :id"), {"id": project_id}).fetchone()
-        if not project:
-            raise HTTPException(**http_error(404, "project_not_found"))
+        _validate_project_access(db, project_id, current_user)
 
         result = db.execute(text("""
             INSERT INTO project_tasks (
@@ -120,6 +112,7 @@ async def update_task(project_id: int, task_id: int, data: TaskUpdate, request: 
     """تحديث مهمة"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         existing = db.execute(
             text("SELECT id FROM project_tasks WHERE id = :tid AND project_id = :pid"),
             {"tid": task_id, "pid": project_id}
@@ -182,6 +175,7 @@ async def delete_task(project_id: int, task_id: int, request: Request, current_u
     """حذف مهمة"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         db.execute(
             text("DELETE FROM project_tasks WHERE id = :tid AND project_id = :pid"),
             {"tid": task_id, "pid": project_id}
@@ -210,6 +204,7 @@ def list_task_dependencies(project_id: int, current_user=Depends(get_current_use
     """تبعيات المهام"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         rows = db.execute(text("""
             SELECT td.*, t1.task_name as task_name, t2.task_name as depends_on_name
             FROM task_dependencies td
@@ -228,9 +223,22 @@ def create_task_dependency(project_id: int, dep: TaskDependencyCreate, request: 
     """إنشاء تبعية مهمة"""
     db = get_db_connection(current_user.company_id)
     try:
+        _validate_project_access(db, project_id, current_user)
         # T034: Validate no self-dependency
         if dep.task_id == dep.depends_on_task_id:
             raise HTTPException(**http_error(400, "task_cannot_depend_on_itself"))
+        task_count = db.execute(text("""
+            SELECT COUNT(*)
+            FROM project_tasks
+            WHERE project_id = :pid
+              AND id IN (:task_id, :depends_on_task_id)
+        """), {
+            "pid": project_id,
+            "task_id": dep.task_id,
+            "depends_on_task_id": dep.depends_on_task_id,
+        }).scalar()
+        if task_count != 2:
+            raise HTTPException(**http_error(400, "task_dependency_project_mismatch"))
 
         result = db.execute(text("""
             INSERT INTO task_dependencies (project_id, task_id, depends_on_task_id,
@@ -266,6 +274,15 @@ def delete_task_dependency(dep_id: int, request: Request, current_user=Depends(g
     """حذف تبعية"""
     db = get_db_connection(current_user.company_id)
     try:
+        dependency = db.execute(text("""
+            SELECT td.project_id, p.branch_id
+            FROM task_dependencies td
+            JOIN projects p ON p.id = td.project_id
+            WHERE td.id = :id
+        """), {"id": dep_id}).fetchone()
+        if not dependency:
+            raise HTTPException(**http_error(404, "dependency_not_found"))
+        validate_branch_access(current_user, dependency.branch_id)
         db.execute(text("DELETE FROM task_dependencies WHERE id = :id"), {"id": dep_id})
         db.commit()
         log_activity(
@@ -287,10 +304,5 @@ def delete_task_dependency(dep_id: int, request: Request, current_user=Depends(g
 # ═══════════════════════════════════════════════════════════
 # US17 — Time Tracking  (/projects/timetracking/...)
 # ═══════════════════════════════════════════════════════════
-
-from schemas.timetracking import (
-    TimesheetEntryCreate, TimesheetEntryUpdate,
-    WeeklySubmitRequest, RejectRequest
-)
 
 

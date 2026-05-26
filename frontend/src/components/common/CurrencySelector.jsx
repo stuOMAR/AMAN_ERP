@@ -20,7 +20,7 @@ export default function CurrencySelector({ value, onChange, className = '', labe
                 if (!value && response.data.length > 0) {
                     const base = response.data.find(c => c.is_base) || response.data[0]
                     if (base) {
-                        onChange(base.code, base.exchange_rate || 1.0)
+                        onChange(base.code, base.is_base ? '1' : null)
                     }
                 }
             } catch (error) {
@@ -32,18 +32,15 @@ export default function CurrencySelector({ value, onChange, className = '', labe
         fetchCurrencies()
     }, [])
 
-    // T8.4: replace static `currencies.exchange_rate` with the live rate from
-    // /accounting/currencies/current. Falls back gracefully on any error.
     const handleChange = async (e) => {
         const code = e.target.value
         const selected = currencies.find(c => c.code === code)
-        const fallback = selected?.exchange_rate || 1.0
-        // Push the fallback immediately for snappy UI, then refine.
-        onChange(code, fallback)
-        try {
-            const live = await fetchCurrentRate(code)
-            if (live && live !== fallback) onChange(code, live)
-        } catch { /* keep fallback */ }
+        if (selected?.is_base) {
+            onChange(code, '1')
+            return
+        }
+        const live = await fetchCurrentRate(code)
+        onChange(code, live)
     }
 
     if (loading && currencies.length === 0) {

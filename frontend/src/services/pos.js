@@ -34,7 +34,10 @@ export const posAPI = {
     getActiveSession: () => api.get('/pos/sessions/active'),
 
     // Orders
-    createOrder: (data) => api.post('/pos/orders', data),
+    previewOrder: (data) => api.post('/pos/orders/preview', data),
+    createOrder: (data, idempotencyKey) => api.post('/pos/orders', data, idempotencyKey ? {
+        headers: { 'Idempotency-Key': idempotencyKey }
+    } : undefined),
     getHeldOrders: () => api.get('/pos/orders/held'),
     resumeOrder: (orderId) => api.post(`/pos/orders/${orderId}/resume`),
     cancelHeldOrder: (orderId) => api.delete(`/pos/orders/${orderId}/cancel-held`),

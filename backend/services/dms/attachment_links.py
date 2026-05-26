@@ -5,7 +5,7 @@ Contract: see specs/024-workforce-service-comms-integrity/contracts/dms-attachme
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 
@@ -78,10 +78,12 @@ def list_for_entity(
     """List documents linked to an entity."""
     rows = conn.execute(
         text("""
-            SELECT l.id, l.document_id, d.filename, d.file_size, d.state, d.created_at
+            SELECT l.id, l.document_id, d.file_name, d.file_size,
+                   COALESCE(d.state, 'clean') AS state, d.created_at
             FROM dms_attachment_links l
             JOIN documents d ON d.id = l.document_id
             WHERE l.tenant_id = :tnt AND l.entity_type = :etype AND l.entity_id = :eid
+              AND COALESCE(d.is_deleted, FALSE) = FALSE
             ORDER BY l.created_at DESC
         """),
         {"tnt": tenant_id, "etype": entity_type, "eid": entity_id},

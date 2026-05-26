@@ -21,14 +21,13 @@ from __future__ import annotations
 
 import json
 import logging
-import os
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import Any, Optional
 
 from sqlalchemy import text
 
-from database import db_connection, get_db_connection
-from utils.field_encryption import decrypt, encrypt, is_encrypted
+from database import db_connection
+from utils.field_encryption import decrypt, encrypt
 from utils.audit import log_activity
 
 logger = logging.getLogger(__name__)

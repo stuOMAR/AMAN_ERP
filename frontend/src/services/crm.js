@@ -1,25 +1,33 @@
 import api from './apiClient'
 
+const idempotencyHeaders = () => ({
+    headers: { 'Idempotency-Key': globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}` }
+})
+
 export const crmAPI = {
     // Opportunities
     listOpportunities: (params) => api.get('/crm/opportunities', { params }),
     getPipelineSummary: () => api.get('/crm/opportunities/pipeline'),
     getOpportunity: (id) => api.get(`/crm/opportunities/${id}`),
-    createOpportunity: (data) => api.post('/crm/opportunities', data),
+    createOpportunity: (data) => api.post('/crm/opportunities', data, idempotencyHeaders()),
     updateOpportunity: (id, data) => api.put(`/crm/opportunities/${id}`, data),
     deleteOpportunity: (id) => api.delete(`/crm/opportunities/${id}`),
     addActivity: (oppId, data) => api.post(`/crm/opportunities/${oppId}/activities`, data),
-    convertToQuotation: (oppId) => api.post(`/crm/opportunities/${oppId}/convert-quotation`),
+    convertToQuotation: (oppId) => api.post(`/crm/opportunities/${oppId}/convert-quotation`, null, idempotencyHeaders()),
     // Marketing Campaigns
     listCampaigns: (params) => api.get('/crm/campaigns', { params }),
+    getCampaignSummary: (params) => api.get('/crm/campaigns/summary', { params }),
     getCampaign: (id) => api.get(`/crm/campaigns/${id}`),
-    createCampaign: (data) => api.post('/crm/campaigns', data),
+    createCampaign: (data) => api.post('/crm/campaigns', data, idempotencyHeaders()),
     updateCampaign: (id, data) => api.put(`/crm/campaigns/${id}`, data),
     deleteCampaign: (id) => api.delete(`/crm/campaigns/${id}`),
-    executeCampaign: (id) => api.post(`/crm/campaigns/${id}/execute`),
+    executeCampaign: (id) => api.post(`/crm/campaigns/${id}/execute`, null, idempotencyHeaders()),
     getCampaignRecipients: (id, params) => api.get(`/crm/campaigns/${id}/recipients`, { params }),
     getCampaignMetrics: (id) => api.get(`/crm/campaigns/${id}/metrics`),
-    attributeLead: (campaignId, leadId) => api.post(`/crm/campaigns/${campaignId}/attribute-lead`, null, { params: { lead_id: leadId } }),
+    attributeLead: (campaignId, leadId) => api.post(`/crm/campaigns/${campaignId}/attribute-lead`, null, {
+        params: { lead_id: leadId },
+        ...idempotencyHeaders()
+    }),
     // Knowledge Base
     listArticles: (params) => api.get('/crm/knowledge-base', { params }),
     getArticle: (id) => api.get(`/crm/knowledge-base/${id}`),
@@ -58,6 +66,9 @@ export const crmAPI = {
     getConversionAnalytics: () => api.get('/crm/analytics/conversion'),
     getSalesForecast: () => api.get('/crm/analytics/forecast'),
     getCampaignROI: () => api.get('/crm/analytics/campaign-roi'),
+    getVelocity: (params) => api.get('/crm/velocity', { params }),
+    getFunnel: (params) => api.get('/crm/funnel', { params }),
+    getCashflowForecast: (params) => api.get('/crm/cashflow-forecast', { params }),
     // Dashboard
     getDashboard: () => api.get('/crm/dashboard'),
 }

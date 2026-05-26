@@ -3,34 +3,26 @@
 Mounted under the parent router via auth/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Body
-from utils.i18n import http_error
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
+from utils.i18n import http_error, i18n_message
+from fastapi.security import OAuth2PasswordRequestForm
 from sqlalchemy import text, create_engine
-from sqlalchemy.exc import OperationalError, ProgrammingError
 from jose import jwt, JWTError
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, EmailStr
+from typing import Any, Dict, Optional
 import logging
 import os
-import secrets
-import hashlib
-import ipaddress
-from database import get_system_db, verify_password, get_db_connection, hash_password, engine as system_engine
-from utils.tx import transactional
+from database import get_system_db, verify_password, get_db_connection
 from config import settings
-from schemas import Token, UserResponse
+from schemas import Token
 from utils.audit import log_activity, log_system_activity
 from utils.limiter import limiter
 from utils.auth_cookies import set_auth_cookies, clear_auth_cookies
 
 logger = logging.getLogger(__name__)
-oauth2_scheme = OAuth2PasswordBearer(tokenUrl='api/auth/login')
-oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_error=False)
 
 router = APIRouter()
 
-from .core import LogoutRequest, RefreshTokenRequest, _get_client_ip, _hash_token, _is_user_tokens_invalidated, add_token_to_blacklist, check_rate_limit, clear_failed_attempts, create_access_token, create_refresh_token, is_token_blacklisted, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt
+from .core import LogoutRequest, RefreshTokenRequest, _get_client_ip, _hash_token, _is_user_tokens_invalidated, add_token_to_blacklist, check_rate_limit, clear_failed_attempts, create_access_token, create_refresh_token, is_token_blacklisted, oauth2_scheme, oauth2_scheme_optional, record_failed_attempt  # noqa: E402
 
 @router.post("/login", response_model=Token)
 @limiter.limit("10/minute")  # SEC-FIX: Production rate limit (reverted from 1000 testing value)
@@ -684,4 +676,3 @@ async def refresh_token(
 # ═══════════════════════════════════════════════════════════════════════════════
 # FORGOT / RESET PASSWORD
 # ═══════════════════════════════════════════════════════════════════════════════
-

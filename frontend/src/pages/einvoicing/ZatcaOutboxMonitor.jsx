@@ -13,6 +13,11 @@ const STATE_STYLES = {
     dead_letter: 'text-red-700 bg-red-100',
 };
 
+function makeIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`;
+    return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`;
+}
+
 const ZatcaOutboxMonitor = () => {
     const { t } = useTranslation();
     const [rows, setRows] = useState([]);
@@ -37,7 +42,9 @@ const ZatcaOutboxMonitor = () => {
 
     const handleReprocess = async (id) => {
         try {
-            await api.post(`/einvoicing/outbox/${id}/reprocess`);
+            await api.post(`/einvoicing/outbox/${id}/reprocess`, null, {
+                headers: { 'Idempotency-Key': makeIdempotencyKey(`zatca-reprocess:${id}`) },
+            });
             fetchRows();
         } catch (err) {
             console.error('Reprocess failed:', err);

@@ -4,37 +4,16 @@ Mounted under the parent router via core/__init__.py.
 """
 import logging
 from decimal import Decimal
-from datetime import datetime, date
-from typing import List, Optional
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
-from utils.i18n import http_error
+from typing import Optional
+from fastapi import APIRouter
 from pydantic import BaseModel
 from sqlalchemy import text
-from routers.auth import get_current_user
-from utils.permissions import require_permission, require_module
-from database import get_db_connection
-from utils.tx import transactional
-from utils.accounting import get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.exports import generate_excel, generate_pdf, create_export_response
-from utils.audit import log_activity
-from services.gl_service import create_journal_entry
-from schemas import UserResponse
-from schemas.manufacturing_advanced import (
-    WorkCenterCreate, WorkCenterResponse,
-    RouteCreate, RouteResponse,
-    BOMCreate, BOMResponse,
-    ProductionOrderCreate, ProductionOrderResponse,
-    ProductionOrderOperationResponse, MRPPlanResponse,
-    EquipmentCreate, EquipmentResponse,
-    MaintenanceLogCreate, MaintenanceLogResponse
-)
 
 logger = logging.getLogger(__name__)
 
 router = APIRouter()
 
-def calculate_production_cost(conn, bom_id: int, order_quantity: float, order_id: int = None):
+def calculate_production_cost(conn, bom_id: int, order_quantity: Decimal, order_id: int = None):
     """
     Calculate total production cost breakdown for a production order.
     Returns dict with material_cost, labor_cost, overhead_cost, total_cost, and unit_cost.
@@ -111,7 +90,7 @@ def calculate_production_cost(conn, bom_id: int, order_quantity: float, order_id
 
 
 # ---- Helper: Check Inventory Sufficiency ----
-def check_inventory_sufficiency(conn, bom_id: int, order_quantity: float, warehouse_id: int = None, *, lock_rows: bool = False):
+def check_inventory_sufficiency(conn, bom_id: int, order_quantity: Decimal, warehouse_id: int = None, *, lock_rows: bool = False):
     """
     Check if enough raw materials are available in inventory for a production order.
     Returns (is_sufficient: bool, shortages: list).
@@ -177,8 +156,8 @@ class QCResultRecord(BaseModel):
 
 
 class ActualCostUpdate(BaseModel):
-    actual_material_cost: Optional[float] = None
-    actual_labor_cost: Optional[float] = None
-    actual_overhead_cost: Optional[float] = None
+    actual_material_cost: Optional[Decimal] = None
+    actual_labor_cost: Optional[Decimal] = None
+    actual_overhead_cost: Optional[Decimal] = None
 
 

@@ -27,7 +27,7 @@ def get_storage_root(conn: Any, *, tenant_id: int) -> str:
 
 
 def compute_storage_path(
-    tenant_id: int,
+    tenant_id: int | str,
     document_id: int,
     filename: str,
     storage_root: str,
@@ -37,8 +37,15 @@ def compute_storage_path(
     Uses content-addressed storage: /root/<tenant>/<shard>/<hash>/<filename>
     """
     # Create sharding from document_id
-    shard = document_id % 1000
-    return os.path.join(storage_root, str(tenant_id), f"{shard:03d}", str(document_id))
+    shard = int(document_id) % 1000
+    root = Path(storage_root).resolve()
+    tenant_segment = str(tenant_id or "0").strip() or "0"
+    if not tenant_segment.replace("-", "_").replace("_", "").isalnum():
+        tenant_segment = hashlib.sha256(tenant_segment.encode("utf-8")).hexdigest()[:16]
+    path = (root / tenant_segment / f"{shard:03d}" / str(int(document_id))).resolve()
+    if not str(path).startswith(str(root) + os.sep):
+        raise ValueError("dms.path_traversal")
+    return str(path)
 
 
 def ensure_directory(path: str) -> None:

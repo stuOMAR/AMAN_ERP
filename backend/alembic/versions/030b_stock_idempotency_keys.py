@@ -11,7 +11,6 @@ INV-16: stock_transfer_log.idempotency_key — prevents duplicate transfer
 """
 from typing import Sequence, Union
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "030b_stock_idempotency_keys"

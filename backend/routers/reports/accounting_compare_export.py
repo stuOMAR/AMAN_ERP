@@ -2,26 +2,53 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import Request, APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
+from typing import Any, Dict, Optional
+from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
-from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
-from routers.reports.accounting_statements import get_profit_loss, get_balance_sheet, get_trial_balance, get_general_ledger
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
+from routers.reports.accounting_statements import (
+    _get_general_ledger_data,
+    _resolve_report_ledger_id,
+    get_balance_sheet,
+    get_profit_loss,
+    get_trial_balance,
+)
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
+_D2 = Decimal("0.01")
+
+
+def _q_pct(value) -> Decimal:
+    return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _direction(value) -> str:
+    dec = Decimal(str(value if value is not None else 0))
+    if dec > 0:
+        return "increase"
+    if dec < 0:
+        return "decrease"
+    return "flat"
+
+
+def _plus_prefix(value) -> str:
+    return "+" if Decimal(str(value if value is not None else 0)) > 0 else ""
+
+
+def _parse_report_date(value, fallback: date) -> date:
+    if not value:
+        return fallback
+    if isinstance(value, date):
+        return value
+    return date.fromisoformat(str(value))
 
 @router.get("/accounting/profit-loss/compare", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
 def compare_profit_loss(request: Request, 
@@ -70,8 +97,8 @@ def compare_profit_loss(request: Request,
             bal_map = {r.id: Decimal(str(r.balance)) for r in balances}
 
             accounts_with_bal = []
-            total_rev = 0
-            total_exp = 0
+            total_rev = Decimal("0")
+            total_exp = Decimal("0")
             for a in account_list:
                 bal = bal_map.get(a["id"], 0)
                 accounts_with_bal.append({**a, "balance": bal})
@@ -86,6 +113,7 @@ def compare_profit_loss(request: Request,
                 "total_revenue": total_rev,
                 "total_expense": total_exp,
                 "net_income": total_rev - total_exp,
+                "result_type": "profit" if total_rev >= total_exp else "loss",
             })
 
         # Build flat comparison table
@@ -98,6 +126,7 @@ def compare_profit_loss(request: Request,
                 "total_revenue": pr["total_revenue"],
                 "total_expense": pr["total_expense"],
                 "net_income": pr["net_income"],
+                "result_type": pr["result_type"],
             } for pr in period_results],
             "comparison": comparison,
         }
@@ -150,9 +179,9 @@ def compare_balance_sheet(request: Request,
             bal_map = {r.id: Decimal(str(r.balance)) for r in balances}
 
             accounts_with_bal = []
-            total_assets = 0
-            total_liab = 0
-            total_equity = 0
+            total_assets = Decimal("0")
+            total_liab = Decimal("0")
+            total_equity = Decimal("0")
             for a in account_list:
                 bal = bal_map.get(a["id"], 0)
                 accounts_with_bal.append({**a, "balance": bal})
@@ -180,6 +209,7 @@ def compare_balance_sheet(request: Request,
                 "total_assets": pr["total_assets"],
                 "total_liabilities": pr["total_liabilities"],
                 "total_equity": pr["total_equity"],
+                "total_liabilities_and_equity": pr["total_liabilities"] + pr["total_equity"],
             } for pr in period_results],
             "comparison": comparison,
         }
@@ -189,7 +219,7 @@ def compare_balance_sheet(request: Request,
 
 # ==================== Export Endpoints ====================
 
-from utils.exports import generate_pdf, generate_excel, generate_excel_with_chart, generate_chart_image, create_export_response
+from utils.exports import generate_pdf, generate_excel, create_export_response  # noqa: E402
 
 @router.get("/accounting/profit-loss/export", dependencies=[Depends(require_permission(["accounting.view", "reports.view"]))], response_model=Dict[str, Any])
 def export_profit_loss(request: Request, 
@@ -404,7 +434,7 @@ def _build_comparison_table(account_list, period_results, mode):
         has_data = False
         for pr in period_results:
             acc = next((x for x in pr["accounts"] if x["id"] == a["id"]), None)
-            bal = acc["balance"] if acc else 0
+            bal = Decimal(str(acc["balance"])) if acc else Decimal("0")
             if bal != 0:
                 has_data = True
             period_values.append(bal)
@@ -414,10 +444,8 @@ def _build_comparison_table(account_list, period_results, mode):
             for idx in range(len(period_values) - 1):
                 delta = period_values[idx] - period_values[idx + 1]
                 period_changes.append(delta)
-                period_change_pct.append(
-                    round((delta / abs(period_values[idx + 1]) * 100), 2)
-                    if period_values[idx + 1] != 0 else 0
-                )
+                previous = period_values[idx + 1]
+                period_change_pct.append(_q_pct((delta / abs(previous) * Decimal("100")) if previous != 0 else Decimal("0")))
 
             # Backward-compatible first-pair fields for existing clients.
             change = period_changes[0] if period_changes else 0
@@ -431,7 +459,11 @@ def _build_comparison_table(account_list, period_results, mode):
                 "account_type": a["account_type"],
                 "periods": period_values,
                 "change": change,
-                "change_pct": round(change_pct, 2),
+                "change_pct": _q_pct(change_pct),
+                "change_direction": _direction(change),
+                "change_prefix": _plus_prefix(change),
+                "change_pct_direction": _direction(change_pct),
+                "change_pct_prefix": _plus_prefix(change_pct),
                 "period_changes": period_changes,
                 "period_change_pct": period_change_pct,
             })
@@ -482,15 +514,33 @@ def export_general_ledger(
     current_user: dict = Depends(get_current_user)
 ):
     """تصدير دفتر الأستاذ لحساب معين"""
-    data = get_general_ledger(account_id=account_id, start_date=start_date, end_date=end_date, branch_id=branch_id, current_user=current_user)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
+    db = get_db_connection(current_user.company_id)
+    try:
+        start = _parse_report_date(start_date, date.today().replace(day=1, month=1))
+        end = _parse_report_date(end_date, date.today())
+        data = _get_general_ledger_data(
+            db,
+            account_id,
+            start,
+            end,
+            branch_scope=branch_scope,
+            ledger_id=_resolve_report_ledger_id(db, None),
+            limit=None,
+        )
+    finally:
+        db.close()
+
     flat = []
     balance = Decimal("0")
     for e_row in data["entries"]:
-        balance += e_row["debit"] - e_row["credit"]
+        debit = Decimal(str(e_row.get("debit") or 0))
+        credit = Decimal(str(e_row.get("credit") or 0))
+        balance += debit - credit
         flat.append({
             "التاريخ": e_row["entry_date"], "رقم القيد": e_row["entry_number"],
             "البيان": e_row["description"] or "", "المرجع": e_row["reference"] or "",
-            "مدين": f"{e_row['debit']:,.2f}", "دائن": f"{e_row['credit']:,.2f}",
+            "مدين": f"{debit:,.2f}", "دائن": f"{credit:,.2f}",
             "الرصيد": f"{balance:,.2f}",
         })
     cols = ["التاريخ", "رقم القيد", "البيان", "المرجع", "مدين", "دائن", "الرصيد"]
@@ -529,5 +579,3 @@ def export_cashflow(
         return create_export_response(buf, f"{fname}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
     buf = generate_pdf([[r[c] for c in cols] for r in flat], "Cash Flow Statement", cols)
     return create_export_response(buf, f"{fname}.pdf", "application/pdf")
-
-

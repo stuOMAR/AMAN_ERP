@@ -3,10 +3,25 @@ import { useNavigate } from 'react-router-dom'
 import { taxesAPI } from '../../utils/api'
 import { useTranslation } from 'react-i18next'
 import { getCurrency } from '../../utils/auth'
+import { formatNumber } from '../../utils/format'
 import { useBranch } from '../../context/BranchContext'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
 import BackButton from '../../components/common/BackButton';
 import FormField from '../../components/common/FormField';
+
+function makeIdempotencyKey(prefix) {
+    if (window.crypto?.randomUUID) return `${prefix}:${window.crypto.randomUUID()}`
+    return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
+}
+
+function isNegativeAmount(value) {
+    return String(value || '0').trim().startsWith('-')
+}
+
+function absoluteAmount(value) {
+    const text = String(value || '0.00').trim()
+    return text.startsWith('-') ? text.slice(1) : text
+}
 
 function TaxReturnForm() {
     const { t } = useTranslation()
@@ -45,13 +60,23 @@ function TaxReturnForm() {
         setLoading(true)
 
         try {
-            const res = await taxesAPI.createReturn({
+            const payload = {
                 tax_period: getPeriodString(),
                 tax_type: form.tax_type,
                 due_date: form.due_date || null,
                 notes: form.notes || null,
                 branch_id: currentBranch?.id || null
-            })
+            }
+            const preview = await taxesAPI.previewReturn(payload)
+            const submittedTaxDue = preview.data?.submitted_tax_due || preview.data?.summary?.net_payable
+            if (submittedTaxDue == null) {
+                throw new Error('submitted_tax_due_missing')
+            }
+            const idempotencyKey = makeIdempotencyKey(`tax-return:${payload.tax_period}`)
+            const res = await taxesAPI.createReturn({
+                ...payload,
+                submitted_tax_due: String(submittedTaxDue)
+            }, idempotencyKey)
             setSuccess(res.data)
         } catch (err) {
             setError(err.response?.data?.detail || t('errors.generic'))
@@ -105,19 +130,19 @@ function TaxReturnForm() {
                             <div className="metrics-grid mt-4" style={{ gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', maxWidth: '800px', margin: '24px auto' }}>
                                 <div className="metric-card">
                                     <div className="metric-label">{t('taxes.output_vat')}</div>
-                                    <div className="metric-value text-secondary">{(success.summary.output_vat || 0).toLocaleString('en', { minimumFractionDigits: 2 })}</div>
+                                    <div className="metric-value text-secondary">{formatNumber(success.summary.output_vat || '0.00')}</div>
                                 </div>
                                 <div className="metric-card">
                                     <div className="metric-label">{t('taxes.input_vat')}</div>
-                                    <div className="metric-value text-primary">{(success.summary.input_vat || 0).toLocaleString('en', { minimumFractionDigits: 2 })}</div>
+                                    <div className="metric-value text-primary">{formatNumber(success.summary.input_vat || '0.00')}</div>
                                 </div>
                                 <div className="metric-card">
                                     <div className="metric-label">{t('taxes.net_payable')}</div>
-                                    <div className={`metric-value ${success.summary.net_payable >= 0 ? 'text-error' : 'text-success'}`}>
-                                        {Math.abs(success.summary.net_payable || 0).toLocaleString('en', { minimumFractionDigits: 2 })} {currency}
+                                    <div className={`metric-value ${isNegativeAmount(success.summary.net_payable) ? 'text-success' : 'text-error'}`}>
+                                        {formatNumber(absoluteAmount(success.summary.net_payable || '0.00'))} {currency}
                                     </div>
                                     <div className="metric-change">
-                                        {success.summary.net_payable >= 0 ? (t('taxes.payable')) : (t('taxes.refundable'))}
+                                        {isNegativeAmount(success.summary.net_payable) ? (t('taxes.refundable')) : (t('taxes.payable'))}
                                     </div>
                                 </div>
                             </div>

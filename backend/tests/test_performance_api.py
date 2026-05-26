@@ -10,10 +10,10 @@ AMAN ERP - Performance Tests: API Response Times
 ═══════════════════════════════════════
 """
 
-import pytest
-import time
-from fastapi.testclient import TestClient
-from main import app
+import pytest  # noqa: E402
+import time  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
 
 client = TestClient(app)
 

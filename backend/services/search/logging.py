@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import time
 from typing import Any
 
 logger = logging.getLogger(__name__)
@@ -49,8 +48,8 @@ def log_search_query(
             },
         )
         db.commit()
-    except Exception as exc:
-        logger.error("Failed to log search query: %s", exc)
+    except Exception:
+        logger.error("Failed to log search query")
 
 
 def cleanup_old_logs(db: Any, retention_days: int = 90) -> int:
@@ -62,7 +61,7 @@ def cleanup_old_logs(db: Any, retention_days: int = 90) -> int:
 
     try:
         result = db.execute(
-            text("DELETE FROM search_query_logs WHERE created_at < NOW() - INTERVAL ':days days'"),
+            text("DELETE FROM search_query_logs WHERE created_at < NOW() - (:days * INTERVAL '1 day')"),
             {"days": retention_days},
         )
         db.commit()
@@ -70,6 +69,6 @@ def cleanup_old_logs(db: Any, retention_days: int = 90) -> int:
         if deleted > 0:
             logger.info("Cleaned up %d old search query logs", deleted)
         return deleted
-    except Exception as exc:
-        logger.error("Search log cleanup failed: %s", exc)
+    except Exception:
+        logger.error("Search log cleanup failed")
         return 0

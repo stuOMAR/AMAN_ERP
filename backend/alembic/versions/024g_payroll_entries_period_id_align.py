@@ -3,7 +3,6 @@
 Feature 024 — T022. Ensures payroll_entries.period_id exists with FK.
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "024g_payroll_entries_period_id_align"
 down_revision = "024f_bank_codes"

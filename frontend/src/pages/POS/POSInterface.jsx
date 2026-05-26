@@ -21,6 +21,27 @@ import {
 } from 'lucide-react';
 import { formatShortDate } from '../../utils/dateUtils';
 import { formatNumber } from '../../utils/format';
+import Decimal from 'decimal.js';
+
+const parseDecimalInput = (value) => {
+    if (value === null || value === undefined || value === '') return null;
+    try {
+        const decimal = new Decimal(value);
+        return decimal.isFinite() ? decimal : null;
+    } catch {
+        return null;
+    }
+};
+
+const decimalOrZero = (value) => parseDecimalInput(value) || new Decimal('0');
+const decimalString = (value) => decimalOrZero(value).toString();
+const fallbackUuid = () => {
+    const seed = `${Date.now().toString(16)}${Math.random().toString(16).slice(2)}`.padEnd(32, '0').slice(0, 32);
+    return `${seed.slice(0, 8)}-${seed.slice(8, 12)}-4${seed.slice(13, 16)}-8${seed.slice(17, 20)}-${seed.slice(20, 32)}`;
+};
+const newClientOperationId = () => (
+    (typeof window !== 'undefined' && window.crypto?.randomUUID?.()) || fallbackUuid()
+);
 
 const POSInterface = () => {
     const { t, i18n } = useTranslation();
@@ -46,10 +67,12 @@ const POSInterface = () => {
     const [cart, setCart] = useState([]);
     const [customers, setCustomers] = useState([]);
     const [selectedCustomer, setSelectedCustomer] = useState(null);
-    const [globalDiscount, setGlobalDiscount] = useState(0);
+    const [globalDiscount, setGlobalDiscount] = useState('');
+    const [orderPreview, setOrderPreview] = useState(null);
+    const [previewLoading, setPreviewLoading] = useState(false);
 
     const [showPaymentModal, setShowPaymentModal] = useState(false);
-    const [paymentAmounts, setPaymentAmounts] = useState({ cash: 0, card: 0, mada: 0 });
+    const [paymentAmounts, setPaymentAmounts] = useState({ cash: '', card: '', mada: '' });
     const [submitting, setSubmitting] = useState(false);
 
     // --- Offline Mode (B7) ---
@@ -99,22 +122,90 @@ const POSInterface = () => {
         }
     }, [searchQuery, products]);
 
+    const buildOrderPayload = (payments = [], status = 'paid', preview = orderPreview, clientOrderId = null) => ({
+        session_id: session?.id,
+        ...(clientOrderId ? { client_order_id: clientOrderId } : {}),
+        warehouse_id: session?.warehouse_id,
+        customer_id: selectedCustomer?.id,
+        items: cart.map(item => ({
+            product_id: item.id,
+            quantity: String(item.quantity),
+            unit_price: String(item.price),
+        })),
+        discount_amount: decimalString(globalDiscount),
+        paid_amount: '0',
+        payments,
+        status,
+        submitted_grand_total: preview?.total_amount ? String(preview.total_amount) : null,
+    });
+
+    const fetchOrderPreview = async (payments = [], status = 'paid') => {
+        if (!navigator.onLine || !session?.id || cart.length === 0) {
+            setOrderPreview(null);
+            return null;
+        }
+        const payload = buildOrderPayload(payments, status, null);
+        const res = await api.post('/pos/orders/preview', payload);
+        setOrderPreview(res.data);
+        return res.data;
+    };
+
     // --- Cart Totals ---
-    const cartTotals = useMemo(() => {
-        let subtotal = 0;
-        let totalTax = 0;
+    const cartTotals = useMemo(() => ({
+        subtotal: orderPreview?.subtotal ?? null,
+        discount: orderPreview?.discount_amount ?? null,
+        tax: orderPreview?.tax_amount ?? null,
+        total: orderPreview?.total_amount ?? null,
+        remaining: orderPreview?.remaining_amount ?? null,
+    }), [orderPreview]);
 
-        cart.forEach(item => {
-            const itemTotal = item.price * item.quantity;
-            subtotal += itemTotal;
-            const itemTax = 0; // Tax resolved by backend engine
-            totalTax += itemTax;
-        });
+    const hasPreviewTotals = Boolean(cartTotals.total);
+    const displayMoney = (value) => (value === null || value === undefined || value === '' ? '—' : formatNumber(value));
+    const previewLineTotal = (productId) => orderPreview?.lines?.find(line => line.product_id === productId)?.total ?? null;
 
-        // Display total: just sum + tax - discount (for display only)
-        const total = Math.max(0, subtotal + totalTax - globalDiscount);
-        return { subtotal, discount: globalDiscount, tax: totalTax, total };
-    }, [cart, globalDiscount]);
+    useEffect(() => {
+        if (!isOnline || !session?.id || cart.length === 0) {
+            setOrderPreview(null);
+            return;
+        }
+        let cancelled = false;
+        const timer = setTimeout(async () => {
+            setPreviewLoading(true);
+            try {
+                const res = await api.post('/pos/orders/preview', buildOrderPayload([], 'paid', null));
+                if (!cancelled) setOrderPreview(res.data);
+            } catch (e) {
+                if (!cancelled) setOrderPreview(null);
+            } finally {
+                if (!cancelled) setPreviewLoading(false);
+            }
+        }, 250);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [isOnline, session?.id, session?.warehouse_id, selectedCustomer?.id, cart, globalDiscount]);
+
+    useEffect(() => {
+        if (!showPaymentModal || !isOnline || !session?.id || cart.length === 0) return;
+        let cancelled = false;
+        const payments = [];
+        if (decimalOrZero(paymentAmounts.cash).gt(0)) payments.push({ method: "cash", amount: decimalString(paymentAmounts.cash) });
+        if (decimalOrZero(paymentAmounts.card).gt(0)) payments.push({ method: "bank", amount: decimalString(paymentAmounts.card), reference: "card" });
+        if (decimalOrZero(paymentAmounts.mada).gt(0)) payments.push({ method: "bank", amount: decimalString(paymentAmounts.mada), reference: "mada" });
+        const timer = setTimeout(async () => {
+            try {
+                const res = await api.post('/pos/orders/preview', buildOrderPayload(payments, 'paid', null));
+                if (!cancelled) setOrderPreview(res.data);
+            } catch (e) {
+                if (!cancelled) setOrderPreview(null);
+            }
+        }, 200);
+        return () => {
+            cancelled = true;
+            clearTimeout(timer);
+        };
+    }, [showPaymentModal, paymentAmounts, isOnline, session?.id, session?.warehouse_id, selectedCustomer?.id, cart, globalDiscount]);
 
     // Broadcast cart changes to Customer Display
     useEffect(() => {
@@ -125,7 +216,7 @@ const POSInterface = () => {
                     name: item.name,
                     price: item.price,
                     quantity: item.quantity,
-                    total: item.price * item.quantity
+                    total: previewLineTotal(item.id)
                 })),
                 totals: cartTotals,
                 currency
@@ -204,11 +295,15 @@ const POSInterface = () => {
 
     // --- Checkout Logic ---
     const openSplitPayment = () => {
-        setPaymentAmounts({ cash: 0, card: 0, mada: 0 });
+        setPaymentAmounts({ cash: '', card: '', mada: '' });
         setShowPaymentModal(true);
     }
 
     const quickPay = async (method) => {
+        if (!hasPreviewTotals) {
+            showToast(t('common.error_occurred'), 'warning');
+            return;
+        }
         const finalMethod = method === 'cash' ? 'cash' : 'bank';
         try {
             await processOrder([{ method: finalMethod, amount: cartTotals.total, reference: method }]);
@@ -221,35 +316,34 @@ const POSInterface = () => {
         setSubmitting(true);
 
         try {
-            const totalPaid = payments.reduce((sum, p) => sum + Number(p.amount), 0);
+            const authoritativePreview = navigator.onLine ? await fetchOrderPreview(payments, status) : null;
 
-            if (status === 'paid' && totalPaid < cartTotals.total - 0.01) {
+            if (navigator.onLine && !authoritativePreview) {
+                showToast(t('common.error_occurred'), "warning");
+                return;
+            }
+
+            if (status === 'paid' && navigator.onLine && decimalOrZero(authoritativePreview.remaining_amount).gt(0)) {
                 showToast(t('pos.paid_amount_less'), "warning");
                 return;
             }
 
-            const orderData = {
-                session_id: session?.id,
-                warehouse_id: session?.warehouse_id,
-                customer_id: selectedCustomer?.id,
-                items: cart.map(item => ({
-                    product_id: item.id,
-                    quantity: item.quantity,
-                    unit_price: item.price,
-                })),
-                discount_amount: globalDiscount,
-                paid_amount: status === 'paid' ? totalPaid : 0,
-                payments: status === 'paid' ? payments : [],
-                status: status
-            };
+            const idempotencyKey = newClientOperationId();
+            const submittedPreview = authoritativePreview || orderPreview;
+            const orderData = buildOrderPayload(
+                status === 'paid' ? payments : [],
+                status,
+                submittedPreview,
+                idempotencyKey
+            );
 
             // Offline fallback: save to IndexedDB when no connection
             if (!navigator.onLine) {
-                await savePendingOrder({ orderData, total: cartTotals.total });
+                await savePendingOrder({ orderData, idempotencyKey });
                 setOfflinePendingCount(prev => prev + 1);
                 showToast(t('pos.order_saved_offline', 'تم حفظ الطلب محلياً - سيتم مزامنته عند عودة الاتصال'), 'warning');
             } else {
-                await api.post('/pos/orders', orderData);
+                await api.post('/pos/orders', orderData, { headers: { 'Idempotency-Key': idempotencyKey } });
                 showToast(status === 'paid' ? t('pos.order_completed') : t('common.saved'), "success");
             }
 
@@ -259,7 +353,7 @@ const POSInterface = () => {
             }
 
             setCart([]);
-            setGlobalDiscount(0);
+            setGlobalDiscount('');
             setShowPaymentModal(false);
             setSelectedCustomer(null);
 
@@ -275,16 +369,35 @@ const POSInterface = () => {
     }
 
     const handleSplitCheckout = async () => {
-        const totalPaid = Number(paymentAmounts.cash) + Number(paymentAmounts.card) + Number(paymentAmounts.mada);
-        if (totalPaid < cartTotals.total - 0.01) {
+        const latestPreview = await fetchOrderPreview([
+            ...(decimalOrZero(paymentAmounts.cash).gt(0) ? [{ method: "cash", amount: decimalString(paymentAmounts.cash) }] : []),
+            ...(decimalOrZero(paymentAmounts.card).gt(0) ? [{ method: "bank", amount: decimalString(paymentAmounts.card), reference: "card" }] : []),
+            ...(decimalOrZero(paymentAmounts.mada).gt(0) ? [{ method: "bank", amount: decimalString(paymentAmounts.mada), reference: "mada" }] : []),
+        ]);
+        if (!latestPreview || decimalOrZero(latestPreview.remaining_amount).gt(0)) {
             showToast(t('pos.paid_amount_less'), "warning");
             return;
         }
         const payments = [];
-        if (Number(paymentAmounts.cash) > 0) payments.push({ method: "cash", amount: Number(paymentAmounts.cash) });
-        if (Number(paymentAmounts.card) > 0) payments.push({ method: "bank", amount: Number(paymentAmounts.card), reference: "card" });
-        if (Number(paymentAmounts.mada) > 0) payments.push({ method: "bank", amount: Number(paymentAmounts.mada), reference: "mada" });
+        if (decimalOrZero(paymentAmounts.cash).gt(0)) payments.push({ method: "cash", amount: decimalString(paymentAmounts.cash) });
+        if (decimalOrZero(paymentAmounts.card).gt(0)) payments.push({ method: "bank", amount: decimalString(paymentAmounts.card), reference: "card" });
+        if (decimalOrZero(paymentAmounts.mada).gt(0)) payments.push({ method: "bank", amount: decimalString(paymentAmounts.mada), reference: "mada" });
         await processOrder(payments);
+    };
+
+    const fillPaymentAmount = async (target) => {
+        const payments = [];
+        if (target !== 'cash' && decimalOrZero(paymentAmounts.cash).gt(0)) {
+            payments.push({ method: "cash", amount: decimalString(paymentAmounts.cash) });
+        }
+        if (target !== 'card' && decimalOrZero(paymentAmounts.card).gt(0)) {
+            payments.push({ method: "bank", amount: decimalString(paymentAmounts.card), reference: "card" });
+        }
+        if (target !== 'mada' && decimalOrZero(paymentAmounts.mada).gt(0)) {
+            payments.push({ method: "bank", amount: decimalString(paymentAmounts.mada), reference: "mada" });
+        }
+        const preview = await fetchOrderPreview(payments);
+        setPaymentAmounts(p => ({ ...p, [target]: preview?.remaining_amount || '' }));
     };
 
     const handleHold = async () => {
@@ -300,7 +413,7 @@ const POSInterface = () => {
         try {
             await api.post(`/pos/sessions/${session.id}/close`, {
                 cash_register_balance: String(closingData.cashCount),
-                closing_balance: String(closingData.cashCount),
+                closing_balance: String(session?.expected_cash || '0'),
                 notes: closingData.notes
             });
 
@@ -567,7 +680,7 @@ const POSInterface = () => {
                                 </div>
 
                                 <div className="cart-item-total">
-                                    <p className="total-amount">{formatNumber(item.price * item.quantity)}</p>
+                                    <p className="total-amount">{displayMoney(previewLineTotal(item.id))}</p>
                                     <p className="total-currency">{currency}</p>
                                 </div>
 
@@ -586,29 +699,28 @@ const POSInterface = () => {
                         <div className="cart-totals">
                             <div className="cart-totals-row">
                                 <span className="label">{t('pos.subtotal')}</span>
-                                <span className="value">{formatNumber(cartTotals.subtotal)} {currency}</span>
+                                <span className="value">{displayMoney(cartTotals.subtotal)} {currency}</span>
                             </div>
                             <div className="cart-totals-row discount">
                                 <span className="label">{t('pos.discount')}</span>
                                 <div className="discount-actions">
-                                    {globalDiscount > 0 ? (
+                                    {decimalOrZero(globalDiscount).gt(0) ? (
                                         <>
                                             <span className="value">-{formatNumber(globalDiscount)} {currency}</span>
-                                            <button onClick={() => setGlobalDiscount(0)} className="discount-btn remove">{t('common.cancel')}</button>
+                                            <button onClick={() => setGlobalDiscount('')} className="discount-btn remove">{t('common.cancel')}</button>
                                         </>
                                     ) : (
                                         <button
                                             onClick={() => {
                                                 const d = prompt(t('pos.enter_discount_value'));
-                                                if (d && !isNaN(d)) {
-                                                    const val = Number(d);
-                                                    if (val < 0) {
-                                                        showToast(t('pos.discount_negative'), 'warning');
-                                                    } else if (val > cartTotals.subtotal) {
-                                                        showToast(t('pos.discount_exceeds_total'), 'warning');
-                                                    } else {
-                                                        setGlobalDiscount(val);
-                                                    }
+                                                const val = parseDecimalInput(d);
+                                                if (!val) return;
+                                                if (val.lt(0)) {
+                                                    showToast(t('pos.discount_negative'), 'warning');
+                                                } else if (cartTotals.subtotal && val.gt(decimalOrZero(cartTotals.subtotal))) {
+                                                    showToast(t('pos.discount_exceeds_total'), 'warning');
+                                                } else {
+                                                    setGlobalDiscount(val.toString());
                                                 }
                                             }}
                                             className="discount-btn add"
@@ -620,14 +732,14 @@ const POSInterface = () => {
                             </div>
                             <div className="cart-totals-row">
                                 <span className="label">{t('pos.tax')}</span>
-                                <span className="value">{formatNumber(cartTotals.tax)} {currency}</span>
+                                <span className="value">{displayMoney(cartTotals.tax)} {currency}</span>
                             </div>
                         </div>
 
                         <div className="cart-grand-total">
                             <span className="label">{t('pos.total')}</span>
                             <div className="value">
-                                <p className="amount">{formatNumber(cartTotals.total)}</p>
+                                <p className="amount">{previewLoading ? '...' : displayMoney(cartTotals.total)}</p>
                                 <p className="currency">{currency}</p>
                             </div>
                         </div>
@@ -635,28 +747,28 @@ const POSInterface = () => {
                         <div className="cart-payment-grid">
                             <button
                                 onClick={() => quickPay('cash')}
-                                disabled={!cart.length || submitting}
+                                disabled={!cart.length || submitting || !hasPreviewTotals}
                                 className="payment-btn cash"
                             >
                                 <Banknote size={18} /> {submitting ? '...' : t('pos.cash')}
                             </button>
                             <button
                                 onClick={() => quickPay('card')}
-                                disabled={!cart.length || submitting}
+                                disabled={!cart.length || submitting || !hasPreviewTotals}
                                 className="payment-btn card"
                             >
                                 <CardIcon size={18} /> {t('pos.payment_credit_card')}
                             </button>
                             <button
                                 onClick={() => quickPay('mada')}
-                                disabled={!cart.length || submitting}
+                                disabled={!cart.length || submitting || !hasPreviewTotals}
                                 className="payment-btn mada"
                             >
                                 <Smartphone size={16} /> {t('pos.payment_mada')}
                             </button>
                             <button
                                 onClick={openSplitPayment}
-                                disabled={!cart.length || submitting}
+                                disabled={!cart.length || submitting || !hasPreviewTotals}
                                 className="payment-btn split"
                             >
                                 <Split size={16} /> {t('pos.split_payment')}
@@ -673,8 +785,12 @@ const POSInterface = () => {
                                 <span>{t('pos.hold_invoice')}</span>
                             </button>
                             <button
-                                disabled={!cart.length}
+                                disabled={!cart.length || (isOnline && !hasPreviewTotals)}
                                 onClick={() => {
+                                    if (!orderPreview) {
+                                        showToast(t('common.error_occurred'), 'warning');
+                                        return;
+                                    }
                                     const receiptOrder = {
                                         order_number: session?.session_code ? `${session.session_code}-${(session.order_count || 0) + 1}` : 'NEW',
                                         order_date: new Date().toISOString(),
@@ -683,7 +799,7 @@ const POSInterface = () => {
                                             product_name: item.name,
                                             quantity: item.quantity,
                                             unit_price: item.price,
-                                            total: item.price * item.quantity,
+                                            total: previewLineTotal(item.id),
                                         })),
                                         subtotal: cartTotals.subtotal,
                                         tax_amount: cartTotals.tax,
@@ -742,7 +858,7 @@ const POSInterface = () => {
                                 <p className="label">{t('pos.remaining_amount')}</p>
                                 <p className="amount">
                                     <span className="currency">{currency}</span>
-                                    {formatNumber(cartTotals.total - Number(paymentAmounts.cash) - Number(paymentAmounts.card) - Number(paymentAmounts.mada))}
+                                    {displayMoney(cartTotals.remaining)}
                                 </p>
                             </div>
 
@@ -754,13 +870,15 @@ const POSInterface = () => {
                                         <Banknote size={24} />
                                     </div>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         value={paymentAmounts.cash}
                                         onChange={e => setPaymentAmounts({ ...paymentAmounts, cash: e.target.value })}
                                         onFocus={e => e.target.select()}
                                     />
                                     <button
-                                        onClick={() => setPaymentAmounts(p => ({ ...p, cash: Math.max(0, cartTotals.total - Number(p.card) - Number(p.mada)) }))}
+                                        disabled={!hasPreviewTotals}
+                                        onClick={() => fillPaymentAmount('cash')}
                                         className="modal-full-btn"
                                     >
                                         {t('pos.full')}
@@ -776,13 +894,15 @@ const POSInterface = () => {
                                         <CardIcon size={24} />
                                     </div>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         value={paymentAmounts.card}
                                         onChange={e => setPaymentAmounts({ ...paymentAmounts, card: e.target.value })}
                                         onFocus={e => e.target.select()}
                                     />
                                     <button
-                                        onClick={() => setPaymentAmounts(p => ({ ...p, card: Math.max(0, cartTotals.total - Number(p.cash) - Number(p.mada)) }))}
+                                        disabled={!hasPreviewTotals}
+                                        onClick={() => fillPaymentAmount('card')}
                                         className="modal-full-btn"
                                     >
                                         {t('pos.full')}
@@ -798,13 +918,15 @@ const POSInterface = () => {
                                         <Smartphone size={24} />
                                     </div>
                                     <input
-                                        type="number"
+                                        type="text"
+                                        inputMode="decimal"
                                         value={paymentAmounts.mada}
                                         onChange={e => setPaymentAmounts({ ...paymentAmounts, mada: e.target.value })}
                                         onFocus={e => e.target.select()}
                                     />
                                     <button
-                                        onClick={() => setPaymentAmounts(p => ({ ...p, mada: Math.max(0, cartTotals.total - Number(p.cash) - Number(p.card)) }))}
+                                        disabled={!hasPreviewTotals}
+                                        onClick={() => fillPaymentAmount('mada')}
                                         className="modal-full-btn"
                                     >
                                         {t('pos.full')}
@@ -812,7 +934,7 @@ const POSInterface = () => {
                                 </div>
                             </div>
 
-                            <button onClick={handleSplitCheckout} className="modal-confirm-btn" disabled={submitting}>
+                            <button onClick={handleSplitCheckout} className="modal-confirm-btn" disabled={submitting || !hasPreviewTotals}>
                                 <span>{submitting ? '...' : t('pos.confirm_payment')}</span>
                                 <ArrowRightLeft size={20} />
                             </button>
@@ -889,7 +1011,7 @@ const POSInterface = () => {
                                     <div style={{ display: 'flex', justifyContent: 'space-between', paddingTop: '8px', borderTop: '2px solid var(--base-300)' }}>
                                         <span style={{ fontWeight: '700', fontSize: '14px' }}>{t('pos.expected_cash')}:</span>
                                         <strong style={{ color: 'var(--primary)', fontSize: '17px' }}>
-                                            {formatNumber((session?.opening_balance || 0) + (session?.total_cash || 0) - (session?.total_returns_cash || 0))} {currency}
+                                            {formatNumber(session?.expected_cash || 0)} {currency}
                                         </strong>
                                     </div>
                                     <div style={{ fontSize: '11px', color: 'var(--base-content-secondary)', marginTop: '4px', textAlign: 'center' }}>
@@ -903,8 +1025,8 @@ const POSInterface = () => {
                                     {t('pos.actual_cash_count')} *
                                 </label>
                                 <input
-                                    type="number"
-                                    step="0.01"
+                                    type="text"
+                                    inputMode="decimal"
                                     value={closingData.cashCount}
                                     onChange={(e) => setClosingData({ ...closingData, cashCount: e.target.value })}
                                     placeholder="0.00"

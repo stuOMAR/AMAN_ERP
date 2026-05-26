@@ -13,9 +13,7 @@ Findings are written to ``audit_logs`` with ``critical = True``.
 
 from __future__ import annotations
 
-import json
 import logging
-from datetime import datetime, timezone
 from typing import List
 
 from sqlalchemy import text

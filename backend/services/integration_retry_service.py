@@ -20,6 +20,8 @@ from typing import Callable, Optional
 
 from sqlalchemy import text
 
+from services.audit_sanitizer import sanitize_for_audit
+
 logger = logging.getLogger(__name__)
 
 # Exponential backoff — same shape as `retry_failed_notifications` (T019).
@@ -29,6 +31,13 @@ _MAX_RETRIES_DEFAULT = 3
 
 # ─── shared helpers ─────────────────────────────────────────────────────────
 
+def _sanitize_external_payload(value):
+    return sanitize_for_audit(value, context="integration_retry")
+
+
+def _safe_error(exc: Exception) -> str:
+    return f"{exc.__class__.__name__}"
+
 def _next_backoff_clause(retry_count: int) -> str:
     """Return a SQL expression computing ``next_retry_at = NOW() + INTERVAL`` ."""
     seconds = _BACKOFF_SECONDS.get(retry_count, 1800)
@@ -37,6 +46,8 @@ def _next_backoff_clause(retry_count: int) -> str:
 
 def _move_to_dlq(conn, *, queue_type: str, queue_item_id: int, provider: Optional[str],
                  reason: str, payload: dict, gateway_response: Optional[dict]) -> None:
+    safe_payload = _sanitize_external_payload(payload or {})
+    safe_gateway_response = _sanitize_external_payload(gateway_response or {})
     conn.execute(
         text("""
             INSERT INTO integration_dlq (
@@ -49,9 +60,9 @@ def _move_to_dlq(conn, *, queue_type: str, queue_item_id: int, provider: Optiona
         """),
         {
             "qt": queue_type, "qi": queue_item_id, "pr": provider,
-            "rs": (reason or "")[:1000],
-            "pl": json.dumps(payload or {}, default=str),
-            "gr": json.dumps(gateway_response, default=str) if gateway_response else None,
+            "rs": str(_sanitize_external_payload(reason or ""))[:1000],
+            "pl": json.dumps(safe_payload, default=str),
+            "gr": json.dumps(safe_gateway_response, default=str) if gateway_response else None,
         },
     )
 
@@ -136,7 +147,7 @@ def process_payment_retries(conn, attempt_callback: Callable[[dict], dict]) -> d
             outcome = attempt_callback(row)
         except Exception as e:
             logger.exception("[payment-retry] gateway call raised for row %s", row["id"])
-            outcome = {"status": "failed", "error": str(e), "gateway_response": None}
+            outcome = {"status": "failed", "error": _safe_error(e), "gateway_response": None}
 
         new_retry_count = (row["retry_count"] or 0) + 1
         if outcome.get("status") == "succeeded":
@@ -269,7 +280,7 @@ def process_sms_retries(conn, send_callback: Callable[[dict], dict]) -> dict:
             outcome = send_callback(row)
         except Exception as e:
             logger.exception("[sms-retry] gateway call raised for row %s", row["id"])
-            outcome = {"status": "failed", "error": str(e), "gateway_response": None}
+            outcome = {"status": "failed", "error": _safe_error(e), "gateway_response": None}
 
         new_retry_count = (row["retry_count"] or 0) + 1
         if outcome.get("status") == "sent":
@@ -345,12 +356,12 @@ def default_payment_attempt(row: dict) -> dict:
     try:
         from integrations.payments.registry import get_gateway as get_payment_gateway
     except Exception as e:
-        return {"status": "failed", "error": f"payments registry unavailable: {e}"}
+        return {"status": "failed", "error": f"payments registry unavailable: {_safe_error(e)}"}
 
     try:
         gateway = get_payment_gateway(row.get("provider"))
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": _safe_error(e)}
 
     payload = row.get("request_payload") or {}
     source = payload.get("source") or {}
@@ -363,14 +374,14 @@ def default_payment_attempt(row: dict) -> dict:
             source=source, metadata=metadata,
         )
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": _safe_error(e)}
 
     if result.status in ("captured", "authorised"):
         return {"status": "succeeded",
                 "gateway_response": {"charge_id": result.charge_id, "status": result.status,
                                      **(result.gateway_response or {})}}
     return {"status": "failed",
-            "error": result.error_message or f"unexpected status {result.status}",
+            "error": str(_sanitize_external_payload(result.error_message or f"unexpected status {result.status}")),
             "gateway_response": {"charge_id": result.charge_id, "status": result.status,
                                  **(result.gateway_response or {})}}
 
@@ -379,12 +390,12 @@ def default_sms_send(row: dict) -> dict:
     try:
         from integrations.sms.registry import get_gateway as get_sms_gateway
     except Exception as e:
-        return {"status": "failed", "error": f"sms registry unavailable: {e}"}
+        return {"status": "failed", "error": f"sms registry unavailable: {_safe_error(e)}"}
 
     try:
         gateway = get_sms_gateway(row.get("provider"))
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": _safe_error(e)}
 
     try:
         result = gateway.send(
@@ -393,14 +404,14 @@ def default_sms_send(row: dict) -> dict:
             sender=row.get("sender_id"),
         )
     except Exception as e:
-        return {"status": "failed", "error": str(e)}
+        return {"status": "failed", "error": _safe_error(e)}
 
     if result.status in ("sent", "delivered", "queued"):
         return {"status": "sent",
                 "gateway_response": {"message_id": result.message_id, "segments": result.segments,
                                      **(result.gateway_response or {})}}
     return {"status": "failed",
-            "error": result.error_message or f"unexpected status {result.status}",
+            "error": str(_sanitize_external_payload(result.error_message or f"unexpected status {result.status}")),
             "gateway_response": {"message_id": result.message_id,
                                  **(result.gateway_response or {})}}
 

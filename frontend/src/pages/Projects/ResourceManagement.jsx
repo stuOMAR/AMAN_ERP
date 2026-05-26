@@ -45,15 +45,15 @@ const ResourceManagement = () => {
 
     const getDailyLoad = (resource, date) => {
         const dateStr = format(date, 'yyyy-MM-dd');
-        return resource.daily_load.find(d => d.date === dateStr)?.hours || 0;
+        return resource.daily_load.find(d => d.date === dateStr) || { hours: '0.00', load_status: 'none' };
     };
 
-    const getCellColor = (hours) => {
-        if (hours === 0) return '';
-        if (hours <= 6) return 'bg-success-subtle'; // Light load
-        if (hours <= 8) return 'bg-success text-white'; // Optimal
-        if (hours <= 10) return 'bg-warning text-dark'; // Heavy
-        return 'bg-danger text-white'; // Overload
+    const getCellColor = (status) => {
+        if (status === 'light') return 'bg-success-subtle';
+        if (status === 'optimal') return 'bg-success text-white';
+        if (status === 'heavy') return 'bg-warning text-dark';
+        if (status === 'overload') return 'bg-danger text-white';
+        return '';
     };
 
     return (
@@ -117,9 +117,7 @@ const ResourceManagement = () => {
                                 ) : resources.length === 0 ? (
                                     <tr><td colSpan={9} className="text-center py-5 text-muted">{t('common.no_data')}</td></tr>
                                 ) : (
-                                    resources.map(res => {
-                                        const totalWeekly = weekDays.reduce((acc, day) => acc + getDailyLoad(res, day), 0);
-                                        return (
+                                    resources.map(res => (
                                             <tr key={res.id}>
                                                 <td className="ps-4 py-3">
                                                     <div className="d-flex align-items-center gap-3">
@@ -135,21 +133,20 @@ const ResourceManagement = () => {
                                                     </div>
                                                 </td>
                                                 {weekDays.map(day => {
-                                                    const hours = getDailyLoad(res, day);
+                                                    const load = getDailyLoad(res, day);
                                                     return (
                                                         <td key={day.toISOString()} className="text-center p-1">
-                                                            <div className={`allocation-cell rounded py-2 fw-bold ${getCellColor(hours)}`}>
-                                                                {hours > 0 ? hours : '-'}
+                                                            <div className={`allocation-cell rounded py-2 fw-bold ${getCellColor(load.load_status)}`}>
+                                                                {load.load_status !== 'none' ? load.hours : '-'}
                                                             </div>
                                                         </td>
                                                     );
                                                 })}
                                                 <td className="text-center fw-bold text-primary">
-                                                    {totalWeekly.toFixed(1)}
+                                                    {res.weekly_total_load}
                                                 </td>
                                             </tr>
-                                        );
-                                    })
+                                    ))
                                 )}
                             </tbody>
                         </table>

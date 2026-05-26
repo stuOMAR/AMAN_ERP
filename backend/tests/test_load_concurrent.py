@@ -10,11 +10,11 @@ AMAN ERP - Load Tests: Concurrent Users
 ═══════════════════════════════════════
 """
 
-import threading
-import time
-import os
-from fastapi.testclient import TestClient
-from main import app
+import threading  # noqa: E402
+import time  # noqa: E402
+import os  # noqa: E402
+from fastapi.testclient import TestClient  # noqa: E402
+from main import app  # noqa: E402
 
 client = TestClient(app)
 

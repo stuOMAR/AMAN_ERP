@@ -1,10 +1,11 @@
 import { useEffect, useRef, useCallback, useState } from 'react'
 import { getToken } from '../utils/tokenStore'
+import api from '../services/apiClient'
 
 /**
  * useNotificationSocket — React hook for real-time WebSocket notifications
  * 
- * Connects to ws://host/api/notifications/ws?token=JWT and receives
+ * Connects to ws://host/api/notifications/ws?ticket=TICKET and receives
  * push notifications in real-time. Falls back to polling if WS fails.
  * 
  * @param {Function} onNotification - callback({id, title, message, type, link, is_read, created_at})
@@ -16,7 +17,7 @@ export function useNotificationSocket(onNotification) {
     const [connected, setConnected] = useState(false)
     const attempt = useRef(0)
 
-    const connect = useCallback((abortSignal) => {
+    const connect = useCallback(async (abortSignal) => {
         // SEC-T2.8: read access token from in-memory store (not localStorage).
         const token = getToken()
         if (!token) return
@@ -39,10 +40,23 @@ export function useNotificationSocket(onNotification) {
             // If we can't parse, just proceed — the backend will validate
         }
 
+        // Fetch short-lived ws-ticket to hide JWT from query string
+        let wsTicket = null
+        try {
+            const response = await api.post('/notifications/ws-ticket')
+            wsTicket = response.data?.ticket
+        } catch (err) {
+            console.error("Failed to fetch WS ticket:", err)
+            // Fallback to token if ticket fetch fails
+        }
+
+        if (abortSignal?.aborted) return
+
         // Determine WS URL — use same host so Vite proxy handles it in dev
         const proto = window.location.protocol === 'https:' ? 'wss' : 'ws'
         const host = window.location.host
-        const url = `${proto}://${host}/api/notifications/ws?token=${encodeURIComponent(token)}`
+        const queryParam = wsTicket ? `ticket=${encodeURIComponent(wsTicket)}` : `token=${encodeURIComponent(token)}`
+        const url = `${proto}://${host}/api/notifications/ws?${queryParam}`
 
         // Defer creation so React StrictMode's instant cleanup sets abortSignal
         // before we ever open a socket — avoids "closed before established" warning.

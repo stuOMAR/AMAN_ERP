@@ -10,7 +10,8 @@ logger = logging.getLogger(__name__)
 
 # FIN-FIX: Precision constants for costing calculations
 _D4 = Decimal('0.0001')
-_dec = lambda v: Decimal(str(v or 0))
+def _dec(v):
+    return Decimal(str(v or 0))
 
 # F-NEW-003: monetary/quantity inputs arrive as Decimal, str, or int.
 # All numeric helpers in this module funnel them through ``_dec(...)``.
@@ -389,7 +390,7 @@ class CostingService:
 
         # ── Constitution VIII: validate qty_available before consuming ──
         inv_row = db.execute(text("""
-            SELECT quantity, reserved_quantity, available_quantity
+            SELECT quantity, reserved_quantity, damaged_quantity, available_quantity
             FROM inventory
             WHERE product_id = :pid AND warehouse_id = :wid
             FOR UPDATE
@@ -398,7 +399,8 @@ class CostingService:
         if inv_row:
             on_hand = _dec(inv_row[0])
             reserved = _dec(inv_row[1])
-            available = on_hand - reserved   # authoritative formula
+            damaged = _dec(inv_row[2])
+            available = _dec(inv_row[3]) if inv_row[3] is not None else on_hand - reserved - damaged
             if qty_remaining > available:
                 raise ValueError(
                     f"Insufficient available stock for product {product_id} in warehouse "
@@ -410,7 +412,7 @@ class CostingService:
         consumption_details = []
         order = "purchase_date ASC, id ASC" if costing_method == "fifo" else "purchase_date DESC, id DESC"
 
-        layers = db.execute(text( # noqa: sql-lint
+        layers = db.execute(text( # noqa
                     f"""
             SELECT id, remaining_quantity, unit_cost
             FROM cost_layers
@@ -519,7 +521,7 @@ class CostingService:
             else:  # lifo
                 layer_order = "ORDER BY purchase_date DESC, id DESC"
 
-            layers = db.execute(text( # noqa: sql-lint
+            layers = db.execute(text( # noqa
                         f"""
                 SELECT id, remaining_quantity, unit_cost
                 FROM cost_layers
@@ -698,11 +700,13 @@ class CostingService:
         if not include_exhausted:
             conditions.append("cl.is_exhausted = FALSE")
 
-        return db.execute(text( # noqa: sql-lint
+        return db.execute(text( # noqa
                     f"""
             SELECT cl.id, cl.product_id, cl.warehouse_id, cl.costing_method,
                    cl.purchase_date, cl.original_quantity, cl.remaining_quantity,
-                   cl.unit_cost, cl.source_document_type, cl.source_document_id,
+                   cl.unit_cost,
+                   cl.remaining_quantity * cl.unit_cost AS total_value,
+                   cl.source_document_type, cl.source_document_id,
                    cl.is_exhausted, cl.created_at, cl.updated_at,
                    p.product_name as product_name, w.warehouse_name as warehouse_name
             FROM cost_layers cl
@@ -725,7 +729,7 @@ class CostingService:
             params["wid"] = warehouse_id
 
         # Sum up remaining inventory from existing layers
-        agg = db.execute(text( # noqa: sql-lint
+        agg = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM(remaining_quantity), 0) as total_qty,
                    CASE WHEN SUM(remaining_quantity) > 0
@@ -754,7 +758,7 @@ class CostingService:
                 avg_cost = _dec(prod[0]) if prod else Decimal("0")
 
         # Mark all existing layers as exhausted
-        db.execute(text( # noqa: sql-lint
+        db.execute(text( # noqa
                     f"""
             UPDATE cost_layers SET is_exhausted = TRUE, remaining_quantity = 0, updated_at = NOW()
             WHERE {' AND '.join(conditions)}
@@ -802,7 +806,7 @@ class CostingService:
             else:
                 scope_filter += " AND 1=0"
 
-        layer_rows = db.execute(text( # noqa: sql-lint
+        layer_rows = db.execute(text( # noqa
                     f"""
             SELECT cl.product_id, p.product_name as product_name, cl.costing_method,
                    SUM(cl.remaining_quantity) as total_quantity,
@@ -833,7 +837,7 @@ class CostingService:
 
         # Current WAC valuation for products that do not have active cost layers.
         # Layer-based products are already valued above; this closes the WAC report gap.
-        wac_rows = db.execute(text( # noqa: sql-lint
+        wac_rows = db.execute(text( # noqa
                     f"""
             SELECT i.product_id, p.product_name, 'wac' as costing_method,
                    SUM(i.quantity) as total_quantity,
@@ -861,22 +865,31 @@ class CostingService:
 
         items = []
         grand_total = Decimal("0")
+        grand_total_quantity = Decimal("0")
         for r in list(layer_rows) + list(wac_rows):
             val = _dec(r[4])
+            qty = _dec(r[3])
             items.append({
                 "product_id": r[0],
                 "product_name": r[1],
+                "warehouse_id": None,
+                "warehouse_name": None,
                 "costing_method": r[2],
-                "total_quantity": str(_dec(r[3]).quantize(_D4, ROUND_HALF_UP)),
+                "total_quantity": str(qty.quantize(_D4, ROUND_HALF_UP)),
                 "total_value": str(val.quantize(_D4, ROUND_HALF_UP)),
                 "weighted_avg_cost": str(_dec(r[5]).quantize(_D4, ROUND_HALF_UP)),
+                "weighted_unit_cost": str(_dec(r[5]).quantize(_D4, ROUND_HALF_UP)),
+                "layer_count": 0,
             })
             grand_total += val
+            grand_total_quantity += qty
 
         return {
             "as_of_date": str(as_of_date or "current"),
             "items": items,
             "grand_total": str(grand_total.quantize(_D4, ROUND_HALF_UP)),
+            "grand_total_value": str(grand_total.quantize(_D4, ROUND_HALF_UP)),
+            "grand_total_quantity": str(grand_total_quantity.quantize(_D4, ROUND_HALF_UP)),
         }
 
     @staticmethod
@@ -896,7 +909,7 @@ class CostingService:
                 params["branch_ids"] = branch_ids
             else:
                 filters.append("1=0")
-        return db.execute(text( # noqa: sql-lint
+        return db.execute(text( # noqa
                     """
             SELECT clc.id, clc.cost_layer_id, clc.quantity_consumed,
                    clc.sale_document_type, clc.sale_document_id, clc.consumed_at,
@@ -906,4 +919,4 @@ class CostingService:
             LEFT JOIN warehouses w ON w.id = cl.warehouse_id
             WHERE """ + " AND ".join(filters) + """
             ORDER BY clc.consumed_at DESC
-        """), params).fetchall() # noqa: sql-lint
+        """), params).fetchall() # noqa

@@ -5,7 +5,6 @@ import { Save, Plus, Trash2 } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { toast } from 'react-hot-toast';
 import { accountingAPI, costCentersAPI } from '../../utils/api';
-import Decimal from 'decimal.js';
 import { useBranch } from '../../context/BranchContext';
 import { getCurrency } from '../../utils/auth';
 import { formatNumber } from '../../utils/format';
@@ -28,22 +27,26 @@ const JournalEntryForm = () => {
         reference: '',
         description: '',
         currency: '',
-        exchange_rate: 1.0,
+        exchange_rate: '1',
         lines: [
-            { account_id: '', debit: 0, credit: 0, description: '', cost_center_id: '' },
-            { account_id: '', debit: 0, credit: 0, description: '', cost_center_id: '' }
+            { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' },
+            { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' }
         ]
     });
     const [idempotencyKey, setIdempotencyKey] = useState(crypto.randomUUID());
+    const [preview, setPreview] = useState({
+        total_debit: '0.00',
+        total_credit: '0.00',
+        difference: '0.00',
+        is_balanced: true,
+        has_amount: false,
+        has_debit: false,
+        has_credit: false,
+        invalid_both_count: 0,
+        negative_count: 0,
+    });
 
-    const money = (value) => {
-        try {
-            return new Decimal(value || 0);
-        } catch {
-            return new Decimal(0);
-        }
-    };
-
+    const isNegativeInput = (value) => String(value || '').trim().startsWith('-');
     useEffect(() => {
         const timer = setTimeout(() => {
             fetchAccounts();
@@ -52,6 +55,18 @@ const JournalEntryForm = () => {
         }, 300)
         return () => clearTimeout(timer)
     }, [currentBranch]);
+
+    useEffect(() => {
+        const timer = setTimeout(async () => {
+            try {
+                const res = await accountingAPI.previewJournalEntry({ lines: formData.lines });
+                setPreview(res.data);
+            } catch {
+                setPreview(prev => ({ ...prev, is_balanced: false }));
+            }
+        }, 250);
+        return () => clearTimeout(timer);
+    }, [formData.lines]);
 
     const fetchAccounts = async () => {
         try {
@@ -75,8 +90,8 @@ const JournalEntryForm = () => {
     const handleLineChange = (index, field, value) => {
         const newLines = [...formData.lines];
         // Prevent negative debit/credit values
-        if ((field === 'debit' || field === 'credit') && money(value).lt(0)) {
-            value = '0';
+        if ((field === 'debit' || field === 'credit') && isNegativeInput(value)) {
+            value = '';
         }
         newLines[index][field] = value;
         setFormData({ ...formData, lines: newLines });
@@ -85,7 +100,7 @@ const JournalEntryForm = () => {
     const addLine = () => {
         setFormData({
             ...formData,
-            lines: [...formData.lines, { account_id: '', debit: 0, credit: 0, description: '', cost_center_id: '' }]
+            lines: [...formData.lines, { account_id: '', debit: '', credit: '', description: '', cost_center_id: '' }]
         });
     };
 
@@ -98,23 +113,24 @@ const JournalEntryForm = () => {
         setFormData({ ...formData, lines: newLines });
     };
 
-    const calculateTotals = () => {
-        const totalDebit = formData.lines.reduce((sum, line) => sum.plus(money(line.debit)), new Decimal(0));
-        const totalCredit = formData.lines.reduce((sum, line) => sum.plus(money(line.credit)), new Decimal(0));
-        const difference = totalDebit.minus(totalCredit);
-        return { totalDebit, totalCredit, difference };
-    };
-
     const handleSubmit = async (e, entryStatus = 'posted') => {
         if (e) e.preventDefault();
-        const { totalDebit, totalCredit, difference } = calculateTotals();
+        let latestPreview;
+        try {
+            const previewRes = await accountingAPI.previewJournalEntry({ lines: formData.lines });
+            latestPreview = previewRes.data;
+        } catch {
+            toast.error(t('common.error_occurred'));
+            return;
+        }
+        setPreview(latestPreview);
 
-        if (difference.abs().gt('0.01')) {
+        if (!latestPreview.is_balanced) {
             toast.error(t('accounting.journal.unbalanced_error', 'Journal Entry must be balanced'));
             return;
         }
 
-        if (totalDebit.eq(0)) {
+        if (!latestPreview.has_amount) {
             toast.error(t('accounting.journal.zero_amount_error', 'Total amount cannot be zero'));
             return;
         }
@@ -124,15 +140,12 @@ const JournalEntryForm = () => {
             return;
         }
 
-        const hasDebit = formData.lines.some(l => money(l.debit).gt(0));
-        const hasCredit = formData.lines.some(l => money(l.credit).gt(0));
-        if (!hasDebit || !hasCredit) {
+        if (!latestPreview.has_debit || !latestPreview.has_credit) {
             toast.error(t('accounting.journal.debit_credit_required', 'Each entry must have at least one debit line and one credit line'));
             return;
         }
 
-        const invalidLines = formData.lines.filter(l => money(l.debit).gt(0) && money(l.credit).gt(0));
-        if (invalidLines.length > 0) {
+        if (latestPreview.invalid_both_count > 0) {
             toast.error(t('accounting.journal.both_debit_credit', 'A line cannot have both debit and credit amounts. Please use separate lines.'));
             return;
         }
@@ -158,7 +171,9 @@ const JournalEntryForm = () => {
         }
     };
 
-    const { totalDebit, totalCredit, difference } = calculateTotals();
+    const totalDebit = preview.total_debit || '0.00';
+    const totalCredit = preview.total_credit || '0.00';
+    const isBalanced = preview.is_balanced;
 
     return (
         <div className="workspace fade-in">
@@ -200,7 +215,7 @@ const JournalEntryForm = () => {
                                         type="number"
                                         step="0.000001"
                                         className="form-input"
-                                        value={formData.exchange_rate || 1.0}
+                                        value={formData.exchange_rate || '1'}
                                         onChange={(e) => setFormData({ ...formData, exchange_rate: e.target.value || '1' })}
                                     />
                                 </FormField>
@@ -332,10 +347,10 @@ const JournalEntryForm = () => {
                             <tfoot className="fw-bold bg-light">
                                 <tr>
                                     <td colSpan="3" className="text-end py-3">{t('common.total')}</td>
-                                    <td className={`text-end py-3 ${totalDebit !== totalCredit ? 'text-danger' : 'text-success'}`}>
+                                    <td className={`text-end py-3 ${!isBalanced ? 'text-danger' : 'text-success'}`}>
                                         {formatNumber(totalDebit)} <small>{currency}</small>
                                     </td>
-                                    <td className={`text-end py-3 ${totalDebit !== totalCredit ? 'text-danger' : 'text-success'}`}>
+                                    <td className={`text-end py-3 ${!isBalanced ? 'text-danger' : 'text-success'}`}>
                                         {formatNumber(totalCredit)} <small>{currency}</small>
                                     </td>
                                     <td></td>
@@ -351,9 +366,9 @@ const JournalEntryForm = () => {
                         {t('common.add_line')}
                     </button>
 
-                    {Math.abs(difference) > 0.01 && (
+                    {!isBalanced && (
                         <div className="badge bg-danger-subtle text-danger p-2" style={{ borderRadius: '8px' }}>
-                            {t('accounting.trial_balance.metrics.difference')}: {formatNumber(difference)} <small>{currency}</small>
+                            {t('accounting.trial_balance.metrics.difference')}: {formatNumber(preview.difference || '0.00')} <small>{currency}</small>
                         </div>
                     )}
                 </div>

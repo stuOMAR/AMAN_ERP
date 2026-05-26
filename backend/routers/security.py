@@ -71,7 +71,6 @@ def setup_2fa(current_user=Depends(get_current_user)):
     with transactional(current_user.company_id) as db:
         try:
             import pyotp
-            import base64
     
             # Check if already enabled
             existing = db.execute(text("""
@@ -107,8 +106,7 @@ def setup_2fa(current_user=Depends(get_current_user)):
         except ImportError:
             raise HTTPException(**http_error(500, "pyotp_not_installed"))
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("2FA setup failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -157,8 +155,7 @@ def verify_2fa(data: TwoFAVerifyRequest, current_user=Depends(get_current_user))
         except HTTPException:
             raise
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("2FA verification failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -192,8 +189,7 @@ def disable_2fa(data: TwoFAVerifyRequest, current_user=Depends(get_current_user)
         except HTTPException:
             raise
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("2FA disable failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -317,8 +313,8 @@ def change_password(data: PasswordChangeRequest, current_user=Depends(get_curren
             from routers.auth import invalidate_user_tokens
             try:
                 invalidate_user_tokens(company_id, current_user.username, reason="password_change")
-            except Exception as inv_err:
-                logger.error(f"Token invalidation after password change failed: {inv_err}")
+            except Exception:
+                logger.error("Token invalidation after password change failed")
                 # Fallback: deactivate all sessions in DB directly
                 try:
                     db.execute(text("""
@@ -326,7 +322,7 @@ def change_password(data: PasswordChangeRequest, current_user=Depends(get_curren
                     """), {"uid": current_user.id})
                     db.commit()
                 except Exception:
-                    logger.exception("Session deactivation fallback also failed")
+                    logger.error("Session deactivation fallback failed")
     
             log_activity(db, current_user.id, current_user.username, "change_password",
                          "security", str(current_user.id), {})
@@ -335,8 +331,7 @@ def change_password(data: PasswordChangeRequest, current_user=Depends(get_curren
         except HTTPException:
             raise
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("Password change failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -367,8 +362,7 @@ def update_password_policy(data: PasswordPolicySchema, current_user=Depends(get_
     
             return {"message": i18n_message("password_policy_updated")}
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("Password policy update failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -418,8 +412,7 @@ def terminate_session(session_id: int, current_user=Depends(get_current_user)):
             """), {"sid": session_id, "uid": current_user.id})
             return {"message": i18n_message("session_terminated")}
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("Session termination failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -438,8 +431,7 @@ def terminate_all_sessions(current_user=Depends(get_current_user)):
             """), {"uid": current_user.id})
             return {"message": i18n_message("all_sessions_terminated")}
         except Exception:
-            pass
-            logger.exception("Internal error")
+            logger.error("Bulk session termination failed")
             raise HTTPException(**http_error(500, "internal_error"))
 
 
@@ -503,8 +495,8 @@ def check_password_expiry(current_user=Depends(get_current_user)):
                 result["message"] = i18n_message("password_expiry_warning_in_days", days=days_remaining)
     
             return result
-        except Exception as e:
-            logger.warning(f"Password expiry check failed: {e}")
+        except Exception:
+            logger.warning("Password expiry check failed")
             return {"expired": False, "days_remaining": 999, "warning": False}
 
 
@@ -558,7 +550,7 @@ def check_password_expiry_on_login(company_conn, user_id: int, policy: dict = No
 def list_security_events(
     event_type: Optional[str] = None,
     severity: Optional[str] = None,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=100),
     current_user=Depends(get_current_user)
 ):
     """سجل الأحداث الأمنية"""
@@ -602,7 +594,7 @@ def security_events_summary(current_user=Depends(get_current_user)):
 @router.get("/login-attempts", dependencies=[Depends(require_permission(["security.view", "settings.view"]))], response_model=List[Dict[str, Any]])
 def list_login_attempts(
     ip_address: Optional[str] = None,
-    limit: int = Query(50, le=200),
+    limit: int = Query(50, ge=1, le=100),
     current_user=Depends(get_current_user)
 ):
     """سجل محاولات تسجيل الدخول"""
@@ -639,31 +631,28 @@ def log_security_event(company_id: str, event_type: str, severity: str, user_id:
                        ip_address: str = None, user_agent: str = None, details: dict = None):
     """Utility to log security events from anywhere"""
     try:
-        conn = get_db_connection(company_id)
-        conn.execute(text("""
-            INSERT INTO security_events (event_type, severity, user_id, ip_address, user_agent, details)
-            VALUES (:et, :sev, :uid, :ip, :ua, :det::jsonb)
-        """), {
-            "et": event_type, "sev": severity, "uid": user_id,
-            "ip": ip_address, "ua": user_agent,
-            "det": __import__('json').dumps(details or {})
-        })
-        conn.commit()
-        conn.close()
-    except Exception as e:
-        logger.error(f"Failed to log security event: {e}")
+        with transactional(company_id) as db:
+            db.execute(text("""
+                INSERT INTO security_events (event_type, severity, user_id, ip_address, user_agent, details)
+                VALUES (:et, :sev, :uid, :ip, :ua, :det::jsonb)
+            """), {
+                "et": event_type, "sev": severity, "uid": user_id,
+                "ip": ip_address, "ua": user_agent,
+                "det": __import__('json').dumps(details or {})
+            })
+    except Exception:
+        logger.error("Failed to log security event")
 
 
 def check_brute_force(company_id: str, ip_address: str, max_attempts: int = 5, window_minutes: int = 60) -> bool:
     """Returns True if IP should be blocked"""
     try:
-        conn = get_db_connection(company_id)
-        count = conn.execute(text("""
-            SELECT COUNT(*) FROM login_attempts
-            WHERE ip_address = :ip AND success = FALSE
-              AND attempted_at >= NOW() - INTERVAL :win
-        """), {"ip": ip_address, "win": f"{window_minutes} minutes"}).scalar() or 0
-        conn.close()
+        with transactional(company_id) as db:
+            count = db.execute(text("""
+                SELECT COUNT(*) FROM login_attempts
+                WHERE ip_address = :ip AND success = FALSE
+                  AND attempted_at >= NOW() - INTERVAL '1 minute' * :win
+            """), {"ip": ip_address, "win": window_minutes}).scalar() or 0
         return count >= max_attempts
     except Exception:
         return False

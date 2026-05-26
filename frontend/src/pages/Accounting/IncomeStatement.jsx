@@ -2,7 +2,6 @@ import { useState, useEffect } from 'react'
 import { reportsAPI, api } from '../../utils/api'
 import { useBranch } from '../../context/BranchContext'
 import { useTranslation } from 'react-i18next'
-import Decimal from 'decimal.js'
 import { formatNumber } from '../../utils/format'
 import { getCurrency } from '../../utils/auth'
 import CustomDatePicker from '../../components/common/CustomDatePicker'
@@ -68,6 +67,18 @@ function IncomeStatement() {
     const currency = getCurrency()
     const isRTL = i18n.language === 'ar'
     const getName = (acc) => (isRTL ? acc.name : (acc.name_en || acc.name))
+    const amountAbs = (value) => {
+        const raw = String(value || '0').trim()
+        return raw.startsWith('-') ? raw.slice(1) : raw
+    }
+    const isNegativeAmount = (value) => String(value || '0').trim().startsWith('-') && amountAbs(value) !== '0'
+    const changeTone = (row, increaseIsGood = true) => {
+        if (row.change_direction === 'flat') return 'var(--text-muted)'
+        const favorable = increaseIsGood
+            ? row.change_direction === 'increase'
+            : row.change_direction === 'decrease'
+        return favorable ? 'var(--success)' : 'var(--danger)'
+    }
 
     // Flatten account tree to a list with level info
     const flattenTree = (nodes, level = 0) => {
@@ -87,9 +98,10 @@ function IncomeStatement() {
     const expenseRoots = allAccounts.filter(a => a.account_type === 'expense')
     const flatRevenue = flattenTree(revenueRoots)
     const flatExpense = flattenTree(expenseRoots)
-    const totalRevenue = revenueRoots.reduce((sum, a) => sum.plus(new Decimal(a.balance || '0')), new Decimal('0'))
-    const totalExpense = expenseRoots.reduce((sum, a) => sum.plus(new Decimal(a.balance || '0')), new Decimal('0'))
-    const netIncome = data?.total !== undefined ? new Decimal(data.total) : totalRevenue.minus(totalExpense)
+    const totalRevenue = data?.summary?.total_revenue || '0'
+    const totalExpense = data?.summary?.total_expense || '0'
+    const netIncome = data?.summary?.net_income || data?.total || '0'
+    const isProfit = !isNegativeAmount(netIncome)
 
     return (
         <div className="workspace fade-in">
@@ -236,10 +248,10 @@ function IncomeStatement() {
                                             {row.periods.map((val, pIdx) => (
                                                 <td key={pIdx} style={{ textAlign: 'left' }}>{formatNumber(val)}</td>
                                             ))}
-                                            <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                            <td style={{ textAlign: 'left', color: changeTone(row, true) }}>
                                                 {formatNumber(row.change)}
                                             </td>
-                                            <td style={{ textAlign: 'left', color: row.change >= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                            <td style={{ textAlign: 'left', color: changeTone(row, true) }}>
                                                 {row.change_pct}%
                                             </td>
                                         </tr>
@@ -258,10 +270,10 @@ function IncomeStatement() {
                                             {row.periods.map((val, pIdx) => (
                                                 <td key={pIdx} style={{ textAlign: 'left' }}>{formatNumber(val)}</td>
                                             ))}
-                                            <td style={{ textAlign: 'left', color: row.change <= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                            <td style={{ textAlign: 'left', color: changeTone(row, false) }}>
                                                 {formatNumber(row.change)}
                                             </td>
-                                            <td style={{ textAlign: 'left', color: row.change <= 0 ? 'var(--success)' : 'var(--danger)' }}>
+                                            <td style={{ textAlign: 'left', color: changeTone(row, false) }}>
                                                 {row.change_pct}%
                                             </td>
                                         </tr>
@@ -294,12 +306,12 @@ function IncomeStatement() {
                             </div>
                             <div className="metric-card">
                                 <div className="metric-label">{t('accounting.income_statement.net_income')}</div>
-                                <div className={`metric-value ${netIncome >= 0 ? 'text-success' : 'text-error'}`}>
-                                    {formatNumber(Math.abs(netIncome))} <small>{currency}</small>
-                                    {netIncome >= 0 ? ' ✅' : ' ⚠️'}
+                                <div className={`metric-value ${isProfit ? 'text-success' : 'text-error'}`}>
+                                    {formatNumber(amountAbs(netIncome))} <small>{currency}</small>
+                                    {isProfit ? ' ✅' : ' ⚠️'}
                                 </div>
                                 <div className="metric-change">
-                                    {netIncome >= 0 ? t('accounting.income_statement.profit') : t('accounting.income_statement.loss')}
+                                    {isProfit ? t('accounting.income_statement.profit') : t('accounting.income_statement.loss')}
                                 </div>
                             </div>
                         </div>
@@ -335,7 +347,7 @@ function IncomeStatement() {
                                                         <span className="font-mono" style={{ marginLeft: '8px' }}>{acc.account_number}</span>
                                                         {' '}{getName(acc)}
                                                     </td>
-                                                    <td style={{ textAlign: 'left' }}>{formatNumber(Math.abs(acc.balance))}</td>
+                                                    <td style={{ textAlign: 'left' }}>{formatNumber(amountAbs(acc.balance))}</td>
                                                 </tr>
                                             ))
                                         )}
@@ -381,7 +393,7 @@ function IncomeStatement() {
                                                         <span className="font-mono" style={{ marginLeft: '8px' }}>{acc.account_number}</span>
                                                         {' '}{getName(acc)}
                                                     </td>
-                                                    <td style={{ textAlign: 'left' }}>{formatNumber(Math.abs(acc.balance))}</td>
+                                                    <td style={{ textAlign: 'left' }}>{formatNumber(amountAbs(acc.balance))}</td>
                                                 </tr>
                                             ))
                                         )}
@@ -401,16 +413,16 @@ function IncomeStatement() {
                             <table className="data-table">
                                 <tbody>
                                     <tr style={{
-                                        background: netIncome >= 0 ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)',
+                                        background: isProfit ? 'var(--success, #10b981)' : 'var(--danger, #ef4444)',
                                         color: 'white',
                                         fontWeight: 'bold',
                                         fontSize: '1.2em'
                                     }}>
                                         <td style={{ textAlign: 'center', padding: '16px' }}>
-                                            {netIncome >= 0 ? t('accounting.income_statement.net_profit') : t('accounting.income_statement.net_loss')}
+                                            {isProfit ? t('accounting.income_statement.net_profit') : t('accounting.income_statement.net_loss')}
                                         </td>
                                         <td style={{ textAlign: 'left', padding: '16px' }}>
-                                            {formatNumber(Math.abs(netIncome))} {currency}
+                                            {formatNumber(amountAbs(netIncome))} {currency}
                                         </td>
                                     </tr>
                                 </tbody>

@@ -14,10 +14,8 @@ and verifies:
        ``log_permission_change`` go through ``log_activity`` (no more
        inline INSERT bypassing the chain).
 """
-import json
 import os
 import urllib.parse as urlparse
-from datetime import datetime, timezone
 
 import psycopg2
 import psycopg2.extras

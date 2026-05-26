@@ -8,7 +8,7 @@ import logging
 import uuid
 from typing import Any, Dict, List, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from sqlalchemy import text
 from sqlalchemy.exc import OperationalError, ProgrammingError
 
@@ -23,7 +23,7 @@ from routers.auth import get_current_user
 from services import sso_service
 from utils.permissions import require_permission
 from utils.cache import cache
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 
 logger = logging.getLogger(__name__)
 
@@ -203,6 +203,7 @@ async def list_active_providers(
 
 @router.get("/saml/metadata", response_model=Dict[str, Any])
 async def saml_metadata(
+    request: Request,
     company_id: Optional[str] = None,
     company_code: Optional[str] = None,
 ):
@@ -260,8 +261,8 @@ async def saml_acs(request: Request, response: Response):
             sso_config,
             company_id,
         )
-    except ValueError as exc:
-        raise HTTPException(status_code=401, detail=str(exc))
+    except ValueError:
+        raise HTTPException(**http_error(401, "invalid_request", request))
 
     # Map groups → role
     role_name = sso_service.map_groups_to_role(sso_config["id"], assertion.get("groups", []), company_id)
@@ -314,7 +315,7 @@ async def saml_acs(request: Request, response: Response):
 
 
 @router.post("/exchange", response_model=Dict[str, Any])
-async def sso_exchange(payload: dict):
+async def sso_exchange(payload: dict, request: Request):
     """
     Exchange a one-time SSO ticket (issued by /saml/acs) for access & refresh
     tokens. Ticket is invalidated immediately after exchange.
@@ -335,7 +336,7 @@ async def sso_exchange(payload: dict):
 
 
 @router.post("/login", response_model=Dict[str, Any])
-async def sso_login(body: SsoLoginRequest, response: Response):
+async def sso_login(body: SsoLoginRequest, response: Response, request: Request):
     """
     Initiate SSO login.
     - SAML: returns {"redirect_url": "..."} for frontend to redirect.
@@ -375,8 +376,8 @@ async def sso_login(body: SsoLoginRequest, response: Response):
             raise HTTPException(**http_error(400, "sso_ldap_credentials_required", request))
         try:
             ldap_result = sso_service.ldap_authenticate(sso_config, body.username, body.password)
-        except ValueError as exc:
-            raise HTTPException(status_code=401, detail=str(exc))
+        except ValueError:
+            raise HTTPException(**http_error(401, "invalid_request", request))
         except ConnectionError:
             # IdP down — check fallback admin
             raise HTTPException(**http_error(503, "ldap_server_unreachable_use_local_login_if_you_are", request))

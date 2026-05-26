@@ -549,6 +549,11 @@ def create_sales_return(
 
         grand_total = subtotal + total_tax
 
+        # Strict validation: compare client-submitted grand total with authoritative backend grand total
+        if data.submitted_grand_total is not None:
+            if abs(grand_total - data.submitted_grand_total) > Decimal("0.01"):
+                raise HTTPException(**http_error(422, "submitted_grand_total_mismatch", request))
+
         # Validate effective exchange-rate record for foreign currency returns.
         base_currency_row = db.execute(text("SELECT code FROM currencies WHERE is_base = TRUE LIMIT 1")).fetchone()
         if not base_currency_row:
@@ -744,8 +749,8 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
                             original_source_document_type="sales_invoice" if header.invoice_id else None,
                             original_source_document_id=header.invoice_id,
                         )
-                    except ValueError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc))
+                    except ValueError:
+                        raise HTTPException(**http_error(400, "invalid_request", request))
                     restored_cost = _dec(return_result.get("restored_unit_cost", cost_price))
                     restored_total = _dec(return_result.get("restored_total_cost", cost_price * _dec(line.quantity)))
                 else:
@@ -871,7 +876,7 @@ def approve_sales_return(return_id: int, request: Request, current_user: dict = 
             voucher_num = generate_sequential_number(db, f"REF-{datetime.now().year}", "payment_vouchers", "voucher_number")
 
             # A. Create Payment Voucher
-            voucher_id = db.execute(text("""
+            db.execute(text("""
                 INSERT INTO payment_vouchers (
                     voucher_number, voucher_type, voucher_date, party_type, party_id,
                     amount, payment_method, bank_account_id, treasury_account_id, check_number, check_date,
@@ -1070,8 +1075,8 @@ def cancel_sales_return(return_id: int, request: Request, current_user: dict = D
                             sale_document_id=return_id,
                             costing_method=costing_method,
                         )
-                    except ValueError as exc:
-                        raise HTTPException(status_code=400, detail=str(exc))
+                    except ValueError:
+                        raise HTTPException(**http_error(400, "invalid_request", request))
                 else:
                     CostingService.update_cost(
                         db,
@@ -1121,7 +1126,7 @@ def cancel_sales_return(return_id: int, request: Request, current_user: dict = D
                 })
 
             exchange_rate = _dec(header.exchange_rate or 1)
-            gl_total = (_dec(header.total) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
+            (_dec(header.total) * exchange_rate).quantize(_D2, ROUND_HALF_UP)
             # AUDIT-H1: cancel of an approved return restores AR — use
             # the document-currency amount to undo what the original
             # approve flow recorded under the same (party_site, currency)

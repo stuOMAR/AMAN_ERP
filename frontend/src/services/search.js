@@ -12,12 +12,11 @@ export const searchAPI = {
      *
      * @param {string} q                       free-text query (Arabic / English).
      * @param {object} options
-     * @param {string[]} options.entities      subset of:
-     *   ['parties','products','invoices','sales_orders','purchase_orders'].
-     *   Omitted → all five.
-     * @param {number} options.limit           per-entity limit (capped at 50 server-side).
+     * @param {string[]} options.entities      subset of registry entity_code values.
+     *   Omitted → all entities allowed by backend permissions.
+     * @param {number} options.limit           per-entity limit (capped at 100 server-side).
      * @param {AbortSignal} options.signal     optional Axios cancellation signal.
-     * @returns {Promise<{ query: string, entities: string[], items: Array, total: number }>}
+     * @returns {Promise<{ query: string, results: Array, total_count: number, latency_ms: number }>}
      */
     search: (q, { entities, limit = 20, signal } = {}) =>
         api.get('/search', {

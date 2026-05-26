@@ -2,25 +2,16 @@
 
 Mounted under the parent router via projects/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, File, UploadFile
-from utils.i18n import http_error, i18n_message
-import os
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import date, datetime, timedelta
+from fastapi import APIRouter, Depends
+from utils.i18n import i18n_message
+from typing import Any, Dict, Optional
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
-from utils.accounting import (
-    generate_sequential_number, get_mapped_account_id,
-    get_base_currency, compute_line_amounts, compute_invoice_totals
-)
-from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
+from utils.permissions import require_permission
+from utils.tax_precision import money_str, qty_str, rate_str
 from sqlalchemy import text
-from services.gl_service import create_journal_entry as gl_create_journal_entry
 import logging
 
 logger = logging.getLogger(__name__)
@@ -30,22 +21,10 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-from schemas.projects import (
-    ProjectCreate, ProjectUpdate, TaskCreate, TaskUpdate,
-    ProjectExpenseCreate, ProjectRevenueCreate,
-    TimesheetCreate, TimesheetUpdate, TimesheetApprove,
-    ProjectInvoiceCreate, ChangeOrderCreate, ChangeOrderUpdate, ProjectCloseRequest,
-    ProjectRiskCreate, ProjectRiskUpdate, TaskDependencyCreate
-)
-from schemas.timetracking import (
-    TimesheetEntryCreate, TimesheetEntryUpdate,
-    WeeklySubmitRequest, RejectRequest
-)
-from schemas.resource import AllocationCreate, AllocationUpdate
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/reports/profitability", dependencies=[Depends(require_permission("projects.view"))], response_model=Dict[str, Any])
 async def report_project_profitability(
@@ -70,7 +49,11 @@ async def report_project_profitability(
             FROM projects p
             LEFT JOIN (
                 SELECT project_id, SUM(amount) as total
-                FROM project_expenses WHERE status != 'rejected'
+                FROM (
+                    SELECT project_id, amount FROM project_expenses WHERE status != 'rejected'
+                    UNION ALL
+                    SELECT project_id, amount FROM expenses WHERE approval_status = 'approved' AND is_deleted = false
+                ) combined_exp
                 GROUP BY project_id
             ) exp ON exp.project_id = p.id
             LEFT JOIN (
@@ -99,13 +82,15 @@ async def report_project_profitability(
                 "project_code": m["project_code"],
                 "project_name": m["project_name"],
                 "status": m["status"],
-                "planned_budget": float(budget.quantize(_D2)),
-                "total_expenses": float(exp.quantize(_D2)),
-                "total_revenues": float(rev.quantize(_D2)),
-                "net_profit": float(net.quantize(_D2)),
-                "margin_pct": float(margin.quantize(_D2)),
-                "budget_variance": float(budget_var.quantize(_D2)),
-                "progress": float(m["progress_percentage"] or 0),
+                "planned_budget": money_str(budget),
+                "total_expenses": money_str(exp),
+                "total_revenues": money_str(rev),
+                "net_profit": money_str(net),
+                "margin_pct": rate_str(margin),
+                "budget_variance": money_str(budget_var),
+                "progress": rate_str(m["progress_percentage"] or 0),
+                "profit_status": "profitable" if net >= 0 else "loss",
+                "budget_status": "over_budget" if budget > 0 and exp > budget else "within_budget",
             })
             total_revenue_sum += rev
             total_expense_sum += exp
@@ -117,11 +102,12 @@ async def report_project_profitability(
             "report_name": "تقرير ربحية المشاريع",
             "projects": projects_list,
             "totals": {
-                "total_revenue": float(total_revenue_sum.quantize(_D2)),
-                "total_expense": float(total_expense_sum.quantize(_D2)),
-                "total_profit": float(total_net.quantize(_D2)),
-                "avg_margin_pct": float(avg_margin.quantize(_D2)),
+                "total_revenue": money_str(total_revenue_sum),
+                "total_expense": money_str(total_expense_sum),
+                "total_profit": money_str(total_net),
+                "avg_margin_pct": rate_str(avg_margin),
                 "project_count": len(projects_list),
+                "profit_status": "profitable" if total_net >= 0 else "loss",
             }
         }
     finally:
@@ -142,7 +128,11 @@ async def report_project_variance(current_user: dict = Depends(get_current_user)
             FROM projects p
             LEFT JOIN (
                 SELECT project_id, SUM(amount) as total
-                FROM project_expenses WHERE status != 'rejected'
+                FROM (
+                    SELECT project_id, amount FROM project_expenses WHERE status != 'rejected'
+                    UNION ALL
+                    SELECT project_id, amount FROM expenses WHERE approval_status = 'approved' AND is_deleted = false
+                ) combined_exp
                 GROUP BY project_id
             ) exp ON exp.project_id = p.id
             LEFT JOIN (
@@ -180,14 +170,14 @@ async def report_project_variance(current_user: dict = Depends(get_current_user)
                 "project_code": m["project_code"],
                 "project_name": m["project_name"],
                 "status": m["status"],
-                "planned_budget": float(budget.quantize(_D2)),
-                "actual_cost": float(actual.quantize(_D2)),
-                "cost_variance": float(cost_var.quantize(_D2)),
-                "cost_variance_pct": float(cost_var_pct.quantize(_D2)),
-                "planned_hours": float(planned_h.quantize(_D2)),
-                "actual_hours": float(actual_h.quantize(_D2)),
-                "hours_variance": float(hour_var.quantize(_D2)),
-                "progress": float(m["progress_percentage"] or 0),
+                "planned_budget": money_str(budget),
+                "actual_cost": money_str(actual),
+                "cost_variance": money_str(cost_var),
+                "cost_variance_pct": rate_str(cost_var_pct),
+                "planned_hours": qty_str(planned_h),
+                "actual_hours": qty_str(actual_h),
+                "hours_variance": qty_str(hour_var),
+                "progress": rate_str(m["progress_percentage"] or 0),
                 "schedule_days_remaining": schedule_var_days,
                 "is_over_budget": actual > budget if budget > 0 else False,
                 "is_behind_schedule": schedule_var_days is not None and schedule_var_days < 0,
@@ -241,28 +231,47 @@ async def report_resource_utilization(
         """), params).fetchall()
 
         resources = []
+        total_hours = Decimal("0")
+        total_utilization = Decimal("0")
+        overloaded_count = 0
         for r in rows:
             m = r._mapping
             total_h = _dec(m["total_hours"] or 0)
             working_days = int(m["working_days"] or 1)
             standard_hours = _dec(working_days * 8)
             utilization = (total_h / standard_hours * Decimal('100')) if standard_hours > 0 else Decimal('0')
+            utilization_q = utilization.quantize(_D2, ROUND_HALF_UP)
+            status_key = "overload" if utilization_q >= Decimal("100") else "optimal" if utilization_q >= Decimal("80") else "moderate" if utilization_q >= Decimal("50") else "light"
+            total_hours += total_h
+            total_utilization += utilization_q
+            if status_key == "overload":
+                overloaded_count += 1
 
             resources.append({
                 "user_id": m["user_id"],
                 "name": m["full_name"],
                 "projects_count": m["projects_count"],
-                "total_hours": float(total_h.quantize(_D2)),
-                "avg_daily_hours": round(float(m["avg_daily_hours"] or 0), 2),
+                "total_hours": qty_str(total_h),
+                "avg_daily_hours": qty_str(m["avg_daily_hours"] or 0),
                 "working_days": working_days,
-                "utilization_pct": float(utilization.quantize(_D2)),
+                "utilization_pct": rate_str(utilization_q),
+                "utilization_bar_pct": rate_str(min(utilization_q, Decimal("100"))),
+                "load_status": status_key,
             })
+        resource_count = len(resources)
+        avg_utilization = (total_utilization / Decimal(resource_count)) if resource_count else Decimal("0")
 
         return {
             "report_name": "تقرير استخدام الموارد",
             "period": {
                 "start": str(start_date) if start_date else "All",
                 "end": str(end_date) if end_date else "All"
+            },
+            "summary": {
+                "employee_count": resource_count,
+                "total_hours": qty_str(total_hours),
+                "avg_utilization": rate_str(avg_utilization),
+                "overloaded_count": overloaded_count,
             },
             "resources": resources,
         }
@@ -321,7 +330,11 @@ async def get_over_budget_projects(current_user: dict = Depends(get_current_user
             FROM projects p
             LEFT JOIN (
                 SELECT project_id, SUM(amount) as total
-                FROM project_expenses WHERE status != 'rejected'
+                FROM (
+                    SELECT project_id, amount FROM project_expenses WHERE status != 'rejected'
+                    UNION ALL
+                    SELECT project_id, amount FROM expenses WHERE approval_status = 'approved' AND is_deleted = false
+                ) combined_exp
                 GROUP BY project_id
             ) exp ON exp.project_id = p.id
             WHERE p.planned_budget > 0
@@ -352,7 +365,7 @@ async def get_alerts_dashboard(current_user: dict = Depends(get_current_user)):
     """
     db = get_db_connection(current_user.company_id)
     try:
-        today = date.today()
+        date.today()
 
         # Overdue tasks
         overdue_tasks_count = db.execute(text("""
@@ -367,8 +380,12 @@ async def get_alerts_dashboard(current_user: dict = Depends(get_current_user)):
         over_budget_count = db.execute(text("""
             SELECT COUNT(*) FROM projects p
             LEFT JOIN (
-                SELECT project_id, SUM(amount) as total FROM project_expenses
-                WHERE status != 'rejected' GROUP BY project_id
+                SELECT project_id, SUM(amount) as total FROM (
+                    SELECT project_id, amount FROM project_expenses WHERE status != 'rejected'
+                    UNION ALL
+                    SELECT project_id, amount FROM expenses WHERE approval_status = 'approved' AND is_deleted = false
+                ) combined_exp
+                GROUP BY project_id
             ) exp ON exp.project_id = p.id
             WHERE p.planned_budget > 0
               AND COALESCE(exp.total,0) > p.planned_budget
@@ -436,4 +453,3 @@ async def get_alerts_dashboard(current_user: dict = Depends(get_current_user)):
 
 
 # ===================== B5: Project Risks =====================
-

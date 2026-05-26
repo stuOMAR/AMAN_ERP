@@ -148,13 +148,34 @@ def run_migrations_online():
 
     # 2. Run on company DBs (if requested)
     tenant_failures = []
-    for url in _get_company_urls():
+    companies = []
+    company_arg = _get_company_arg()
+    if company_arg:
+        if company_arg == "all":
+            from sqlalchemy import create_engine
+            sys_eng = create_engine(settings.DATABASE_URL)
+            with sys_eng.connect() as conn:
+                rows = conn.execute(text("SELECT id FROM system_companies WHERE status = 'active'")).fetchall()
+            sys_eng.dispose()
+            companies = [(r[0], settings.get_company_database_url(r[0])) for r in rows]
+        else:
+            companies = [(company_arg, settings.get_company_database_url(company_arg))]
+
+    for company_id, url in companies:
         from sqlalchemy import create_engine
         eng = create_engine(url, poolclass=pool.NullPool)
         try:
             with eng.connect() as connection:
                 context.configure(connection=connection, target_metadata=target_metadata)
                 with context.begin_transaction():
+                    # Set the app.tenant_id session variable so triggers and migrations can read it
+                    try:
+                        tenant_int = int(company_id, 16)
+                        connection.execute(text(f"SELECT set_config('app.tenant_id', '{tenant_int}', false)"))
+                        connection.execute(text(f"SET LOCAL app.tenant_id = '{tenant_int}'"))
+                    except ValueError:
+                        connection.execute(text(f"SELECT set_config('app.tenant_id', '{company_id}', false)"))
+                        connection.execute(text(f"SET LOCAL app.tenant_id = '{company_id}'"))
                     context.run_migrations()
         except Exception as e:
             tenant_failures.append((url, str(e)))

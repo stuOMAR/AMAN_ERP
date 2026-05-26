@@ -6,22 +6,17 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date
-from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
+from decimal import Decimal
 import logging
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, require_module
+from utils.permissions import require_permission, validate_branch_access
 from utils.audit import log_activity
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
 from utils.tax_precision import rate_str, serialize_tax_row
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from schemas.taxes import TaxRateCreate, TaxRateUpdate
 from services.tax_engine import (
     validate_tax_access, update_tax_rate as engine_update_tax_rate,
-    get_active_tax_for_branch, get_active_tax_for_country,
+    get_active_tax_for_branch,
 )
 
 logger = logging.getLogger(__name__)
@@ -34,7 +29,6 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4
 
 @router.get("/rates", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_rates(
@@ -72,7 +66,7 @@ def list_tax_rates(
             where += " AND is_active = :active"
             params["active"] = is_active
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT id, tax_code, tax_name, tax_name_en, rate_type, rate_value,
                    description, effective_from, effective_to, is_active, country_code,
@@ -209,7 +203,7 @@ def update_tax_rate(
             if not updates:
                 raise HTTPException(**http_error(400, "no_data_to_update"))
 
-            db.execute(text(f"UPDATE tax_rates SET {', '.join(updates)} WHERE id = :id"), params)  # noqa: sql-lint
+            db.execute(text(f"UPDATE tax_rates SET {', '.join(updates)} WHERE id = :id"), params)  # noqa
 
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="taxes.rate.update", resource_type="tax_rate",

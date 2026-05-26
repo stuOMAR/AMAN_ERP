@@ -5,6 +5,10 @@ import '../../components/ModuleStyles.css'
 import { formatShortDate } from '../../utils/dateUtils'
 import BackButton from '../../components/common/BackButton'
 import { useToast } from '../../context/ToastContext'
+import { hasPermission } from '../../utils/auth'
+import { downloadBlob } from '../../utils/fileDownload'
+import { Download } from 'lucide-react'
+import QuotaMeter from '../dms/QuotaMeter'
 
 const accessBadgeStyles = {
     public:     { background: '#22c55e', color: '#fff' },
@@ -68,8 +72,8 @@ function DocumentManagement() {
             if (searchQuery) params.search = searchQuery
             const res = await servicesAPI.listDocuments(params)
             setDocuments(Array.isArray(res.data) ? res.data : (res.data?.items ?? []))
-        } catch (err) {
-            console.error('Failed to fetch documents', err)
+        } catch {
+            showToast(t('dms.errors.load_failed'), 'error')
         } finally {
             setLoading(false)
         }
@@ -164,6 +168,19 @@ function DocumentManagement() {
         }
     }
 
+    const handleDownload = async (doc) => {
+        if (doc.state === 'quarantined') {
+            showToast(t('dms.status.quarantined'), 'error')
+            return
+        }
+        try {
+            const res = await servicesAPI.downloadDocument(doc.id)
+            downloadBlob(res, doc.file_name || doc.title || `document-${doc.id}`)
+        } catch (err) {
+            showToast(err.response?.data?.detail || t('common.download_error', 'Download failed'), 'error')
+        }
+    }
+
     const loadDetail = async (id) => {
         if (expandedId === id) {
             setExpandedId(null)
@@ -193,6 +210,20 @@ function DocumentManagement() {
         return opt ? opt.label : value
     }
 
+    const getDmsStatusBadge = (state) => {
+        const normalized = state || 'clean'
+        const styles = {
+            clean: { background: '#16a34a', color: '#fff' },
+            pending_scan: { background: '#f59e0b', color: '#111827' },
+            quarantined: { background: '#dc2626', color: '#fff' }
+        }
+        return (
+            <span className="badge" style={styles[normalized] || {}}>
+                {t(`dms.status.${normalized}`, normalized)}
+            </span>
+        )
+    }
+
     return (
         <div className="workspace fade-in">
             <div className="workspace-header">
@@ -205,6 +236,14 @@ function DocumentManagement() {
                     <button className="btn btn-primary" onClick={openUpload}>+ {t('documents.upload')}</button>
                 </div>
             </div>
+
+            {hasPermission('dms.audit_admin') && (
+                <div className="card section-card" style={{ marginBottom: '16px' }}>
+                    <div className="card-body">
+                        <QuotaMeter />
+                    </div>
+                </div>
+            )}
 
             {/* Search & Filter */}
             <div className="toolbar" style={{ display: 'flex', gap: '12px', marginBottom: '16px', flexWrap: 'wrap' }}>
@@ -235,6 +274,7 @@ function DocumentManagement() {
                             <th>{t('documents.col_filename')}</th>
                             <th>{t('documents.col_size')}</th>
                             <th>{t('documents.col_version')}</th>
+                            <th>{t('documents.col_status', 'Status')}</th>
                             <th>{t('documents.col_access')}</th>
                             <th>{t('documents.col_uploaded_by')}</th>
                             <th>{t('documents.col_date')}</th>
@@ -243,9 +283,9 @@ function DocumentManagement() {
                     </thead>
                     <tbody>
                         {loading ? (
-                            <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px' }}>{t('common.loading')}</td></tr>
+                            <tr><td colSpan="11" style={{ textAlign: 'center', padding: '40px' }}>{t('common.loading')}</td></tr>
                         ) : documents.length === 0 ? (
-                            <tr><td colSpan="10" style={{ textAlign: 'center', padding: '40px' }}>{t('common.no_data')}</td></tr>
+                            <tr><td colSpan="11" style={{ textAlign: 'center', padding: '40px' }}>{t('common.no_data')}</td></tr>
                         ) : documents.map(doc => (
                             <Fragment key={doc.id}>
                                 <tr style={{ cursor: 'pointer' }} onClick={() => loadDetail(doc.id)}>
@@ -255,11 +295,20 @@ function DocumentManagement() {
                                     <td style={{ fontSize: '13px' }}>{doc.file_name}</td>
                                     <td>{formatFileSize(doc.file_size)}</td>
                                     <td style={{ textAlign: 'center' }}>v{doc.current_version}</td>
+                                    <td>{getDmsStatusBadge(doc.state)}</td>
                                     <td><span className="badge" style={accessBadgeStyles[doc.access_level] || {}}>{getLabelByValue(accessOptions, doc.access_level)}</span></td>
                                     <td>{doc.created_by_name || '—'}</td>
                                     <td>{formatShortDate(doc.created_at)}</td>
                                     <td onClick={e => e.stopPropagation()}>
                                         <div style={{ display: 'flex', gap: '4px' }}>
+                                            <button
+                                                className="btn btn-sm btn-light btn-icon"
+                                                onClick={() => handleDownload(doc)}
+                                                title={t('common.download', 'Download')}
+                                                disabled={doc.state === 'quarantined'}
+                                            >
+                                                <Download size={14} />
+                                            </button>
                                             <button className="btn btn-sm" onClick={() => openEdit(doc)} title={t('common.edit')}>✏️</button>
                                             <button className="btn btn-sm btn-primary" onClick={() => openVersionUpload(doc.id)} title={t('documents.new_version')}>📄</button>
                                             <button className="btn btn-sm btn-danger" onClick={() => handleDelete(doc.id)} title={t('common.delete')}>🗑️</button>
@@ -270,7 +319,7 @@ function DocumentManagement() {
                                 {/* Expanded Detail — Versions */}
                                 {expandedId === doc.id && (
                                     <tr key={`detail-${doc.id}`}>
-                                        <td colSpan="10" style={{ background: 'var(--bg-secondary)', padding: '20px' }}>
+                                        <td colSpan="11" style={{ background: 'var(--bg-secondary)', padding: '20px' }}>
                                             {detailLoading ? (
                                                 <div style={{ textAlign: 'center' }}>{t('common.loading')}</div>
                                             ) : detail ? (

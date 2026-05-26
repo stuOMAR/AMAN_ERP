@@ -39,7 +39,7 @@ def _get_setting(conn, key: str, default):
     """Read a company_settings value, returning *default* on miss."""
     try:
         row = conn.execute(
-            text("SELECT value FROM company_settings WHERE key = :k"),
+            text("SELECT setting_value FROM company_settings WHERE setting_key = :k"),
             {"k": key},
         ).scalar()
         if row is None:
@@ -98,6 +98,7 @@ def _flush_tenant(conn, tenant_id: str | None, batch_size: int, sla_seconds: int
     for r in rows:
         outbox_id = r[0]
         try:
+            conn.execute(text("SAVEPOINT flush_row"))
             # Fetch current hash chain tail.
             payload = r[6] or {}
             legacy = _payload_legacy(payload)
@@ -175,18 +176,21 @@ def _flush_tenant(conn, tenant_id: str | None, batch_size: int, sla_seconds: int
                 ),
                 {"id": outbox_id},
             )
+            conn.execute(text("RELEASE SAVEPOINT flush_row"))
             flushed += 1
-        except Exception as exc:
-            logger.exception(
-                "audit_outbox_worker: failed to flush outbox id=%s", outbox_id
-            )
+        except Exception:
+            try:
+                conn.execute(text("ROLLBACK TO SAVEPOINT flush_row"))
+            except Exception:
+                pass
+            logger.error("audit_outbox_worker: failed to flush outbox id=%s", outbox_id)
             conn.execute(
                 text(
                     "UPDATE audit_outbox "
                     "SET attempt_count = attempt_count + 1, last_error = :err "
                     "WHERE id = :id"
                 ),
-                {"err": str(exc)[:500], "id": outbox_id},
+                {"err": "flush_failed", "id": outbox_id},
             )
             failed += 1
 
@@ -250,7 +254,7 @@ def flush(batch_size: int | None = None, max_runtime_seconds: int = 300) -> list
                 finally:
                     conn.close()
             except Exception:
-                logger.exception("audit_outbox_worker: error on tenant %s", tenant_key)
+                logger.error("audit_outbox_worker: error on tenant %s", tenant_key)
 
     return reports
 

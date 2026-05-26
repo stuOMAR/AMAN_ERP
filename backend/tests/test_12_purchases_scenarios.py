@@ -200,6 +200,21 @@ class TestPurchaseInvoiceScenarios:
         inv_id = invoices[0]["id"]
         r2 = client.get(f"/api/buying/invoices/{inv_id}", headers=admin_headers)
         assert r2.status_code in [200, 404]
+        if r2.status_code == 200:
+            data = r2.json()
+            for key in (
+                "remaining_balance",
+                "base_currency",
+                "total_base",
+                "paid_amount_base",
+                "remaining_balance_base",
+            ):
+                assert key in data
+                assert isinstance(data[key], str)
+                assert "E" not in data[key].upper()
+            for line in data.get("items", []):
+                assert "unit_price_base" in line
+                assert "total_base" in line
 
     def test_create_purchase_invoice_cash(self, client, admin_headers):
         """✅ فاتورة شراء نقدية"""

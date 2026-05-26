@@ -417,7 +417,8 @@ END $$;
 _RETURNS_UNIFIED_VIEW_DO_BLOCK = """
 DO $$
 BEGIN
-    IF to_regclass('public.sales_returns') IS NOT NULL
+    IF to_regclass('public.returns_unified') IS NULL
+       AND to_regclass('public.sales_returns') IS NOT NULL
        AND to_regclass('public.pos_returns') IS NOT NULL THEN
         EXECUTE $VIEW$
         CREATE OR REPLACE VIEW returns_unified AS

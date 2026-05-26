@@ -1,15 +1,34 @@
 """kpi_service.crm — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     build_branch_filter, kpi_item, ratio_status, _count_table
 )
-from utils.accounting import get_base_currency
-from utils.currency_display import currency_amount_base_sql
+from utils.i18n import i18n_message  # noqa: E402
+from utils.accounting import get_base_currency  # noqa: E402
+from utils.currency_display import currency_amount_base_sql  # noqa: E402
+from utils.tax_precision import rate_str  # noqa: E402
+
+_D4 = Decimal("0.0001")
+
+
+def _dec(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
+
+
+def _pct(numerator: Any, denominator: Any) -> Decimal:
+    denom = _dec(denominator)
+    if denom == 0:
+        return Decimal("0")
+    return (_dec(numerator) * Decimal("100") / denom).quantize(_D4, rounding=ROUND_HALF_UP)
 
 
 def get_crm_kpis(db, start_date: date, end_date: date,
@@ -22,37 +41,43 @@ def get_crm_kpis(db, start_date: date, end_date: date,
 
     # Opportunities
     open_opps = 0
-    open_value = 0
+    open_value = Decimal("0")
     try:
         oo = db.execute(text(f"""
             SELECT COUNT(*), COALESCE(SUM({expected_base_sql}), 0)
-            FROM sales_opportunities o WHERE o.stage IN ('open','qualified','proposal') {opp_branch_sql}
+            FROM sales_opportunities o
+            WHERE o.stage NOT IN ('won','lost','cancelled')
+              AND COALESCE(o.is_deleted, FALSE) = FALSE
+              {opp_branch_sql}
         """), {"base_currency": base_currency, **opp_bp}).fetchone()
         if oo:
             open_opps = int(oo[0] or 0)
-            open_value = float(oo[1] or 0)
+            open_value = _dec(oo[1])
     except Exception:
         pass
 
     # Win Rate
-    won_opps = _count_table(db, "sales_opportunities", date_col="updated_at",
+    won_opps = _count_table(db, "sales_opportunities", branch_id=branch_id, date_col="updated_at",
                             start_date=start_date, end_date=end_date,
-                            extra_where="stage = 'won'")
-    lost_opps = _count_table(db, "sales_opportunities", date_col="updated_at",
+                            extra_where="stage = 'won' AND COALESCE(is_deleted, FALSE) = FALSE")
+    lost_opps = _count_table(db, "sales_opportunities", branch_id=branch_id, date_col="updated_at",
                              start_date=start_date, end_date=end_date,
-                             extra_where="stage = 'lost'")
+                             extra_where="stage = 'lost' AND COALESCE(is_deleted, FALSE) = FALSE")
     total_closed = won_opps + lost_opps
-    win_rate = (won_opps / total_closed * 100) if total_closed > 0 else 0
+    win_rate = _pct(won_opps, total_closed)
 
     # Pipeline by Stage
     pipeline_stages = []
     try:
         stages = db.execute(text(f"""
             SELECT o.stage, COUNT(*), COALESCE(SUM({expected_base_sql}), 0)
-            FROM sales_opportunities o WHERE o.stage NOT IN ('won','lost','cancelled') {opp_branch_sql}
+            FROM sales_opportunities o
+            WHERE o.stage NOT IN ('won','lost','cancelled')
+              AND COALESCE(o.is_deleted, FALSE) = FALSE
+              {opp_branch_sql}
             GROUP BY o.stage ORDER BY COUNT(*) DESC
         """), {"base_currency": base_currency, **opp_bp}).fetchall()
-        pipeline_stages = [{"stage": r[0], "count": int(r[1]), "value": Decimal(str(r[2]))} for r in stages]
+        pipeline_stages = [{"stage": r[0], "count": int(r[1]), "value": _dec(r[2])} for r in stages]
     except Exception:
         pass
 
@@ -70,33 +95,34 @@ def get_crm_kpis(db, start_date: date, end_date: date,
         pass
 
     # Campaign ROI (marketing_campaigns has budget/spent, no actual_revenue)
-    campaign_roi = 0
+    campaign_roi = Decimal("0")
     try:
-        cr = db.execute(text("""
+        campaign_branch_sql, campaign_bp = build_branch_filter(branch_id, table_alias="mc")
+        cr = db.execute(text(f"""
             SELECT
-                COALESCE(SUM(conversion_count), 0),
-                COALESCE(SUM(budget), 0),
-                COALESCE(SUM(spent), 0)
-            FROM marketing_campaigns
-            WHERE start_date BETWEEN :s AND :e
-        """), {"s": start_date, "e": end_date}).fetchone()
-        if cr and cr[2] > 0 and cr[1] > 0:
+                COALESCE(SUM(total_responded), 0) as conversions,
+                COALESCE(SUM(budget), 0) as budget,
+                COALESCE(SUM(spent), 0) as spent
+            FROM marketing_campaigns mc
+            WHERE mc.start_date BETWEEN :s AND :e {campaign_branch_sql}
+        """), {"s": start_date, "e": end_date, **campaign_bp}).fetchone()
+        if cr and _dec(cr.spent) > 0 and _dec(cr.budget) > 0:
             # ROI based on spend efficiency: (budget - spent) / budget * 100
-            campaign_roi = ((cr[1] - cr[2]) / cr[1]) * 100
+            campaign_roi = ((_dec(cr.budget) - _dec(cr.spent)) * Decimal("100") / _dec(cr.budget)).quantize(_D4, rounding=ROUND_HALF_UP)
     except Exception:
         pass
 
     kpis = [
         kpi_item("open_opportunities", "Open Opportunities", "الفرص المفتوحة", open_opps, ""),
         kpi_item("pipeline_value", "Pipeline Value", "قيمة الفرص", open_value, base_currency),
-        kpi_item("win_rate", "Win Rate", "معدل الفوز", win_rate, "%",
-                 benchmark=35.0, benchmark_source="Industry Avg",
-                 status=ratio_status(win_rate, 35, 20)),
+        kpi_item("win_rate", "Win Rate", "معدل الفوز", rate_str(win_rate), "%",
+                 benchmark=rate_str(35), benchmark_source="Industry Avg",
+                 status=ratio_status(win_rate, Decimal("35"), Decimal("20"))),
         kpi_item("open_tickets", "Open Tickets", "التذاكر المفتوحة", open_tickets, ""),
         kpi_item("overdue_tickets", "Overdue Tickets", "التذاكر المتأخرة", overdue_tickets, "",
                  status="danger" if overdue_tickets > 0 else "good"),
-        kpi_item("campaign_roi", "Campaign ROI", "عائد الحملات", campaign_roi, "%",
-                 benchmark=100.0, benchmark_source="Marketing Benchmark"),
+        kpi_item("campaign_roi", "Campaign ROI", "عائد الحملات", rate_str(campaign_roi), "%",
+                 benchmark=rate_str(100), benchmark_source="Marketing Benchmark"),
     ]
 
     charts = [
@@ -117,4 +143,3 @@ def get_crm_kpis(db, start_date: date, end_date: date,
 # ═══════════════════════════════════════════════════════════════════════════════
 # Helper: Chart Builders
 # ═══════════════════════════════════════════════════════════════════════════════
-

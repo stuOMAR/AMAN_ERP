@@ -1,5 +1,4 @@
 import { useState, useEffect, useRef } from 'react'
-import Decimal from 'decimal.js'
 import { useNavigate, useLocation } from 'react-router-dom'
 import { purchasesAPI, inventoryAPI, currenciesAPI, treasuryAPI } from '../../utils/api'
 import { fetchCurrentRate } from '../../hooks/useExchangeRate'
@@ -49,8 +48,13 @@ function PurchaseInvoiceForm() {
     })
 
     const [items, setItems] = useState([
-        { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }
+        { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }
     ])
+
+    const hasNonZeroDecimalInput = (value) => {
+        const normalized = String(value || '').trim()
+        return /^\d*(?:\.\d*)?$/.test(normalized) && !/^0*(?:\.0*)?$/.test(normalized)
+    }
 
     useEffect(() => {
         const fetchResources = async () => {
@@ -87,10 +91,10 @@ function PurchaseInvoiceForm() {
 	                        is_prepayment: false
 	                    }))
                     setItems(order.items
-                        .filter(item => new Decimal(item.remaining_to_invoice || 0).gt(0))
+                        .filter(item => item.can_invoice || item.has_remaining_to_invoice || hasNonZeroDecimalInput(item.remaining_to_invoice))
                         .map(item => {
                         // T040: Use remaining_to_invoice (received - invoiced) instead of received_quantity
-                        const remainingToInvoice = new Decimal(item.remaining_to_invoice || 0).toString()
+                        const remainingToInvoice = String(item.remaining_to_invoice || '0')
 
                         return {
                             product_id: item.product_id,
@@ -99,7 +103,6 @@ function PurchaseInvoiceForm() {
                             description: item.description || '',
                             quantity: remainingToInvoice,
                             unit_price: String(item.unit_price || '0'),
-                            tax_rate: null,
                             discount: String(item.discount || '0')
                         }
                     }))
@@ -146,10 +149,10 @@ function PurchaseInvoiceForm() {
                 supplier_id: formData.supplier_id ? parseInt(formData.supplier_id, 10) : null,
                 document_date: formData.invoice_date,
                 paid_amount: String(formData.paid_amount || '0'),
-                currency,
+                currency: formData.currency || currency,
             })
         }
-    }, [items, formData.supplier_id, formData.invoice_date, formData.paid_amount, currentBranch, currency, previewDebounced])
+    }, [items, formData.supplier_id, formData.invoice_date, formData.paid_amount, formData.currency, currentBranch, currency, previewDebounced])
 
     // Direct alias — no local arithmetic
     const totals = backendTotals ? {
@@ -182,7 +185,6 @@ function PurchaseInvoiceForm() {
                         const branchPrices = window.__branchPrices || {}
                         const priceInfo = branchPrices[parseInt(value)]
                         updatedItem.unit_price = String(priceInfo ? priceInfo.price : (product.last_buying_price || product.buying_price || ''))
-                        updatedItem.tax_rate = null
                     }
                 }
 
@@ -195,7 +197,7 @@ function PurchaseInvoiceForm() {
     }
 
     const addItem = () => {
-        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', tax_rate: null, discount: '' }])
+        setItems([...items, { product_id: '', description: '', quantity: '1', unit_price: '', discount: '' }])
     }
 
     const removeItem = (index) => {
@@ -225,15 +227,6 @@ function PurchaseInvoiceForm() {
             window.scrollTo(0, 0)
             return
         }
-        const overRemaining = items.find(item =>
-            item.po_line_id && new Decimal(item.quantity || 0).gt(item.max_remaining_to_invoice || 0)
-        )
-        if (overRemaining) {
-            setError(t('buying.purchase_invoices.form.error_qty_exceeds_remaining', 'Quantity exceeds remaining to invoice'))
-            window.scrollTo(0, 0)
-            return
-        }
-
         if (submittingRef.current) {
             return
         }
@@ -266,10 +259,10 @@ function PurchaseInvoiceForm() {
                     description: item.description || '',
                     quantity: String(item.quantity || 0),
                     unit_price: String(item.unit_price || 0),
-                    tax_rate: null,
                     discount: String(item.discount || 0),
                     markup: '0'
-                }))
+                })),
+                submitted_grand_total: backendTotals?.grandTotal ? String(backendTotals.grandTotal) : null,
             }
 
             await purchasesAPI.createInvoice(payload)
@@ -442,11 +435,13 @@ function PurchaseInvoiceForm() {
                                             />
                                         </td>
                                         <td>
-	                                            <span>—</span>
+	                                            <span>{backendLines?.[index]?.tax_rate ?? '—'}</span>
                                         </td>
                                         <td>
                                             <div style={{ fontWeight: 'bold' }}>
-	                                                {backendLines?.[index]?.total != null ? formatNumber(backendLines[index].total) : '—'}
+	                                                {backendLines?.[index]?.line_total != null || backendLines?.[index]?.total != null
+	                                                    ? formatNumber(backendLines[index].line_total ?? backendLines[index].total)
+	                                                    : '—'}
                                             </div>
                                         </td>
                                         <td>
@@ -589,7 +584,7 @@ function PurchaseInvoiceForm() {
                                     <span className="input-suffix">{formData.currency}</span>
                                 </div>
 
-                                {new Decimal(formData.paid_amount || 0).gt(0) && (
+                                {hasNonZeroDecimalInput(formData.paid_amount) && (
                                     <div style={{ marginTop: '12px' }}>
                                         <label className="form-label" style={{ fontSize: '0.9rem' }}>{t('buying.purchase_invoices.form.payment.down_payment_method')}:</label>
                                         <div style={{ display: 'flex', gap: '16px' }}>
@@ -671,7 +666,7 @@ function PurchaseInvoiceForm() {
                             <span>{t('buying.purchase_invoices.form.summary.subtotal')}</span>
                             <span>{totals.subtotal != null ? formatNumber(totals.subtotal) : '—'} <small>{formData.currency}</small></span>
                         </div>
-                        {new Decimal(totals.globalEffectPercent || 0).gt(0) && totals.globalEffectType === 'markup' && (
+                        {totals.globalEffectType === 'markup' && totals.totalMarkup != null && (
                             <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--text-success)' }}>
                                 <span>زيادة (مجموعة) ({totals.globalEffectPercent}%)</span>
                                 <span>{formatNumber(totals.totalMarkup)} <small>{formData.currency}</small></span>

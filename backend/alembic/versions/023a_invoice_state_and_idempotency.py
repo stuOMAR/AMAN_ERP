@@ -8,7 +8,6 @@ Adds invoices.state, idempotency_key, posted_at, posted_by, state_reason.
 Backfill state from existing posted/cancelled flags.
 """
 from alembic import op
-import sqlalchemy as sa
 
 
 revision = "023a_invoice_state_and_idempotency"

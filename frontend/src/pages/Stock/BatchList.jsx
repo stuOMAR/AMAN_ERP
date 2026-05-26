@@ -24,6 +24,7 @@ function BatchList() {
     const [warehouseFilter, setWarehouseFilter] = useState('')
     const [showCreateModal, setShowCreateModal] = useState(false)
     const [total, setTotal] = useState(0)
+    const [summary, setSummary] = useState({})
 
     const [form, setForm] = useState({
         product_id: '',
@@ -58,6 +59,7 @@ function BatchList() {
             const res = await inventoryAPI.listBatches(params)
             setBatches(res.data.items || [])
             setTotal(res.data.total || 0)
+            setSummary(res.data.summary || {})
         } catch (err) {
             console.error(err)
         } finally {
@@ -112,12 +114,15 @@ function BatchList() {
         return <span className={`badge ${s.cls}`}>{s.label}</span>
     }
 
-    const getDaysRemaining = (expiryDate) => {
-        if (!expiryDate) return null
-        const days = Math.ceil((new Date(expiryDate) - new Date()) / (1000 * 60 * 60 * 24))
-        if (days < 0) return <span style={{ color: 'var(--danger)' }}>{t('stock.batch.expired_since', { days: Math.abs(days) })}</span>
-        if (days <= 30) return <span style={{ color: 'var(--warning)' }}>{t('stock.batch.days_remaining', { days })}</span>
-        return <span style={{ color: 'var(--success)' }}>{t('stock.batch.days_remaining', { days })}</span>
+    const getDaysRemaining = (row) => {
+        if (!row.expiry_status || row.expiry_status === 'no_expiry') return null
+        if (row.expiry_status === 'expired') {
+            return <span style={{ color: 'var(--danger)' }}>{t('stock.batch.expired_since', { days: row.days_remaining_abs })}</span>
+        }
+        if (row.expiry_status === 'near_expiry') {
+            return <span style={{ color: 'var(--warning)' }}>{t('stock.batch.days_remaining', { days: row.days_remaining })}</span>
+        }
+        return <span style={{ color: 'var(--success)' }}>{t('stock.batch.days_remaining', { days: row.days_remaining })}</span>
     }
 
     const filteredBatches = useMemo(() => batches, [batches])
@@ -166,7 +171,7 @@ function BatchList() {
             key: '_remaining',
             label: t('stock.batch.remaining'),
             width: '12%',
-            render: (_, row) => getDaysRemaining(row.expiry_date) || '-',
+            render: (_, row) => getDaysRemaining(row) || '-',
         },
         {
             key: 'status',
@@ -207,7 +212,7 @@ function BatchList() {
                         <path d="m9 11 3 3L22 4"/>
                     </svg>
                     <div className="small text-muted">{t('stock.batch.active_batches')}</div>
-                    <div className="fw-bold fs-4 text-success">{batches.filter(b => b.status === 'active').length}</div>
+                    <div className="fw-bold fs-4 text-success">{summary.active_count || 0}</div>
                 </div>
                 <div className="card p-3 text-center">
                     <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" className="mx-auto mb-2 text-warning">
@@ -216,7 +221,7 @@ function BatchList() {
                     </svg>
                     <div className="small text-muted">{t('stock.batch.near_expiry')}</div>
                     <div className="fw-bold fs-4 text-warning">
-                        {batches.filter(b => b.expiry_date && new Date(b.expiry_date) <= new Date(Date.now() + 30*24*60*60*1000) && new Date(b.expiry_date) > new Date()).length}
+                        {summary.near_expiry_count || 0}
                     </div>
                 </div>
                 <div className="card p-3 text-center">
@@ -227,7 +232,7 @@ function BatchList() {
                     </svg>
                     <div className="small text-muted">{t('stock.batch.expired_items')}</div>
                     <div className="fw-bold fs-4 text-danger">
-                        {batches.filter(b => b.expiry_date && new Date(b.expiry_date) < new Date()).length}
+                        {summary.expired_count || 0}
                     </div>
                 </div>
             </div>

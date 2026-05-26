@@ -224,7 +224,7 @@ function ProductList() {
             width: '10%',
             render: (val, row) => (
                 <div style={{ fontWeight: '500' }}>
-                    {formatNumber(val)} <span style={{ fontSize: '12px' }}>{row.unit}</span>
+                    {formatNumber(row.available_stock ?? val)} <span style={{ fontSize: '12px' }}>{row.unit}</span>
                 </div>
             ),
         },
@@ -315,7 +315,7 @@ function ProductList() {
                                 {breakdownData && breakdownData.map((wh, idx) => (
                                     <tr key={idx}>
                                         <td>{wh.warehouse_name}</td>
-                                        <td>{formatNumber(wh.quantity)}</td>
+                                        <td>{formatNumber(wh.available_quantity ?? wh.quantity)}</td>
                                         <td style={{ fontWeight: 'bold' }}>{formatNumber(wh.average_cost)} {currency}</td>
                                         <td>{formatNumber(wh.total_value)} {currency}</td>
                                         <td style={{ fontSize: '12px', color: 'var(--text-secondary)' }}>

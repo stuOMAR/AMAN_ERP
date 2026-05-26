@@ -16,6 +16,7 @@ const AgingReport = () => {
     const [loading, setLoading] = useState(true);
     const [initialLoad, setInitialLoad] = useState(true);
     const [buckets, setBuckets] = useState([]);
+    const [totalDue, setTotalDue] = useState('0');
     const currency = getCurrency();
     const { currentBranch } = useBranch();
 
@@ -29,22 +30,10 @@ const AgingReport = () => {
                 }
                 try {
                     const branchId = currentBranch ? currentBranch.id : null;
-                    const res = await reportsAPI.getAgingReport(branchId);
-                    const rawData = res.data;
-                    setData(rawData);
-
-                    // Aggregate buckets
-                    const agg = { "0-30": 0, "31-60": 0, "61-90": 0, "90+": 0 };
-                    rawData.forEach(item => {
-                        if (agg[item.bucket] !== undefined) {
-                            agg[item.bucket] += item.amount;
-                        }
-                    });
-
-                    setBuckets(Object.keys(agg).map(key => ({
-                        name: key,
-                        amount: agg[key]
-                    })));
+                    const res = await reportsAPI.getAgingSummary(branchId);
+                    setData(res.data.items || []);
+                    setBuckets(res.data.buckets || []);
+                    setTotalDue(res.data.total_due || '0');
                 } catch (err) {
                     showToast(t('common.error'), 'error');
                 } finally {
@@ -58,8 +47,6 @@ const AgingReport = () => {
     }, [currentBranch]);
 
     if (initialLoad) return <PageLoading />;
-
-    const totalDue = buckets.reduce((a, b) => a + b.amount, 0);
 
     const agingChartOption = {
         tooltip: {

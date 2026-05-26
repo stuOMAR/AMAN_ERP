@@ -2,23 +2,18 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import Request, APIRouter, Depends, HTTPException, status
+from fastapi import Request, APIRouter, Depends, HTTPException
 from utils.i18n import http_error
 from sqlalchemy import text
-from pydantic import BaseModel
-from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
+from typing import Any, Dict, Optional
+from datetime import datetime, date
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, require_sensitive_permission, resolve_branch_scope, branch_scope_filter_from_scope
-from utils.cache import cached
+from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.exports import generate_chart_image, generate_excel_with_chart, generate_pdf, create_export_response
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
 logger = logging.getLogger(__name__)
 router = APIRouter()
@@ -28,6 +23,10 @@ _D2 = Decimal("0.01")
 
 def _q(value, places: Decimal = _D2) -> Decimal:
     return Decimal(str(value if value is not None else 0)).quantize(places, rounding=ROUND_HALF_UP)
+
+
+def _decimal_str(value, places: Decimal = _D2) -> str:
+    return format(_q(value, places), "f")
 
 
 def _scoped_branch_filter(branch_id, column, params, *, branch_scope=None):
@@ -456,13 +455,13 @@ def get_fx_gain_loss_report(
                 i.currency,
                 COUNT(*) as invoice_count,
                 SUM(i.total) as fc_total,
-                SUM(i.total * COALESCE(i.exchange_rate, 1.0)) as lc_total,
+                SUM(i.total * COALESCE(i.exchange_rate, 1::numeric)) as lc_total,
                 CASE WHEN i.invoice_type = 'sales' THEN 'receivable' ELSE 'payable' END as direction
             FROM invoices i
             WHERE i.currency != :base_ccy
               AND i.status NOT IN ('cancelled', 'draft')
               AND i.invoice_date BETWEEN :start AND :end
-              AND COALESCE(i.exchange_rate, 1.0) != 1.0
+              AND COALESCE(i.exchange_rate, 1::numeric) != 1::numeric
               {currency_filter}
             GROUP BY i.currency, i.invoice_type
             ORDER BY i.currency
@@ -470,23 +469,23 @@ def get_fx_gain_loss_report(
 
         # Unrealized FX: open foreign currency invoices at current rates
         rate_rows = db.execute(text(
-            "SELECT code, COALESCE(current_rate, 1.0) as rate FROM currencies WHERE is_active = TRUE"
+            "SELECT code, COALESCE(current_rate, 1::numeric) as rate FROM currencies WHERE is_active = TRUE"
         )).fetchall()
         current_rates = {r.code: Decimal(str(r.rate)) for r in rate_rows}
 
         open_invoices = db.execute(text(f"""
             SELECT
                 i.invoice_number, i.invoice_type, i.currency,
-                COALESCE(i.exchange_rate, 1.0) as booked_rate,
+                COALESCE(i.exchange_rate, 1::numeric) as booked_rate,
                 (i.total - COALESCE(i.paid_amount, 0)) as open_fc_amount,
                 p.name as party_name
             FROM invoices i
             LEFT JOIN parties p ON p.id = i.party_id
             WHERE i.currency != :base_ccy
               AND i.status NOT IN ('cancelled', 'draft', 'paid')
-              AND (i.total - COALESCE(i.paid_amount, 0)) > 0.01
+              AND (i.total - COALESCE(i.paid_amount, 0)) > :min_open_amount
               {currency_filter}
-        """), {**params, "base_ccy": base_ccy}).fetchall()
+        """), {**params, "base_ccy": base_ccy, "min_open_amount": Decimal("0.01")}).fetchall()
 
         unrealized_list = []
         total_unrealized_gain = Decimal("0")
@@ -630,19 +629,22 @@ def horizontal_analysis(request: Request,
             a = acct._mapping
             period_balances = [balance_map.get((a["id"], i), Decimal("0")) for i in range(len(parsed))]
 
-            if not any(abs(b) > 0.01 for b in period_balances):
+            if not any(b.copy_abs() > _D2 for b in period_balances):
                 continue
 
             changes = []
             for i in range(len(period_balances) - 1):
                 curr, prev = period_balances[i], period_balances[i + 1]
                 abs_change = curr - prev
-                pct_change = (abs_change / abs(prev) * 100) if prev != 0 else None
-                changes.append({"absolute": round(abs_change, 2), "percentage": round(pct_change, 2) if pct_change is not None else None})
+                pct_change = (abs_change / prev.copy_abs() * Decimal("100")) if prev != 0 else None
+                changes.append({
+                    "absolute": _decimal_str(abs_change),
+                    "percentage": _decimal_str(pct_change) if pct_change is not None else None,
+                })
 
             results.append({
                 "account_number": a["account_number"], "name": a["name"],
-                "account_type": a["account_type"], "periods": period_balances, "changes": changes,
+                "account_type": a["account_type"], "periods": [_decimal_str(v) for v in period_balances], "changes": changes,
                 "trend": "increasing" if all(period_balances[i] >= period_balances[i+1] for i in range(len(period_balances)-1)) else
                          "decreasing" if all(period_balances[i] <= period_balances[i+1] for i in range(len(period_balances)-1)) else "mixed"
             })
@@ -736,7 +738,7 @@ def financial_ratios(
         # Balance Sheet items (cumulative to date)
         total_assets = acct_sum("asset", None, None)
         current_assets = code_sum("11%")
-        fixed_assets = code_sum("12%")
+        code_sum("12%")
         total_liabilities = abs(acct_sum("liability"))
         current_liabilities = abs(code_sum("21%"))
         equity = abs(acct_sum("equity"))
@@ -898,8 +900,8 @@ def detailed_profit_loss(request: Request,
         rows = db.execute(text(revenue_query), params).fetchall()
 
         report_rows = []
-        total_revenue = 0
-        total_cogs = 0
+        total_revenue = Decimal("0")
+        total_cogs = Decimal("0")
 
         for r in rows:
             revenue = Decimal(str(r.revenue or 0))
@@ -912,12 +914,12 @@ def detailed_profit_loss(request: Request,
 
             report_rows.append({
                 group_label: r.group_name or "غير محدد",
-                "revenue": _q(revenue),
-                "cogs": _q(cogs),
-                "gross_profit": _q(gross_profit),
-                "gross_margin_pct": margin,
+                "revenue": _decimal_str(revenue),
+                "cogs": _decimal_str(cogs),
+                "gross_profit": _decimal_str(gross_profit),
+                "gross_margin_pct": _decimal_str(margin, _D1),
                 "invoice_count": r.invoice_count or 0,
-                "total_qty": Decimal(str(r.total_qty or 0)),
+                "total_qty": _decimal_str(r.total_qty or 0),
             })
 
         total_gp = total_revenue - total_cogs
@@ -929,10 +931,10 @@ def detailed_profit_loss(request: Request,
             "group_by": group_by,
             "details": report_rows,
             "totals": {
-                "total_revenue": _q(total_revenue),
-                "total_cogs": _q(total_cogs),
-                "total_gross_profit": _q(total_gp),
-                "overall_gross_margin_pct": overall_margin,
+                "total_revenue": _decimal_str(total_revenue),
+                "total_cogs": _decimal_str(total_cogs),
+                "total_gross_profit": _decimal_str(total_gp),
+                "overall_gross_margin_pct": _decimal_str(overall_margin, _D1),
             }
         }
 

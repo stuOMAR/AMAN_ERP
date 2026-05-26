@@ -9,8 +9,7 @@ Constitution §4: PII must be masked for users without hr.pii permission.
 """
 from __future__ import annotations
 
-from decimal import Decimal
-from typing import Any, Dict, Optional
+from typing import Any, Dict
 
 from utils.masking import mask_pii
 

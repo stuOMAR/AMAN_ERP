@@ -142,8 +142,8 @@ async def cancel_pos_sale(
                         original_source_document_id=sale_id,
                     )
                     unit_cost = Decimal(str(result.get("restored_unit_cost", unit_cost)))
-                except ValueError as exc:
-                    raise HTTPException(status_code=400, detail=str(exc))
+                except ValueError:
+                    raise HTTPException(**http_error(400, "invalid_request", request))
             else:
                 # WAC: update cost with returned quantity
                 CostingService.update_cost(

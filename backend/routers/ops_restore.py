@@ -8,10 +8,11 @@ from __future__ import annotations
 
 import logging
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from utils.i18n import http_error
+from services.permissions.sensitive import require_sensitive_permission
 
 logger = logging.getLogger(__name__)
 
@@ -28,12 +29,17 @@ class RestoreConfirmRequest(BaseModel):
 
 
 @router.get("/backups")
-async def list_backups():
+async def list_backups(current_user=Depends(require_sensitive_permission("ops.restore", audit_view=True))):
     """List backup runs."""
     from database import get_tenant_db
     from sqlalchemy import text
 
-    with get_tenant_db() as db:
+    company_id = (
+        current_user.get("company_id")
+        if isinstance(current_user, dict)
+        else getattr(current_user, "company_id", None)
+    )
+    with get_tenant_db(company_id) as db:
         result = db.execute(text(
             "SELECT id, backup_id, started_at, finished_at, size_bytes, checksum, offsite_uri, status "
             "FROM backup_runs ORDER BY started_at DESC LIMIT 50"
@@ -53,7 +59,11 @@ async def list_backups():
 
 
 @router.post("/restore/dry-run")
-async def restore_dry_run(body: RestoreDryRunRequest, request: Request):
+async def restore_dry_run(
+    body: RestoreDryRunRequest,
+    request: Request,
+    current_user=Depends(require_sensitive_permission("ops.restore", critical=True, audit_view=False)),
+):
     """Step 1: Validate backup + compute missing/extra tenants."""
     from services.ops.restore import dry_run_restore
 
@@ -64,7 +74,11 @@ async def restore_dry_run(body: RestoreDryRunRequest, request: Request):
 
 
 @router.post("/restore")
-async def restore_execute(body: RestoreConfirmRequest, request: Request):
+async def restore_execute(
+    body: RestoreConfirmRequest,
+    request: Request,
+    current_user=Depends(require_sensitive_permission("ops.restore", critical=True, audit_view=False)),
+):
     """Step 2: Execute restore with confirm token. Audited."""
     from services.ops.restore import execute_restore
 

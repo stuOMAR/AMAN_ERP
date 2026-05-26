@@ -4,7 +4,7 @@ Advanced HR Router - Phase 4
 """
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
 from datetime import date
@@ -18,7 +18,7 @@ from utils.audit import log_activity
 import logging
 logger = logging.getLogger(__name__)
 
-from schemas.hr_advanced import (
+from schemas.hr_advanced import (  # noqa: E402
     SalaryStructureCreate, SalaryStructureUpdate, SalaryStructureResponse,
     SalaryComponentCreate, SalaryComponentUpdate, SalaryComponentResponse,
     EmployeeSalaryComponentCreate, OvertimeRequestCreate, OvertimeRequestUpdate, OvertimeRequestResponse,
@@ -37,6 +37,38 @@ def _dec(v):
     return Decimal(str(v or 0))
 
 router = APIRouter(prefix="/hr-advanced", tags=["HR Advanced - الموارد البشرية المتقدمة"], dependencies=[Depends(require_module("hr"))])
+
+
+def _maybe_link_employee_dms_document(conn, *, company_id, user_id, employee_id: int, file_url: Optional[str]) -> None:
+    if not file_url or not str(file_url).startswith("/services/documents/"):
+        return
+    try:
+        from services.dms.documents import tenant_numeric_id
+
+        document_id = int(str(file_url).strip("/").split("/")[2])
+        conn.execute(
+            text("""
+                INSERT INTO dms_attachment_links (
+                    tenant_id, document_id, entity_type, entity_id, created_by_user_id, created_at
+                )
+                SELECT :tenant_id, :document_id, 'employees', :employee_id, :user_id, now()
+                WHERE NOT EXISTS (
+                    SELECT 1 FROM dms_attachment_links
+                     WHERE tenant_id = :tenant_id
+                       AND document_id = :document_id
+                       AND entity_type = 'employees'
+                       AND entity_id = :employee_id
+                )
+            """),
+            {
+                "tenant_id": tenant_numeric_id(company_id),
+                "document_id": document_id,
+                "employee_id": employee_id,
+                "user_id": user_id,
+            },
+        )
+    except (IndexError, ValueError):
+        logger.warning("Employee document has invalid DMS URL")
 
 
 # =============================================
@@ -567,6 +599,13 @@ def create_document(data: EmployeeDocumentCreate, request: Request, current_user
             "url": data.file_url, "notes": data.notes, "alert": data.alert_days, "status": doc_status
         })
         doc_id = result.scalar()
+        _maybe_link_employee_dms_document(
+            conn,
+            company_id=company_id,
+            user_id=current_user.id,
+            employee_id=data.employee_id,
+            file_url=data.file_url,
+        )
         log_activity(
             conn, user_id=current_user.id, username=getattr(current_user, "username", "unknown"),
             action="hr.document.create", resource_type="employee_document",
@@ -587,6 +626,19 @@ def update_document(doc_id: int, data: EmployeeDocumentUpdate, request: Request,
                 params[field] = val
         if not fields:
             raise HTTPException(**http_error(400, "no_changes"))
+        if "file_url" in params:
+            employee = conn.execute(
+                text("SELECT employee_id FROM employee_documents WHERE id = :id"),
+                {"id": doc_id},
+            ).fetchone()
+            if employee:
+                _maybe_link_employee_dms_document(
+                    conn,
+                    company_id=company_id,
+                    user_id=current_user.id,
+                    employee_id=employee.employee_id,
+                    file_url=params["file_url"],
+                )
         fields.append("updated_at = CURRENT_TIMESTAMP")
         conn.execute(text(f"UPDATE employee_documents SET {', '.join(fields)} WHERE id = :id"), params)
         log_activity(

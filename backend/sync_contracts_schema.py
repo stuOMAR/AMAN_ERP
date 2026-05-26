@@ -5,8 +5,8 @@ import sys
 backend_dir = os.path.dirname(os.path.abspath(__file__))
 sys.path.append(backend_dir)
 
-from database import engine, get_db_connection
-from sqlalchemy import text
+from database import engine, get_db_connection  # noqa: E402
+from sqlalchemy import text  # noqa: E402
 
 def sync_contracts_schema():
     print("Starting tenant schema sync for contracts...")

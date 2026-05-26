@@ -23,7 +23,7 @@ _VALID_SOURCES = (
     "payroll_reverse", "ticket_allowance",
     "service_invoice", "service_invoice_reverse",
 )
-_SOURCE_EXPR = " | ".join(f"'{s}'" for s in _VALID_SOURCES)
+_SOURCE_EXPR = ", ".join(f"'{s}'" for s in _VALID_SOURCES)
 
 
 def upgrade() -> None:
@@ -67,7 +67,7 @@ def downgrade() -> None:
         "ifrs15_revenue", "lease", "tax", "provision", "pos",
         "shipment", "delivery", "payment",
     )
-    old_expr = " | ".join(f"'{s}'" for s in _OLD_SOURCES)
+    old_expr = ", ".join(f"'{s}'" for s in _OLD_SOURCES)
     op.execute(
         f"""
         ALTER TABLE journal_entries

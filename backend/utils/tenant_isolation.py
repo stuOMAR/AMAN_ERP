@@ -8,7 +8,7 @@ company_id embedded in their JWT, regardless of what they send.
 
 from typing import Any, Optional
 
-from fastapi import HTTPException, status
+from fastapi import HTTPException
 
 from utils.i18n import http_error
 

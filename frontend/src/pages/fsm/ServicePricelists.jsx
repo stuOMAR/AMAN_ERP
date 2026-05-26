@@ -2,6 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { getCurrency } from '../../utils/auth';
 import { useTranslation } from 'react-i18next';
+import api from '../../services/apiClient';
 
 /**
  * ServicePricelists — DataTable + scope-aware editor with valid_from/valid_to.
@@ -26,24 +27,15 @@ export default function ServicePricelists() {
     queryKey: ['pricelists', scope],
     queryFn: async () => {
       const params = scope ? `?scope=${scope}` : '';
-      const res = await fetch(`/api/fsm/pricelists${params}`);
-      if (!res.ok) throw new Error('Failed to load pricelists');
-      return res.json();
+      const res = await api.get(`/fsm/pricelists${params}`);
+      return res.data;
     },
   });
 
   const mutation = useMutation({
     mutationFn: async (data) => {
-      const res = await fetch('/api/fsm/pricelists', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(data),
-      });
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.detail || 'Failed to save');
-      }
-      return res.json();
+      const res = await api.post('/fsm/pricelists', data);
+      return res.data;
     },
     onSuccess: () => {
       queryClient.invalidateQueries(['pricelists']);

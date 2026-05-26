@@ -26,7 +26,7 @@ from utils.permissions import (
     require_permission,
     require_sensitive_permission,
 )
-from utils.tax_precision import get_idempotency_key
+from utils.tax_precision import require_idempotency_key
 from utils.tx import transactional
 from utils.i18n import http_error
 
@@ -101,11 +101,7 @@ async def reprocess_outbox(
     invoice to ZATCA. The key is persisted on
     ``zatca_outbox.last_idempotency_key``.
     """
-    # Header is optional only for backwards compat with existing
-    # operator scripts; when missing we fall back to a deterministic
-    # per-row key so two concurrent calls without a header still
-    # collapse. New clients are expected to supply it.
-    idempotency_key = get_idempotency_key(request) or f"reprocess:{outbox_id}"
+    idempotency_key = require_idempotency_key(request, operation="ZATCA outbox reprocess")
 
     with transactional(current_user.company_id) as db:
         # PR16-fix: per-tenant DB binding via transactional() already

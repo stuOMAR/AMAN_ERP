@@ -8,7 +8,7 @@ exclusion constraint prevents overlapping non-reversed periods.
 from __future__ import annotations
 
 import logging
-from datetime import date, datetime, timezone
+from datetime import date
 from typing import Any, Optional
 
 from sqlalchemy import text

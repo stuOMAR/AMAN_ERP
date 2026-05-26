@@ -66,9 +66,8 @@ def check_and_emit(
         debounce_setting = db.execute(
             text("""
                 SELECT setting_value FROM company_settings
-                WHERE tenant_id = :tid AND setting_key = 'inventory.low_stock_debounce_hours'
+                WHERE setting_key = 'inventory.low_stock_debounce_hours'
             """),
-            {"tid": tenant_id},
         ).fetchone()
         debounce_hours = int(debounce_setting.setting_value or 24) if debounce_setting else 24
 
@@ -89,11 +88,11 @@ def check_and_emit(
             payload={
                 "item_id": item_id,
                 "warehouse_id": warehouse_id,
-                "available": float(available),
-                "reorder_point": float(reorder_point),
+                "available": str(available),
+                "reorder_point": str(reorder_point),
             },
         )
-    except Exception as e:
-        logger.warning(f"low_stock_webhook: dispatch failed: {e}")
+    except Exception:
+        logger.warning("low_stock_webhook: dispatch failed")
 
     return True

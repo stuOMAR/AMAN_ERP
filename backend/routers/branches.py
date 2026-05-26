@@ -7,7 +7,7 @@ from utils.tx import transactional
 from schemas import BranchCreate, BranchResponse
 from utils.permissions import require_permission
 from utils.audit import log_activity
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 import logging
 logger = logging.getLogger(__name__)
 
@@ -348,7 +348,7 @@ def delete_branch(
             # Build WHERE clause for single or composite FK
             where_clause = ' AND '.join(f'{c} = :bid' for c in col.split(','))
             count = conn.execute(
-                text(f'SELECT COUNT(*) FROM {fk.tbl} WHERE {where_clause}'), # noqa: sql-lint
+                text(f'SELECT COUNT(*) FROM {fk.tbl} WHERE {where_clause}'), # noqa
                 {"bid": branch_id}
             ).scalar() or 0
             if count > 0:

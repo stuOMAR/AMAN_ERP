@@ -229,7 +229,7 @@ class TestLeaveScenarios:
         """✅ الموافقة على إجازة"""
         r = client.get("/api/hr/leaves", headers=admin_headers)
         leaves = r.json()
-        pending = next((l for l in leaves if l.get("status") == "pending"), None)
+        pending = next((line for line in leaves if line.get("status") == "pending"), None)
         if not pending:
             pytest.skip("لا إجازات معلقة")
         lid = pending["id"]
@@ -242,7 +242,7 @@ class TestLeaveScenarios:
         """✅ رفض إجازة"""
         r = client.get("/api/hr/leaves", headers=admin_headers)
         leaves = r.json()
-        pending = next((l for l in leaves if l.get("status") == "pending"), None)
+        pending = next((line for line in leaves if line.get("status") == "pending"), None)
         if not pending:
             pytest.skip("لا إجازات معلقة")
         lid = pending["id"]
@@ -311,7 +311,7 @@ class TestLoanScenarios:
             # Fallback: check existing
             r2 = client.get("/api/hr/loans", headers=admin_headers)
             loans = r2.json()
-            pending = next((l for l in loans if l.get("status") == "pending"), None)
+            pending = next((line for line in loans if line.get("status") == "pending"), None)
             if not pending:
                 pytest.skip("لا سلف معلقة")
             lid = pending["id"]

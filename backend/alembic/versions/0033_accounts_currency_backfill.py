@@ -5,7 +5,6 @@ Revises: 0032_finance_treasury_tax_audit_fixes
 Create Date: 2026-05-20
 """
 from alembic import op
-import sqlalchemy as sa
 
 revision = "0033_accounts_currency_backfill"
 down_revision = "0032_finance_treasury_tax_audit_fixes"

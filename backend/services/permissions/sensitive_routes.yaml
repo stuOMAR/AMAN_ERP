@@ -91,6 +91,12 @@
 "POST /api/fsm/contracts/*/renew": "contract.renew"
 
 # DMS admin
+"GET /api/dms/quotas": "dms.audit_admin"
+"GET /api/dms/quarantine": "dms.audit_admin"
+"POST /api/dms/quarantine/*/release": "dms.audit_admin"
+"GET /api/dms/scan-stats": "dms.audit_admin"
+"POST /api/dms/storage/recalculate": "dms.audit_admin"
+"GET /api/dms/admin/quotas": "dms.audit_admin"
 "GET /api/dms/admin/quarantine": "dms.audit_admin"
 "POST /api/dms/admin/quarantine/*/release": "dms.audit_admin"
 "GET /api/dms/admin/scan-stats": "dms.audit_admin"

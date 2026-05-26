@@ -2,27 +2,18 @@
 
 Mounted under the parent router via auth/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Request, Response, Form, Body
-from utils.i18n import http_error
-from fastapi.security import OAuth2PasswordBearer, OAuth2PasswordRequestForm
-from sqlalchemy import text, create_engine
-from sqlalchemy.exc import OperationalError, ProgrammingError
-from jose import jwt, JWTError
+from fastapi import APIRouter, HTTPException, Request
+from utils.i18n import http_error, i18n_message
+from fastapi.security import OAuth2PasswordBearer
+from sqlalchemy import text
 from datetime import datetime, timedelta, timezone
-from typing import Any, Dict, List, Optional
-from pydantic import BaseModel, EmailStr
+from typing import Any, Dict
 import logging
-import os
 import secrets
-import hashlib
-import ipaddress
 from database import get_system_db, verify_password, get_db_connection, hash_password, engine as system_engine
-from utils.tx import transactional
 from config import settings
-from schemas import Token, UserResponse
-from utils.audit import log_activity, log_system_activity
+from utils.audit import log_system_activity
 from utils.limiter import limiter
-from utils.auth_cookies import set_auth_cookies, clear_auth_cookies
 
 logger = logging.getLogger(__name__)
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl='api/auth/login')
@@ -30,7 +21,7 @@ oauth2_scheme_optional = OAuth2PasswordBearer(tokenUrl='api/auth/login', auto_er
 
 router = APIRouter()
 
-from .core import ForgotPasswordRequest, ResetPasswordRequest, _ensure_reset_table, _hash_reset_token, invalidate_user_tokens, oauth2_scheme, oauth2_scheme_optional
+from .core import ForgotPasswordRequest, ResetPasswordRequest, _ensure_reset_table, _hash_reset_token, invalidate_user_tokens  # noqa: E402
 
 @router.post("/forgot-password", response_model=Dict[str, Any])
 @limiter.limit("5/minute")

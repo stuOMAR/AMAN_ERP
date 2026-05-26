@@ -74,9 +74,12 @@ const ReconciliationList = () => {
         }
     };
 
-    const getProgressBar = (matched, total) => {
+    const getProgressBar = (row) => {
+        const matched = row.matched_count || 0;
+        const total = row.total_lines || 0;
         if (total === 0) return null;
-        const pct = Math.round((matched / total) * 100);
+        const pct = row.progress_pct ?? 0;
+        const isComplete = row.progress_status === 'complete' || row.is_fully_matched === true;
         return (
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
                 <div style={{
@@ -85,7 +88,7 @@ const ReconciliationList = () => {
                 }}>
                     <div style={{
                         width: `${pct}%`, height: '100%', borderRadius: '3px',
-                        backgroundColor: pct === 100 ? 'var(--success)' : 'var(--primary)',
+                        backgroundColor: isComplete ? 'var(--success)' : 'var(--primary)',
                         transition: 'width 0.3s ease'
                     }} />
                 </div>
@@ -149,7 +152,7 @@ const ReconciliationList = () => {
         {
             key: 'matched_count',
             label: t('treasury.reconciliation.progress'),
-            render: (val, row) => getProgressBar(val || 0, row.total_lines || 0),
+            render: (_, row) => getProgressBar(row),
         },
         {
             key: 'created_by_name',

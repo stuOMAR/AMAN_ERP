@@ -2,9 +2,25 @@
 from __future__ import annotations
 
 import logging
-from typing import Any, Optional
+from typing import Optional
 
 logger = logging.getLogger(__name__)
+
+
+def mask_email(email: str) -> str:
+    """Mask email for PII safety."""
+    if not email:
+        return "***"
+    if "@" not in email:
+        return "***"
+    parts = email.split("@")
+    name = parts[0]
+    domain = parts[1]
+    if len(name) <= 2:
+        masked_name = name[0] + "*" * (len(name) - 1) if name else "*"
+    else:
+        masked_name = name[0] + "*" * (len(name) - 2) + name[-1]
+    return f"{masked_name}@{domain}"
 
 
 def send_email(
@@ -16,8 +32,9 @@ def send_email(
     smtp_config: Optional[dict] = None,
 ) -> bool:
     """Send an email via SMTP."""
+    masked_recipient = mask_email(recipient)
     if not smtp_config:
-        logger.warning("SMTP not configured; email not sent to %s", recipient)
+        logger.warning("SMTP not configured; email not sent to %s", masked_recipient)
         return False
 
     import smtplib
@@ -42,6 +59,6 @@ def send_email(
                 server.login(smtp_config["username"], smtp_config["password"])
             server.send_message(msg)
         return True
-    except Exception as e:
-        logger.error("Email send failed: %s", e)
-        raise
+    except Exception:
+        logger.error("Email send failed for recipient: %s (connection details masked)", masked_recipient)
+        raise RuntimeError("SMTP delivery failed")

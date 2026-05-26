@@ -6,7 +6,6 @@ from __future__ import annotations
 
 import json
 import logging
-from decimal import Decimal
 from typing import Any, Optional
 
 from sqlalchemy import text

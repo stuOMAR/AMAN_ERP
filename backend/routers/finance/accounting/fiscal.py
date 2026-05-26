@@ -2,26 +2,20 @@
 
 Mounted under the parent router via accounting/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status, Body, Request
-from utils.i18n import http_error
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Body, Request
+from utils.i18n import http_error, i18n_message
 from typing import Any, Dict, List, Optional
 from sqlalchemy import text
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 import logging
 from datetime import date
-from dateutil.relativedelta import relativedelta
-from utils.cache import invalidate_company_cache
 from decimal import Decimal, ROUND_HALF_UP
 from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access
 from utils.audit import log_activity
-from utils.accounting import get_base_currency
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 from utils.fiscal_lock import check_fiscal_period_open
-from schemas.accounting import AccountCreate, AccountUpdate, FiscalYearCreate, FiscalYearClose, FiscalYearReopen
-from utils.cache import cache
+from schemas.accounting import FiscalYearCreate, FiscalYearClose, FiscalYearReopen
 from utils.limiter import limiter
 
 logger = logging.getLogger(__name__)
@@ -29,6 +23,8 @@ _D2 = Decimal('0.01')
 _D4 = Decimal('0.0001')
 
 def _dec(v) -> Decimal:
+    if v is None or (isinstance(v, str) and v.strip() == ""):
+        return Decimal("0")
     return Decimal(str(v)) if v is not None else Decimal('0')
 
 
@@ -40,7 +36,7 @@ def _require_company_wide_branch_scope(current_user: Any, request: Request) -> N
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D4, _dec  # noqa: E402
 
 @router.get("/fiscal-years", dependencies=[Depends(require_permission("accounting.view"))], response_model=List[Dict[str, Any]])
 @limiter.limit("200/minute")
@@ -109,7 +105,7 @@ def create_fiscal_year(
             existing = db.execute(text("SELECT 1 FROM fiscal_years WHERE year = :y"), {"y": data.year}).fetchone()
             if existing:
                 raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_already_exists", request))
-    
+
             # Find retained earnings account if not specified
             re_account_id = data.retained_earnings_account_id
             if not re_account_id:
@@ -122,7 +118,7 @@ def create_fiscal_year(
                 """)).fetchone()
                 if re_acc:
                     re_account_id = re_acc.id
-    
+
             result = db.execute(text("""
                 INSERT INTO fiscal_years (year, start_date, end_date, retained_earnings_account_id)
                 VALUES (:year, :start, :end, :re_acc)
@@ -134,12 +130,12 @@ def create_fiscal_year(
                 "re_acc": re_account_id
             })
             fy_id = result.scalar()
-    
+
             # Auto-create 12 monthly fiscal periods if none exist for this year
             period_count = db.execute(text(
                 "SELECT COUNT(*) FROM fiscal_periods WHERE fiscal_year = :y"
             ), {"y": data.year}).scalar()
-    
+
             if period_count == 0:
                 months_ar = ["يناير", "فبراير", "مارس", "أبريل", "مايو", "يونيو",
                              "يوليو", "أغسطس", "سبتمبر", "أكتوبر", "نوفمبر", "ديسمبر"]
@@ -159,13 +155,13 @@ def create_fiscal_year(
                             "end": end_d,
                             "year": data.year
                         })
-    
-    
+
+
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="accounting.fiscal_year.create",
                          resource_type="fiscal_year", resource_id=str(fy_id),
                          details={"year": data.year})
-    
+
             return {"success": True, "id": fy_id, "message": i18n_message("fiscal_year_created", request)}
         except HTTPException:
             raise
@@ -257,6 +253,7 @@ def preview_year_end_closing(
             "total_revenue": str(total_revenue.quantize(_D4, ROUND_HALF_UP)),
             "total_expenses": str(total_expenses.quantize(_D4, ROUND_HALF_UP)),
             "net_income": str(net_income.quantize(_D4, ROUND_HALF_UP)),
+            "net_income_abs": str(abs(net_income).quantize(_D4, ROUND_HALF_UP)),
             "retained_earnings_account": {
                 "id": re_acc.id, "account_number": re_acc.account_number,
                 "name": re_acc.name, "name_en": re_acc.name_en
@@ -276,13 +273,46 @@ def close_fiscal_year(
         try:
             _require_company_wide_branch_scope(current_user, request)
 
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                from utils.idempotency import find_je_by_idempotency_key
+                existing = find_je_by_idempotency_key(db, idempotency_key)
+                if existing:
+                    je_id, je_num = existing
+                    fy_closed = db.execute(text("""
+                        SELECT year, status
+                        FROM fiscal_years
+                        WHERE closing_entry_id = :je_id
+                    """), {"je_id": je_id}).fetchone()
+                    if fy_closed:
+                        je_lines = db.execute(text("""
+                            SELECT jl.debit, jl.credit, a.account_type
+                            FROM journal_lines jl
+                            JOIN accounts a ON jl.account_id = a.id
+                            WHERE jl.journal_entry_id = :je_id
+                        """), {"je_id": je_id}).fetchall()
+                        rev_sum = sum(_dec(line.debit) for line in je_lines if line.account_type == "revenue")
+                        exp_sum = sum(_dec(line.credit) for line in je_lines if line.account_type == "expense")
+                        net = (rev_sum - exp_sum).quantize(_D4, ROUND_HALF_UP)
+                        return {
+                            "success": True,
+                            "message": i18n_message("fiscal_year_closed", request),
+                            "closing_entry_id": je_id,
+                            "closing_entry_number": je_num,
+                            "total_revenue": str(rev_sum.quantize(_D4, ROUND_HALF_UP)),
+                            "total_expenses": str(exp_sum.quantize(_D4, ROUND_HALF_UP)),
+                            "net_income": str(net.quantize(_D4, ROUND_HALF_UP)),
+                            "result_type": "profit" if net >= 0 else "loss",
+                            "closed_periods": 0
+                        }
+
             # 1. Validate fiscal year exists and is open
             fy = db.execute(text("SELECT * FROM fiscal_years WHERE year = :y FOR UPDATE"), {"y": year}).fetchone()
             if not fy:
                 raise HTTPException(status_code=404, detail=i18n_message("fiscal_year_not_found", request))
             if fy.status == 'closed':
                 raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_already_closed", request))
-    
+
             # 2. Determine retained earnings account
             re_account_id = data.retained_earnings_account_id or fy.retained_earnings_account_id
             if not re_account_id:
@@ -297,7 +327,7 @@ def close_fiscal_year(
                     re_account_id = re_acc.id
                 else:
                     raise HTTPException(**http_error(400, "retained_earnings_not_found_manual", request))
-    
+
             # 3. Calculate total revenue and expenses for the year
             revenue_data = db.execute(text("""
                 SELECT a.id, COALESCE(SUM(jl.credit - jl.debit), 0) AS balance
@@ -310,7 +340,7 @@ def close_fiscal_year(
                 GROUP BY a.id
                 HAVING COALESCE(SUM(jl.credit - jl.debit), 0) != 0
             """), {"start": fy.start_date, "end": fy.end_date}).fetchall()
-    
+
             expense_data = db.execute(text("""
                 SELECT a.id, COALESCE(SUM(jl.debit - jl.credit), 0) AS balance
                 FROM accounts a
@@ -322,17 +352,17 @@ def close_fiscal_year(
                 GROUP BY a.id
                 HAVING COALESCE(SUM(jl.debit - jl.credit), 0) != 0
             """), {"start": fy.start_date, "end": fy.end_date}).fetchall()
-    
+
             total_revenue = sum(_dec(r.balance) for r in revenue_data)
             total_expenses = sum(_dec(r.balance) for r in expense_data)
             net_income = (total_revenue - total_expenses).quantize(_D4, ROUND_HALF_UP)
-    
+
             if not revenue_data and not expense_data:
                 raise HTTPException(**http_error(400, "no_revenue_expense_movements_year", request))
-    
+
             # 4. Build and create the closing journal entry via centralized GL service
             closing_lines = []
-    
+
             # A) Close revenue accounts (debit revenue to zero it out)
             for rev in revenue_data:
                 balance = _dec(rev.balance).quantize(_D4, ROUND_HALF_UP)
@@ -342,7 +372,7 @@ def close_fiscal_year(
                     "credit": 0,
                     "description": f"إقفال حساب إيرادات - {year}",
                 })
-    
+
             # B) Close expense accounts (credit expense to zero it out)
             for exp in expense_data:
                 balance = _dec(exp.balance).quantize(_D4, ROUND_HALF_UP)
@@ -352,7 +382,7 @@ def close_fiscal_year(
                     "credit": abs(balance),
                     "description": f"إقفال حساب مصاريف - {year}",
                 })
-    
+
             # C) Transfer net income to retained earnings
             if net_income >= 0:
                 closing_lines.append({
@@ -368,7 +398,7 @@ def close_fiscal_year(
                     "credit": 0,
                     "description": f"ترحيل صافي خسارة {year} إلى الأرباح المبقاة",
                 })
-    
+
             entry_id, entry_num = gl_create_journal_entry(
                 db=db,
                 company_id=current_user.company_id,
@@ -379,8 +409,9 @@ def close_fiscal_year(
                 reference=f"Year-End Closing {year}",
                 source="fiscal_year_closing",
                 source_id=fy.id,
+                idempotency_key=idempotency_key,
             )
-    
+
             # 6. Close fiscal periods for this year (if requested)
             closed_periods = 0
             if data.close_periods:
@@ -422,7 +453,7 @@ def close_fiscal_year(
                     "user": current_user.id,
                     "reason": f"Fiscal year close {year}",
                 })
-    
+
             # 7. Mark fiscal year as closed
             db.execute(text("""
                 UPDATE fiscal_years
@@ -438,13 +469,13 @@ def close_fiscal_year(
                 "user": current_user.id,
                 "year": year
             })
-    
-    
+
+
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="accounting.fiscal_year.close",
                          resource_type="fiscal_year", resource_id=str(fy.id),
                          details={"year": year, "net_income": str(net_income.quantize(_D4, ROUND_HALF_UP))})
-    
+
             return {
                 "success": True,
                 "message": i18n_message("fiscal_year_closed", request),
@@ -473,13 +504,25 @@ def reopen_fiscal_year(
     """إعادة فتح سنة مالية مقفلة - عكس قيد الإقفال"""
     with transactional(current_user.company_id) as db:
         try:
+            idempotency_key = request.headers.get("Idempotency-Key")
+            if idempotency_key:
+                from utils.idempotency import find_je_by_idempotency_key
+                existing = find_je_by_idempotency_key(db, idempotency_key)
+                if existing:
+                    je_id, je_num = existing
+                    return {
+                        "success": True,
+                        "message": i18n_message("fiscal_year_reopened", request),
+                        "reversal_entry_id": je_id,
+                    }
+
             # 1. Validate
             fy = db.execute(text("SELECT * FROM fiscal_years WHERE year = :y FOR UPDATE"), {"y": year}).fetchone()
             if not fy:
                 raise HTTPException(status_code=404, detail=i18n_message("fiscal_year_not_found", request))
-            if fy.status != 'closed':
+            if fy.status != "closed":
                 raise HTTPException(status_code=400, detail=i18n_message("fiscal_year_not_locked", request))
-    
+
             # 2. Reverse the closing journal entry
             if fy.closing_entry_id:
                 closing_entry = db.execute(text("""
@@ -487,12 +530,12 @@ def reopen_fiscal_year(
                     FROM journal_entries
                     WHERE id = :id
                 """), {"id": fy.closing_entry_id}).fetchone()
-    
+
                 closing_lines = db.execute(text("""
                     SELECT account_id, debit, credit FROM journal_lines
                     WHERE journal_entry_id = :id
                 """), {"id": fy.closing_entry_id}).fetchall()
-    
+
                 rev_lines = []
                 for line in closing_lines:
                     rev_lines.append({
@@ -501,10 +544,10 @@ def reopen_fiscal_year(
                         "credit": _dec(line.debit or 0),
                         "description": f"عكس إقفال {year}",
                     })
-    
+
                 reversal_date = str(date.today())
                 check_fiscal_period_open(db, reversal_date)
-    
+
                 rev_id, _ = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
@@ -518,13 +561,14 @@ def reopen_fiscal_year(
                     exchange_rate=_dec(closing_entry.exchange_rate or 1) if closing_entry else Decimal("1"),
                     source="fiscal_year_reopen",
                     source_id=fy.id,
+                    idempotency_key=idempotency_key,
                 )
-    
+
                 # Mark original closing entry as voided
                 db.execute(text("""
                     UPDATE journal_entries SET status = 'void' WHERE id = :id
                 """), {"id": fy.closing_entry_id})
-    
+
             # 3. Reopen fiscal periods
             db.execute(text("""
                 UPDATE fiscal_periods
@@ -542,7 +586,7 @@ def reopen_fiscal_year(
                   AND fpl.period_end = fp.end_date
                   AND fpl.is_locked = TRUE
             """), {"year": year, "user": current_user.id})
-    
+
             # 4. Update fiscal year status
             db.execute(text("""
                 UPDATE fiscal_years
@@ -552,13 +596,13 @@ def reopen_fiscal_year(
                     reopened_at = NOW()
                 WHERE year = :year
             """), {"user": current_user.id, "year": year})
-    
-    
+
+
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="accounting.fiscal_year.reopen",
                          resource_type="fiscal_year", resource_id=str(fy.id),
                          details={"year": year, "reason": data.reason})
-    
+
             return {
                 "success": True,
                 "message": i18n_message("fiscal_year_reopened", request),
@@ -631,7 +675,7 @@ def toggle_fiscal_period(
             period = db.execute(text("SELECT * FROM fiscal_periods WHERE id = :id"), {"id": period_id}).fetchone()
             if not period:
                 raise HTTPException(**http_error(404, "accounting_period_not_found", request))
-    
+
             # Check if the parent fiscal year is closed
             if period.fiscal_year:
                 fy = db.execute(text(
@@ -639,7 +683,7 @@ def toggle_fiscal_period(
                 ), {"y": period.fiscal_year}).fetchone()
                 if fy and fy.status == 'closed' and period.is_closed:
                     raise HTTPException(**http_error(400, "cannot_open_period_closed_year", request))
-    
+
             new_status = not period.is_closed
             db.execute(text("""
                 UPDATE fiscal_periods
@@ -648,7 +692,7 @@ def toggle_fiscal_period(
                     closed_at = CASE WHEN :closed THEN NOW() ELSE NULL END
                 WHERE id = :id
             """), {"closed": new_status, "user": current_user.id, "id": period_id})
-    
+
             # Sync fiscal_period_locks table
             if new_status:
                 # Closing: ensure a lock row exists
@@ -665,9 +709,8 @@ def toggle_fiscal_period(
                     SET is_locked = FALSE, unlocked_at = NOW(), unlocked_by = :user
                     WHERE period_start = :start AND period_end = :end
                 """), {"start": period.start_date, "end": period.end_date, "user": current_user.id})
-    
-            action = "إغلاق" if new_status else "فتح"
-    
+
+
             # Audit log for fiscal period lock/unlock (FR-024)
             log_activity(
                 db,
@@ -678,7 +721,7 @@ def toggle_fiscal_period(
                 resource_id=str(period_id),
                 details={"period_name": period.name, "new_status": "locked" if new_status else "unlocked"},
             )
-    
+
             return {"success": True, "message": i18n_message("fiscal_period_action", request), "is_closed": new_status}
         except HTTPException:
             raise
@@ -707,7 +750,7 @@ def preview_closing_entries(
         params = {"start": start_date, "end": end_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "je.branch_id", params)
 
-        revenues = db.execute(text(  # noqa: sql-lint
+        revenues = db.execute(text(  # noqa
             f"""
             SELECT a.id, a.account_number, a.name, a.name_en,
                    COALESCE(SUM(jl.credit - jl.debit), 0) as balance
@@ -722,7 +765,7 @@ def preview_closing_entries(
             ORDER BY a.account_number
         """), params).fetchall()
 
-        expenses = db.execute(text(  # noqa: sql-lint
+        expenses = db.execute(text(  # noqa
             f"""
             SELECT a.id, a.account_number, a.name, a.name_en,
                    COALESCE(SUM(jl.debit - jl.credit), 0) as balance
@@ -755,6 +798,8 @@ def preview_closing_entries(
             "total_revenue": str(total_revenue.quantize(_D4, ROUND_HALF_UP)),
             "total_expense": str(total_expense.quantize(_D4, ROUND_HALF_UP)),
             "net_income": str(net_income.quantize(_D4, ROUND_HALF_UP)),
+            "net_income_abs": str(abs(net_income).quantize(_D4, ROUND_HALF_UP)),
+            "result_type": "profit" if net_income >= 0 else "loss",
             "income_summary_account": dict(income_summary._mapping) if income_summary else None,
             "retained_earnings_account": dict(retained_earnings._mapping) if retained_earnings else None,
         }
@@ -774,13 +819,16 @@ def generate_closing_entries(
             income_summary_id = data.get("income_summary_account_id")
             use_income_summary = data.get("use_income_summary", False) and income_summary_id
             entry_date_str = data.get("entry_date", end_date_str)
-    
+            idempotency_key = request.headers.get("Idempotency-Key")
+            def entry_idempotency_key(suffix):
+                return (f"{idempotency_key}:{suffix}" if idempotency_key else None)
+
             branch_id = validate_branch_access(current_user, data.get("branch_id"))
             params = {"start": start_date_str, "end": end_date_str}
             branch_filter = "AND je.branch_id = :branch_id" if branch_id else ""
             if branch_id:
                 params["branch_id"] = branch_id
-    
+
             if not retained_earnings_id:
                 ret = db.execute(text(
                     "SELECT id FROM accounts WHERE account_number IN ('RET', '3100', '32') OR name LIKE '%أرباح مبقاة%' OR name LIKE '%Retained%' ORDER BY account_number LIMIT 1"
@@ -788,8 +836,8 @@ def generate_closing_entries(
                 if not ret:
                     raise HTTPException(**http_error(400, "retained_earnings_not_found", request))
                 retained_earnings_id = ret.id
-    
-            revenues = db.execute(text(  # noqa: sql-lint
+
+            revenues = db.execute(text(  # noqa
                 f"""
                 SELECT a.id, a.account_number, a.name,
                        COALESCE(SUM(jl.credit - jl.debit), 0) as balance
@@ -802,8 +850,8 @@ def generate_closing_entries(
                 GROUP BY a.id, a.account_number, a.name
                 HAVING COALESCE(SUM(jl.credit - jl.debit), 0) != 0
             """), params).fetchall()
-    
-            expenses = db.execute(text(  # noqa: sql-lint
+
+            expenses = db.execute(text(  # noqa
                 f"""
                 SELECT a.id, a.account_number, a.name,
                        COALESCE(SUM(jl.debit - jl.credit), 0) as balance
@@ -816,18 +864,18 @@ def generate_closing_entries(
                 GROUP BY a.id, a.account_number, a.name
                 HAVING COALESCE(SUM(jl.debit - jl.credit), 0) != 0
             """), params).fetchall()
-    
+
             total_revenue = sum(_dec(r.balance) for r in revenues)
             total_expense = sum(_dec(r.balance) for r in expenses)
             net_income = (total_revenue - total_expense).quantize(_D4, ROUND_HALF_UP)
-    
+
             created_entries = []
             target_account_id = income_summary_id if use_income_summary else retained_earnings_id
-    
+
             # Entry 1: Close Revenue accounts
             if revenues:
                 lines1 = []
-    
+
                 for rev in revenues:
                     bal = _dec(rev.balance).quantize(_D4, ROUND_HALF_UP)
                     lines1.append({
@@ -836,14 +884,14 @@ def generate_closing_entries(
                         "credit": 0,
                         "description": f"إقفال {rev.name}",
                     })
-    
+
                 lines1.append({
                     "account_id": target_account_id,
                     "debit": 0,
                     "credit": total_revenue,
                     "description": "إجمالي الإيرادات المقفلة",
                 })
-    
+
                 eid1, num1 = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
@@ -854,14 +902,15 @@ def generate_closing_entries(
                     branch_id=branch_id or getattr(current_user, "branch_id", None),
                     reference="CLOSING-REVENUE",
                     source="closing_entries_revenue",
+                    idempotency_key=entry_idempotency_key("revenue"),
                 )
-    
+
                 created_entries.append({"id": eid1, "type": "close_revenue", "number": num1})
-    
+
             # Entry 2: Close Expense accounts
             if expenses:
                 lines2 = []
-    
+
                 for exp in expenses:
                     bal = _dec(exp.balance).quantize(_D4, ROUND_HALF_UP)
                     lines2.append({
@@ -870,14 +919,14 @@ def generate_closing_entries(
                         "credit": bal,
                         "description": f"إقفال {exp.name}",
                     })
-    
+
                 lines2.append({
                     "account_id": target_account_id,
                     "debit": total_expense,
                     "credit": 0,
                     "description": "إجمالي المصاريف المقفلة",
                 })
-    
+
                 eid2, num2 = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
@@ -888,14 +937,15 @@ def generate_closing_entries(
                     branch_id=branch_id or getattr(current_user, "branch_id", None),
                     reference="CLOSING-EXPENSE",
                     source="closing_entries_expense",
+                    idempotency_key=entry_idempotency_key("expense"),
                 )
-    
+
                 created_entries.append({"id": eid2, "type": "close_expense", "number": num2})
-    
+
             # Entry 3: Transfer Income Summary → Retained Earnings
             if use_income_summary and net_income != 0:
                 lines3 = []
-    
+
                 if net_income > 0:
                     # Profit: Debit Income Summary, Credit Retained Earnings
                     lines3.append({
@@ -925,7 +975,7 @@ def generate_closing_entries(
                         "credit": 0,
                         "description": "صافي خسائر الفترة",
                     })
-    
+
                 eid3, num3 = gl_create_journal_entry(
                     db=db,
                     company_id=current_user.company_id,
@@ -936,21 +986,24 @@ def generate_closing_entries(
                     branch_id=branch_id or getattr(current_user, "branch_id", None),
                     reference="CLOSING-TRANSFER",
                     source="closing_entries_transfer",
+                    idempotency_key=entry_idempotency_key("transfer"),
                 )
-    
+
                 created_entries.append({"id": eid3, "type": "transfer_to_retained", "number": num3})
-    
+
             log_activity(db, user_id=current_user.id, username=current_user.username,
                          action="accounting.closing_entries.generate",
                          resource_type="closing_entries", resource_id=str(len(created_entries)),
                          details={"entries_count": len(created_entries), "net_income": str(net_income.quantize(_D4, ROUND_HALF_UP))})
-    
+
             return {
                 "success": True,
                 "entries": created_entries,
                 "total_revenue": str(total_revenue.quantize(_D4, ROUND_HALF_UP)),
                 "total_expense": str(total_expense.quantize(_D4, ROUND_HALF_UP)),
                 "net_income": str(net_income.quantize(_D4, ROUND_HALF_UP)),
+                "net_income_abs": str(abs(net_income).quantize(_D4, ROUND_HALF_UP)),
+                "result_type": "profit" if net_income >= 0 else "loss",
                 "message": i18n_message("closing_entries_generated", request),
             }
         except HTTPException:

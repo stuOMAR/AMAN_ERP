@@ -7,7 +7,7 @@ from __future__ import annotations
 import logging
 from datetime import date
 from decimal import Decimal
-from typing import Any, Optional
+from typing import Any
 
 from sqlalchemy import text
 
@@ -29,7 +29,6 @@ def accrue_monthly_ticket_allowance(
 
     Returns dict with accrual summary.
     """
-    from models.domain_models.je_source import JESource
 
     # Find eligible employees not yet accrued this month
     employees = conn.execute(

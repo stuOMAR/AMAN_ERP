@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
@@ -10,7 +10,7 @@ import json
 from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access, check_permission, resolve_branch_scope, branch_scope_filter_from_scope
+from utils.permissions import require_permission, check_permission, resolve_branch_scope, branch_scope_filter_from_scope
 from utils.cache import cached
 from utils.accounting import get_base_currency
 from utils.currency_display import branch_amount_base_sql, document_amount_base_sql
@@ -19,6 +19,8 @@ import time
 
 router = APIRouter(prefix="/dashboard", tags=["Dashboard"])
 logger = logging.getLogger(__name__)
+_D2 = Decimal("0.01")
+_D4 = Decimal("0.0001")
 
 # Cache for system stats to avoid slowness
 _system_stats_cache = {
@@ -131,6 +133,32 @@ def _base_to_display_amount(value, display_meta: dict) -> Decimal:
     if display_meta.get("currency") != display_meta.get("base_currency") and rate:
         amount = amount / rate
     return Decimal(str(amount))
+
+
+def _dec(value) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return Decimal("0")
+
+
+def _decimal_str(value, places: Decimal = _D2) -> str:
+    return format(_dec(value).quantize(places), "f")
+
+
+def _analytics_value(value):
+    if isinstance(value, Decimal):
+        return format(value, "f")
+    if isinstance(value, (date, datetime)):
+        return value.isoformat()
+    return value
+
+
+def _serialize_analytics_rows(rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    return [
+        {key: _analytics_value(value) for key, value in row.items()}
+        for row in rows
+    ]
 
 
 def _convert_stats_from_base(stats: dict, display_meta: dict) -> dict:
@@ -378,7 +406,8 @@ def get_financial_chart(
         sales_map = {}
         for row in sales_data:
             d = row.sale_date
-            if isinstance(d, datetime): d = d.date()
+            if isinstance(d, datetime):
+                d = d.date()
             key = d.isoformat() if hasattr(d, "isoformat") else str(d)
             sales_map[key] = Decimal(str(row.total))
 
@@ -394,7 +423,8 @@ def get_financial_chart(
         expenses_map = {}
         for row in expenses_data:
             d = row.transaction_date
-            if isinstance(d, datetime): d = d.date()
+            if isinstance(d, datetime):
+                d = d.date()
             key = d.isoformat() if hasattr(d, "isoformat") else str(d)
             expenses_map[key] = Decimal(str(row.total))
 
@@ -737,7 +767,7 @@ def widget_sales_summary(
         pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params, branch_param="pos_bid")
 
         # Total Sales
-        sales = db.execute(text( # noqa: sql-lint
+        sales = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total,
                    COUNT(*) as count
@@ -747,7 +777,7 @@ def widget_sales_summary(
         """), params).fetchone()
 
         # POS Sales
-        pos = db.execute(text( # noqa: sql-lint
+        pos = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total,
                    COUNT(*) as count
@@ -768,7 +798,7 @@ def widget_sales_summary(
         invoice_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params_prev, branch_param="bid")
         pos_branch_filter_prev = branch_scope_filter_from_scope(branch_scope, "o.branch_id", params_prev, branch_param="pos_bid")
 
-        prev_sales = db.execute(text( # noqa: sql-lint
+        prev_sales = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM({invoice_total_base_sql}), 0) as total
             FROM invoices i
@@ -776,7 +806,7 @@ def widget_sales_summary(
             AND i.invoice_date >= :start AND i.invoice_date <= :end {invoice_branch_filter_prev}
         """), params_prev).scalar() or 0
 
-        prev_pos = db.execute(text( # noqa: sql-lint
+        prev_pos = db.execute(text( # noqa
                     f"""
             SELECT COALESCE(SUM({pos_total_base_sql}), 0) as total
             FROM pos_orders o
@@ -832,7 +862,7 @@ def widget_top_products(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "i.branch_id", params, branch_param="bid")
         line_total_base_sql = document_amount_base_sql("il.total", "i")
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT p.product_name as name,
                    SUM(il.quantity) as qty,
@@ -872,7 +902,7 @@ def widget_low_stock(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "w.branch_id", params, branch_param="bid")
         branch_join = "JOIN warehouses w ON inv.warehouse_id = w.id" if branch_filter else ""
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             SELECT p.id, p.product_name, p.sku, p.reorder_level,
                    COALESCE(inv_sum.total_qty, 0) - COALESCE(inv_sum.reserved_qty, 0) as current_stock
@@ -936,7 +966,7 @@ def widget_pending_tasks(
 
         # Unpaid invoices (filter by branch_id)
         try:
-            unpaid = db.execute(text( # noqa: sql-lint
+            unpaid = db.execute(text( # noqa
                         f"""
                 SELECT COUNT(*) as cnt, COALESCE(SUM(total * COALESCE(exchange_rate, 1)), 0) as total
                 FROM invoices WHERE status IN ('pending', 'partially_paid')
@@ -955,7 +985,7 @@ def widget_pending_tasks(
 
         # Pending purchase orders (filter by branch_id)
         try:
-            pending_po = db.execute(text( # noqa: sql-lint
+            pending_po = db.execute(text( # noqa
                         f"""
                 SELECT COUNT(*) as cnt FROM purchase_orders
                 WHERE status = 'pending'
@@ -975,7 +1005,7 @@ def widget_pending_tasks(
         try:
             approval_scope = scope_clause('e.branch_id')
             if approval_scope:
-                pending_approvals = db.execute(text( # noqa: sql-lint
+                pending_approvals = db.execute(text( # noqa
                             f"""
                     SELECT COUNT(*) FROM approval_requests ar
                     LEFT JOIN employees e ON e.user_id = ar.requested_by
@@ -997,7 +1027,7 @@ def widget_pending_tasks(
 
         # Leave requests pending — JOIN employees to honour branch scope.
         try:
-            pending_leaves = db.execute(text( # noqa: sql-lint
+            pending_leaves = db.execute(text( # noqa
                         f"""
                 SELECT COUNT(*) FROM leave_requests lr
                 JOIN employees e ON e.id = lr.employee_id
@@ -1015,7 +1045,7 @@ def widget_pending_tasks(
 
         # Overdue invoices (filter by branch_id)
         try:
-            overdue = db.execute(text( # noqa: sql-lint
+            overdue = db.execute(text( # noqa
                         f"""
                 SELECT COUNT(*) as cnt FROM invoices
                 WHERE status IN ('pending', 'partially_paid')
@@ -1055,7 +1085,7 @@ def widget_cash_flow(
         branch_filter = branch_scope_filter_from_scope(branch_scope, "ta.branch_id", params, branch_param="bid")
 
         # Cash inflows (receipts) by day
-        inflows = db.execute(text( # noqa: sql-lint
+        inflows = db.execute(text( # noqa
                     f"""
             SELECT t.transaction_date as dt,
                    COALESCE(SUM(t.amount), 0) as total
@@ -1068,11 +1098,12 @@ def widget_cash_flow(
         inflow_map = {}
         for r in inflows:
             d = r.dt
-            if isinstance(d, datetime): d = d.date()
+            if isinstance(d, datetime):
+                d = d.date()
             inflow_map[d.isoformat()] = Decimal(str(r.total))
 
         # Cash outflows (payments) by day
-        outflows = db.execute(text( # noqa: sql-lint
+        outflows = db.execute(text( # noqa
                     f"""
             SELECT t.transaction_date as dt,
                    COALESCE(SUM(t.amount), 0) as total
@@ -1085,7 +1116,8 @@ def widget_cash_flow(
         outflow_map = {}
         for r in outflows:
             d = r.dt
-            if isinstance(d, datetime): d = d.date()
+            if isinstance(d, datetime):
+                d = d.date()
             outflow_map[d.isoformat()] = Decimal(str(r.total))
 
         # Build daily series
@@ -1314,14 +1346,16 @@ MV_MAP = {
 }
 
 
-def _query_widget_data(db, data_source: str, filters: dict = None):
+def _query_widget_data(db, data_source: str, filters: dict = None, *, limit: int = 25, offset: int = 0):
     """Query materialized view for widget data, applying optional filters."""
     mv_name = MV_MAP.get(data_source)
     if not mv_name:
         return []
 
     conditions = []
-    params = {}
+    limit = max(1, min(int(limit or 25), 100))
+    offset = max(0, int(offset or 0))
+    params = {"limit": limit, "offset": offset}
 
     if filters and filters.get("branch_id"):
         conditions.append("branch_id = :branch_id")
@@ -1334,33 +1368,83 @@ def _query_widget_data(db, data_source: str, filters: dict = None):
         else:
             conditions.append("1=0")
 
-    # Date filters apply to revenue/expenses views that have a period column
+    # Date filters apply to revenue/expenses views that have a month column.
     if data_source in ("revenue", "expenses") and filters:
         if filters.get("date_from"):
-            conditions.append("period >= :date_from")
+            conditions.append("month >= :date_from")
             params["date_from"] = filters["date_from"]
         if filters.get("date_to"):
-            conditions.append("period <= :date_to")
+            conditions.append("month <= :date_to")
             params["date_to"] = filters["date_to"]
 
     where_clause = (" WHERE " + " AND ".join(conditions)) if conditions else ""
 
+    page_clause = " LIMIT :limit OFFSET :offset"
     if data_source == "revenue":
-        query = f"SELECT period, branch_id, total_revenue FROM {mv_name}{where_clause} ORDER BY period"
+        query = f"""
+            SELECT month AS period, SUM(total_revenue) AS total_revenue
+            FROM {mv_name}{where_clause}
+            GROUP BY month
+            ORDER BY month{page_clause}
+        """
     elif data_source == "expenses":
-        query = f"SELECT period, branch_id, total_expenses FROM {mv_name}{where_clause} ORDER BY period"
+        query = f"""
+            SELECT month AS period, SUM(total_expenses) AS total_expenses
+            FROM {mv_name}{where_clause}
+            GROUP BY month
+            ORDER BY month{page_clause}
+        """
     elif data_source == "cash_position":
-        query = f"SELECT account_id, account_name, account_number, balance FROM {mv_name} ORDER BY balance DESC"
+        query = f"SELECT account_id, account_name, account_number, balance FROM {mv_name}{where_clause} ORDER BY balance DESC{page_clause}"
     elif data_source == "top_customers":
-        query = f"SELECT party_id, customer_name, invoice_count, total_amount FROM {mv_name} ORDER BY total_amount DESC LIMIT 20"
+        query = f"""
+            SELECT party_id, customer_name, SUM(invoice_count) AS invoice_count, SUM(total_amount) AS total_amount
+            FROM {mv_name}{where_clause}
+            GROUP BY party_id, customer_name
+            ORDER BY SUM(total_amount) DESC{page_clause}
+        """
     elif data_source == "ar_aging":
-        query = f"SELECT party_id, customer_name, current_bucket, days_31_60, days_61_90, days_over_90 FROM {mv_name}"
+        query = f"""
+            SELECT party_id, customer_name,
+                   SUM(current_bucket) AS current_bucket,
+                   SUM(days_31_60) AS days_31_60,
+                   SUM(days_61_90) AS days_61_90,
+                   SUM(days_over_90) AS days_over_90
+            FROM {mv_name}{where_clause}
+            GROUP BY party_id, customer_name
+            ORDER BY SUM(days_over_90) DESC, SUM(days_61_90) DESC{page_clause}
+        """
     elif data_source == "ap_aging":
-        query = f"SELECT party_id, supplier_name, current_bucket, days_31_60, days_61_90, days_over_90 FROM {mv_name}"
+        query = f"""
+            SELECT party_id, supplier_name,
+                   SUM(current_bucket) AS current_bucket,
+                   SUM(days_31_60) AS days_31_60,
+                   SUM(days_61_90) AS days_61_90,
+                   SUM(days_over_90) AS days_over_90
+            FROM {mv_name}{where_clause}
+            GROUP BY party_id, supplier_name
+            ORDER BY SUM(days_over_90) DESC, SUM(days_61_90) DESC{page_clause}
+        """
     elif data_source == "inventory_turnover":
-        query = f"SELECT product_id, product_name, total_sold, current_stock, turnover_ratio FROM {mv_name} ORDER BY turnover_ratio DESC LIMIT 20"
+        query = f"""
+            SELECT product_id, product_name,
+                   SUM(total_sold) AS total_sold,
+                   SUM(current_stock) AS current_stock,
+                   CASE WHEN SUM(current_stock) > 0 THEN SUM(total_sold) / SUM(current_stock) ELSE 0 END AS turnover_ratio
+            FROM {mv_name}{where_clause}
+            GROUP BY product_id, product_name
+            ORDER BY turnover_ratio DESC{page_clause}
+        """
     elif data_source == "sales_pipeline":
-        query = f"SELECT stage, deal_count, total_value, avg_probability FROM {mv_name}"
+        query = f"""
+            SELECT stage,
+                   SUM(deal_count) AS deal_count,
+                   SUM(total_value) AS total_value,
+                   COALESCE(SUM(avg_probability * deal_count) / NULLIF(SUM(deal_count), 0), 0) AS avg_probability
+            FROM {mv_name}{where_clause}
+            GROUP BY stage
+            ORDER BY SUM(total_value) DESC{page_clause}
+        """
     else:
         return []
 
@@ -1370,6 +1454,84 @@ def _query_widget_data(db, data_source: str, filters: dict = None):
     except Exception as e:
         logger.warning(f"Widget data query failed for {data_source}: {e}")
         return []
+
+
+ANALYTICS_WIDGET_META = {
+    "revenue": {"label_key": "period", "value_keys": ["total_revenue"], "sum_field": "total_revenue"},
+    "expenses": {"label_key": "period", "value_keys": ["total_expenses"], "sum_field": "total_expenses"},
+    "cash_position": {"label_key": "account_name", "value_keys": ["balance"], "sum_field": "balance"},
+    "top_customers": {"label_key": "customer_name", "value_keys": ["total_amount"], "sum_field": "total_amount"},
+    "inventory_turnover": {"label_key": "product_name", "value_keys": ["turnover_ratio"], "avg_field": "turnover_ratio"},
+    "sales_pipeline": {"label_key": "stage", "value_keys": ["total_value", "avg_probability"], "sum_field": "total_value", "avg_field": "avg_probability"},
+    "ar_aging": {"label_key": "customer_name", "value_keys": ["current_bucket", "days_31_60", "days_61_90", "days_over_90"]},
+    "ap_aging": {"label_key": "supplier_name", "value_keys": ["current_bucket", "days_31_60", "days_61_90", "days_over_90"]},
+}
+
+
+def _widget_summary(data_source: str, rows: List[Dict[str, Any]]) -> Dict[str, Any]:
+    meta = ANALYTICS_WIDGET_META.get(data_source, {})
+    value_keys = meta.get("value_keys", [])
+    summary: Dict[str, Any] = {
+        "row_count": len(rows),
+        "label_key": meta.get("label_key"),
+        "value_keys": value_keys,
+        "value": "0.00",
+        "display_value": "0.00",
+        "gauge_value": "0.0000",
+        "gauge_dasharray": "0.00 157",
+    }
+
+    sum_field = meta.get("sum_field")
+    if sum_field:
+        total = sum((_dec(row.get(sum_field)) for row in rows), Decimal("0"))
+        summary["value"] = _decimal_str(total)
+        summary["display_value"] = _decimal_str(total)
+
+    avg_field = meta.get("avg_field")
+    if avg_field:
+        total = sum((_dec(row.get(avg_field)) for row in rows), Decimal("0"))
+        avg = total / Decimal(str(len(rows))) if rows else Decimal("0")
+        gauge_pct = min(max(avg * Decimal("100"), Decimal("0")), Decimal("100"))
+        summary["gauge_value"] = _decimal_str(avg, _D4)
+        summary["display_value"] = _decimal_str(avg, _D4)
+        summary["gauge_dasharray"] = f"{_decimal_str(gauge_pct * Decimal('1.57'))} 157"
+
+    if data_source in ("ar_aging", "ap_aging"):
+        bucket_totals = {
+            key: sum((_dec(row.get(key)) for row in rows), Decimal("0"))
+            for key in value_keys
+        }
+        total = sum(bucket_totals.values(), Decimal("0"))
+        summary["bucket_totals"] = {key: _decimal_str(value) for key, value in bucket_totals.items()}
+        summary["value"] = _decimal_str(total)
+        summary["display_value"] = _decimal_str(total)
+
+    return summary
+
+
+def _widget_payload(widget: Dict[str, Any], rows: List[Dict[str, Any]], freshness: Dict[str, Any] | None = None) -> Dict[str, Any]:
+    data_source = widget.get("data_source")
+    meta = ANALYTICS_WIDGET_META.get(data_source, {})
+    serialized_rows = _serialize_analytics_rows(rows)
+    value_keys = meta.get("value_keys", [])
+    label_key = meta.get("label_key")
+    pie_value_key = value_keys[0] if value_keys else None
+    pie_data = [
+        {
+            "name": str(row.get(label_key) if row.get(label_key) is not None else ""),
+            "value": row.get(pie_value_key) if row.get(pie_value_key) is not None else "0",
+        }
+        for row in serialized_rows
+    ] if label_key and pie_value_key else []
+    return {
+        **widget,
+        "label_key": label_key,
+        "value_keys": value_keys,
+        "data": serialized_rows,
+        "pie_data": pie_data,
+        "summary": _widget_summary(data_source, rows),
+        "freshness": freshness,
+    }
 
 
 @router.get("/analytics", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
@@ -1401,10 +1563,18 @@ def list_analytics_dashboards(current_user: dict = Depends(get_current_user)):
 
 
 @router.get("/analytics/widget-data/{widget_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
-def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_user)):
+def get_widget_data(
+    widget_id: int,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    branch_id: Optional[int] = None,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
     """Refresh data for a single widget."""
     company_id = get_user_company_id(current_user)
-    branch_scope = resolve_branch_scope(current_user, None)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         widget = db.execute(text("""
             SELECT id, widget_type, title, data_source, filters
@@ -1420,12 +1590,14 @@ def get_widget_data(widget_id: int, current_user: dict = Depends(get_current_use
             widget_filters["branch_id"] = branch_scope["branch_id"]
         elif branch_scope["branch_ids"] is not None:
             widget_filters["branch_ids"] = branch_scope["branch_ids"]
+        if date_from:
+            widget_filters["date_from"] = date_from
+        if date_to:
+            widget_filters["date_to"] = date_to
 
-        return {
-            "widget_id": widget_id,
-            "data": _query_widget_data(db, wd["data_source"], widget_filters),
-            "freshness": _mv_freshness(db, wd["data_source"]),
-        }
+        rows = _query_widget_data(db, wd["data_source"], widget_filters, limit=limit, offset=offset)
+        payload = _widget_payload(wd, rows, _mv_freshness(db, wd["data_source"]))
+        return {"widget_id": widget_id, **payload, "pagination": {"limit": limit, "offset": offset, "returned": len(rows)}}
 
 
 def _mv_freshness(db, data_source: str) -> Dict[str, Any]:
@@ -1452,10 +1624,18 @@ def _mv_freshness(db, data_source: str) -> Dict[str, Any]:
 
 
 @router.get("/analytics/{dashboard_id}", dependencies=[Depends(require_permission("dashboard.analytics_view"))], response_model=Dict[str, Any])
-def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_current_user)):
+def get_analytics_dashboard(
+    dashboard_id: int,
+    date_from: Optional[date] = None,
+    date_to: Optional[date] = None,
+    branch_id: Optional[int] = None,
+    limit: int = Query(25, ge=1, le=100),
+    offset: int = Query(0, ge=0),
+    current_user: dict = Depends(get_current_user),
+):
     """Get a dashboard with its widget data queried from materialized views."""
     company_id = get_user_company_id(current_user)
-    branch_scope = resolve_branch_scope(current_user, None)
+    branch_scope = resolve_branch_scope(current_user, branch_id)
     with transactional(company_id) as db:
         dashboard = db.execute(text("""
             SELECT id, name, description, is_system, access_roles, branch_scope,
@@ -1489,10 +1669,15 @@ def get_analytics_dashboard(dashboard_id: int, current_user: dict = Depends(get_
                 widget_filters["branch_id"] = branch_scope["branch_id"]
             elif branch_scope["branch_ids"] is not None:
                 widget_filters["branch_ids"] = branch_scope["branch_ids"]
-            wd["data"] = _query_widget_data(db, wd["data_source"], widget_filters)
-            widget_list.append(wd)
+            if date_from:
+                widget_filters["date_from"] = date_from
+            if date_to:
+                widget_filters["date_to"] = date_to
+            rows = _query_widget_data(db, wd["data_source"], widget_filters, limit=limit, offset=offset)
+            widget_list.append(_widget_payload(wd, rows, _mv_freshness(db, wd["data_source"])))
 
         d["widgets"] = widget_list
+        d["pagination"] = {"limit": limit, "offset": offset}
         return d
 
 
@@ -1589,7 +1774,7 @@ def update_analytics_dashboard(request: Request, dashboard_id: int, payload: Das
         if updates:
             updates.append("updated_by = :updated_by")
             updates.append("updated_at = NOW()")
-            db.execute(text(f"UPDATE analytics_dashboards SET {', '.join(updates)} WHERE id = :id"), params) # noqa: sql-lint
+            db.execute(text(f"UPDATE analytics_dashboards SET {', '.join(updates)} WHERE id = :id"), params) # noqa
 
         # Replace widgets if provided
         if payload.widgets is not None:

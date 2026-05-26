@@ -29,16 +29,25 @@ export const taxesAPI = {
     // Tax Returns
     listReturns: (params) => api.get('/taxes/returns', { params }),
     getReturn: (id) => api.get(`/taxes/returns/${id}`),
-    createReturn: (data) => api.post('/taxes/returns', data),
-    fileReturn: (id, data) => api.put(`/taxes/returns/${id}/file`, data),
-    cancelReturn: (id) => api.put(`/taxes/returns/${id}/cancel`),
+    previewReturn: (data) => api.post('/taxes/returns/preview', data),
+    createReturn: (data, idempotencyKey) => api.post('/taxes/returns', data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
+    fileReturn: (id, data, idempotencyKey) => api.put(`/taxes/returns/${id}/file`, data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
+    cancelReturn: (id, idempotencyKey) => api.put(`/taxes/returns/${id}/cancel`, null, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
     // Tax Payments
     listPayments: (params) => api.get('/taxes/payments', { params }),
     createPayment: (data, idempotencyKey) => api.post('/taxes/payments', data, {
         headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
     }),
     // Settlement
-    settle: (data) => api.post('/taxes/settle', data),
+    settle: (data, idempotencyKey) => api.post('/taxes/settle', data, {
+        headers: idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : undefined,
+    }),
     // Branch Tax Analysis
     getBranchAnalysis: (params) => api.get('/taxes/branch-analysis', { params }),
     // Employee Tax Obligations

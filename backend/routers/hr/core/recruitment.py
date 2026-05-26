@@ -3,25 +3,14 @@
 Mounted under the parent router via core/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from routers.roles import DEFAULT_ROLES
-from pydantic import BaseModel
-from datetime import date, datetime
-from decimal import Decimal, ROUND_HALF_UP
+from decimal import Decimal
 import logging
-from database import get_db_connection, hash_password
 from routers.auth import get_current_user, UserResponse, get_current_user_company
 from utils.tx import transactional
-from repositories import EmployeeRepository
-from utils.permissions import branch_scope_filter, require_permission, validate_branch_access, check_permission, require_module
-from utils.permissions import has_pii_access, mask_pii, mask_pii_list, EMPLOYEE_PII_FIELDS, PAYROLL_PII_FIELDS
-from utils.accounting import get_mapped_account_id, get_base_currency
-from utils.fiscal_lock import check_fiscal_period_open
-from utils.audit import log_activity
-from schemas.hr import LoanCreate, LoanResponse, EmployeeCreate, EmployeeUpdate, DepartmentCreate, DepartmentResponse, PositionCreate, PositionResponse, PayrollPeriodCreate, PayrollEntryResponse, PayrollPeriodResponse, AttendanceResponse, LeaveRequestCreate, LeaveRequestResponse, EndOfServiceRequest
-from services.gl_service import create_journal_entry as gl_create_journal_entry
+from utils.permissions import branch_scope_filter, require_permission
 
 logger = logging.getLogger(__name__)
 _D2 = Decimal('0.01')
@@ -31,7 +20,7 @@ def _dec(v: Any) -> Decimal:
 
 router = APIRouter()
 
-from .core import ApplicationCreate, ApplicationStageUpdate, JobOpeningCreate, JobOpeningUpdate, _D2
+from .core import ApplicationCreate, ApplicationStageUpdate, JobOpeningCreate, JobOpeningUpdate  # noqa: E402
 
 @router.get("/recruitment/openings", dependencies=[Depends(require_permission("hr.view"))], response_model=List[Dict[str, Any]])
 def list_job_openings(status: Optional[str] = None, branch_id: Optional[int] = None, current_user: UserResponse = Depends(get_current_user), company_id: str = Depends(get_current_user_company)):
@@ -72,7 +61,8 @@ def update_job_opening(request: Request, opening_id: int, data: JobOpeningUpdate
         for f, col in [("title","title"),("status","status"),("positions","vacancies"),("requirements","requirements"),("deadline","closing_date")]:
             v = getattr(data, f, None)
             if v is not None:
-                fields.append(f"{col} = :{f}"); params[f] = v
+                fields.append(f"{col} = :{f}")
+                params[f] = v
         if fields:
             conn.execute(text(f"UPDATE job_openings SET {', '.join(fields)} WHERE id = :id"), params)
         return {"message": i18n_message("updated_success", request)}

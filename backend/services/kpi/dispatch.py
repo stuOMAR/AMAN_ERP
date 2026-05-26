@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -43,10 +42,10 @@ async def dispatch_kpi_notification(
                     tenant_id=tenant_id,
                     metadata={"kpi_id": kpi_id, "kpi_code": kpi_code, "value": value, "threshold": threshold},
                 )
-            except Exception as exc:
-                logger.error("Failed to dispatch KPI notification via %s: %s", channel, exc)
+            except Exception:
+                logger.warning("Failed to dispatch KPI notification via %s", channel)
 
         return True
-    except Exception as exc:
-        logger.error("KPI dispatch failed: %s", exc)
+    except Exception:
+        logger.warning("KPI dispatch failed")
         return False

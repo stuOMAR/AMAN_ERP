@@ -3,21 +3,16 @@
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request, status
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
-from decimal import Decimal, ROUND_HALF_UP
 import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
-from utils.permissions import require_permission, validate_branch_access
-from utils.cache import cached
-from services.sales_service import get_sales_total, get_gl_profit_breakdown
+from utils.permissions import require_permission
 
 logger = logging.getLogger(__name__)
 router = APIRouter()

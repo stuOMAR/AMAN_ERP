@@ -22,6 +22,9 @@ function makeIdempotencyKey(prefix) {
     return `${prefix}:${Date.now()}:${Math.random().toString(36).slice(2)}`
 }
 
+const isZeroAmount = (value) => /^[-+]?0+(?:\.0+)?$/.test(String(value ?? '0').trim())
+const isNegativeAmount = (value) => String(value ?? '').trim().startsWith('-')
+
 function ZakatCalculator() {
     const { t } = useTranslation()
     const { showToast } = useToast()
@@ -163,10 +166,10 @@ function ZakatCalculator() {
                             <h3 className="card-title text-success mb-3">
                                 ➕ {t('zakat.additions')}
                             </h3>
-                            {result.additions && result.additions.filter(a => Number(a.amount || 0) !== 0 || a.is_subtotal).map((a, i) => (
+                            {result.additions && result.additions.filter(a => !isZeroAmount(a.amount) || a.is_subtotal).map((a, i) => (
                                 <div key={i} className="flex justify-between py-1 border-bottom" style={a.is_subtotal ? { fontWeight: 'bold', borderTop: '2px solid var(--border)', paddingTop: '8px' } : {}}>
                                     <span>{a.label_ar || a.label}</span>
-                                    <span className="font-medium" style={Number(a.amount || 0) < 0 ? { color: 'var(--danger)' } : {}}>{formatNumber(a.amount)} {displayCurrency}</span>
+                                    <span className="font-medium" style={isNegativeAmount(a.amount) ? { color: 'var(--danger)' } : {}}>{formatNumber(a.amount)} {displayCurrency}</span>
                                 </div>
                             ))}
                             <div className="flex justify-between py-2 font-bold mt-2" style={{ borderTop: '3px double var(--border)', paddingTop: '10px' }}>
@@ -178,7 +181,7 @@ function ZakatCalculator() {
                             <h3 className="card-title text-danger mb-3">
                                 ➖ {t('zakat.deductions')}
                             </h3>
-                            {result.deductions && result.deductions.filter(d => Number(d.amount || 0) !== 0).length > 0 ? result.deductions.filter(d => Number(d.amount || 0) !== 0).map((d, i) => (
+                            {result.deductions && result.deductions.filter(d => !isZeroAmount(d.amount)).length > 0 ? result.deductions.filter(d => !isZeroAmount(d.amount)).map((d, i) => (
                                 <div key={i} className="flex justify-between py-1 border-bottom">
                                     <span style={{ color: 'var(--text-muted)' }}>{d.label_ar || d.label}</span>
                                     <span className="font-medium" style={{ color: 'var(--text-muted)' }}>{formatNumber(d.amount)} {displayCurrency}</span>

@@ -6,17 +6,16 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from utils.i18n import http_error
 from sqlalchemy.orm import Session
 from sqlalchemy import text
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 from datetime import datetime
 from decimal import Decimal, ROUND_HALF_UP
 import logging
-from database import get_company_db
 from routers.auth import get_current_user
-from utils.permissions import require_permission, validate_branch_access, validate_treasury_account_access, require_module
+from utils.permissions import require_permission, validate_branch_access, validate_treasury_account_access
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.audit import log_activity
 from schemas import UserResponse
-from schemas.pos import SessionCreate, SessionClose, SessionResponse, POSProductResponse, OrderCreate, OrderResponse, ReturnCreate
+from schemas.pos import SessionCreate, SessionClose, SessionResponse
 from services.gl_service import create_journal_entry as gl_create_journal_entry
 
 logger = logging.getLogger(__name__)
@@ -26,12 +25,9 @@ _D4 = Decimal('0.0001')
 def _dec(v) -> Decimal:
     return Decimal(str(v)) if v is not None else Decimal('0')
 
-def get_db(current_user: UserResponse = Depends(get_current_user)):
-    yield from get_company_db(current_user.company_id)
-
 router = APIRouter()
 
-from .core import _D2, _D4, _dec, get_db, _get_populated_session
+from .core import _D2, _dec, get_db, _get_populated_session  # noqa: E402
 
 @router.post("/sessions/open", response_model=SessionResponse, dependencies=[Depends(require_permission("pos.sessions"))])
 def open_session(
@@ -142,10 +138,7 @@ def close_session(
         # Re-fetch session after rollback
         sess = db.execute(text("SELECT * FROM pos_sessions WHERE id = :id"), {"id": session_id}).fetchone()
 
-    # Expected cash should come from the close request, while cash_register_balance is actual count.
-    # Keep computed cash flow available for future diagnostics.
-    _ = (opening_bal + _dec(sales_cash) - _dec(returns_cash)).quantize(_D2, ROUND_HALF_UP)
-    expected_cash = _dec(close_in.closing_balance).quantize(_D2, ROUND_HALF_UP)
+    expected_cash = (opening_bal + _dec(sales_cash) - _dec(returns_cash)).quantize(_D2, ROUND_HALF_UP)
     difference = (_dec(close_in.cash_register_balance) - expected_cash).quantize(_D2, ROUND_HALF_UP)
     
     # Build total_returns subquery safely (pos_returns may not exist)
@@ -168,7 +161,7 @@ def close_session(
             total_returns = {total_returns_sql}
         WHERE id = :id
     """), {
-        "close_bal": _dec(close_in.closing_balance).quantize(_D2, ROUND_HALF_UP),
+        "close_bal": expected_cash,
         "reg_bal": _dec(close_in.cash_register_balance).quantize(_D2, ROUND_HALF_UP),
         "diff": difference,
         "notes": close_in.notes or "",
@@ -193,7 +186,7 @@ def close_session(
 
         if acc_cash and acc_over_short:
             import random
-            je_num = f"JE-POS-CLOSE-{session_id}-{random.randint(100,999)}"
+            f"JE-POS-CLOSE-{session_id}-{random.randint(100,999)}"
             
             diff_abs = abs(difference).quantize(_D2, ROUND_HALF_UP)
             lines_data = []
@@ -224,7 +217,7 @@ def close_session(
         db, user_id=current_user.id, username=current_user.username,
         action="close_pos_session", resource_type="pos_session",
         resource_id=str(session_id),
-        details={"closing_balance": str(close_in.closing_balance), "difference": str(difference)},
+        details={"closing_balance": str(expected_cash), "cash_register_balance": str(close_in.cash_register_balance), "difference": str(difference)},
         request=request, branch_id=branch_id
     )
 
@@ -298,4 +291,3 @@ def session_detailed_report(request: Request,
 
 
 # ---------- POS-007: Table Management ----------
-

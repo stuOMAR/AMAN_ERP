@@ -43,7 +43,7 @@ export default function NotificationCenter() {
         setLoading(true)
         try {
             const [listRes, countRes] = await Promise.all([
-                notificationsAPI.getAll({ page: 1, page_size: 50 }),
+                notificationsAPI.getAll({ limit: 50 }),
                 notificationsAPI.getUnreadCount(),
             ])
             const payload = listRes.data

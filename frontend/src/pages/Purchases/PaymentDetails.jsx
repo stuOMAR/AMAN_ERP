@@ -9,7 +9,6 @@ import { Printer, ArrowLeft, CreditCard, Calendar, User, FileText, CheckCircle, 
 import BackButton from '../../components/common/BackButton';
 import { PageLoading } from '../../components/common/LoadingStates'
 import { formatNumber } from '../../utils/format'
-import { Decimal } from 'decimal.js'
 
 function PaymentDetails() {
     const { t } = useTranslation()
@@ -40,9 +39,7 @@ function PaymentDetails() {
     if (error) return <div className="workspace fade-in"><div className="alert alert-error">{error}</div></div>
     if (!payment) return <div className="workspace fade-in"><div className="alert alert-warning">{t('buying.payments.details.not_found')}</div></div>
 
-    const totalAllocated = payment.allocations
-        ? payment.allocations.reduce((sum, a) => sum.plus(a.allocated_amount || 0), new Decimal(0)).toString()
-        : '0'
+    const totalAllocated = payment.total_allocated || '0'
 
     return (
         <div className="workspace fade-in">

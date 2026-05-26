@@ -57,7 +57,11 @@ class ProductRepository:
         if branch_id:
             inv_join = """
                 LEFT JOIN (
-                    SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                    SELECT inv.product_id,
+                           SUM(inv.quantity) AS stock_qty,
+                           SUM(COALESCE(inv.reserved_quantity, 0)) AS reserved_qty,
+                           SUM(COALESCE(inv.damaged_quantity, 0)) AS damaged_qty,
+                           SUM(COALESCE(inv.available_quantity, inv.quantity - COALESCE(inv.reserved_quantity, 0) - COALESCE(inv.damaged_quantity, 0))) AS available_qty,
                            CASE WHEN SUM(inv.quantity) > 0 THEN
                                SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
                            ELSE 0 END AS avg_cost
@@ -72,7 +76,11 @@ class ProductRepository:
             if branch_ids:
                 inv_join = """
                     LEFT JOIN (
-                        SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                        SELECT inv.product_id,
+                               SUM(inv.quantity) AS stock_qty,
+                               SUM(COALESCE(inv.reserved_quantity, 0)) AS reserved_qty,
+                               SUM(COALESCE(inv.damaged_quantity, 0)) AS damaged_qty,
+                               SUM(COALESCE(inv.available_quantity, inv.quantity - COALESCE(inv.reserved_quantity, 0) - COALESCE(inv.damaged_quantity, 0))) AS available_qty,
                                CASE WHEN SUM(inv.quantity) > 0 THEN
                                    SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
                                ELSE 0 END AS avg_cost
@@ -86,7 +94,11 @@ class ProductRepository:
             else:
                 inv_join = """
                     LEFT JOIN (
-                        SELECT inv.product_id, SUM(inv.quantity) AS stock_qty,
+                        SELECT inv.product_id,
+                               SUM(inv.quantity) AS stock_qty,
+                               SUM(COALESCE(inv.reserved_quantity, 0)) AS reserved_qty,
+                               SUM(COALESCE(inv.damaged_quantity, 0)) AS damaged_qty,
+                               SUM(COALESCE(inv.available_quantity, 0)) AS available_qty,
                                CASE WHEN SUM(inv.quantity) > 0 THEN
                                    SUM(inv.average_cost * inv.quantity) / SUM(inv.quantity)
                                ELSE 0 END AS avg_cost
@@ -98,7 +110,11 @@ class ProductRepository:
         else:
             inv_join = """
                 LEFT JOIN (
-                    SELECT product_id, SUM(quantity) AS stock_qty,
+                    SELECT product_id,
+                           SUM(quantity) AS stock_qty,
+                           SUM(COALESCE(reserved_quantity, 0)) AS reserved_qty,
+                           SUM(COALESCE(damaged_quantity, 0)) AS damaged_qty,
+                           SUM(COALESCE(available_quantity, quantity - COALESCE(reserved_quantity, 0) - COALESCE(damaged_quantity, 0))) AS available_qty,
                            CASE WHEN SUM(quantity) > 0 THEN
                                SUM(average_cost * quantity) / SUM(quantity)
                            ELSE 0 END AS avg_cost
@@ -110,6 +126,9 @@ class ProductRepository:
         sql = f"""
             SELECT p.*,
                    COALESCE(inv_sum.stock_qty, 0) AS current_stock,
+                   COALESCE(inv_sum.reserved_qty, 0) AS reserved_quantity,
+                   COALESCE(inv_sum.damaged_qty, 0) AS damaged_quantity,
+                   COALESCE(inv_sum.available_qty, 0) AS available_stock,
                    COALESCE(inv_sum.avg_cost, p.cost_price, 0) AS branch_avg_cost
               FROM products p
               {inv_join}

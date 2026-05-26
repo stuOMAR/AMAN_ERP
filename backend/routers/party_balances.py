@@ -6,9 +6,11 @@ Uses party_sites and party_site_balances tables.
 from fastapi import Request, APIRouter, Depends, HTTPException, Query
 from sqlalchemy import text
 from typing import Optional
+from decimal import Decimal
 from utils.tx import transactional
 from utils.permissions import require_permission, resolve_branch_scope
 from routers.auth import get_current_user
+from utils.i18n import http_error
 
 router = APIRouter(prefix="/party-balances", tags=["Party Balances"])
 
@@ -26,7 +28,7 @@ def get_party_balance_detail(request: Request,
         if not party:
             raise HTTPException(**http_error(404, "party_not_found", request))
 
-        branch_scope = resolve_branch_scope(current_user, branch_id)
+        resolve_branch_scope(current_user, branch_id)
 
         query = """
             SELECT ps.id as site_id, ps.site_name, ps.currency as site_currency,

@@ -117,7 +117,7 @@ class ResilientCacheClient:
         try:
             self._inner.delete(key)
             self._breaker.record_success()
-        except Exception as exc:
+        except Exception:
             self._breaker.record_failure()
 
     def delete_pattern(self, pattern: str) -> None:
@@ -126,7 +126,7 @@ class ResilientCacheClient:
         try:
             self._inner.delete_pattern(pattern)
             self._breaker.record_success()
-        except Exception as exc:
+        except Exception:
             self._breaker.record_failure()
 
     def set_nx(self, key: str, value: Any, expire: int = 30) -> bool:

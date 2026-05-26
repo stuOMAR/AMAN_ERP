@@ -7,7 +7,7 @@ PERM-003: Cost-Center-Level Permissions
 PERM-004: Permission Audit Logging
 """
 
-from fastapi import Depends, HTTPException, Request, status
+from fastapi import Depends, HTTPException, Request
 from typing import List, Union, Any, Optional, Dict
 import logging
 import json
@@ -32,6 +32,11 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     "admin.users":      ["admin.roles", "settings.view", "settings.edit"],
     # admin.branches → branches.manage (fix inconsistency)
     "admin.branches":   ["branches.view", "branches.manage"],
+    "admin": [
+        "admin.users", "admin.roles", "admin.companies", "admin.branches",
+        "admin.account_classifications", "admin.cache", "admin.credentials",
+        "admin.recurring", "admin.security", "system.admin",
+    ],
     # sales aliases
     "sales.edit":       ["sales.create"],
     "sales.delete":     ["sales.create"],
@@ -48,21 +53,28 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     "manufacturing.reports": ["manufacturing.view"],
     # notifications.send implies notifications.view
     "notifications.send": ["notifications.view"],
-    # approvals edit is an alias for approvals.manage
-    "approvals.manage": ["approvals.view", "approvals.create"],
-    # accounting.manage implies view + edit
-    "accounting.manage": ["accounting.view", "accounting.edit"],
+    "notifications.admin": ["notifications.view", "notifications.send", "email_templates.admin"],
     # treasury.manage implies full treasury operations
     "treasury.manage": ["treasury.view", "treasury.create", "treasury.edit", "treasury.delete", "treasury.bank_details.view"],
     # taxes.manage implies taxes.view
-    "taxes.manage": ["taxes.view"],
+    "taxes.manage": ["taxes.view", "einvoicing.manage"],
+    # e-invoicing is governed under tax/compliance administration.
+    "einvoicing.manage": ["taxes.view"],
     # settings.manage implies settings.view + settings.edit
     "settings.manage": ["settings.view", "settings.edit"],
+    # DMS/FSM legacy bridges
+    "services.view": ["dms.view"],
+    "services.edit": ["dms.manage", "dms.view"],
+    "services.admin": ["dms.audit_admin", "dms.manage", "dms.view"],
     # === Duplicate-name aliases (same concept, different legacy name used by some routers/pages) ===
     # approvals.approve is the canonical key; frontend also uses `approvals.action`
     "approvals.approve": ["approvals.action"],
-    # approvals.manage implies view + create + action
-    "approvals.manage": ["approvals.view", "approvals.create", "approvals.action"],
+    "approvals.action": ["approvals.approve"],
+    # approvals.manage implies workflow setup and action authority
+    "approvals.manage": [
+        "approvals.view", "approvals.create", "approvals.edit",
+        "approvals.action", "approvals.approve",
+    ],
     # products.create / delete used under stock.* aliases by ProductList UI
     "products.create": ["stock.create_product"],
     "products.delete": ["stock.delete_product"],
@@ -104,12 +116,19 @@ PERMISSION_ALIASES: Dict[str, List[str]] = {
     "buying.blanket_manage": ["buying.blanket_view"],
     "buying.blanket_release": ["buying.blanket_view"],
     # Expenses policies: manage implies expense view
-    "expenses.manage": ["expenses.view", "expenses.create", "expenses.edit", "expenses.delete", "expenses.approve"],
+    "expenses.manage": ["expenses.view", "expenses.create", "expenses.edit", "expenses.delete", "expenses.approve", "finance.expenses"],
     # Finance accounting depth: post implies read/view, read implies view
     "finance.accounting_post": ["finance.accounting_read", "finance.accounting_view"],
     "finance.accounting_read": ["finance.accounting_view"],
     # Finance bank-feed reconciliation: manage implies view
-    "finance.reconciliation_manage": ["finance.reconciliation_view"],
+    "finance.reconciliation_manage": ["finance.reconciliation_view", "finance.reconciliation.finalize"],
+    # POS/contract/payroll legacy bridges
+    "pos.manage": ["pos.use", "pos.cancel", "pos.view"],
+    "pos.create": ["pos.use"],
+    "contracts.manage": ["contract.renew"],
+    "contracts.*": ["contract.renew"],
+    "hr.payroll.manage": ["payroll.reverse", "hr.salary.write"],
+    "hr.*": ["payroll.reverse"],
     # === 2026-04-22 audit: umbrella & legacy aliases ===
     # sales.manage / buying.manage umbrellas used by frontend Settings tabs
     # T2.3 (2026-05-01): sales.manage now also implies the new sensitive sub-permissions
@@ -248,8 +267,8 @@ def require_sensitive_permission(permission: Union[str, List[str]], **kwargs):
             except HTTPException:
                 raise
             except Exception as e:
-                logger.error(f"DB re-validation error: {e}")
-                # Fail open — if DB is unreachable, rely on JWT check above
+                logger.error(f"🔒 DB re-validation error during sensitive operation: {str(e)}")
+                raise HTTPException(**http_error(500, "db_connection_error"))
 
         return current_user
 
@@ -342,7 +361,8 @@ def validate_branch_access(current_user: dict, requested_branch_id: Union[int, N
     
     # If no restrictions, return as is (handling empty string/None)
     if not normalized_allowed_branches:
-        if requested_branch_id == "": return None 
+        if requested_branch_id == "":
+            return None
         return int(requested_branch_id) if requested_branch_id else None
 
     # Handle requested_branch_id
@@ -496,7 +516,7 @@ def validate_treasury_account_access(
     from sqlalchemy import text
 
     active_filter = "" if allow_inactive else " AND is_active = TRUE"
-    row = db.execute(text( # noqa: sql-lint
+    row = db.execute(text( # noqa
                 f"""
         SELECT id, branch_id, gl_account_id, currency, account_type, current_balance
         FROM treasury_accounts
@@ -585,7 +605,6 @@ def get_field_restrictions(current_user, company_conn=None) -> Dict[str, List[st
     if role in ['admin', 'system_admin', 'superuser'] or "*" in (permissions or []):
         return {}
 
-    restrictions = {}
 
     # Check DB for custom field restrictions (per-user or per-role)
     if company_conn and user_id:
@@ -823,8 +842,8 @@ def log_permission_change(company_conn, admin_user_id: int, admin_username: str,
             resource_id=str(target_user_id),
             details=details,
         )
-    except Exception as e:
-        logger.warning(f"Failed to log permission change: {e}")
+    except Exception:
+        logger.warning("Failed to log permission change")
 
 
 # ===================== T2.4: HR PII Masking =====================

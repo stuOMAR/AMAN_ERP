@@ -6,6 +6,7 @@ from apscheduler.jobstores.sqlalchemy import SQLAlchemyJobStore
 from apscheduler.executors.pool import ThreadPoolExecutor
 from sqlalchemy import text
 from datetime import datetime, timedelta, date
+from decimal import Decimal
 from typing import Any, Generator, Optional
 
 from database import engine as system_engine, _get_engine
@@ -379,7 +380,7 @@ def refresh_analytics_materialized_views():
                         if exists:
                             import time as _t
                             _start = _t.monotonic()
-                            conn.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv_name}"))  # noqa: sql-lint
+                            conn.execute(text(f"REFRESH MATERIALIZED VIEW CONCURRENTLY {mv_name}"))  # noqa
                             _dur_ms = int((_t.monotonic() - _start) * 1000)
                             conn.execute(text("""
                                 INSERT INTO analytics_mv_freshness (mv_name, last_refreshed_at, refresh_duration_ms)
@@ -924,12 +925,12 @@ def activate_due_cheques():
             eng = _get_company_engine_for_db(db_name)
             with eng.begin() as conn:
                 for tbl in ("checks_receivable", "checks_payable"):
-                    rows = conn.execute(text(f"""  # noqa: sql-lint
+                    rows = conn.execute(text(f"""  # noqa
                         UPDATE {tbl}
                            SET status = 'due', updated_at = CURRENT_TIMESTAMP
                          WHERE status = 'pending' AND due_date <= :today
                         RETURNING id, amount, check_number
-                    """), {"today": today}).fetchall()  # noqa: sql-lint
+                    """), {"today": today}).fetchall()  # noqa
                     for row in rows:
                         try:
                             conn.execute(text("""
@@ -1112,7 +1113,7 @@ def _auto_match_reconciliation(conn, reconciliation_id: int):
         branch_filter = "AND je.branch_id = :branch_id"
         ledger_params["branch_id"] = rec.branch_id
 
-    ledger_lines = conn.execute(text(f"""  # noqa: sql-lint
+    ledger_lines = conn.execute(text(f"""  # noqa
         SELECT jl.id, je.entry_date, jl.debit, jl.credit
         FROM journal_lines jl
         JOIN journal_entries je ON jl.journal_entry_id = je.id
@@ -1123,7 +1124,7 @@ def _auto_match_reconciliation(conn, reconciliation_id: int):
           {branch_filter}
         ORDER BY je.entry_date, jl.id
         FOR UPDATE OF jl SKIP LOCKED
-    """), ledger_params).fetchall()  # noqa: sql-lint
+    """), ledger_params).fetchall()  # noqa
 
     amount_tolerance = max(_dec(rec.tolerance_amount), Decimal("0"))
     matched_journal_lines = set()
@@ -1422,11 +1423,11 @@ def _evaluate_single_alert(eng, rule, condition: dict):
 
         elif rule_type == "overdue_receivable":
             days = int(condition.get("days_overdue", 30))
-            total_row = conn.execute(text(f"""  # noqa: sql-lint
+            total_row = conn.execute(text(f"""  # noqa
                 SELECT COALESCE(SUM(amount_due), 0) FROM receivables
                 WHERE status NOT IN ('paid','cancelled')
                   AND due_date < CURRENT_DATE - INTERVAL '{days} days'
-            """)).scalar() or 0  # noqa: sql-lint
+            """)).scalar() or 0  # noqa
             if Decimal(str(total_row)) > threshold:
                 triggered = True
                 details = {"overdue_amount": Decimal(str(total_row)), "days": days}

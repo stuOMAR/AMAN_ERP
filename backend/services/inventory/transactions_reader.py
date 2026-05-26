@@ -5,7 +5,7 @@ Feature 023 — T099.
 from __future__ import annotations
 
 import logging
-from typing import Any, Iterator
+from typing import Any
 
 from sqlalchemy import text
 

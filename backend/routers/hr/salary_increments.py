@@ -69,7 +69,7 @@ def bulk_salary_increment(
             dry_run=body.dry_run,
         )
         return result
-    except Exception as e:
+    except Exception:
         logger.exception("Error applying bulk salary increment")
         raise HTTPException(status_code=400, detail=i18n_message("internal_error", request) if request else "Internal error")
     finally:

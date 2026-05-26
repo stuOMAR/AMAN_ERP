@@ -49,7 +49,7 @@ def _load_cfg(db, provider: str, request: Request) -> Dict[str, Any]:
         raise HTTPException(**http_error(412, "sms_gateway_not_configured", request, provider=provider))
     try:
         return row[0] if isinstance(row[0], dict) else json.loads(row[0])
-    except Exception as e:
+    except Exception:
         raise HTTPException(**http_error(500, "sms_config_invalid_json", request))
 
 
@@ -103,10 +103,10 @@ def send_sms(body: SendSMSRequest, request: Request, current_user=Depends(get_cu
     except HTTPException:
         db.rollback()
         raise
-    except Exception as e:
+    except Exception:
         db.rollback()
         logger.exception("sms.send failed")
-        raise HTTPException(**http_error(500, "sms_send_failed", request, error=str(e)))
+        raise HTTPException(**http_error(500, "sms_send_failed", request))
     finally:
         _close(db)
 

@@ -1,17 +1,53 @@
 """kpi_service.financial — split from monolithic kpi_service.py (T6.3)"""
 from sqlalchemy import text
-from datetime import date, timedelta
-from typing import Any, Optional, Tuple
+from datetime import date
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
+from typing import Any, Optional
 import logging
 
 logger = logging.getLogger(__name__)
-from .common import (
+from .common import (  # noqa: E402
     get_previous_period, build_branch_filter, kpi_item, ratio_status, _gl_sum, _gl_balance, _gl_balance_by_classification
 )
-from utils.accounting import get_base_currency
-from .charts import (
+from utils.accounting import get_base_currency  # noqa: E402
+from .charts import (  # noqa: E402
     _build_ar_aging, _build_ap_aging, _build_financial_alerts
 )
+
+
+_D0 = Decimal("0")
+_D2 = Decimal("0.01")
+_D1 = Decimal("0.1")
+_D100 = Decimal("100")
+
+
+def _dec(value: Any) -> Decimal:
+    try:
+        return Decimal(str(value if value is not None else 0))
+    except (InvalidOperation, TypeError, ValueError):
+        return _D0
+
+
+def _q(value: Any, places: Decimal = _D2) -> Decimal:
+    return _dec(value).quantize(places, rounding=ROUND_HALF_UP)
+
+
+def _decimal_text(value: Any, places: Decimal = _D2) -> str:
+    return format(_q(value, places), "f")
+
+
+def _ratio(numerator: Any, denominator: Any, places: Decimal = _D2) -> Decimal:
+    denominator_dec = _dec(denominator)
+    if denominator_dec <= 0:
+        return _D0
+    return _q(_dec(numerator) / denominator_dec, places)
+
+
+def _percent(numerator: Any, denominator: Any) -> Decimal:
+    denominator_dec = _dec(denominator)
+    if denominator_dec <= 0:
+        return _D0
+    return _q((_dec(numerator) / denominator_dec) * _D100, _D1)
 
 
 def get_financial_kpis(db, start_date: date, end_date: date,
@@ -21,17 +57,17 @@ def get_financial_kpis(db, start_date: date, end_date: date,
     base_currency = get_base_currency(db) or "SAR"
 
     # Current Assets & Liabilities (balance as of end_date)
-    current_assets = _gl_balance_by_classification(db, "current_asset", end_date, branch_id)
+    current_assets = _dec(_gl_balance_by_classification(db, "current_asset", end_date, branch_id))
     if current_assets == 0:
         # Fallback: sum asset accounts with codes 1xxx
-        current_assets = _gl_balance(db, "asset", end_date, branch_id)
+        current_assets = _dec(_gl_balance(db, "asset", end_date, branch_id))
 
-    current_liabilities = abs(_gl_balance_by_classification(db, "current_liability", end_date, branch_id))
+    current_liabilities = abs(_dec(_gl_balance_by_classification(db, "current_liability", end_date, branch_id)))
     if current_liabilities == 0:
-        current_liabilities = abs(_gl_balance(db, "liability", end_date, branch_id, debit_minus_credit=False))
+        current_liabilities = abs(_dec(_gl_balance(db, "liability", end_date, branch_id, debit_minus_credit=False)))
 
     # Inventory balance
-    inventory_balance = 0
+    inventory_balance = _D0
     try:
         inv_branch_sql, inv_bp = build_branch_filter(branch_id)
         inv_result = db.execute(text("""
@@ -43,22 +79,22 @@ def get_financial_kpis(db, start_date: date, end_date: date,
               AND je.entry_date <= :end_dt AND je.status = 'posted'
               {inv_branch_sql}
         """.format(inv_branch_sql=inv_branch_sql)), {"end_dt": end_date, **inv_bp}).scalar()
-        inventory_balance = float(inv_result or 0)
+        inventory_balance = _dec(inv_result)
     except Exception:
         pass
 
     # Ratios
-    current_ratio = current_assets / current_liabilities if current_liabilities > 0 else 0
-    quick_ratio = (current_assets - inventory_balance) / current_liabilities if current_liabilities > 0 else 0
+    current_ratio = _ratio(current_assets, current_liabilities)
+    quick_ratio = _ratio(current_assets - inventory_balance, current_liabilities)
 
     # Total Debt & Equity
     total_debt = current_liabilities  # Simplified — should include long-term too
-    equity = _gl_balance(db, "equity", end_date, branch_id, debit_minus_credit=False)
-    debt_to_equity = total_debt / equity if equity > 0 else 0
+    equity = _dec(_gl_balance(db, "equity", end_date, branch_id, debit_minus_credit=False))
+    debt_to_equity = _ratio(total_debt, equity)
 
     # Revenue & Margins
-    revenue = _gl_sum(db, "revenue", start_date, end_date, branch_id, debit_minus_credit=False)
-    cogs = 0
+    revenue = _dec(_gl_sum(db, "revenue", start_date, end_date, branch_id, debit_minus_credit=False))
+    cogs = _D0
     try:
         cogs_branch_sql, cogs_bp = build_branch_filter(branch_id)
         cogs_r = db.execute(text("""
@@ -69,16 +105,16 @@ def get_financial_kpis(db, start_date: date, end_date: date,
               AND je.entry_date BETWEEN :s AND :e AND je.status = 'posted'
               {cogs_branch_sql}
         """.format(cogs_branch_sql=cogs_branch_sql)), {"s": start_date, "e": end_date, **cogs_bp}).scalar()
-        cogs = float(cogs_r or 0)
+        cogs = _dec(cogs_r)
     except Exception:
         pass
 
-    expenses = _gl_sum(db, "expense", start_date, end_date, branch_id)
-    gross_margin = ((revenue - cogs) / revenue * 100) if revenue > 0 else 0
-    net_margin = ((revenue - cogs - expenses) / revenue * 100) if revenue > 0 else 0
+    expenses = _dec(_gl_sum(db, "expense", start_date, end_date, branch_id))
+    gross_margin = _percent(revenue - cogs, revenue)
+    net_margin = _percent(revenue - cogs - expenses, revenue)
 
     # Budget vs Actual
-    budget_variance = 0
+    budget_variance = _D0
     try:
         bv = db.execute(text("""
             SELECT
@@ -89,7 +125,7 @@ def get_financial_kpis(db, start_date: date, end_date: date,
             WHERE b.status = 'active'
         """)).fetchone()
         if bv and bv[0] > 0:
-            budget_variance = ((bv[1] - bv[0]) / bv[0]) * 100
+            budget_variance = _percent(_dec(bv[1]) - _dec(bv[0]), bv[0])
     except Exception:
         pass
 
@@ -100,8 +136,8 @@ def get_financial_kpis(db, start_date: date, end_date: date,
     ap_aging = _build_ap_aging(db, end_date, branch_id)
 
     # VAT Position
-    vat_output = 0
-    vat_input = 0
+    vat_output = _D0
+    vat_input = _D0
     try:
         vat_branch_sql, vat_bp = build_branch_filter(branch_id)
         vat_r = db.execute(text("""
@@ -115,14 +151,14 @@ def get_financial_kpis(db, start_date: date, end_date: date,
               {vat_branch_sql}
         """.format(vat_branch_sql=vat_branch_sql)), {"s": start_date, "e": end_date, **vat_bp}).fetchone()
         if vat_r:
-            vat_output = float(vat_r[0] or 0)
-            vat_input = float(vat_r[1] or 0)
+            vat_output = _dec(vat_r[0])
+            vat_input = _dec(vat_r[1])
     except Exception:
         pass
     vat_position = vat_output - vat_input
 
     # Zakat estimate (ZATCA method: equity minus fixed assets and intangibles × 2.5%)
-    zakat_estimate = 0
+    zakat_estimate = _D0
     try:
         try:
             db.rollback()
@@ -147,7 +183,7 @@ def get_financial_kpis(db, start_date: date, end_date: date,
               AND je.entry_date <= :end_dt AND je.status = 'posted'
               {branch_sql_z}
         """), {"end_dt": end_date, **bp_z}).scalar()
-        fixed_assets_bal = float(fa_bal or 0)
+        fixed_assets_bal = _dec(fa_bal)
 
         # Intangible assets (goodwill/IP — non-zakatable)
         intang_bal = db.execute(text(f"""
@@ -166,34 +202,33 @@ def get_financial_kpis(db, start_date: date, end_date: date,
               AND je.entry_date <= :end_dt AND je.status = 'posted'
               {branch_sql_z}
         """), {"end_dt": end_date, **bp_z}).scalar()
-        intangibles_bal = float(intang_bal or 0)
+        intangibles_bal = _dec(intang_bal)
 
-        zakat_base = max(0.0, equity - fixed_assets_bal - intangibles_bal)
-        zakat_estimate = zakat_base * 0.025
+        zakat_base = max(_D0, equity - fixed_assets_bal - intangibles_bal)
+        zakat_estimate = _q(zakat_base * Decimal("0.025"))
     except Exception:
         pass
 
-    prev_current_ratio = 0  # Would need prev period balance — simplified
 
     kpis = [
-        kpi_item("current_ratio", "Current Ratio", "نسبة التداول", current_ratio, "x",
-                 benchmark=2.0, benchmark_source="IAS 1",
-                 status=ratio_status(current_ratio, 2.0, 1.0)),
-        kpi_item("quick_ratio", "Quick Ratio", "نسبة السيولة السريعة", quick_ratio, "x",
-                 benchmark=1.0, benchmark_source="IAS 1",
-                 status=ratio_status(quick_ratio, 1.0, 0.5)),
-        kpi_item("debt_to_equity", "Debt-to-Equity", "نسبة الدين إلى حقوق الملكية", debt_to_equity, "x",
-                 benchmark=1.5, benchmark_source="IAS 32",
-                 status=ratio_status(debt_to_equity, 1.0, 2.0, higher_is_better=False)),
-        kpi_item("gross_margin", "Gross Margin", "هامش الربح الإجمالي", gross_margin, "%",
-                 benchmark=30.0, benchmark_source="Industry Avg",
-                 status=ratio_status(gross_margin, 30, 15)),
-        kpi_item("net_margin", "Net Margin", "صافي هامش الربح", net_margin, "%",
-                 benchmark=15.0, benchmark_source="IAS 1",
-                 status=ratio_status(net_margin, 15, 5)),
-        kpi_item("budget_variance", "Budget vs Actual", "الانحراف عن الميزانية", budget_variance, "%",
-                 benchmark=0, benchmark_source="Internal",
-                 status=ratio_status(abs(budget_variance), 5, 15, higher_is_better=False)),
+        kpi_item("current_ratio", "Current Ratio", "نسبة التداول", _decimal_text(current_ratio), "x",
+                 benchmark="2.0", benchmark_source="IAS 1",
+                 status=ratio_status(current_ratio, Decimal("2.0"), Decimal("1.0"))),
+        kpi_item("quick_ratio", "Quick Ratio", "نسبة السيولة السريعة", _decimal_text(quick_ratio), "x",
+                 benchmark="1.0", benchmark_source="IAS 1",
+                 status=ratio_status(quick_ratio, Decimal("1.0"), Decimal("0.5"))),
+        kpi_item("debt_to_equity", "Debt-to-Equity", "نسبة الدين إلى حقوق الملكية", _decimal_text(debt_to_equity), "x",
+                 benchmark="1.5", benchmark_source="IAS 32",
+                 status=ratio_status(debt_to_equity, Decimal("1.0"), Decimal("2.0"), higher_is_better=False)),
+        kpi_item("gross_margin", "Gross Margin", "هامش الربح الإجمالي", _decimal_text(gross_margin, _D1), "%",
+                 benchmark="30.0", benchmark_source="Industry Avg",
+                 status=ratio_status(gross_margin, Decimal("30"), Decimal("15"))),
+        kpi_item("net_margin", "Net Margin", "صافي هامش الربح", _decimal_text(net_margin, _D1), "%",
+                 benchmark="15.0", benchmark_source="IAS 1",
+                 status=ratio_status(net_margin, Decimal("15"), Decimal("5"))),
+        kpi_item("budget_variance", "Budget vs Actual", "الانحراف عن الميزانية", _decimal_text(budget_variance, _D1), "%",
+                 benchmark="0", benchmark_source="Internal",
+                 status=ratio_status(abs(budget_variance), Decimal("5"), Decimal("15"), higher_is_better=False)),
         kpi_item("vat_position", "VAT Position", "موقف ضريبة القيمة المضافة", vat_position, base_currency),
         kpi_item("zakat_estimate", "Zakat Estimate", "تقدير الزكاة", zakat_estimate, base_currency,
                  benchmark_source="GAZT"),
@@ -212,4 +247,3 @@ def get_financial_kpis(db, start_date: date, end_date: date,
 # ═══════════════════════════════════════════════════════════════════════════════
 # Sales Dashboard KPIs
 # ═══════════════════════════════════════════════════════════════════════════════
-

@@ -16,7 +16,7 @@ so rotation of the master key follows the existing field-encryption playbook.
 from __future__ import annotations
 
 import logging
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 from typing import List, Optional
 
 from sqlalchemy import text
@@ -142,9 +142,11 @@ def list_keys(
     where = ["1=1"]
     params: dict = {}
     if integration_type:
-        where.append("integration_type = :it"); params["it"] = integration_type
+        where.append("integration_type = :it")
+        params["it"] = integration_type
     if provider:
-        where.append("provider = :pr"); params["pr"] = provider
+        where.append("provider = :pr")
+        params["pr"] = provider
     if not include_revoked:
         where.append("key_status <> 'revoked'")
     rows = db.execute(

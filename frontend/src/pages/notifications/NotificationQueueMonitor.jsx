@@ -1,6 +1,6 @@
-import React, { useState } from 'react';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useTranslation } from 'react-i18next';
+import { notificationsAPI } from '../../utils/api';
 
 /**
  * NotificationQueueMonitor — paginated queue with state/channel filter + reprocess.
@@ -9,28 +9,49 @@ export default function NotificationQueueMonitor() {
   const { t } = useTranslation();
   const [state, setState] = useState('');
   const [channel, setChannel] = useState('');
-  const queryClient = useQueryClient();
+  const [queue, setQueue] = useState([]);
+  const [isLoading, setIsLoading] = useState(false);
+  const [retryingId, setRetryingId] = useState(null);
+  const [error, setError] = useState('');
 
-  const { data: queue, isLoading } = useQuery({
-    queryKey: ['notif-queue', state, channel],
-    queryFn: async () => {
-      const params = new URLSearchParams();
-      if (state) params.set('state', state);
-      if (channel) params.set('channel', channel);
-      const res = await fetch(`/api/notifications/queue?${params}`);
-      if (!res.ok) throw new Error('Failed to load');
-      return res.json();
-    },
-  });
+  const loadQueue = useCallback(async () => {
+    const params = { limit: 100 };
+    if (state) params.state = state;
+    if (channel) params.channel = channel;
 
-  const retryMutation = useMutation({
-    mutationFn: async (id) => {
-      const res = await fetch(`/api/notifications/queue/${id}/retry`, { method: 'POST' });
-      if (!res.ok) throw new Error('Retry failed');
-      return res.json();
-    },
-    onSuccess: () => queryClient.invalidateQueries(['notif-queue']),
-  });
+    setIsLoading(true);
+    setError('');
+    try {
+      const res = await notificationsAPI.getQueue(params);
+      const payload = res.data?.items ?? res.data ?? [];
+      setQueue(Array.isArray(payload) ? payload : []);
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t('common.error'));
+    } finally {
+      setIsLoading(false);
+    }
+  }, [channel, state, t]);
+
+  useEffect(() => {
+    loadQueue();
+  }, [loadQueue]);
+
+  const handleRetry = async (entry) => {
+    setRetryingId(entry.id);
+    setError('');
+    try {
+      if (entry.state === 'dlq') {
+        await notificationsAPI.requeueDlq(entry.id);
+      } else {
+        await notificationsAPI.retryQueue(entry.id);
+      }
+      await loadQueue();
+    } catch (err) {
+      setError(err?.response?.data?.detail || err?.message || t('common.error'));
+    } finally {
+      setRetryingId(null);
+    }
+  };
 
   return (
     <div className="notif-queue-monitor">
@@ -55,6 +76,8 @@ export default function NotificationQueueMonitor() {
         </select>
       </div>
 
+      {error && <div className="alert alert-danger">{error}</div>}
+
       {isLoading ? <p>{t('notifications.queue_monitor.loading')}</p> : (
         <table className="table table-sm">
           <thead>
@@ -75,7 +98,7 @@ export default function NotificationQueueMonitor() {
                 <td>{n.created_at}</td>
                 <td>
                   {(n.state === 'failed' || n.state === 'dlq') && (
-                    <button className="btn btn-sm btn-outline-primary" onClick={() => retryMutation.mutate(n.id)}>
+                    <button className="btn btn-sm btn-outline-primary" disabled={retryingId === n.id} onClick={() => handleRetry(n)}>
                       {t('notifications.queue_monitor.buttons.retry')}
                     </button>
                   )}

@@ -2,21 +2,16 @@
 
 Mounted under the parent /reports prefix via reports/__init__.py.
 """
-from fastapi import APIRouter, Depends, HTTPException, status
-from utils.i18n import http_error
+from fastapi import APIRouter, Depends
 from sqlalchemy import text
-from pydantic import BaseModel
 from typing import Any, Dict, List, Optional
-from datetime import datetime, date, timedelta, timezone
+from datetime import datetime, date, timedelta
 from decimal import Decimal, ROUND_HALF_UP
-import json
 import logging
 
 from database import get_db_connection
 from routers.auth import get_current_user
-from utils.tx import transactional
 from utils.permissions import require_permission, resolve_branch_scope, branch_scope_filter_from_scope
-from utils.cache import cached
 from utils.exports import generate_excel, generate_excel_with_chart, generate_pdf, generate_chart_image, create_export_response
 from services.sales_service import get_sales_total, get_gl_profit_breakdown
 
@@ -27,6 +22,10 @@ _D2 = Decimal("0.01")
 
 def _q_money(value) -> Decimal:
     return Decimal(str(value if value is not None else 0)).quantize(_D2, rounding=ROUND_HALF_UP)
+
+
+def _money_str(value) -> str:
+    return format(_q_money(value), "f")
 
 @router.get("/sales/summary", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["sales.reports", "reports.view"]))])
 def get_sales_summary(
@@ -59,7 +58,7 @@ def get_sales_summary(
         params = {"start": start_date, "end": end_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        tax_row = db.execute(text( # noqa: sql-lint
+        tax_row = db.execute(text( # noqa
                     f"""
             WITH all_sales AS (
                 SELECT
@@ -149,7 +148,7 @@ def get_sales_trend(
         params = {"start": start_date}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             WITH all_sales AS (
                 SELECT 
@@ -196,7 +195,7 @@ def get_sales_by_customer(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "s.branch_id", params)
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             WITH all_sales AS (
                 SELECT 
@@ -245,7 +244,7 @@ def get_sales_by_product(
         params = {"limit": limit}
         branch_filter = branch_scope_filter_from_scope(branch_scope, "cl.branch_id", params)
 
-        result = db.execute(text( # noqa: sql-lint
+        result = db.execute(text( # noqa
                     f"""
             WITH combined_lines AS (
                 SELECT 
@@ -310,7 +309,7 @@ def get_customer_statement(
         # (debit-balance reductions), debit notes (additions), and
         # approved sales returns. Without these, statement opening drifts
         # from party_site_balances.
-        opening_balance = db.execute(text( # noqa: sql-lint
+        opening_balance = db.execute(text( # noqa
                     f"""
             WITH all_movements AS (
                 SELECT 
@@ -404,7 +403,7 @@ def get_customer_statement(
         # source set so debit/credit notes and approved returns appear
         # as their own rows (and the running balance reconciles).
         params["end"] = end_date
-        transactions = db.execute(text( # noqa: sql-lint
+        transactions = db.execute(text( # noqa
                     f"""
             WITH all_movements AS (
                 SELECT 
@@ -521,7 +520,7 @@ def get_aging_report(
         from utils.accounting import get_base_currency
         base_currency = get_base_currency(db)
 
-        results = db.execute(text( # noqa: sql-lint
+        results = db.execute(text( # noqa
                     f"""
             -- AUDIT-H3: aging must reflect debit notes (raise AR),
             -- credit notes (lower AR), and approved sales returns
@@ -623,9 +622,12 @@ def get_aging_report(
         for row in results:
             bucket = "0-30"
             days = row.days_old or 0
-            if days > 90: bucket = "90+"
-            elif days > 60: bucket = "61-90"
-            elif days > 30: bucket = "31-60"
+            if days > 90:
+                bucket = "90+"
+            elif days > 60:
+                bucket = "61-90"
+            elif days > 30:
+                bucket = "31-60"
             
             report.append({
                 "customer": row.customer_name,
@@ -642,6 +644,43 @@ def get_aging_report(
         return report
     finally:
         db.close()
+
+
+@router.get("/sales/aging/summary", response_model=Dict[str, Any], dependencies=[Depends(require_permission(["sales.reports", "reports.view"]))])
+def get_aging_summary(
+    branch_id: Optional[int] = None,
+    current_user: dict = Depends(get_current_user)
+):
+    """Sales aging report with backend-owned bucket totals."""
+    rows = get_aging_report(branch_id=branch_id, current_user=current_user)
+    bucket_totals = {
+        "0-30": Decimal("0"),
+        "31-60": Decimal("0"),
+        "61-90": Decimal("0"),
+        "90+": Decimal("0"),
+    }
+
+    serialized_rows = []
+    for row in rows:
+        bucket = row.get("bucket")
+        amount = _q_money(row.get("amount"))
+        if bucket in bucket_totals:
+            bucket_totals[bucket] += amount
+        serialized = dict(row)
+        serialized["amount"] = _money_str(amount)
+        serialized["amount_fc"] = _money_str(row.get("amount_fc"))
+        serialized_rows.append(serialized)
+
+    buckets = [
+        {"name": name, "amount": _money_str(amount)}
+        for name, amount in bucket_totals.items()
+    ]
+
+    return {
+        "items": serialized_rows,
+        "buckets": buckets,
+        "total_due": _money_str(sum(bucket_totals.values(), Decimal("0"))),
+    }
 
 # --- Purchases Reports ---
 
@@ -680,7 +719,7 @@ def sales_by_cashier(
     invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
     pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
     try:
-        rows = db.execute(text( # noqa: sql-lint
+        rows = db.execute(text( # noqa
                     f"""
             WITH all_sales AS (
                 SELECT created_by, 
@@ -753,7 +792,7 @@ def sales_target_vs_actual(
         invoice_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
         pos_branch_filter = branch_scope_filter_from_scope(branch_scope, "branch_id", params)
 
-        actuals = db.execute(text( # noqa: sql-lint
+        actuals = db.execute(text( # noqa
                     f"""
             SELECT EXTRACT(MONTH FROM sale_date)::int as month,
                    COALESCE(SUM(total_amount), 0) as actual

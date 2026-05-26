@@ -3,23 +3,20 @@
 Mounted under the parent router via taxes/__init__.py.
 """
 from fastapi import APIRouter, Depends, HTTPException, Request
-from utils.i18n import http_error
+from utils.i18n import http_error, i18n_message
 from sqlalchemy import text
 from typing import Any, Dict, List, Optional
-from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
-from pydantic import BaseModel
 import logging
 import json
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
-from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access, require_module
+from utils.permissions import branch_scope_filter_from_scope, require_permission, resolve_branch_scope, validate_branch_access, validate_treasury_account_access
 from utils.audit import log_activity
 from utils.fiscal_lock import check_fiscal_period_open
 from utils.accounting import generate_sequential_number, get_mapped_account_id, get_base_currency
 from utils.tax_precision import CALCULATION_VERSION, money_str, require_idempotency_key
-from schemas.taxes import TaxRateCreate, TaxRateUpdate, TaxGroupCreate, TaxReturnCreate, TaxPaymentCreate
+from schemas.taxes import TaxPaymentCreate
 
 logger = logging.getLogger(__name__)
 
@@ -31,7 +28,7 @@ def _dec(v) -> Decimal:
 
 router = APIRouter()
 
-from .core import _D2, _D4, _dec
+from .core import _D2, _dec  # noqa: E402
 
 @router.get("/payments", dependencies=[Depends(require_permission(["accounting.view", "taxes.view"]))], response_model=List[Dict[str, Any]])
 def list_tax_payments(
@@ -57,7 +54,7 @@ def list_tax_payments(
             where += " AND EXTRACT(YEAR FROM tp.payment_date) = :year"
             params["year"] = year
 
-        rows = db.execute(text(  # noqa: sql-lint
+        rows = db.execute(text(  # noqa
             f"""
             SELECT tp.*, tr.return_number, tr.tax_period, tr.tax_type,
                    tr.branch_id, tr.jurisdiction_code,

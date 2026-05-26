@@ -105,13 +105,18 @@ def validate_webhook_url(url: str) -> None:
 # Supported events
 WEBHOOK_EVENTS = [
     "invoice.created", "invoice.paid", "invoice.cancelled",
+    "sales.invoice.posted", "sales.invoice.cancelled", "sales.payment.received",
     "order.created", "order.confirmed", "order.delivered",
     "payment.received", "payment.refunded",
     "inventory.low_stock", "inventory.adjustment",
+    "inventory.movement.posted",
     "purchase.created", "purchase.approved",
+    "purchases.invoice.posted", "purchases.payment.made",
     "employee.leave_request", "employee.attendance",
+    "hr.payroll_run.posted",
     "ticket.created", "ticket.resolved",
     "opportunity.stage_changed", "opportunity.won", "opportunity.lost",
+    "gl.journal_entry.posted", "gl.journal_entry.reversed",
 ]
 
 
@@ -131,8 +136,8 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
     # Defense-in-depth SSRF check before dispatch (DNS rebinding protection)
     try:
         validate_webhook_url(url)
-    except ValueError as e:
-        logger.warning("Webhook %d blocked by SSRF check: %s - %s", webhook_id, url, e)
+    except ValueError:
+        logger.warning("Webhook %d blocked by SSRF check", webhook_id)
         return
 
     payload_json = json.dumps(payload, default=str, ensure_ascii=False)
@@ -164,10 +169,10 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
             success = 200 <= resp.status_code < 300
         except requests.Timeout:
             error_msg = f"Timeout after {timeout}s"
-        except requests.ConnectionError as e:
-            error_msg = f"Connection error: {str(e)[:200]}"
-        except Exception as e:
-            error_msg = f"Error: {str(e)[:200]}"
+        except requests.ConnectionError:
+            error_msg = "connection_error"
+        except Exception:
+            error_msg = "request_failed"
         
         # Log this attempt
         try:
@@ -187,11 +192,11 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
             })
             db.commit()
             db.close()
-        except Exception as log_err:
-            logger.error(f"Failed to log webhook attempt: {log_err}")
+        except Exception:
+            logger.warning("Failed to log webhook attempt")
         
         if success:
-            logger.info(f"✅ Webhook #{webhook_id} sent: {event} → {url} (attempt {attempt})")
+            logger.info("Webhook %d sent for event %s on attempt %d", webhook_id, event, attempt)
             return
         
         if attempt < retry_count:
@@ -203,10 +208,10 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
             except ValueError:
                 backoff_base, backoff_cap = 2.0, 60.0
             wait = min(backoff_base ** attempt, backoff_cap)
-            logger.warning(f"⚠️ Webhook #{webhook_id} failed (attempt {attempt}), retrying in {wait}s...")
+            logger.warning("Webhook %d failed on attempt %d; retrying", webhook_id, attempt)
             time.sleep(wait)
     
-    logger.error(f"❌ Webhook #{webhook_id} failed after {retry_count} attempts: {event} → {url}")
+    logger.warning("Webhook %d failed after configured attempts", webhook_id)
     try:
         db = db_factory()
         db.execute(text("""
@@ -229,8 +234,8 @@ def _send_single_webhook(webhook_id: int, url: str, secret: Optional[str],
         })
         db.commit()
         db.close()
-    except Exception as dlq_err:
-        logger.error(f"Failed to move webhook #{webhook_id} to DLQ: {dlq_err}")
+    except Exception:
+        logger.warning("Failed to move webhook to DLQ")
 
 
 def fire_webhook_event(db, event: str, payload: dict, db_factory=None):
@@ -273,5 +278,5 @@ def fire_webhook_event(db, event: str, payload: dict, db_factory=None):
                 daemon=True
             )
             thread.start()
-    except Exception as e:
-        logger.error(f"Error firing webhook event {event}: {e}")
+    except Exception:
+        logger.warning("Error firing webhook event %s", event)

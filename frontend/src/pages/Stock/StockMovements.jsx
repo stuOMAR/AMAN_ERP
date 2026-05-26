@@ -25,6 +25,12 @@ const StockMovements = () => {
         end_date: ''
     });
     const [warehouses, setWarehouses] = useState([]);
+    const normalizeMovementPayload = (payload) => Array.isArray(payload) ? payload : (payload?.items || []);
+    const quantityClass = (direction) => {
+        if (direction === 'in') return 'text-success';
+        if (direction === 'out') return 'text-danger';
+        return '';
+    };
 
     useEffect(() => {
         const fetchInitialData = async () => {
@@ -34,7 +40,7 @@ const StockMovements = () => {
                     inventoryAPI.getStockMovements({ branch_id: currentBranch?.id })
                 ]);
                 setWarehouses(wRes.data);
-                setMovements(mRes.data);
+                setMovements(normalizeMovementPayload(mRes.data));
             } catch (err) {
                 showToast(t('stock.reports.movements.error_load'), 'error');
             } finally {
@@ -56,7 +62,7 @@ const StockMovements = () => {
         try {
             setLoading(true);
             const res = await inventoryAPI.getStockMovements({ ...newFilters, branch_id: currentBranch?.id });
-            setMovements(res.data);
+            setMovements(normalizeMovementPayload(res.data));
         } catch (err) {
             showToast(t('stock.reports.movements.error_filter'), 'error');
         } finally {
@@ -228,8 +234,8 @@ const StockMovements = () => {
                                                 {move.warehouse_name}
                                             </span>
                                         </td>
-                                        <td dir="ltr" style={{ textAlign: 'left' }} className={`font-bold ${move.quantity > 0 ? 'text-success' : 'text-danger'}`}>
-                                            {move.quantity > 0 ? `+${formatNumber(move.quantity)}` : formatNumber(move.quantity)}
+                                        <td dir="ltr" style={{ textAlign: 'left' }} className={`font-bold ${quantityClass(move.quantity_direction)}`}>
+                                            {move.quantity_prefix || ''}{formatNumber(move.quantity)}
                                         </td>
                                         <td className="text-sm text-muted">{move.user_name}</td>
                                     </tr>

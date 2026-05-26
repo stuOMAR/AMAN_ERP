@@ -198,8 +198,8 @@ const ReconciliationForm = () => {
     };
 
     const handleFinalize = async () => {
-        const toleranceMsg = summary?.tolerance != null
-            ? `\n${t('treasury.reconciliation.tolerance', 'هامش التسامح')}: ${summary.tolerance}`
+        const toleranceMsg = summary?.tolerance_amount != null
+            ? `\n${t('treasury.reconciliation.tolerance', 'هامش التسامح')}: ${summary.tolerance_amount}`
             : '';
         if (!window.confirm(t('common.confirm_action') + toleranceMsg)) return;
         try {
@@ -212,6 +212,9 @@ const ReconciliationForm = () => {
     };
 
     const fmt = (n) => formatNumber(n || '0');
+    const isReconciliationBalanced = (item) => (
+        item?.is_balanced === true || item?.difference_status === 'balanced'
+    );
 
     if (initialLoad) return (
         <PageLoading />
@@ -371,7 +374,7 @@ const ReconciliationForm = () => {
                     </div>
                     <div className="text-center">
                         <span className="small text-muted">{t('treasury.reconciliation.difference')}</span>
-                        <div className={`fw-bold font-monospace ${Math.abs(summary.difference) < 0.01 ? 'text-success' : 'text-danger'}`}>
+                        <div className={`fw-bold font-monospace ${isReconciliationBalanced(summary) ? 'text-success' : 'text-danger'}`}>
                             {fmt(summary.difference)}
                         </div>
                     </div>

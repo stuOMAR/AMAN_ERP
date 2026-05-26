@@ -11,7 +11,6 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from sqlalchemy import text
 
-from database import get_db_connection
 from routers.auth import get_current_user
 from utils.tx import transactional
 from utils.i18n import http_error, i18n_message
@@ -30,7 +29,7 @@ router = APIRouter(
 # Schemas
 # ---------------------------------------------------------------------------
 
-from decimal import Decimal
+from decimal import Decimal  # noqa: E402
 
 class MatchActionRequest(BaseModel):
     exception_notes: Optional[str] = None

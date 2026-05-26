@@ -47,13 +47,13 @@ def prepare_je_lines(je_lines: List[Dict], source: str = "auto", request=None) -
     when only the pure totals are needed).
     """
     # 1. None-account guard
-    missing = [l.get("description", "unknown") for l in je_lines if l.get("account_id") is None]
+    missing = [line.get("description", "unknown") for line in je_lines if line.get("account_id") is None]
     if missing:
         logger.error(f"JE validation ({source}): Missing account mappings for: {missing}")
         raise HTTPException(**http_error(400, "account_mapping.missing", request))
 
     # 2. Filter zero lines
-    valid = [l for l in je_lines if l.get("debit", 0) > 0 or l.get("credit", 0) > 0]
+    valid = [line for line in je_lines if line.get("debit", 0) > 0 or line.get("credit", 0) > 0]
 
     # 3. At least 2 non-zero lines
     if len(valid) < 2:
@@ -113,7 +113,7 @@ def generate_sequential_number(db, prefix: str, table: str, column: str, branch_
         branch_clause = " AND branch_id = :branch_id"
         params["branch_id"] = int(branch_id)
 
-    result = db.execute(text( # noqa: sql-lint
+    result = db.execute(text( # noqa
                 f"""
         SELECT MAX(CAST(SUBSTRING({column} FROM '[0-9]+$') AS INTEGER))
         FROM {table} WHERE {column} LIKE :pattern{branch_clause}

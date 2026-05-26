@@ -14,7 +14,6 @@ Formula: available = GREATEST(quantity - reserved_quantity - damaged_quantity, 0
 """
 from typing import Sequence, Union
 from alembic import op
-import sqlalchemy as sa
 
 
 revision: str = "030a_inventory_damaged_qty"
