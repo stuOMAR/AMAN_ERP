@@ -363,9 +363,25 @@ def create_company_tables(company_id: str, currency: str = "SAR") -> Tuple[bool,
         with company_engine.connect() as conn:
             apply_tenant_schema(conn, currency=currency)
 
+        # Pre-create the alembic_version table with VARCHAR(255) to support long migration names
+        try:
+            with create_engine(connection_url).begin() as conn:
+                conn.execute(text("CREATE TABLE IF NOT EXISTS alembic_version (version_num VARCHAR(255) PRIMARY KEY)"))
+            logger.info(f"✅ Pre-created alembic_version table with VARCHAR(255) for {db_name}")
+        except Exception as pre_exc:
+            logger.warning(f"Could not pre-create alembic_version table: {pre_exc}")
+
         migration_ok, migration_msg = run_company_alembic_stamp_head()
         if not migration_ok:
             return False, f"فشل ترحيل Alembic: {migration_msg}"
+
+        # Resize/verify the alembic_version table's column is VARCHAR(255) to support long migration names
+        try:
+            with create_engine(connection_url).begin() as conn:
+                conn.execute(text("ALTER TABLE alembic_version ALTER COLUMN version_num TYPE VARCHAR(255)"))
+            logger.info(f"✅ Altered/verified alembic_version.version_num is VARCHAR(255) for {db_name}")
+        except Exception as alter_exc:
+            logger.warning(f"Could not alter alembic_version table: {alter_exc}")
 
         logger.info(f"✅ Created all tables and stamped Alembic head for {db_name}")
         return True, "تم إنشاء جميع الجداول وتثبيت Alembic head بنجاح"

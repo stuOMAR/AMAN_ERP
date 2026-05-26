@@ -104,7 +104,13 @@ def _get_single_company_url_for_autogen() -> str:
 
 def run_migrations_offline():
     url = config.get_main_option("sqlalchemy.url")
-    context.configure(url=url, target_metadata=target_metadata, literal_binds=True)
+    import sqlalchemy as sa
+    context.configure(
+        url=url,
+        target_metadata=target_metadata,
+        literal_binds=True,
+        version_table_col_type=sa.String(length=255)
+    )
     with context.begin_transaction():
         context.run_migrations()
 
@@ -117,13 +123,25 @@ def run_migrations_online():
         autogen_url = _get_single_company_url_for_autogen()
         eng = create_engine(autogen_url, poolclass=pool.NullPool)
         try:
+            try:
+                with eng.connect() as _alt_conn:
+                    _alt_conn.execute(text(
+                        "ALTER TABLE alembic_version "
+                        "ALTER COLUMN version_num TYPE VARCHAR(255)"
+                    ))
+                    _alt_conn.commit()
+            except Exception:
+                pass
+
             with eng.connect() as connection:
+                import sqlalchemy as sa
                 context.configure(
                     connection=connection,
                     target_metadata=target_metadata,
                     include_object=_include_object,
                     compare_type=True,
                     compare_server_default=False,
+                    version_table_col_type=sa.String(length=255)
                 )
                 with context.begin_transaction():
                     context.run_migrations()
@@ -141,8 +159,23 @@ def run_migrations_online():
             prefix="sqlalchemy.",
             poolclass=pool.NullPool,
         )
+        try:
+            with connectable.connect() as _alt_conn:
+                _alt_conn.execute(text(
+                    "ALTER TABLE alembic_version "
+                    "ALTER COLUMN version_num TYPE VARCHAR(255)"
+                ))
+                _alt_conn.commit()
+        except Exception:
+            pass
+
         with connectable.connect() as connection:
-            context.configure(connection=connection, target_metadata=target_metadata)
+            import sqlalchemy as sa
+            context.configure(
+                connection=connection,
+                target_metadata=target_metadata,
+                version_table_col_type=sa.String(length=255)
+            )
             with context.begin_transaction():
                 context.run_migrations()
 
@@ -165,8 +198,27 @@ def run_migrations_online():
         from sqlalchemy import create_engine
         eng = create_engine(url, poolclass=pool.NullPool)
         try:
+            # Ensure alembic_version.version_num is VARCHAR(255) before any
+            # migration runs.  This MUST happen on a dedicated, committed
+            # connection — outside Alembic's own transaction management — so
+            # the schema change persists even if the migration itself fails.
+            try:
+                with eng.connect() as _alt_conn:
+                    _alt_conn.execute(text(
+                        "ALTER TABLE alembic_version "
+                        "ALTER COLUMN version_num TYPE VARCHAR(255)"
+                    ))
+                    _alt_conn.commit()
+            except Exception:
+                pass
+
             with eng.connect() as connection:
-                context.configure(connection=connection, target_metadata=target_metadata)
+                import sqlalchemy as sa
+                context.configure(
+                    connection=connection,
+                    target_metadata=target_metadata,
+                    version_table_col_type=sa.String(length=255)
+                )
                 with context.begin_transaction():
                     # Set the app.tenant_id session variable so triggers and migrations can read it
                     try:
