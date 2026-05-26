@@ -1,0 +1,206 @@
+/* ═══════════════════════════════════════════════════════
+   NotificationCenter — Dark Mode Support
+   ═══════════════════════════════════════════════════════ */
+
+/* Container */
+.nc-container {
+  position: relative;
+  display: inline-block;
+}
+
+/* Bell button */
+.nc-bell-btn {
+  position: relative;
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 6px;
+}
+
+.nc-bell-icon {
+  font-size: 1.25rem;
+}
+
+/* Badge */
+.nc-badge {
+  position: absolute;
+  top: 2px;
+  inset-inline-end: 2px;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 8px;
+  background: var(--danger, #e53e3e);
+  color: #fff;
+  font-size: 0.65rem;
+  font-weight: 700;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0 3px;
+}
+
+/* Dropdown */
+.nc-dropdown {
+  position: absolute;
+  inset-inline-end: 0;
+  top: calc(100% + 6px);
+  width: 340px;
+  max-height: 460px;
+  overflow-y: auto;
+  background: var(--bg-card, #fff);
+  border: 1px solid var(--border-color, #e2e8f0);
+  border-radius: 8px;
+  box-shadow: var(--shadow-lg, 0 8px 24px rgba(0, 0, 0, 0.12));
+  z-index: 9999;
+}
+
+/* Header */
+.nc-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  font-weight: 600;
+  color: var(--text-main, #1e293b);
+}
+
+.nc-mark-all-btn {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 0.78rem;
+  color: var(--primary, #3b82f6);
+  padding: 2px 6px;
+  border-radius: 4px;
+  transition: background 0.15s;
+}
+
+.nc-mark-all-btn:hover {
+  background: var(--bg-hover, #f1f5f9);
+}
+
+/* Empty state */
+.nc-empty {
+  padding: 20px;
+  text-align: center;
+  color: var(--text-muted, #718096);
+}
+
+/* Notification items */
+.nc-item {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-color, #e2e8f0);
+  transition: background 0.15s;
+}
+
+.nc-item-clickable {
+  cursor: pointer;
+}
+
+.nc-item-read {
+  background: transparent;
+}
+
+.nc-item-unread {
+  background: var(--primary-light, #ebf8ff);
+}
+
+.nc-item:hover {
+  background: var(--bg-hover, #f1f5f9);
+}
+
+.nc-item-content {
+  flex: 1;
+  min-width: 0;
+}
+
+.nc-item-title {
+  font-size: 0.875rem;
+  margin-bottom: 2px;
+  color: var(--text-main, #1e293b);
+}
+
+.nc-item-title-bold {
+  font-weight: 600;
+}
+
+.nc-item-body {
+  font-size: 0.78rem;
+  color: var(--text-muted, #718096);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.nc-item-time {
+  font-size: 0.7rem;
+  color: var(--text-muted, #718096);
+  margin-top: 2px;
+}
+
+/* Unread dot */
+.nc-unread-dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 4px;
+  background: var(--primary, #3b82f6);
+  flex-shrink: 0;
+  margin-top: 6px;
+}
+
+/* ═══════════════════════════════════════════════════════
+   DARK MODE
+   ═══════════════════════════════════════════════════════ */
+[data-theme="dark"] .nc-dropdown {
+  background: var(--bg-card, #1e293b);
+  border-color: var(--border-color, #334155);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+}
+
+[data-theme="dark"] .nc-header {
+  border-bottom-color: var(--border-color, #334155);
+  color: var(--text-main, #e2e8f0);
+}
+
+[data-theme="dark"] .nc-mark-all-btn:hover {
+  background: var(--bg-hover, #334155);
+}
+
+[data-theme="dark"] .nc-empty {
+  color: var(--text-muted, #94a3b8);
+}
+
+[data-theme="dark"] .nc-item {
+  border-bottom-color: var(--border-color, #334155);
+}
+
+[data-theme="dark"] .nc-item-read {
+  background: transparent;
+}
+
+[data-theme="dark"] .nc-item-unread {
+  background: rgba(37, 99, 235, 0.15);
+}
+
+[data-theme="dark"] .nc-item:hover {
+  background: var(--bg-hover, #334155);
+}
+
+[data-theme="dark"] .nc-item-title {
+  color: var(--text-main, #e2e8f0);
+}
+
+[data-theme="dark"] .nc-item-body {
+  color: var(--text-muted, #94a3b8);
+}
+
+[data-theme="dark"] .nc-item-time {
+  color: var(--text-muted, #94a3b8);
+}
+
+[data-theme="dark"] .nc-badge {
+  background: var(--danger, #ef4444);
+}

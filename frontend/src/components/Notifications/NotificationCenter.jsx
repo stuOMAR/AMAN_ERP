@@ -10,6 +10,7 @@ import { useNavigate } from 'react-router-dom'
 import { useTranslation } from 'react-i18next'
 import { notificationsAPI } from '../../utils/api'
 import { useNotificationSocket } from '../../hooks/useNotificationSocket'
+import './NotificationCenter.css'
 
 export default function NotificationCenter() {
     const { t } = useTranslation()
@@ -106,35 +107,17 @@ export default function NotificationCenter() {
     /*  Render                                                              */
     /* ------------------------------------------------------------------ */
     return (
-        <div ref={containerRef} style={{ position: 'relative', display: 'inline-block' }}>
+        <div ref={containerRef} className="nc-container">
             {/* Bell button */}
             <button
-                className="topbar-icon-btn"
+                className="topbar-icon-btn nc-bell-btn"
                 onClick={() => setOpen((o) => !o)}
                 title={t('notification_center.title')}
                 aria-label={t('notification_center.title')}
-                style={{ position: 'relative', background: 'none', border: 'none', cursor: 'pointer', padding: '6px' }}
             >
-                <span style={{ fontSize: '1.25rem' }}>🔔</span>
+                <span className="nc-bell-icon">🔔</span>
                 {unread > 0 && (
-                    <span
-                        style={{
-                            position: 'absolute',
-                            top: 2,
-                            insetInlineEnd: 2,
-                            minWidth: 16,
-                            height: 16,
-                            borderRadius: 8,
-                            background: 'var(--danger, #e53e3e)',
-                            color: '#fff',
-                            fontSize: '0.65rem',
-                            fontWeight: 700,
-                            display: 'flex',
-                            alignItems: 'center',
-                            justifyContent: 'center',
-                            padding: '0 3px',
-                        }}
-                    >
+                    <span className="nc-badge">
                         {unread > 99 ? '99+' : unread}
                     </span>
                 )}
@@ -142,38 +125,14 @@ export default function NotificationCenter() {
 
             {/* Dropdown */}
             {open && (
-                <div
-                    className="notification-dropdown"
-                    style={{
-                        position: 'absolute',
-                        insetInlineEnd: 0,
-                        top: 'calc(100% + 6px)',
-                        width: 340,
-                        maxHeight: 460,
-                        overflowY: 'auto',
-                        background: 'var(--card-bg, #fff)',
-                        border: '1px solid var(--border, #e2e8f0)',
-                        borderRadius: 8,
-                        boxShadow: '0 8px 24px rgba(0,0,0,0.12)',
-                        zIndex: 9999,
-                    }}
-                >
+                <div className="nc-dropdown">
                     {/* Header */}
-                    <div
-                        style={{
-                            display: 'flex',
-                            justifyContent: 'space-between',
-                            alignItems: 'center',
-                            padding: '10px 14px',
-                            borderBottom: '1px solid var(--border, #e2e8f0)',
-                            fontWeight: 600,
-                        }}
-                    >
+                    <div className="nc-header">
                         <span>{t('notification_center.title')}</span>
                         {unread > 0 && (
                             <button
                                 onClick={handleMarkAllRead}
-                                style={{ background: 'none', border: 'none', cursor: 'pointer', fontSize: '0.78rem', color: 'var(--primary, #3b82f6)' }}
+                                className="nc-mark-all-btn"
                             >
                                 {t('notification_center.mark_all_read')}
                             </button>
@@ -182,11 +141,11 @@ export default function NotificationCenter() {
 
                     {/* List */}
                     {loading && items.length === 0 ? (
-                        <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted, #718096)' }}>
+                        <div className="nc-empty">
                             {t('notification_center.loading')}
                         </div>
                     ) : items.length === 0 ? (
-                        <div style={{ padding: 20, textAlign: 'center', color: 'var(--muted, #718096)' }}>
+                        <div className="nc-empty">
                             {t('notification_center.empty')}
                         </div>
                     ) : (
@@ -194,31 +153,23 @@ export default function NotificationCenter() {
                             <div
                                 key={n.id}
                                 onClick={() => handleClick(n)}
-                                style={{
-                                    display: 'flex',
-                                    gap: 10,
-                                    padding: '10px 14px',
-                                    cursor: n.link ? 'pointer' : 'default',
-                                    background: n.is_read ? 'transparent' : 'var(--primary-light, #ebf8ff)',
-                                    borderBottom: '1px solid var(--border-subtle, #f0f0f0)',
-                                    transition: 'background 0.15s',
-                                }}
+                                className={`nc-item ${n.is_read ? 'nc-item-read' : 'nc-item-unread'} ${n.link ? 'nc-item-clickable' : ''}`}
                             >
-                                <div style={{ flex: 1, minWidth: 0 }}>
-                                    <div style={{ fontWeight: n.is_read ? 400 : 600, fontSize: '0.875rem', marginBottom: 2 }}>
+                                <div className="nc-item-content">
+                                    <div className={`nc-item-title ${n.is_read ? '' : 'nc-item-title-bold'}`}>
                                         {n.title}
                                     </div>
                                     {(n.body || n.message) && (
-                                        <div style={{ fontSize: '0.78rem', color: 'var(--muted, #718096)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                                        <div className="nc-item-body">
                                             {n.body || n.message}
                                         </div>
                                     )}
-                                    <div style={{ fontSize: '0.7rem', color: 'var(--muted, #718096)', marginTop: 2 }}>
+                                    <div className="nc-item-time">
                                         {n.created_at ? new Date(n.created_at).toLocaleString() : ''}
                                     </div>
                                 </div>
                                 {!n.is_read && (
-                                    <div style={{ width: 8, height: 8, borderRadius: 4, background: 'var(--primary, #3b82f6)', flexShrink: 0, marginTop: 6 }} />
+                                    <div className="nc-unread-dot" />
                                 )}
                             </div>
                         ))
